@@ -1,0 +1,246 @@
+# Contributing overview
+
+This page is the entry point for anyone about to work on agenthropic: what the repo is
+trying to be, how to get a dev environment up (mostly **TBD today** — there is no
+scaffold to install yet), how work is decomposed and handed out, and the rules every
+contribution — human or agent-authored — has to clear before it merges. The key
+takeaway up front: agenthropic is built as **one work package (WP) → one agent → one
+PR**, gated by a **merge-blocking >90% coverage bar** and a fixed set of security
+invariants that apply from Phase 1 onward, every WP owes a `WORKLOG.md` entry, git
+history carries **no AI attribution**, and **nothing gets committed or pushed without an
+explicit ask** from the project owner. None of this is aspirational — it is the literal
+Global Definition of Done in
+[`development-plan.md`](../../analysis/development-plan.md) §8 and the conventions in
+the project's own `CLAUDE.md` (see [Version-control conventions](#version-control-conventions)
+below for why that file itself won't be in your checkout).
+
+## Repo intent, in short
+
+agenthropic is a **self-hosted, local-first dashboard for observing Claude Code agent
+and subagent activity** — ingesting Claude Code's lifecycle hooks and the
+ground-truth `~/.claude/projects/*.jsonl` transcripts into an owned SQLite database,
+then rendering the resulting subagent tree, token cost, and (later) Telegram alerts.
+It is a **greenfield clean build** in the spirit of a sibling project (`kiko`),
+structured with **ports and adapters** so ingest, storage, cost, realtime, and alerting
+each sit behind a named interface. Two invariants are non-negotiable design facts, not
+implementation details, and every WP is checked against them:
+
+- **Token counts are ground truth**, read from `~/.claude/projects/*.jsonl` — never
+  inferred.
+- **Agents and subagents are first-class, persisted, queryable entities** with a
+  self-referential `parent_agent_id` — the subagent tree is a data fact the projection
+  writes once, not something the browser reconstructs from a flat event log.
+
+For the full pitch and the "why build instead of fork" argument, see
+[What is agenthropic](../guide/what-is-agenthropic.md) and
+[The moat](../guide/the-moat.md); for the architecture these invariants imply, see
+[Architecture overview](../architecture/overview.md).
+
+## Where the project stands today
+
+As of this writing agenthropic is in the **bootstrap phase**: the design basis and the
+development plan are written, but **no application code is scaffolded** — there is no
+`package.json`, no workspace, no `src/` yet. Concretely, this means:
+
+| Question | Answer today |
+|---|---|
+| Can I `pnpm install` and run something? | **No.** There is nothing to install. |
+| Is the stack decided? | **Leaning**, not locked: Fastify + `better-sqlite3` + React/Vite/D3 in a pnpm monorepo (server + web) — per the project `CLAUDE.md` and the Senior Developer verdict in concept-analysis-v2 [§4.2](../../analysis/concept-analysis-v2.md) ("the stack lean … is correct"), still open per `WP-F1`'s hard dependency on `WP-S7`. |
+| What Node version? | **Node 22** — already fixed as part of `WP-F1`'s Done-when ("clean install on Node 22 with a committed lockfile"), even though `WP-F1` itself hasn't landed. |
+| When does the scaffold land? | Only after `WP-S7` reads **GO** — see [Why there's nothing to scaffold yet](#why-theres-nothing-to-scaffold-yet) below. `WP-F1` has a hard dependency on `WP-S7` for exactly this reason. |
+| Where do lint/test commands come from? | `WP-F2` fixes `pnpm run lint` (zero errors) and `WP-F3` adds a Vitest coverage harness producing lcov + json-summary — both still open. |
+
+Until those land, **treat every command in this guide as illustrative, not runnable**.
+The [Roadmap](../guide/roadmap.md) tracks phase-by-phase when each piece of tooling is
+expected to exist; [`TODO.md`](../../../TODO.md) at the repo root is the live,
+authoritative status of what's actually done vs. open.
+
+### Why there's nothing to scaffold yet
+
+CD-8 (the Phase-0 hard-stop) means **no production code — not even the monorepo
+scaffold — starts before a throwaway feasibility spike returns a verdict.** That
+sequencing is encoded as a literal dependency in the plan: `WP-F1` (the scaffold)
+depends on `WP-S7` (the GO/NO-GO report), which itself depends on five upstream
+Phase-0 probes (`WP-S2`…`WP-S6`) that empirically test whether the subagent tree can
+be rebuilt from the JSONL transcript alone. Two human approval gates sit above even
+that: Ivan must **approve the ten canonical decisions (CD-1…CD-10)** and **approve
+running Phase 0 at all** before the spike itself starts (`TODO.md`, "Gate A"). This is
+why a contributing guide for a codebase with zero lines of application code is not
+premature — the WP/PR discipline described below already governs the Phase-0 spike
+work packages (`WP-S1`…`WP-S7`, `WP-X10`), which are the only things anyone can pick up
+right now.
+
+## Reading order before you touch anything
+
+Per [`development-plan.md`](../../analysis/development-plan.md) §1, an implementing
+agent (human or AI) should read, in this order:
+
+1. `concept-analysis-v2.md` §3 (the CD-1…CD-10 decisions) and §6 (acceptance criteria).
+2. The design basis (architecture, data model, hooks, security model — digested on this
+   site under [Architecture](../architecture/overview.md) and
+   [Security](../security/model.md)).
+3. The project's `CLAUDE.md` — the non-negotiable security constraints in it apply to
+   **every** WP, no exceptions.
+4. Your assigned WP in [`development-plan.md`](../../analysis/development-plan.md) §5 —
+   honour its `deps`, satisfy its Done-when.
+
+## The work-package model: one WP → one agent → one PR
+
+Every unit of work is a **WP** — sized S/M/L for a single agent's working session, with
+explicit inputs, concrete deliverables, hard dependencies, a testable Done-when, and
+the CD decision(s) it implements
+([`development-plan.md`](../../analysis/development-plan.md) §1). The rule is
+literal: **one WP, one agent, one PR.** No two WPs write the same file (five
+duplicate-pair merges in the plan exist specifically to enforce this — pricing,
+`events_raw` append, redaction, the hooks installer, and the storage substrate each
+have exactly one owning WP).
+
+```
+WP defined (deps, Done-when, owner-agent type)
+        │
+        ▼
+  deps all merged? ──no──► blocked, wait for the wave
+        │ yes
+        ▼
+  one agent picks up the WP
+        │
+        ▼
+  implements + tests to the Done-when
+        │
+        ▼
+  PR: typecheck + lint + tests + coverage(>90%) + security/license gates
+        │
+        ▼
+  merge ──► unblocks every WP that named this one in `deps`
+```
+
+### WP id scheme and owner-agent types
+
+IDs follow `WP-<TRACK><n>`. Tracks: **S** Phase-0 spike, **F** Foundation/CI, **D**
+Data, **IN** Ingest/Normalizer, **C** Cost, **U** Realtime + UI, **A** Alerts, **X**
+Delivery/Docs/QA. Each WP is assigned to an **owner-agent type** specialised for it:
+`ingest`, `data`, `backend`, `cost`, `frontend`, `devops`, `security`, `qa`, `docs`
+([`development-plan.md`](../../analysis/development-plan.md) §1).
+
+### Dependencies are hard, and waves are the schedule
+
+An agent may only start a WP once **every** id in its `deps` is merged. The plan's
+**17 topological waves** (§4) are the distribution schedule: every WP in wave *N* can
+run concurrently once wave *N-1* is fully merged. The **GO/NO-GO gate is absolute** —
+wave 4 (`WP-S7`) blocks all of wave 5 onward via the `WP-F1 → WP-S7` dependency. A
+concrete illustration of how strictly "hard dependency" is meant: `WP-F7`'s security
+contract tests are **written and merged intentionally red** at wave 8, and stay red
+until `WP-U0` wires the loopback/token/origin primitives at wave 9 — the plan
+explicitly warns "do not merge `WP-F7` as passing"; its Done-when is jointly owned with
+`WP-U0` ([`development-plan.md`](../../analysis/development-plan.md) §7). Deps are not
+a suggestion.
+
+### Human-in-the-loop gates
+
+A handful of WPs cannot be closed by an agent alone — they require Ivan's sign-off in
+the loop, not just a passing test suite:
+
+- **Gate A** — approving CD-1…CD-10 and approving that Phase 0 runs at all
+  (`TODO.md`, "Now").
+- **`WP-S1`** — Ivan hand-labels the expected subagent tree per captured session.
+- **`WP-S5`** — Ivan signs off that the rendered tree nesting is correct (the "G0.3
+  tree smoke gate").
+- **`WP-S7`** — the GO / CONDITIONAL-GO / NO-GO verdict itself, which "gates all of
+  Phase 1."
+
+## The merge-blocking bar: Global Definition of Done
+
+Every WP, in every phase, is held to the same bar
+([`development-plan.md`](../../analysis/development-plan.md) §8):
+
+- Touched code passes **typecheck + lint + tests**; coverage stays **>90%** — the gate
+  is **merge-blocking from Phase 1 onward**, not a soft target added later.
+- No security invariant is weakened: loopback-only bind, mandatory-token-or-fail-startup,
+  SSE same-origin, no subprocess spawner, no SSRF, secrets never in SQLite/SSE/logs.
+- Ground-truth tokens are **read, never inferred**; every displayed dollar traces to
+  (tokens × a dated priced model).
+- No all-rights-reserved code is copied (clean-room reimplementation for the
+  all-rights-reserved reference projects; attribution for the two whose licenses permit
+  copying), verified by the CI provenance scan.
+- A `WORKLOG.md` entry is appended for each meaningful WP; AI-harness files stay
+  git-excluded.
+
+The **>90% coverage gate** specifically is not deferred: Phase 1's exit gate requires
+it "green & blocking" (`WP-X5`, `WP-F3`/`WP-F4`), meaning a PR that drops coverage
+below the threshold is rejected by CI, demonstrated as such, before any ingest feature
+code is written. `WP-F7`'s security-contract tests and `WP-F5`/`WP-F6`'s static
+no-spawner/no-SSRF/license gates land in the **same phase**, deliberately, so security
+and coverage are live "from commit one," never bolted on at the end. Full mechanics —
+the golden fixture corpus, the three P0 reconciliation tests, and the 12-scenario
+negative catalogue — are covered on [Testing & quality](testing.md).
+
+## WORKLOG discipline
+
+Every project keeps a local `WORKLOG.md` — a session journal appended after each
+meaningful task. It is git-excluded (see [Version-control
+conventions](#version-control-conventions)), so it never appears in the public repo or
+on this docs site; it exists purely as the project's own audit trail of what was done
+and why. `WP-X10` — "WORKLOG discipline: template + presence check" — is the WP that
+formalizes this as a checked convention rather than an informal habit: a template plus
+a presence check that a WP isn't considered closed without a corresponding entry
+([`TODO.md`](../../../TODO.md), [`development-plan.md`](../../analysis/development-plan.md)
+Track X). It is one of only two dep-free work packages in wave 1 (alongside `WP-S1`),
+so it is actionable immediately, ahead of any scaffold.
+
+## Version-control conventions
+
+Two rules apply to **every** commit in this repository, stated as-is in the project's
+own `CLAUDE.md`:
+
+- **No AI attribution in git history.** No `Co-Authored-By` trailers for an AI agent,
+  no "Generated with …" lines in commit messages or PR descriptions.
+- **Never commit or push without an explicit ask.** An agent completing a WP does not
+  get to merge itself — a human (or an explicit instruction in the working session)
+  authorizes the commit and the push.
+
+A practical consequence for anyone cloning the repo fresh: **`CLAUDE.md`, `WORKLOG.md`,
+`.claude/`, and `docs/ai/` are all git-excluded** (via `.git/info/exclude`, not
+`.gitignore` — so the exclusion rule itself isn't committed either). If you're reading
+this docs site, that's exactly what you're seeing: the durable design and process
+documentation, republished from those local-only sources into `docs/site/`, without
+the harness files themselves ever entering git history.
+
+## Licensing & provenance
+
+Per-artifact licensing is a canonical decision (CD-9), enforced by a CI provenance/
+license scan, not left to reviewer memory: reference-project patterns copied from the
+two permissively-licensed projects are attributed; patterns adapted from the three
+all-rights-reserved-by-default reference projects are **clean-room reimplemented**
+(never viewing their source while writing the equivalent). `WP-F6` is the WP that makes
+a non-allowlisted dependency license fail CI red. Full rule, the per-project
+attribution table, and the scan mechanics live on
+[Licensing & provenance](licensing.md).
+
+## Decisions and governance
+
+The ten canonical decisions (CD-1…CD-10) plus the two load-bearing ones (LB1 ingest
+primacy, LB2 personal-first/commercial-clean) are the constitution this whole plan
+decomposes from. Each is recorded, or will be recorded, as an ADR using the standard
+template at [`decisions/_adr-template.md`](decisions/_adr-template.md); the indexed set
+lives at [Decisions](decisions/README.md). Repository governance — the security-report
+path, code of conduct, and issue/PR templates — is documented on
+[Governance](governance.md).
+
+## See also
+
+- [Testing & quality](testing.md) — the golden fixture corpus, the three P0
+  reconciliation tests, the 12-scenario negative catalogue, and the coverage gate in
+  detail.
+- [Licensing & provenance](licensing.md) — the clean-room vs. attribution rule and the
+  CI scan.
+- [Decisions](decisions/README.md) — the ADR set for CD-1…CD-10 and LB1/LB2.
+- [Governance](governance.md) — security-report path, code of conduct, issue/PR
+  templates.
+- [Roadmap](../guide/roadmap.md) — the phase-by-phase build sequence this guide's
+  WPs slot into.
+- [Security model](../security/model.md) — the invariants every WP's Done-when is
+  checked against.
+- [`development-plan.md`](../../analysis/development-plan.md) — the full 75-WP
+  catalog, dependency DAG, waves, and Global Definition of Done (§8).
+- [`TODO.md`](../../../TODO.md) / [`DONE.md`](../../../DONE.md) — live open work and
+  completed milestones.
