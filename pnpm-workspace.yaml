@@ -1,0 +1,15 @@
+packages:
+  - apps/server
+  - apps/web
+  - packages/shared
+  - packages/core
+  - packages/test-fixtures
+
+# pnpm 11 blocks dependency build scripts unless explicitly allowlisted.
+# better-sqlite3 is a native module and must build; esbuild installs its binary.
+allowBuilds:
+  better-sqlite3: true
+  esbuild: true
+
+minimumReleaseAgeExclude:
+  - '@sinclair/typebox@0.34.51'

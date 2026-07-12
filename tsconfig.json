@@ -1,0 +1,10 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/shared" },
+    { "path": "packages/core" },
+    { "path": "packages/test-fixtures" },
+    { "path": "apps/server" },
+    { "path": "apps/web" }
+  ]
+}

@@ -1,0 +1,282 @@
+/**
+ * WP-D3 - ordered, idempotent, in-code migration runner - plus the Phase-1
+ * schema migrations (WP-D4..D8) and the pricing seed (WP-C1).
+ *
+ * Applied migration ids are recorded in `schema_version`; running the runner
+ * twice yields an identical schema and applies nothing the second time.
+ */
+import type { SqliteDatabase } from './connection';
+
+export interface Migration {
+  /** Strictly increasing, never reused, never reordered. */
+  readonly id: number;
+  readonly name: string;
+  readonly up: (db: SqliteDatabase) => void;
+}
+
+/** The five priced token buckets (parser-spec section 5.4). */
+const TOKEN_BUCKETS = ['input', 'output', 'cache_read', 'cache_write_5m', 'cache_write_1h'];
+const BUCKET_CHECK = TOKEN_BUCKETS.map((b) => `'${b}'`).join(',');
+
+/**
+ * WP-C1 pricing seed, dated 2026-07-11, from parser-spec section 5.4.
+ *
+ * These are APPROXIMATE LIST prices - a mechanism proof for the cost engine,
+ * NOT a billing source. Derived buckets per model: cache_read = 0.1 x input,
+ * cache_write_5m = 1.25 x input, cache_write_1h = 2.0 x input.
+ * '<synthetic>' is priced 0 for all buckets. The parser must halt loudly on
+ * an unknown model id - never silently price it at 0.
+ */
+const PRICING_SEED_EFFECTIVE_FROM = '2026-07-11';
+const PRICING_SEED: ReadonlyArray<{
+  model: string;
+  inputUsdPerMtok: number;
+  outputUsdPerMtok: number;
+}> = [
+  { model: 'opus-4-8', inputUsdPerMtok: 5, outputUsdPerMtok: 25 },
+  { model: 'sonnet-5', inputUsdPerMtok: 3, outputUsdPerMtok: 15 },
+  { model: 'fable-5', inputUsdPerMtok: 10, outputUsdPerMtok: 50 },
+  { model: 'haiku-4-5', inputUsdPerMtok: 1, outputUsdPerMtok: 5 },
+  { model: '<synthetic>', inputUsdPerMtok: 0, outputUsdPerMtok: 0 },
+];
+
+export const migrations: readonly Migration[] = [
+  {
+    id: 1,
+    name: 'events-raw-append-only',
+    up(db) {
+      // WP-D4: the immutable raw-event substrate. Append-only is enforced in
+      // the storage engine itself, not by adapter discipline.
+      db.exec(`
+        CREATE TABLE events_raw (
+          id              INTEGER PRIMARY KEY,
+          idempotency_key TEXT NOT NULL UNIQUE,
+          source          TEXT NOT NULL CHECK (source IN ('hook','jsonl')),
+          event_type      TEXT NOT NULL,
+          payload         TEXT NOT NULL,
+          received_at     TEXT NOT NULL
+        );
+        CREATE TRIGGER events_raw_no_update
+        BEFORE UPDATE ON events_raw
+        BEGIN
+          SELECT RAISE(ABORT, 'events_raw is append-only');
+        END;
+        CREATE TRIGGER events_raw_no_delete
+        BEFORE DELETE ON events_raw
+        BEGIN
+          SELECT RAISE(ABORT, 'events_raw is append-only');
+        END;
+      `);
+    },
+  },
+  {
+    id: 2,
+    name: 'sessions',
+    up(db) {
+      // Keyed on session-uuid, never the project slug (parser-spec 6.2:
+      // two same-slug concurrent sessions must stay two roots).
+      db.exec(`
+        CREATE TABLE sessions (
+          id               TEXT PRIMARY KEY,
+          project_slug     TEXT,
+          started_at       TEXT,
+          last_activity_at TEXT,
+          status           TEXT
+        );
+      `);
+    },
+  },
+  {
+    id: 3,
+    name: 'events',
+    up(db) {
+      // WP-D5: normalized event projection; every row points back at its
+      // immutable raw source (FK enforced by the WP-D2 connection pragmas).
+      db.exec(`
+        CREATE TABLE events (
+          id           INTEGER PRIMARY KEY,
+          raw_event_id INTEGER NOT NULL REFERENCES events_raw(id),
+          session_id   TEXT,
+          agent_id     TEXT,
+          event_type   TEXT,
+          occurred_at  TEXT
+        );
+        CREATE INDEX idx_events_session_id ON events(session_id);
+      `);
+    },
+  },
+  {
+    id: 4,
+    name: 'agents-self-referential',
+    up(db) {
+      // WP-D6: agents are first-class queryable entities; the subagent tree
+      // is a data fact via the self-referential parent_agent_id.
+      // 'unknown' status is REQUIRED (open-decisions OPEN-2: the missing-Stop
+      // watchdog assigns it).
+      db.exec(`
+        CREATE TABLE agents (
+          id              TEXT PRIMARY KEY,
+          session_id      TEXT NOT NULL REFERENCES sessions(id),
+          type            TEXT CHECK (type IN ('main','subagent')),
+          subagent_type   TEXT,
+          status          TEXT CHECK (status IN ('working','waiting','completed','error','unknown')),
+          parent_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+          first_seen_at   TEXT,
+          last_seen_at    TEXT
+        );
+        CREATE INDEX idx_agents_parent_agent_id ON agents(parent_agent_id);
+        CREATE INDEX idx_agents_session_id ON agents(session_id);
+      `);
+    },
+  },
+  {
+    id: 5,
+    name: 'orchestration-edges',
+    up(db) {
+      // WP-D7: the moat artifact - persisted, per-instance spawn edges
+      // (never a render-time reconstruction). source enumerates the four
+      // structural join paths of parser-spec section 4. instance/host_id are
+      // NOT NULL by design for future fleet aggregation (DESIGN.md 2.4).
+      // Insert path is INSERT OR IGNORE against the UNIQUE logical key.
+      db.exec(`
+        CREATE TABLE orchestration_edges (
+          id              INTEGER PRIMARY KEY,
+          session_id      TEXT NOT NULL,
+          parent_agent_id TEXT NOT NULL,
+          child_agent_id  TEXT NOT NULL,
+          source          TEXT NOT NULL CHECK (source IN ('tool_use','directory','task_notification','queue_operation')),
+          instance        TEXT NOT NULL,
+          host_id         TEXT NOT NULL,
+          created_at      TEXT,
+          UNIQUE (session_id, parent_agent_id, child_agent_id)
+        );
+        CREATE INDEX idx_orchestration_edges_session_id ON orchestration_edges(session_id);
+      `);
+    },
+  },
+  {
+    id: 6,
+    name: 'token-usage',
+    up(db) {
+      // WP-D8: ground-truth token usage. UNIQUE(message_id, bucket) is the
+      // N3 dedup guarantee at the storage level - one usage row per message
+      // per bucket (parser-spec 5.2: naive row summation over-counts ~2.4x).
+      // agent_id is nullable by design: backfilled later by the hard join
+      // (parser-spec 5.1).
+      db.exec(`
+        CREATE TABLE token_usage (
+          id                      INTEGER PRIMARY KEY,
+          session_id              TEXT NOT NULL,
+          agent_id                TEXT,
+          message_id              TEXT NOT NULL,
+          model                   TEXT NOT NULL,
+          bucket                  TEXT NOT NULL CHECK (bucket IN (${BUCKET_CHECK})),
+          tokens                  INTEGER NOT NULL,
+          is_compaction_baseline  INTEGER NOT NULL DEFAULT 0,
+          occurred_at             TEXT,
+          UNIQUE (message_id, bucket)
+        );
+        CREATE INDEX idx_token_usage_session_id ON token_usage(session_id);
+        CREATE INDEX idx_token_usage_agent_id ON token_usage(agent_id);
+      `);
+    },
+  },
+  {
+    id: 7,
+    name: 'model-pricing-with-seed',
+    up(db) {
+      // WP-C1: versioned bucket-and-model-aware pricing. The composite PK
+      // lets multiple effective_from rows per (model, bucket) coexist.
+      db.exec(`
+        CREATE TABLE model_pricing (
+          model          TEXT NOT NULL,
+          bucket         TEXT NOT NULL CHECK (bucket IN (${BUCKET_CHECK})),
+          usd_per_mtok   REAL NOT NULL,
+          effective_from TEXT NOT NULL,
+          PRIMARY KEY (model, bucket, effective_from)
+        );
+      `);
+      const insert = db.prepare(
+        'INSERT INTO model_pricing (model, bucket, usd_per_mtok, effective_from) VALUES (?, ?, ?, ?)',
+      );
+      for (const { model, inputUsdPerMtok, outputUsdPerMtok } of PRICING_SEED) {
+        const rates: Record<string, number> = {
+          input: inputUsdPerMtok,
+          output: outputUsdPerMtok,
+          cache_read: inputUsdPerMtok * 0.1,
+          cache_write_5m: inputUsdPerMtok * 1.25,
+          cache_write_1h: inputUsdPerMtok * 2.0,
+        };
+        for (const bucket of TOKEN_BUCKETS) {
+          insert.run(model, bucket, rates[bucket], PRICING_SEED_EFFECTIVE_FROM);
+        }
+      }
+    },
+  },
+];
+
+export interface MigrationRunResult {
+  /** Ids applied by THIS run (empty when the schema was already current). */
+  readonly appliedIds: readonly number[];
+}
+
+/**
+ * Apply all pending migrations in order, each inside a transaction that also
+ * records its id in `schema_version`. Idempotent: a second run applies
+ * nothing and leaves the schema byte-identical.
+ */
+export function runMigrations(
+  db: SqliteDatabase,
+  list: readonly Migration[] = migrations,
+): MigrationRunResult {
+  assertOrdered(list);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS schema_version (
+      id         INTEGER PRIMARY KEY,
+      name       TEXT NOT NULL,
+      applied_at TEXT NOT NULL
+    );
+  `);
+  const appliedBefore = new Set(
+    (db.prepare('SELECT id FROM schema_version').all() as Array<{ id: number }>).map((r) => r.id),
+  );
+  const record = db.prepare('INSERT INTO schema_version (id, name, applied_at) VALUES (?, ?, ?)');
+  const appliedIds: number[] = [];
+  for (const migration of list) {
+    if (appliedBefore.has(migration.id)) {
+      continue;
+    }
+    db.transaction(() => {
+      migration.up(db);
+      record.run(migration.id, migration.name, new Date().toISOString());
+    })();
+    appliedIds.push(migration.id);
+  }
+  return { appliedIds };
+}
+
+/** Highest applied migration id, or 0 for a virgin database. */
+export function currentSchemaVersion(db: SqliteDatabase): number {
+  const table = db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_version'")
+    .get();
+  if (table === undefined) {
+    return 0;
+  }
+  const row = db.prepare('SELECT MAX(id) AS version FROM schema_version').get() as {
+    version: number | null;
+  };
+  return row.version ?? 0;
+}
+
+function assertOrdered(list: readonly Migration[]): void {
+  let previousId = 0;
+  for (const migration of list) {
+    if (migration.id <= previousId) {
+      throw new Error(
+        `Migration ids must be strictly increasing: ${migration.id} follows ${previousId}.`,
+      );
+    }
+    previousId = migration.id;
+  }
+}

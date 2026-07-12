@@ -1,0 +1,13 @@
+# Dependency / build / data output
+node_modules/
+dist/
+coverage/
+data/
+pnpm-lock.yaml
+
+# Not owned by the toolchain: docs corpus, source material, spike, root markdown
+docs/
+due-diligence/
+spike/
+*.md
+LICENSE

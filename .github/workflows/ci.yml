@@ -1,0 +1,50 @@
+# CI quality gate: typecheck, lint, format, tests (with >90% coverage thresholds
+# enforced by the per-package Vitest configs), no-spawner gate, license gate.
+#
+# NOTE: making this workflow merge-blocking requires a GitHub branch-protection
+# rule (Settings -> Branches -> require status checks to pass). That is an owner
+# action on github.com and cannot be configured from this file.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable corepack (pnpm from packageManager field)
+        run: corepack enable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Format check
+        run: pnpm run format:check
+
+      - name: Test (coverage thresholds enforce the >90% gate)
+        run: pnpm run test
+
+      - name: Security gate - no spawner / no wide bind / no eval
+        run: pnpm run gate:spawner
+
+      - name: License gate (CD-9 allowlist)
+        run: pnpm run gate:licenses

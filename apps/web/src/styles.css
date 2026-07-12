@@ -1,0 +1,125 @@
+:root {
+  color-scheme: dark;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #14161a;
+  color: #e6e8eb;
+  min-height: 100vh;
+}
+
+h1 {
+  font-size: 1.4rem;
+  margin: 0 0 0.5rem;
+}
+
+h2 {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #9aa2ad;
+  margin: 0 0 0.4rem;
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: #1f232a;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+}
+
+.token-form,
+.dashboard {
+  max-width: 26rem;
+  margin: 4rem auto;
+  padding: 1.5rem;
+  background: #1a1d22;
+  border: 1px solid #2a2f37;
+  border-radius: 10px;
+}
+
+.token-form p {
+  color: #9aa2ad;
+  margin: 0 0 1rem;
+}
+
+.token-form label {
+  display: block;
+  font-size: 0.85rem;
+  color: #9aa2ad;
+  margin-bottom: 0.3rem;
+}
+
+.token-form input {
+  display: block;
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  margin-bottom: 1rem;
+  background: #101216;
+  color: #e6e8eb;
+  border: 1px solid #2a2f37;
+  border-radius: 6px;
+  font-size: 1rem;
+}
+
+.token-form input:focus {
+  outline: none;
+  border-color: #4b8dd6;
+}
+
+button {
+  padding: 0.5rem 1rem;
+  background: #2d5f9e;
+  color: #e6e8eb;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #3a72ba;
+}
+
+.dashboard section {
+  margin-bottom: 1.25rem;
+}
+
+.muted {
+  color: #9aa2ad;
+}
+
+.status-ok {
+  color: #6fbf73;
+  font-weight: 600;
+}
+
+.status-error {
+  color: #e07070;
+}
+
+.stream-connecting {
+  color: #d6b95c;
+}
+
+.stream-open {
+  color: #6fbf73;
+}
+
+.stream-error {
+  color: #e07070;
+}
+
+.disconnect {
+  background: #3a3f47;
+}
+
+.disconnect:hover {
+  background: #4a505a;
+}
