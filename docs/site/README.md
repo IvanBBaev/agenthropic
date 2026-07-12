@@ -44,4 +44,4 @@ later without touching page content.
 
 Authoring conventions: [`STYLE-GUIDE.md`](STYLE-GUIDE.md). Decomposition &
 per-page scope: [`../DOCS-PLAN.md`](../DOCS-PLAN.md). Design basis:
-[`../ai/DESIGN.md`](../ai/DESIGN.md).
+`docs/ai/DESIGN.md` (internal, kept local-only — not published in this repo).

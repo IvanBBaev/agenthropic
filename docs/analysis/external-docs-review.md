@@ -14,8 +14,8 @@ sharper, where they are softer, and where they are simply wrong.
 ## Method
 
 A five-lens adversarial workflow (5 parallel senior reviewers, Opus, high effort,
-~361k subagent tokens) cross-checked every claim against: [`../ai/DESIGN.md`](../ai/DESIGN.md),
-[`../../CLAUDE.md`](../../CLAUDE.md), [`../independent-due-diligence.md`](../independent-due-diligence.md),
+~361k subagent tokens) cross-checked every claim against: `docs/ai/DESIGN.md`,
+`CLAUDE.md`, [`../independent-due-diligence.md`](../independent-due-diligence.md),
 the six per-project deep dives in [`../due-diligence/projects/`](../due-diligence/projects/),
 [`../due-diligence/security.md`](../due-diligence/security.md), and the internal
 [`concept-analysis.md`](concept-analysis.md) / [`implementation-plan.md`](implementation-plan.md).
@@ -148,5 +148,5 @@ missed items above.** That synthesis is carried into
 [`development-plan.md`](development-plan.md).
 
 ---
-_Reviewed against the design of record in [`../ai/DESIGN.md`](../ai/DESIGN.md) and the
+_Reviewed against the design of record in `docs/ai/DESIGN.md` and the
 independent audit in [`../independent-due-diligence.md`](../independent-due-diligence.md)._

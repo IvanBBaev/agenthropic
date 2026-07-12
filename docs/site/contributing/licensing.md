@@ -1,7 +1,7 @@
 # Licensing & provenance
 
 `agenthropic` is a greenfield build that deliberately reuses patterns from six
-audited rival projects ([the moat](../guide/the-moat.md), [`DESIGN.md` §7](../../ai/DESIGN.md))
+audited rival projects ([the moat](../guide/the-moat.md), `DESIGN.md` §7)
 without inheriting any of their licensing risk. The rule that makes that possible —
 **concept-analysis-v2's CD-9**, load-bearing on **LB2** ("personal-first /
 commercial-clean") — is per-artifact, not per-project: `cast`, `disler`, and

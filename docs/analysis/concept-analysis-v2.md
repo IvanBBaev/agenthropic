@@ -6,7 +6,7 @@ inputs into one decision-useful view:
 1. the original internal analysis — [`concept-analysis.md`](concept-analysis.md) + [`implementation-plan.md`](implementation-plan.md) (**v1**);
 2. two externally-produced parallel reports — **BASE** (~3.7k words) and **EXPANDED** (~7.7k words);
 3. the adversarial cross-check of those two — [`external-docs-review.md`](external-docs-review.md);
-4. the design of record — [`../ai/DESIGN.md`](../ai/DESIGN.md) and the invariants in [`../../CLAUDE.md`](../../CLAUDE.md).
+4. the design of record — `docs/ai/DESIGN.md` and the invariants in `CLAUDE.md`.
 
 It was produced by a six-lens senior workflow (Architect · Developer · QA · Business
 Analyst · brutal Gap · Holistic), Opus / high effort, ~468k subagent tokens, run against
@@ -413,4 +413,4 @@ in [`../../TODO.md`](../../TODO.md), completed milestones in [`../../DONE.md`](.
 ---
 _Six-lens re-analysis (Architect · Developer · QA · BA · Gap · Holistic), Opus / high effort,
 ~468k subagent tokens, run against v1 + BASE + EXPANDED + the adversarial review. Reviewed
-against the design of record in [`../ai/DESIGN.md`](../ai/DESIGN.md)._
+against the design of record in `docs/ai/DESIGN.md`._

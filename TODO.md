@@ -10,6 +10,14 @@ Completed milestones move to [`DONE.md`](DONE.md). Context-free session? Read
 > **No production code starts until `WP-S7` reads GO** — that gate (CD-8) is encoded as
 > `WP-F1 → WP-S7`. **v1.0 = the DAG + cost cockpit answering the five daily questions —
 > no alerts** (best-path §6.1).
+> **⚠️ OWNER OVERRIDE 2026-07-11:** Ivan explicitly instructed implementation start in
+> chat ("пускай агенти и започвай да имплементираш") after being repeatedly informed that
+> CD-8's remaining conditions (LABEL-ME ratification of the CONDITIONAL GO; KC-0's two
+> physical boxes) were the block. Per the instruction-precedence rules, an explicit
+> current-chat owner instruction outranks this board — **scaffolding began 2026-07-11.**
+> The override does NOT touch: the security invariants, the KC calendar (KC-0's two open
+> boxes below are still Ivan's, deadline 2026-07-13), the LABEL-ME ratification (numbers
+> stay PROVISIONAL), or the no-commit-without-explicit-ask rule.
 > **Schedule of record:** [`roadmap-v1-v2-2026-07-06.md`](docs/analysis/roadmap-v1-v2-2026-07-06.md)
 > — kill checkpoints **KC-0…KC-5 with default-death**. Gate A signs by **2026-07-13**
 > (KC-0) or the project archives by default; **v1.0 hard date 2026-12-01** (KC-4).
@@ -64,8 +72,11 @@ longer a valid third state** — KC-0's failure branch is archive.
 > 2026-07-13, KC-0's default branch — archive — fires regardless of spike progress.
 
 **Also parked with Ivan (not blocking, decide any time):** approve `LICENSE` (MIT —
-PROC-4) · authorize committing the docs (repo still has 0 commits). _(The former "pick
-a red-team exit" item is **retired**: the KC table replaced the exit choice — Exit B is
+PROC-4; a standard MIT `LICENSE` draft, © 2026 Ivan Baev, now sits in the tree
+uncommitted — approving means asking for it to be committed, or request a different
+license and it gets replaced). _(Committing the docs is **done** — first commit `9dfcc9c` pushed to the PUBLIC
+origin 2026-07-11; future commits/pushes still need an explicit ask. The former "pick a
+red-team exit" item is **retired**: the KC table replaced the exit choice — Exit B is
 absorbed into Phase 0 inside CD-8, Exit A is every checkpoint's failure branch, Exit C
 is eliminated by the KC-0 deadline.)_
 
@@ -108,74 +119,55 @@ EMP-1; proving it is in-scope for Lane S5)**.
 
 ---
 
-## The assignment — Phase 0 · feasibility spike _(throwaway; hard GO/NO-GO stop)_
+## Phase 0 · feasibility spike — ✅ COMPLETE 2026-07-10 (verdict CONDITIONAL GO ~90%)
 
-Unlocked by Step 0. Waves run in order; lanes inside a wave run in parallel.
+_Full record in [`DONE.md`](DONE.md) (2026-07-10 entry) and the verdict
+[`phase0-verdict.md`](docs/analysis/phase0-verdict.md); parser findings consolidated in
+[`parser-spec.md`](docs/analysis/parser-spec.md). All spike output under `spike/`
+(THROWAWAY, git-excluded)._
 
-### Wave 1 — two parallel lanes
-- [ ] **Lane S1 · WP-S1** _(ingest)_ — Paired-capture harness + hand-labeled corpus (≥3 real
-  sessions incl. crashed-no-Stop, deep nesting **on purpose — depth-2 evidence is thin,
-  EMP-2**, mid-session PreCompact, two concurrent instances). **Slimmed per best-path §6.6:**
-  the install-and-revert throwaway-hook block is OFF the gating path. _Dep: none._
-  **Owns: `spike/corpus/**`.** · **Ivan-in-the-loop:** label the expected tree per session.
-- [ ] **Lane X10 · WP-X10** _(docs)_ — WORKLOG discipline template + presence check.
-  _Dep: none._ **Owns: only the template file it creates (path per dev-plan WP-X10).**
+- [x] **Wave 1** — S1 hostile corpus (5 sessions · 224 agents; crashed-no-Stop, depth-2,
+  mid-PreCompact, two concurrent same-slug) · X10 WORKLOG template.
+- [x] **Wave 2** — S2 ingest-primacy → **CD-1 JSONL-PRIMARY confirmed** (edge 100% ×5,
+  0/463 hook-sourced; found `<task-notification>` 3rd flat join path) · S3 join-key →
+  **HARD KEY 6654/6654** (found `queue-operation` 3rd schema → 224/224) · S4 hooks →
+  **`SubagentStart` is not a real hook**, only `UserPromptSubmit` fires.
+- [x] **Wave 3** — S5 tree smoke **PASS 5/5** + EMP-1 (**wave-partial ordering, not
+  total**; two same-slug sessions = **two independent roots**) · S6 reconciliation
+  (**parent rollup 0.00%**, `message.id` dedup 8540→3339, corpus ≈$345.91) + the
+  **THROWAWAY DAG-with-dollars render** (KC-1 stay-alive condition — exists).
+- [x] **Wave 4** — S7 verdict → [`phase0-verdict.md`](docs/analysis/phase0-verdict.md):
+  **CONDITIONAL GO ~90%**. Three new parser MUSTs beyond the 11-item gate
+  (`<task-notification>` flat join · `queue-operation` 3rd join schema · `message.id`
+  dedup + bucket/model pricing) captured in
+  [`parser-spec.md`](docs/analysis/parser-spec.md). First velocity number recorded.
 
-### Wave 2 — three parallel lanes _(dep: WP-S1)_
-- [~] **Lane S2 · WP-S2** _(ingest)_ — G0.1 ingest-primacy probe → **emits the CD-1 verdict
-  rule**. **Pre-answered by the 2026-07-04 probe: JSONL-primary, `CONDITIONAL-GO`** (JSONL
-  self-reconciles by backfill; outbox deferrable). Confirm on the paired-capture corpus.
-  **Owns: `spike/ingest-probe/**`.** · **The make-or-break probe (LB1).**
-- [~] **Lane S3 · WP-S3** _(data)_ — G0.1b token→`agent_id` join-key probe. **Pre-answered:
-  hard key** (`meta.toolUseId == Agent tool_use.id`; `filename hex == toolUseResult.agentId`;
-  100% attributable). Confirm on the labeled corpus. **Owns: `spike/join-probe/**`.**
-- [ ] **Lane S4 · WP-S4** _(ingest)_ — hook-catalog enumeration, **demoted to liveness-only
-  per best-path §6.6** (does `SubagentStart` fire? PreCompact markers — informative, not
-  gating). **Owns: `spike/hooks-liveness/**`.**
-
-### Wave 3 — two parallel lanes
-- [ ] **Lane S5 · WP-S5** _(qa)_ — G0.3 tree smoke gate against the 11-item parser gate,
-  **including the intra-workflow edge-ordering proof via `journal.jsonl`+`promptId` (EMP-1)**;
-  **Ivan signs off** the rendered nesting. _Dep: WP-S1, WP-S2._ **Owns: `spike/tree-smoke/**`.**
-- [ ] **Lane S6 · WP-S6** _(cost)_ — G0.4 token-reconciliation probe (Σ per-record ==
-  JSONL total, exact; capture PreCompact baseline). _Dep: WP-S1, WP-S3._
-  **Owns: `spike/token-recon/**`.**
-
-> **Joint Wave-3 deliverable (roadmap §5 — Exit B, absorbed):** one THROWAWAY script/page
-> rendering the reconstructed subagent DAG **with real dollars on the nodes** — Lane S5
-> owns the render, Lane S6 feeds it the per-agent dollar figures. This is the exact
-> artifact red-team Exit B demanded, produced *inside* CD-8 (no production code, no
-> scaffold; it dies after WP-S7). Its existence is a **KC-1 stay-alive condition**.
-
-### Wave 4 — single lane (the gate)
-- [ ] **Lane S7 · WP-S7** _(docs)_ — **GO / CONDITIONAL-GO / NO-GO report.** Applies the
-  CD-1 rule with evidence from all lanes. **Gates all of Phase 1.** _Dep: S2, S3, S4, S5, S6._
-  **Owns: `docs/analysis/phase0-verdict.md` (new file).** **Deadline: 2026-07-27 (KC-1)** —
-  day 14 of the timebox; no verdict by then = the KC-1 failure branch. The verdict must
-  also record the **first measured velocity number** (WPs/week) for the roadmap §3 rebase.
+> **Still self-check — the one open spike-adjacent act is Ivan's.** Every number above is
+> scored against machine inventories, not Ivan's hand-labeled trees. Filling the five
+> `spike/corpus/sessions/*/LABEL-ME.md` (224 per-edge blanks — esp. confirming `69ac12d0`
+> + `a362e15d` stay two independent roots) is the **KC-0/KC-1 human act** that upgrades
+> the WP-S7 GO from *conditional / self-check* to *human-verified* and ratifies it.
 
 ---
 
-## Optional documentation lanes — available NOW, no Gate A needed, mutually disjoint
+## Optional documentation lanes — ✅ ALL COMPLETE 2026-07-10
 
-Agent-executable on request; each cites its finding IDs from
-[`corpus-audit-2026-07-06.md`](docs/analysis/corpus-audit-2026-07-06.md):
+Ran alongside the spike (no Gate A needed); each closed its `corpus-audit-2026-07-06.md`
+finding IDs. Recorded in [`DONE.md`](DONE.md) (2026-07-10 entry).
 
-- [ ] **Lane DOC-A — recover the lost vendor material** (LOST-1/2/3/4): 24-capability
-  feature matrix as a UI checklist, OTel `query_source` note, hook-schema-drift risk,
-  cost sizing. **Owns: `docs/analysis/recovered-source-material.md` (new file) + one
-  pointer line in `docs/analysis/README.md` table.**
-- [ ] **Lane DOC-B — recover the lost requirements & tests** (LOST-5/7): FR/NFR IDs
-  (incl. PRIV-01, PERF-01) as a column on the CD table; the 10-scenario negative-test
-  catalogue. **Owns: `docs/analysis/concept-analysis-v2.md` (CD table only) +
-  `docs/site/contributing/testing.md`.**
-- [ ] **Lane DOC-C — WP-UX0 design pre-work** (LOST-6 + audit §9.5): IA map, five
-  question-to-screen flows, ASCII wireframes for the four views, the
+- [x] **Lane DOC-A** (LOST-1/2/3/4) → [`recovered-source-material.md`](docs/analysis/recovered-source-material.md):
+  24-capability feature matrix as a UI checklist, OTel `query_source` note,
+  hook-schema-drift risk, cost sizing. Indexed in the README table.
+- [x] **Lane DOC-B** (LOST-5/7) → Satisfies column on the
+  [`concept-analysis-v2.md`](docs/analysis/concept-analysis-v2.md) CD table + the
+  10-scenario negative-test catalogue in `docs/site/contributing/testing.md` §5.1.
+- [x] **Lane DOC-C** (LOST-6 + audit §9.5) → [`ux0-design.md`](docs/analysis/ux0-design.md):
+  IA map, five question-to-screen flows, ASCII wireframes for the four views, the
   uncertainty/honesty visual language (inferred edges, estimated costs, `'unknown'`
-  status always visible). **Owns: `docs/analysis/ux0-design.md` (new file).**
-- [ ] **Lane DOC-D — OPEN-1…9 decision one-pager for Ivan**: each open question with
-  the recommended resolution from the audit, as checkboxes for sign-off. **Owns:
-  `docs/analysis/open-decisions.md` (new file).** _(Deciding them stays with Ivan.)_
+  status always visible).
+- [x] **Lane DOC-D** (OPEN-1…9) → [`open-decisions.md`](docs/analysis/open-decisions.md):
+  each open question with its recommended resolution, as sign-off checkboxes.
+  _(Deciding them still stays with Ivan.)_
 
 ---
 
@@ -217,8 +209,9 @@ amended by best-path §6. Unlocks wave-by-wave after GO.
 
 ### Phase 3 · Projection, the DAG moat, reconciliation, cost _(P0 blockers — exit = **KC-3, by 2026-10-12**)_
 - [ ] **WP-IN6** pure Normalizer · **IN7** projection · **IN8** dual-path
-  `orchestration_edges` **(moat core — must satisfy the 11-item parser gate: `Agent`/`Workflow`
-  not `Task`, both layouts, self-referential parent index)** · **IN9** reconciliation+backfill
+  `orchestration_edges` **(moat core — must satisfy the 14-item parser gate of
+  [`parser-spec.md`](docs/analysis/parser-spec.md): `Agent`/`Workflow` not `Task`, both
+  layouts, all four join paths, self-referential parent index)** · **IN9** reconciliation+backfill
   **(load-bearing — child-transcript token summation is the ledger)** · **IN10**
   replay-on-startup · **IN12** missing-Stop→unknown watchdog · **IN13** P0 suite.
   **Cost:** WP-C3 CostEngine · C4 compaction repricing · C5 delegation-savings · C6

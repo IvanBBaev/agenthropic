@@ -216,5 +216,58 @@ planning documentation — the evidence base the build stands on._
   four §6 playbooks updated/added) and the project `CLAUDE.md` (schedule-of-record
   bullet) now lead every cold start to the KC calendar.
 
+### 2026-07-10 · Phase-0 feasibility spike executed end-to-end (WP-S1…S7) + DOC-A…D recovery
+- Ran the **entire** Phase-0 throwaway spike in one day via parallel background lanes,
+  under CD-8 (no production code scaffolded). All output under `spike/` (THROWAWAY,
+  git-excluded); `~/.claude/projects` + `spike/corpus` stayed read-only; no agent ran git.
+  Gate A partially signed the same day (3/5 Step-0 boxes: CD-1…CD-10 + LB1/LB2, the KC
+  schedule, approve-running-Phase-0).
+- **Wave 1** — S1 hostile corpus (5 real sessions · 224 agents · ~66 MB, deliberately
+  loaded with crashed-no-Stop, depth-2 nesting, mid-session PreCompact, two concurrent
+  same-slug instances); X10 WORKLOG-discipline template.
+- **Wave 2** — S2 ingest-primacy → **CD-1 = JSONL-PRIMARY confirmed** (edge accuracy
+  100% ×5 sessions, 0/463 hook-sourced; discovered `<task-notification>` as a 3rd flat
+  join path recovering compaction-evicted parent blocks); S3 token→agent join → **HARD
+  KEY 6654/6654, zero heuristic** (discovered `queue-operation` as a 3rd structural
+  schema that closes `run_in_background` spawns to 224/224); S4 hooks → **`SubagentStart`
+  is not a real Claude Code hook** (never fires), only `UserPromptSubmit` leaves a
+  footprint (37), compaction read from `compact_boundary` (30, all `trigger=auto`).
+- **Wave 3** — S5 tree smoke gate **PASS 5/5** + EMP-1 resolved (**wave-partial ordering,
+  not a total order**; max inverted Δt 0.003 s; `promptId` is a batch key not an ordinal)
+  + concurrency (`69ac12d0` 103 agents vs `a362e15d` 57 — **two independent roots**, empty
+  intersection); S6 reconciliation (**parent rollup 0.00%**, disjoint `message.id` sets;
+  dedup 8540→3339 messages, naive over-count 2.4–2.7×; corpus ≈ **$345.91** over
+  206,001,429 tokens) + the **THROWAWAY DAG-with-dollars render** (fused S5+S6, Exit B
+  absorbed — a **KC-1 stay-alive condition**; it exists).
+- **Wave 4** — S7 verdict → **new** `docs/analysis/phase0-verdict.md`: **CONDITIONAL GO
+  ~90%** — the subagent DAG + dollar cost is mechanically reconstructable from
+  `~/.claude/projects/*.jsonl` alone, zero inference, on the hostile corpus. Beyond the
+  11-item gate the spike surfaced **three new production-parser MUSTs** (`<task-notification>`
+  flat join · `queue-operation` 3rd join schema · `message.id` dedup + bucket/model
+  pricing). First measured velocity number recorded for the roadmap §3 rebase.
+- **DOC-A…D** (needed no Gate A): `recovered-source-material.md` (LOST-1…4),
+  `ux0-design.md` (LOST-6), `open-decisions.md` (OPEN-1…9), the Satisfies column on the
+  `concept-analysis-v2.md` CD table, and `testing.md` §5.1 negative catalogue (LOST-7).
+- **All results are self-check / PROVISIONAL** — scored against machine inventories, not
+  Ivan's hand-labeled trees. Filling the five `spike/corpus/sessions/*/LABEL-ME.md`
+  (224 per-edge blanks) is the human act that ratifies the GO (KC-0/KC-1).
+
+### 2026-07-11 · First commit & push to public origin; parser spec
+- `docs/analysis/parser-spec.md` — **new**, the normative parser contract distilled from
+  S1…S7: the **14-item requirements gate** (original 11 + the three new MUSTs), the four
+  structural join paths, token→cost rules (dedup + bucket/model pricing), the
+  self-referential depth-2 tree index, the amended EMP-1 wave-partial ordering, and the
+  exact `docs/site` edits to apply **at scaffold time**. Design document only — scaffolds
+  nothing; CD-8 still gates code.
+- **First commit `9dfcc9c`** (79 files: `DONE/README/TODO` + all of `docs/`; clean
+  English message, no AI attribution) **pushed** to `github.com/IvanBBaev/agenthropic`
+  (**PUBLIC**, by Ivan's informed choice after the visibility discrepancy was surfaced).
+  Pre-push hygiene: excluded `.DS_Store` and the top-level source `due-diligence/`
+  (`.docx` was already excluded; an 825 KB source `.pdf` was leaking). Harness files,
+  the throwaway `spike/`, and source docs correctly kept out.
+- `docs/analysis/README.md` — indexed `phase0-verdict.md` + `parser-spec.md` (were
+  dangling). `~/Development/CLAUDE.md` workspace map — added the missing `agenthropic`
+  row (public, pre-code). CD-8 unchanged; still waiting on Ivan for KC-0 (2026-07-13).
+
 ---
-_Each entry is also recorded in [`WORKLOG.md`](WORKLOG.md) with affected files._
+_Each entry is also recorded in `WORKLOG.md` (the local-only session journal) with affected files._

@@ -111,6 +111,16 @@ them**.
   best-path on strategy and the dev-plan on WP content; authoritative on dates,
   checkpoints and scope boundaries **once Ivan signs its two §8 lines**.
 
+**Post-freeze records (added after this snapshot; not analyses — permitted by roadmap §8):**
+- [`phase0-verdict.md`](phase0-verdict.md) — **the WP-S7 GO/NO-GO verdict record**
+  (2026-07-10): the Phase-0 spike executed end-to-end against a hostile 5-session /
+  224-agent corpus → **CONDITIONAL GO ~90%**; all numbers self-check / PROVISIONAL
+  until Ivan hand-fills the five `LABEL-ME.md` trees.
+- [`parser-spec.md`](parser-spec.md) — the normative parser contract distilled from the
+  verdict (the **14-item gate**, four structural join paths, token→cost rules). For any
+  parser/ingest question this is now the most-current authority; it supersedes the
+  11-item framing embedded in older docs. Design only — CD-8 still gates code.
+
 ## 4. Current truth snapshot
 
 **Decided and consistent corpus-wide:**

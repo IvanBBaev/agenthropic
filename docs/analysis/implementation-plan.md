@@ -12,7 +12,7 @@
 > four-lens review **in decision form** — every open question resolved into a
 > recommendation with a rationale. Part B turns those decisions into a sequenced,
 > testable, coverage-gated build plan that honours the project's non-negotiable
-> security invariants ([`../ai/DESIGN.md`](../ai/DESIGN.md) §8) and Ivan's delivery
+> security invariants (`docs/ai/DESIGN.md` §8) and Ivan's delivery
 > bar (**>90% coverage · README badges + donation · GitHub Pages docs site**).
 >
 > **Status:** plan only — no code scaffolded. The stack/structure decisions below are
@@ -303,7 +303,7 @@ production code.
 3. On a ✅ gate: scaffold the **pnpm monorepo** skeleton (`server` / `web` / `shared`
    / `hooks`) with the CI coverage gate and security-invariant test harness **wired in
    from commit one** — never retrofitted.
-4. Update [`../ai/DESIGN.md`](../ai/DESIGN.md) so the design of record reflects the
+4. Update `docs/ai/DESIGN.md` so the design of record reflects the
    resolved decisions (SSE, JSONL-primary, clean-room licensing rule) and Ivan's
    delivery bar (coverage/badges/donation/Pages).
 

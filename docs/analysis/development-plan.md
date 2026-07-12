@@ -45,8 +45,8 @@ Ingest/Normalizer · **C** Cost · **U** Realtime+UI · **A** Alerts · **X** De
 ### Reading order for an implementing agent
 1. Read [`concept-analysis-v2.md`](concept-analysis-v2.md) §3 (the CD decisions) and §6
    (acceptance criteria).
-2. Read [`../ai/DESIGN.md`](../ai/DESIGN.md) for the data model and hook set.
-3. Read [`../../CLAUDE.md`](../../CLAUDE.md) — the non-negotiable security constraints apply
+2. Read `docs/ai/DESIGN.md` for the data model and hook set.
+3. Read `CLAUDE.md` — the non-negotiable security constraints apply
    to **every** WP.
 4. Find your WP in §6, honour its deps, satisfy its Done-when.
 
@@ -373,5 +373,5 @@ Every canonical decision is implemented by ≥1 WP (verifier-confirmed `ok:true`
 ---
 _Decomposition + adversarial verification workflow (8 track owners + 1 verifier), Opus /
 high effort, ~452k subagent tokens. Implements [`concept-analysis-v2.md`](concept-analysis-v2.md)
-CD-1…CD-10 against the design of record in [`../ai/DESIGN.md`](../ai/DESIGN.md). Open work:
+CD-1…CD-10 against the design of record in `docs/ai/DESIGN.md`. Open work:
 [`../../TODO.md`](../../TODO.md) · completed: [`../../DONE.md`](../../DONE.md)._

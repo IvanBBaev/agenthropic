@@ -226,8 +226,8 @@ report's §7.1; they are now recovered verbatim in §5.1 below (finding **LOST-7
 ## 5.1 The recovered EXPANDED §7.1 base catalogue (10 scenarios) — LOST-7
 
 The ten literal scenarios below are the external EXPANDED report's own §7.1 negative-test
-catalogue, recovered from the git-excluded source
-`due-diligence/agenthropic_ideen_doklad_gap_holistic_implementation_EXPANDED.docx` per
+catalogue, recovered from the EXPANDED external report (internal source material, not
+published in this repo) per
 corpus-audit finding **LOST-7** ([`corpus-audit-2026-07-06.md`](../../analysis/corpus-audit-2026-07-06.md)
 §4.3). They are the **base 10** of `WP-X4`'s 12-scenario catalogue; the remaining two
 (**compaction-mid-session** and **`PreCompact` re-pricing**) are the project-specific

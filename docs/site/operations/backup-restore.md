@@ -8,7 +8,7 @@ controls that sit next to backup in the source material: a **retention** TTL and
 **redaction at the ingest boundary**, so secrets and raw tool payloads never reach
 disk in the first place. The key takeaway: a backup nobody has ever restored from is
 not a real backup — this is why every gate below is phrased as **tested restore**,
-never "backup exists" ([`ai/DESIGN.md`](../../ai/DESIGN.md) §8;
+never "backup exists" (`docs/ai/DESIGN.md` §8;
 `docs/analysis/concept-analysis-v2.md` §6; `docs/analysis/development-plan.md`
 `WP-F8`).
 
@@ -21,7 +21,7 @@ procedure `WP-F8` will ship; §6 tallies precisely what is decided versus still 
 
 ## 1. Why WAL mode
 
-[`ai/DESIGN.md`](../../ai/DESIGN.md) §8 states the requirement in five words: **"SQLite
+`docs/ai/DESIGN.md` §8 states the requirement in five words: **"SQLite
 in WAL mode with backups."** `WP-D2` (the SQLite driver adapter) makes this a
 connection-time assertion rather than a hopeful default: *"On open, `journal_mode==wal`
 & `foreign_keys==ON` asserted"* (development-plan §5, Track D) — every connection the
@@ -61,7 +61,7 @@ The backup step must use SQLite's **online backup** mechanism, which is safe to 
 against a live, being-written-to WAL database — either the `sqlite3` CLI's `.backup`
 command (driver-agnostic, shown below) or, once the driver is fixed, the equivalent
 call on the storage driver itself (`better-sqlite3` — the leaning driver per
-[`ai/DESIGN.md`](../../ai/DESIGN.md) §10, still an open decision — exposes the same
+`docs/ai/DESIGN.md` §10, still an open decision — exposes the same
 SQLite online-backup API in-process).
 
 ```bash
@@ -92,7 +92,7 @@ find "${BACKUP_DIR}" -name 'agenthropic-*.db' -mtime "+<days>" -delete
 **Scheduling.** agenthropic's target host is a Mac Mini M4, and the design already
 leans on `launchd` rather than cron elsewhere — `simple10`'s
 `AGENTS_OBSERVE_RUNTIME=local` pattern under `launchd` (no Docker daemon) is named
-explicitly as a pattern to steal ([`ai/DESIGN.md`](../../ai/DESIGN.md) §7). A backup
+explicitly as a pattern to steal (`docs/ai/DESIGN.md` §7). A backup
 job fits the same operational model: a `launchd` user agent, not a browser-triggered
 endpoint (see the callout below).
 
@@ -134,7 +134,7 @@ endpoint (see the callout below).
 > Building a "restore" button that spawns a subprocess from request input is exactly
 > the [`security model`](../security/model.md)'s no-spawner invariant in a different
 > costume — the same shape as the `hoangsonww` `/api/run` RCE this project
-> deliberately walks away from ([`ai/DESIGN.md`](../../ai/DESIGN.md) §8).
+> deliberately walks away from (`docs/ai/DESIGN.md` §8).
 
 ## 3. The tested-restore drill
 
@@ -284,7 +284,7 @@ different work packages at two different boundaries. See
 
 | Aspect | Status |
 |---|---|
-| SQLite runs in WAL mode, pragma-asserted on every connection open | **Decided** ([`ai/DESIGN.md`](../../ai/DESIGN.md) §8; `WP-D2`) |
+| SQLite runs in WAL mode, pragma-asserted on every connection open | **Decided** (`docs/ai/DESIGN.md` §8; `WP-D2`) |
 | A backup exists and its restore path is exercised, not merely assumed to work | **Decided** (`ai/DESIGN.md` §8; `concept-analysis-v2.md` §6; `WP-F8`) |
 | Restore is re-verified at least once per release candidate, tracked in `RELEASE.md` | **Decided** (`concept-analysis-v2.md` §6; `WP-X9`) |
 | A retention TTL and payload redaction exist, live from Phase 1 | **Decided at the requirement level** (CD-10; `WP-D10`) |

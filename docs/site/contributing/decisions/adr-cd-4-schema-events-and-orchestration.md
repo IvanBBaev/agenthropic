@@ -5,7 +5,7 @@
 - **Date:** 2026-07-03
 - **Deciders:** Ivan Baev (project owner), via the six-lens concept-analysis-v2 workflow
 - **Source:** [`concept-analysis-v2.md` §3, row CD-4](../../../analysis/concept-analysis-v2.md#3-canonical-decision-register-v2)
-  (consolidates AD4, G-D6, SD5); [`docs/ai/DESIGN.md` §4](../../../ai/DESIGN.md)
+  (consolidates AD4, G-D6, SD5); `docs/ai/DESIGN.md` §4
 
 ## Context
 

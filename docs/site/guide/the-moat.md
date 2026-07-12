@@ -12,7 +12,7 @@ second host physically exists. The audit's own scoring model, corrected for a fa
 `simple10` first as a fork candidate — not `hoangsonww`, the vendor panel's original
 pick — but even the corrected #1 candidate doesn't ship the moat, and both leading
 candidates carry baggage (an insecure-by-default bind, or a live RCE) not worth
-inheriting. So the decision (recorded in [`DESIGN.md` §0](../../ai/DESIGN.md)) is to
+inheriting. So the decision (recorded in `DESIGN.md` §0) is to
 build clean, ports-and-adapters, in the spirit of `kiko`, and **steal the specific
 proven pieces** — under a per-artifact licensing rule — rather than adopt any one
 project's codebase wholesale.
@@ -33,13 +33,13 @@ zero-install developer-experience bar in the whole survey (due-diligence
 It already nails **self-hosted + zero-install + live token attribution**.
 
 It is also a flat leaderboard: **no DAG, no dollar cost, no persistence, no Telegram**
-(binds `0.0.0.0`, no auth) — see [`DESIGN.md` §1](../../ai/DESIGN.md). Our moat is
+(binds `0.0.0.0`, no auth) — see `DESIGN.md` §1. Our moat is
 defined as exactly what this baseline lacks, refined against the other five audited
 projects (due-diligence [`market-landscape.md`](../../due-diligence/market-landscape.md)).
 
 ## 2. The five features no existing tool delivers
 
-[`DESIGN.md` §2](../../ai/DESIGN.md) names five capabilities "confirmed absent across
+`DESIGN.md` §2 names five capabilities "confirmed absent across
 all six audited projects" — the build backlog that justifies building rather than
 adopting:
 
@@ -52,7 +52,7 @@ adopting:
 | 5 | Persistence the owner controls | nobody, cleanly — closest gap is `claude-code-templates`'s in-memory-only cache | Phase 1 baseline (SQLite WAL) |
 
 Phase numbers above follow [the roadmap page](roadmap.md)'s dependency-derived
-renumbering, which supersedes [`DESIGN.md` §9](../../ai/DESIGN.md)'s original sketch on
+renumbering, which supersedes `DESIGN.md` §9's original sketch on
 exactly these points — see §6 below for why the two disagree.
 
 Each is detailed below with the due-diligence evidence for its absence and the exact
@@ -77,7 +77,7 @@ per-session parent column with no cross-session graph:
   **reconstructed post-hoc on `SubagentStop`**, not a global cross-session graph
   (due-diligence
   [`projects/hoangsonww.md`](../../due-diligence/projects/hoangsonww.md);
-  [`DESIGN.md` §6](../../ai/DESIGN.md)).
+  `DESIGN.md` §6).
 - `disler`'s server **drops** `agent_id`/`agent_type` on ingest (`db.ts:127`) — the
   hierarchy is a dead path; no parent column, no graph library anywhere in the
   dependency tree (due-diligence [`projects/disler.md`](../../due-diligence/projects/disler.md)).
@@ -91,7 +91,7 @@ per-session parent column with no cross-session graph:
 
 **What we steal:** `simple10`'s tree algorithm — `buildAgentTree()` / `layoutTree()`
 (parent→child, orphan-reparenting, root synthesis) — as the model to validate against a
-real subagent-heavy session before committing ([`DESIGN.md` §6](../../ai/DESIGN.md)).
+real subagent-heavy session before committing (`DESIGN.md` §6).
 What we do **not** copy is its storage model. `DESIGN.md` §4 is explicit that the moat
 extends beyond every existing schema: edges must be **persisted** (not event-derived at
 render time), **per-instance** (not type-aggregated like `hoangsonww`'s), and carry an
@@ -140,12 +140,12 @@ proven piece is `cast`'s `analytics.ts:233-310` (~50 LOC): it re-prices Haiku se
 at Sonnet rates and reports the conservative `max(0, sonnetEquiv − actualHaiku)` saving,
 run off `~/.claude` JSONL (due-diligence
 [`projects/cast.md`](../../due-diligence/projects/cast.md);
-[`DESIGN.md` §2](../../ai/DESIGN.md) item 2: "Borrow `cast`'s ~50-LOC formula").
+`DESIGN.md` §2 item 2: "Borrow `cast`'s ~50-LOC formula").
 
 Two caveats carried forward from the due-diligence:
 
 - `cast`'s pricing table is **hardcoded and likely stale** — re-verify model rates
-  before trusting dollar figures ([`DESIGN.md` §7](../../ai/DESIGN.md)).
+  before trusting dollar figures (`DESIGN.md` §7).
 - `cast` has **no LICENSE file** (`private:true`, "MIT" is a README badge only, no
   `license` field) — so per concept-analysis-v2's CD-9, this formula is **clean-room
   reimplemented** (the idea is reproduced from the written description, not by reading
@@ -155,7 +155,7 @@ This is combined with `hoangsonww`'s genuinely superior costing grafts: `token_u
 bucketed by `speed` / `inference_geo` / `service_tier` (each changes the per-token
 rate), preserving **compaction baselines** so historical totals still price correctly
 after a context rewrite, plus a `model_pricing` table to drive the tile
-([`DESIGN.md` §4](../../ai/DESIGN.md)). Land on
+(`DESIGN.md` §4). Land on
 [architecture: cost model](../architecture/cost-model.md) (open page) once written; the
 tile itself is Phase 4 in the roadmap (§6 below).
 
@@ -166,7 +166,7 @@ No audited project has a Telegram integration ready to graft except one:
 (`webhook-providers.js:177`) plus a full `alert_rules` / `webhook_targets` /
 `webhook_deliveries` schema — "the easiest Telegram bridge in the whole set" (due-diligence
 [`projects/hoangsonww.md`](../../due-diligence/projects/hoangsonww.md);
-[`DESIGN.md` §2](../../ai/DESIGN.md) item 3, §7).
+`DESIGN.md` §2 item 3, §7).
 
 `hoangsonww` is MIT-licensed with a real LICENSE file, so this webhook provider and
 schema are grafted **with attribution**, not clean-room reimplemented — the one part of
@@ -182,12 +182,12 @@ SSRF test a build-blocking gate. Roadmap placement: Phase 5, "Alerting core" —
 ([`best-path-decision.md` §6.1](../../analysis/best-path-decision.md)) pulls alerting
 off the v1.0 critical path, so it ships as a post-1.0 convenience, not as part of the
 moat (§6 below; [the roadmap page](roadmap.md) sequences Telegram after the
-ingest/DAG/cost work, later than [`DESIGN.md` §9](../../ai/DESIGN.md)'s original
+ingest/DAG/cost work, later than `DESIGN.md` §9's original
 sketch).
 
 ### 2.4 Cross-machine / fleet aggregation
 
-**All six audited projects are single-host** ([`DESIGN.md` §2](../../ai/DESIGN.md) item
+**All six audited projects are single-host** (`DESIGN.md` §2 item
 4; [`market-landscape.md`](../../due-diligence/market-landscape.md)). There is no
 project to steal a fleet-aggregation pattern from — this is genuinely unclaimed ground,
 not a graft.
@@ -290,7 +290,7 @@ still doesn't have, and what it would drag in if adopted:
   bypassPermissions` in an attacker-chosen directory — code execution as the host user
   (due-diligence [`projects/hoangsonww.md`](../../due-diligence/projects/hoangsonww.md)).
   This is the exact anti-pattern this project's design forbids outright
-  ([`DESIGN.md` §8](../../ai/DESIGN.md)) — we never add a browser-driven `claude`
+  (`DESIGN.md` §8) — we never add a browser-driven `claude`
   spawner, full stop.
 - **`hoangsonww` is bus-factor-1 across 92k LOC**, with "enterprise cosplay over a solo
   project" red flags (70 badges, a 207 KB `ARCHITECTURE.md`) — adopting it wholesale is
@@ -300,7 +300,7 @@ still doesn't have, and what it would drag in if adopted:
   28.4k★ incumbent on five axes... is the exact hoangsonww
   enterprise-cosplay-over-solo-project trap").
 
-[`DESIGN.md` §0](../../ai/DESIGN.md) states the resolution directly: "the audit's §6
+`DESIGN.md` §0 states the resolution directly: "the audit's §6
 shows the genuine product surface is *what none of the six delivers*... a real
 greenfield moat — so we build, and *steal the best proven pieces* from each project
 rather than inherit any one's baggage." concept-analysis-v2's bottom line agrees: "Build.
@@ -334,7 +334,7 @@ Positioning and engineering priority lead with those two, not the full list of f
 
 ## 5. What we steal, and the licensing line that governs it
 
-[`DESIGN.md` §7](../../ai/DESIGN.md) names the source-level patterns worth taking;
+`DESIGN.md` §7 names the source-level patterns worth taking;
 concept-analysis-v2's **CD-9** turns that into an enforceable rule, because licensing is
 a hard commercial/legal gate, not a vibe (concept-analysis-v2
 [§4.4](../../analysis/concept-analysis-v2.md), [§3](../../analysis/concept-analysis-v2.md)):
@@ -358,7 +358,7 @@ enforced by a CI provenance/license scan (CD-9) — see
 
 ## 6. Where the moat lands in the roadmap
 
-The moat is not built in one phase. [`DESIGN.md` §9](../../ai/DESIGN.md) sketches a
+The moat is not built in one phase. `DESIGN.md` §9 sketches a
 shorter, higher-level phase sequence; [the roadmap page](roadmap.md) later decomposed
 that sketch into 75 dependency-checked units of work and **re-derived the phase
 boundaries from that graph rather than from the original guess** — which moved Telegram

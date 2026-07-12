@@ -9,7 +9,7 @@ parent→child relationship, and the hierarchy tables (`agents.parent_agent_id`,
 The governing principle, stated directly in the design basis:
 
 > "The differentiator is what we do with events after ingestion, not which we
-> receive." — [`DESIGN.md` §5](../../ai/DESIGN.md)
+> receive." — `DESIGN.md` §5
 
 Concretely, that means the ingest boundary is **accept-any-event**: a never-seen
 `event_type` is stored, not rejected and not crashed on. Ingestion is deliberately

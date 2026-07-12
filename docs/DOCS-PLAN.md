@@ -31,7 +31,7 @@ work packages** — one WP → one page → one agent → one PR, in the same sp
 >   differently); every `0.0.0.0` is a labelled anti-pattern; no spawner/WebSocket-transport
 >   guidance; secrets are placeholders only.
 
-Source of truth for content: [`ai/DESIGN.md`](ai/DESIGN.md) (design basis),
+Source of truth for content: `docs/ai/DESIGN.md` (design basis),
 [`analysis/`](analysis/) (concept-analysis-v2, development-plan, external review,
 animated-room), [`due-diligence/`](due-diligence/) (the evidence base), and the root
 [`README.md`](../README.md) / [`TODO.md`](../TODO.md) / [`DONE.md`](../DONE.md).
@@ -230,5 +230,5 @@ need a decision when the generator lands:
   non-github-slugger generator, re-run the anchor check against the *chosen* renderer.
 
 ---
-_Plan of record for content decomposition. Design basis: [`ai/DESIGN.md`](ai/DESIGN.md).
+_Plan of record for content decomposition. Design basis: `docs/ai/DESIGN.md`.
 Build decomposition: [`analysis/development-plan.md`](analysis/development-plan.md)._

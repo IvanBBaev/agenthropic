@@ -4,7 +4,7 @@
 > **Date:** 2026-07-03 · **Scope:** the "animated office/room" feature idea for
 > `agenthropic` (agents rendered as animated characters), earmarked by Ivan as a
 > post-MVP "version 1.5" want.
-> **Reviews:** [`../ai/DESIGN.md`](../ai/DESIGN.md) §6 (visualisation) and §9
+> **Reviews:** `docs/ai/DESIGN.md` §6 (visualisation) and §9
 > (roadmap, Phase 1.5). Sits beside [`concept-analysis.md`](concept-analysis.md)
 > (the whole-concept review) and [`implementation-plan.md`](implementation-plan.md)
 > (Part A decisions this analysis stays consistent with).

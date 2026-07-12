@@ -194,7 +194,7 @@ machinery can observe):
 |---|---|
 | A literal token baked into the `~/.claude` hook-command string | That settings file is plaintext on disk, and the command string is exactly what an installer would write in the (planned) registration shape above |
 | A literal token passed as a CLI argument | `argv` is visible to any other process on the host via `ps`/`/proc` — a classic local-secret leak vector, independent of anything Claude Code does |
-| A token printed to the hook script's stdout/stderr | Claude Code's own transcript (`~/.claude/projects/*.jsonl`) is the same ground-truth log this project treats as authoritative elsewhere ([DESIGN.md](../../ai/DESIGN.md) §3) — anything the hook prints risks ending up captured in it |
+| A token printed to the hook script's stdout/stderr | Claude Code's own transcript (`~/.claude/projects/*.jsonl`) is the same ground-truth log this project treats as authoritative elsewhere (`DESIGN.md` §3) — anything the hook prints risks ending up captured in it |
 | A token committed inside the versioned `hooks/` scripts themselves | The scripts are installable artifacts meant to be copied into `~/.claude`; a secret baked into them travels with every copy |
 
 Instead, the intended shape is that the shared dispatcher script reads the token at
