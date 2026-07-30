@@ -1,0 +1,104 @@
+# WP-X7 - build & publish the docs corpus to GitHub Pages.
+#
+# Generator neutrality: ADR-0013 (docs/site/contributing/decisions/
+# adr-docs-site-generator.md) explicitly DEFERS the docs-site generator choice
+# to DOC-P1. This workflow deliberately does not decide it: the tool-agnostic
+# Markdown tree is rendered with the stock GitHub Pages Jekyll builder
+# (actions/jekyll-build-pages - the official starter-workflow path), which adds
+# ZERO dependencies to the repository. When DOC-P1 picks a generator
+# (VitePress / Docusaurus / MkDocs Material), replace the build job wholesale.
+#
+# Source root is docs/ (not docs/site/): the site tree cross-links heavily into
+# ../analysis/*, ../DOCS-PLAN.md and ../due-diligence/* (129 relative links at
+# the time of writing), so publishing docs/site alone would break them all.
+# docs/ai/ is local-only (git-excluded) and never present in the CI checkout.
+#
+# The default GitHub Pages plugin set does the heavy lifting:
+#   - jekyll-optional-front-matter: renders plain CommonMark pages as-is
+#   - jekyll-relative-links: rewrites relative *.md links to the rendered pages
+#   - jekyll-readme-index: docs/site/README.md becomes /site/index.html
+#   - jekyll-titles-from-headings + the default Primer theme
+#
+# OWNER ACTION REQUIRED (one-time, cannot be done from this file): enable Pages
+# in Settings -> Pages -> Source: "GitHub Actions". As of 2026-07-29 the repo
+# reports has_pages: false; until the owner flips that switch, the deploy job
+# will fail with "Pages not enabled". The application itself stays bound to
+# 127.0.0.1 - the docs site is the only public surface (ADR-0013).
+name: Docs site (GitHub Pages)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time; never cancel a running production deploy.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Add build-time site scaffolding (runner workspace only, never committed)
+        run: |
+          # Minimal Jekyll config: only forces inclusion of the underscore-
+          # prefixed ADR template (linked from five pages; Jekyll drops _* files
+          # by default). Everything else stays at Pages defaults.
+          cat > docs/_config.yml <<'EOF'
+          title: agenthropic
+          description: Self-hosted, local-first dashboard observing Claude Code agent/subagent activity
+          include:
+            - _adr-template.md
+            - site/contributing/decisions/_adr-template.md
+          EOF
+          # docs/ has no README.md of its own, so the site root would 404.
+          # Generate a small landing page pointing into the published trees.
+          cat > docs/index.md <<'EOF'
+          # agenthropic documentation
+
+          Self-hosted, local-first dashboard for observing Claude Code agent and
+          subagent activity - the persisted subagent DAG with dollar-accurate
+          cost attribution.
+
+          - [Documentation site](site/README.md) - start here (guide,
+            architecture, usage, security, operations, contributing, ADRs)
+          - [Decision spine / analysis corpus](analysis/README.md) - the
+            due-diligence record behind every decision
+          - [Docs plan](DOCS-PLAN.md) - how this corpus is produced
+
+          Source: [github.com/IvanBBaev/agenthropic](https://github.com/IvanBBaev/agenthropic)
+          EOF
+
+      - name: Build with the stock GitHub Pages Jekyll builder
+        uses: actions/jekyll-build-pages@v1
+        with:
+          source: ./docs
+          destination: ./_site
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

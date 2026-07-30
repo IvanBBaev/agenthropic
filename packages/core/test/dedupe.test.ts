@@ -94,13 +94,56 @@ describe('dedupeUsageByMessageId', () => {
     expect(totalOutput).toBe(60); // naive summation would report 180 (3x)
   });
 
-  it('throws when duplicate rows carry different usage blocks', () => {
-    const rows = [row(), row({ usage: { ...USAGE_A, cacheRead: 5001 } })];
-    expect(() => dedupeUsageByMessageId(rows)).toThrow(UsageConflictError);
-    expect(() => dedupeUsageByMessageId(rows)).toThrow(/conflicting usage blocks/);
+  it('collapses streamed partials to the per-bucket maximum (final complete usage)', () => {
+    // Real transcripts stream one message across rows: input/cache constant,
+    // output_tokens growing to the final total. Dedup keeps the max per bucket.
+    const rows = [
+      row({ usage: { ...USAGE_A, output: 7 } }),
+      row({ usage: { ...USAGE_A, output: 7 } }),
+      row({ usage: { ...USAGE_A, output: 310 } }),
+    ];
+    const deduped = dedupeUsageByMessageId(rows);
+    expect(deduped).toHaveLength(1);
+    expect(deduped[0]?.usage.output).toBe(310);
+    expect(deduped[0]?.usage.input).toBe(USAGE_A.input);
+    expect(deduped[0]?.usage.cacheRead).toBe(USAGE_A.cacheRead);
   });
 
-  it('throws when duplicate rows carry different models', () => {
+  it('takes the maximum regardless of row order (order-independent collapse)', () => {
+    const rows = [
+      row({ usage: { ...USAGE_A, output: 310 } }),
+      row({ usage: { ...USAGE_A, output: 7 } }),
+    ];
+    const deduped = dedupeUsageByMessageId(rows);
+    expect(deduped[0]?.usage.output).toBe(310);
+  });
+
+  it('settles the model to the greatest-output row (transient fast-mode label on the first partial)', () => {
+    // Real streaming: the first partial can carry a transient routing label
+    // (claude-fable-5) that settles to the real model (claude-opus-4-8) on every
+    // later partial. The greatest-output (final) row is authoritative.
+    const rows = [
+      row({ model: 'claude-fable-5', usage: { ...USAGE_A, output: 2 } }),
+      row({ model: 'claude-opus-4-8', usage: { ...USAGE_A, output: 2 } }),
+      row({ model: 'claude-opus-4-8', usage: { ...USAGE_A, output: 6747 } }),
+    ];
+    const deduped = dedupeUsageByMessageId(rows);
+    expect(deduped).toHaveLength(1);
+    expect(deduped[0]?.model).toBe('claude-opus-4-8');
+    expect(deduped[0]?.usage.output).toBe(6747);
+  });
+
+  it('settles the model regardless of row order (the final row can arrive first)', () => {
+    const rows = [
+      row({ model: 'claude-opus-4-8', usage: { ...USAGE_A, output: 6747 } }),
+      row({ model: 'claude-fable-5', usage: { ...USAGE_A, output: 2 } }),
+    ];
+    expect(dedupeUsageByMessageId(rows)[0]?.model).toBe('claude-opus-4-8');
+  });
+
+  it('throws when two distinct models are tied at the same maximum output (genuine collision)', () => {
+    // No output growth to disambiguate: two models tie at the global maximum,
+    // which streaming cannot produce, so it stays a loud failure.
     const rows = [row(), row({ model: 'claude-fable-5' })];
     expect(() => dedupeUsageByMessageId(rows)).toThrow(UsageConflictError);
     expect(() => dedupeUsageByMessageId(rows)).toThrow(/conflicting model/);

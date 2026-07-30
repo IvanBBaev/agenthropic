@@ -11,12 +11,16 @@ private pipe that carries bytes from a remote client into that one loopback sock
 never asks the application to listen anywhere else, and it never weakens the mandatory
 auth check that gates every request arriving on that socket (`DESIGN.md` §8).
 
-> **Status.** `agenthropic` is pre-Phase-0 (see the [roadmap](../guide/roadmap.md)): no
-> server code is scaffolded yet. Everything below describes the target operating
-> procedure for Phase 1's "hardened internal cockpit" — loopback bind + mandatory token
-> (`DESIGN.md` §9, Phase 1) — not a command you can run against a live agenthropic
-> instance today. The generic SSH and Tailscale mechanics themselves are standard,
-> already-stable tool behavior and are safe to learn ahead of that.
+> **Status (updated 2026-07, as built).** This page was written pre-Phase-0; the
+> server it describes now exists. Implementation began 2026-07-11: the server binds
+> `127.0.0.1` with **no configuration path to any other host** (the bind host is a
+> constant in `apps/server/src/config.ts`, deliberately not an environment variable),
+> refuses to start without `DASHBOARD_TOKEN`, and listens on port **4317** by default
+> (`DASHBOARD_PORT` overrides it). Substitute `4317` for `<port>` in every command
+> below and the procedures apply as written. The token travels as an
+> `Authorization: Bearer <token>` header — with one accommodation: the SSE stream
+> (`/api/stream`) also accepts `?token=`, because the browser `EventSource` API
+> cannot set headers (the server redacts that query value from its own logs).
 
 ## Why the bind never moves
 
@@ -91,8 +95,8 @@ tunnel — and both leave the dashboard listening on `127.0.0.1` and nowhere els
 ```
 
 In both cases the dashboard process itself never binds anything but `127.0.0.1:<port>`
-(`<port>` is a placeholder — the exact port is one of `DESIGN.md` §10's open stack
-decisions, not yet fixed). What differs between the two options is which
+(`<port>` was an open stack decision when this page was written; as built the default
+is **4317**, overridable via `DASHBOARD_PORT`). What differs between the two options is which
 already-trusted system service — `sshd` or `tailscaled` — is allowed to hand bytes to
 that socket on the app's behalf, and over what authenticated channel. Neither option
 asks the dashboard to change how or where it listens.
@@ -197,11 +201,13 @@ becomes a no-op the moment it is unset, and that single gap is what turns its
 spawner. Tunnel-plus-mandatory-token is defense in depth, not either/or — removing
 either half reopens a path the other half was specifically there to close.
 
-The exact wire mechanics of *how* a browser presents that token (header, cookie, or
-query parameter) are not fixed anywhere citable yet — see
-[security model](model.md) for the authoritative answer once that detail lands. This
-page only guarantees the outcome is identical regardless of which tunnel option
-carried the request.
+The wire mechanics of *how* a browser presents that token were open when this page
+was written; as built they are: `Authorization: Bearer <token>` on every request,
+plus `?token=` accepted on `/api/stream` only (the `EventSource` API cannot set
+headers; the server redacts the query value from its logs). See
+[security model](model.md) rule 2's as-built note. This page's guarantee is
+unchanged: the outcome is identical regardless of which tunnel option carried the
+request.
 
 ## Choosing between the two
 
@@ -224,21 +230,25 @@ something is open rather than gloss over it:
 
 - **The dashboard's listening port** is a placeholder (`<port>`) throughout this page —
   the concrete default is one of `DESIGN.md` §10's undecided stack questions.
+  *(Resolved as built: default **4317**, `DASHBOARD_PORT` overrides.)*
 - **The token transport mechanics** (header vs. cookie vs. query parameter) are not yet
-  fixed — see [security model](model.md).
+  fixed — see [security model](model.md). *(Resolved as built: `Authorization: Bearer`
+  header everywhere; `?token=` accepted on `/api/stream` only, redacted from logs.)*
 - **Whether an installer or `launchd` unit ever wraps the SSH/Tailscale setup above**
   (to save re-typing the tunnel command) is not on the roadmap as of this writing; today
-  this page describes the manual procedure only.
+  this page describes the manual procedure only. *(Still open — the built installer,
+  `usage/hooks-installer.md`, installs hooks, not tunnels.)*
 - No server exists yet to actually tunnel to — see the
   [roadmap](../guide/roadmap.md) for when Phase 1 ships the loopback-bound,
-  token-gated listener this page assumes.
+  token-gated listener this page assumes. *(Resolved 2026-07: the server exists —
+  loopback-bound, token-gated, test-proven by the security-contract suite.)*
 
 ## See also
 
 - [Security model](model.md) — the full rule → why → how-enforced catalogue for every
   control this page assumes (loopback bind, mandatory token, same-origin realtime
-  channel); the token-transport mechanics this page defers to it are not decided there
-  either — see [what's not yet decided](#whats-not-yet-decided) above.
+  channel); its rule 2 as-built note now records the token-transport mechanics
+  (Bearer header, `?token=` on the SSE stream only).
 - [Threat model](threat-model.md) — the rival-by-rival breakdown of what happens when
   bind and auth are gotten wrong, including the LAN-peer and local-multi-user attacker
   models referenced above.

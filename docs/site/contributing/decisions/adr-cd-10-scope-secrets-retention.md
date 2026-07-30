@@ -1,10 +1,61 @@
 # ADR-0012: CD-10 — Scope, secrets & retention: MVP discipline for a solo owner
 
-- **Status:** accepted
+- **Status:** accepted, **partially built as of 2026-07-30** — scope discipline held; payload redaction shipped at the ingest boundary; **retention TTL is not implemented**, blocked on the open OPEN-1/2/3 decisions (see the as-built update below)
 - **Date:** 2026-07-03
 - **Deciders:** Ivan Baev (project owner), via the six-lens concept-analysis-v2 workflow
 - **Source:** [`concept-analysis-v2.md` §3, row CD-10](../../../analysis/concept-analysis-v2.md#3-canonical-decision-register-v2)
   (consolidates BA-D1/D3, G-D7, AD8, SD7, LB2); §4.6 (Holistic, seam 3)
+
+## As-built update — 2026-07-30
+
+**Verdict: partially built.** This decision bundles three separate risks, and they
+shipped at three different depths. Taking them in order:
+
+**Scope — held.** No vector-DB feed, no fleet, no multi-tenancy. The
+`instance`/`host_id` hedge is present and `NOT NULL` on every `orchestration_edges`
+row, exactly as the cheap-hedge criterion requires. The API surface is small
+(sessions, DAG, cost, events, stream). The "< 30s time-to-understand a session"
+criterion is **unmeasured** — no one has timed it, so it is neither met nor missed;
+it is untested.
+
+**Redaction — shipped, in the strong position.** `apps/server/src/hooks/redact.ts`
+scrubs hook payloads at the **ingest boundary**, before persistence and — critically
+— **before the idempotency key is computed**, so a redelivered event redacts
+identically and still dedupes. Two independent rules run: key-based (any field whose
+normalized name matches `token`, `secret`, `password`, `apikey`, `authorization`,
+`bearer`, `privatekey`, `accesskey`, … is replaced wholesale, whatever its value
+type) and value-based (string values are scanned for credential shapes — `sk-`,
+`ghp_`, `xox`, `AKIA`, JWTs, `Bearer <…>` — and each match is masked in place). An
+explicit allowlist keeps **token-count** fields (`input_tokens`, `output_tokens`, …)
+intact, because token counts are observability data, not credentials — the one place
+where a naive "redact anything called `*token*`" rule would have destroyed the
+project's core dataset.
+
+Two caveats stated plainly: the redaction policy implements the *recommended*
+resolution of OPEN-3 as a default and is **pending Ivan's sign-off**; and it can only
+ever grow on sign-off, never relax.
+
+**Retention — NOT implemented.** There is no TTL sweeper, no prune, no purge, and no
+retention configuration anywhere in `apps/server`, `packages/core` or
+`packages/shared`. `WP-D10` shipped its redaction half and not its retention half.
+The Decision below says "Retention TTL + payload redaction from Phase 1"; half of
+that sentence is true.
+
+This is **blocked, and on a named person**: the retention policy depends on the
+still-open OPEN-1 / OPEN-2 / OPEN-3 decisions
+([`open-decisions.md`](../../../analysis/open-decisions.md)), which are Ivan's to
+make. Building a sweeper before those land would mean choosing a data-destruction
+policy by default — the precise failure mode this project was built to avoid. So the
+gap is deliberate, but it is still a gap: the "unbounded local storage growth" risk
+this ADR names in its Context is, as of today, **not mitigated**. A long-running
+instance grows without bound.
+
+**Telegram `token_ref` — not built, because there is nothing to secure yet.** No
+`token_ref` resolver exists (`WP-A3`), because alerting is post-1.0 and no Telegram
+secret is handled by any code path. The `>0600`-dotfile-rejected criterion has
+nothing to run against. Separately, `ANTHROPIC_API_KEY` does stay out of the
+dashboard env entirely — it appears nowhere in the server source, and the server has
+no outbound network call that could use one.
 
 ## Context
 

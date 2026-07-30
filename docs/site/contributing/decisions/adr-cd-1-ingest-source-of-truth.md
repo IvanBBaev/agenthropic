@@ -1,6 +1,6 @@
 # ADR-0003: CD-1 — Ingest source of truth, decided by the Phase-0 diff
 
-- **Status:** accepted — decision procedure locked; outcome pre-answered `CONDITIONAL-GO` (conf 85) by the 2026-07-04 desktop probe, formal Phase-0 spike pending (see ADR-0001)
+- **Status:** accepted — JSONL-primary branch **built and holding** (see the as-built update below); ~~formal Phase-0 spike pending~~ *(the `WP-S7` gate this ADR depends on was overridden by the owner on 2026-07-11, not passed — see [ADR-0010](adr-cd-8-phase-0-spike.md))*
 - **Date:** 2026-07-03
 - **Deciders:** Ivan Baev (project owner), via the six-lens concept-analysis-v2 workflow
 - **Source:** [`concept-analysis-v2.md` §3, row CD-1](../../../analysis/concept-analysis-v2.md#3-canonical-decision-register-v2)
@@ -27,6 +27,38 @@ real `~/.claude/projects/` corpus, two load-bearing facts hand-verified) **pre-a
 This **de-risks but does not replace** the formal spike: `WP-S1`/`WP-S5` still need the
 paired-capture corpus and Ivan's tree sign-off, and the `WP-S7` **GO gate below still stands** —
 no ingest/normalizer production code before it.
+
+## As-built update — 2026-07-30
+
+**Verdict: holds, strengthened.** The Decision's JSONL-primary branch is what was
+built, and the split is sharper in code than on paper.
+
+- **JSONL is the sole structural source.** `sessions`, `agents`,
+  `orchestration_edges` and `token_usage` are written only from parsed JSONL, via a
+  read-only corpus port. Nothing about the shape of the tree, and no token count,
+  ever originates in a hook.
+- **Hooks are liveness only, never structure.** A hook delivery appends its raw
+  envelope to `events_raw` and writes one identifier-only normalized row to `events`
+  (session / agent identifiers and a type — never payload content). It is a "something
+  happened just now" signal for the live view; it cannot create an agent, an edge, or
+  a token row.
+- **Four hooks exist, not twelve.** The shipped installer wires `UserPromptSubmit`,
+  `Stop`, `SubagentStop` and `PreCompact`. Design-era prose across this corpus that
+  counts "the twelve lifecycle hook events" describes the event *catalogue* that was
+  surveyed, not what agenthropic subscribes to. In particular **`SubagentStart` does
+  not exist** — subagent birth is therefore observable only in JSONL, which is one
+  concrete reason the JSONL-primary branch had to win.
+- **The separation is proven, not asserted.** The P0 DAG-rebuild proof
+  (`apps/server/test/p0/p0-dag-rebuild.test.ts`) rebuilds the full DAG from JSONL
+  alone after a simulated outage, then appends hook events and asserts the DAG dump is
+  **unchanged**. That test is merge-blocking.
+
+One honest caveat on the *procedural* half of this ADR: the criterion below —
+"no ingest/normalizer production code until `WP-S7` reports GO" — was **not**
+satisfied. Ingest was built under an owner override of that gate; see
+[ADR-0010](adr-cd-8-phase-0-spike.md)'s as-built update. The technical branch this
+ADR selects was independently borne out by the P0 proofs; the gate that was supposed
+to select it was bypassed.
 
 ## Context
 

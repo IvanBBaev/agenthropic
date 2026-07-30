@@ -7,5 +7,18 @@ export const CORE_PACKAGE_NAME = '@agenthropic/core';
 
 export { dedupeUsageByMessageId, UsageConflictError } from './usage/dedupe';
 export { computeCostUsd, PricingError } from './cost/compute-cost';
+export { computeCompactionAwareCost } from './cost/compaction-repricing';
+export type { CompactionSegment, CompactionRepricingResult } from './cost/compaction-repricing';
+export { computeDelegationSavings } from './cost/delegation-savings';
+export type {
+  DelegationSavingsOptions,
+  AgentDelegationSavings,
+  DelegationSavingsResult,
+} from './cost/delegation-savings';
 export { groupSiblingsIntoWaves, DEFAULT_WAVE_THRESHOLD_MS } from './dag/waves';
+export { parseSession, SubstrateError, classifyRelativePath } from './parser/parse-session';
+export { extractCompactionBoundaries } from './parser/compaction';
+export type { CompactionBoundary } from './parser/compaction';
 export type { TokenBuckets, UsageRow, DedupedUsage, PricingEntry, SiblingWave } from './types';
+export type { ParsedSession, ParsedAgent, ParsedEdge, ParsedAgentType } from './parser/types';
+export type { SessionSubstrate, SubstrateFile } from './parser/substrate';

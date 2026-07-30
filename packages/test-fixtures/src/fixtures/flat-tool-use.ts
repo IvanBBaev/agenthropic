@@ -2,10 +2,11 @@
  * Fixture `flat-tool-use` — parser-spec section 4, base path 1.
  *
  * Flat layout: the main transcript carries an `Agent` tool_use block whose
- * `id` is the structural anchor; the child `agent-<hex>.jsonl` carries the
- * inline `agentId` and a `meta.toolUseId` byte-equal to that anchor.
- * The join must be on structural id position, never a substring grep — the
- * prose line below deliberately mentions the id in free text (gate item #5).
+ * `id` is the structural anchor; the child's `agent-<hex>.meta.json` sidecar
+ * carries a `toolUseId` byte-equal to that anchor (the primary child->parent
+ * join on real data). The join must be on structural id position, never a
+ * substring grep — the prose line below deliberately mentions the id in free
+ * text (gate item #5).
  */
 import { type Fixture, jsonLine } from './types.js';
 
@@ -74,7 +75,6 @@ const childFirstLines = [
     isSidechain: true,
     sessionId: SESSION_ID,
     agentId: AGENT_HEX,
-    meta: { toolUseId: TOOL_USE_ID, layout: 'flat' },
     type: 'user',
     message: {
       role: 'user',
@@ -107,13 +107,15 @@ const childFirstLines = [
   }),
 ];
 
+// Real `agent-<hex>.meta.json` sidecar shape for a FLAT subagent: single-line
+// JSON carrying the parent anchor `toolUseId` (primary child->parent join),
+// the dispatched `agentType`, a `description` and the `spawnDepth`.
 const childMeta = [
   jsonLine({
-    agentId: AGENT_HEX,
+    agentType: 'general-purpose',
+    description: 'Synthetic subagent task: count the widgets.',
     toolUseId: TOOL_USE_ID,
-    promptId: 'prompt_synth_flat_0001',
-    layout: 'flat',
-    model: 'synthetic-model-a',
+    spawnDepth: 1,
   }),
 ];
 
@@ -121,7 +123,7 @@ export const flatToolUse: Fixture = {
   name: 'flat-tool-use',
   description:
     'Flat layout, base join path 1: parent-side Agent tool_use block in the main transcript, ' +
-    'anchored by tool_use.id to the child agent-<hex>.jsonl inline agentId/meta.toolUseId. ' +
+    'anchored by tool_use.id to the child agent-<hex>.meta.json sidecar toolUseId. ' +
     'Includes a prose mention of the anchor id to guard against substring joins (gate #5).',
   files: [
     { relativePath: `${SESSION_ID}.jsonl`, lines: mainTranscript },

@@ -15,8 +15,10 @@ export interface TokenBuckets {
 }
 
 /**
- * One raw JSONL `usage` row. Claude Code writes one line per content block,
- * so many rows share a `messageId` and carry an identical `usage` block
+ * One raw JSONL `usage` row. Claude Code writes one line per content block, so
+ * many rows share a `messageId`; on real data those are streamed partials whose
+ * `input`/cache buckets are constant while `output` grows toward the final
+ * total. Dedup collapses each `messageId` to its per-bucket maximum
  * (parser-spec section 5.2).
  */
 export interface UsageRow {

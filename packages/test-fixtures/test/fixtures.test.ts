@@ -53,13 +53,14 @@ function agentHexFromPath(relativePath: string): string {
 }
 
 describe('fixture manifest', () => {
-  it('lists exactly the five expected fixtures', () => {
+  it('lists exactly the six expected fixtures', () => {
     expect([...listFixtures()]).toEqual([
       'flat-tool-use',
       'nested-workflow',
       'task-notification-recovery',
       'queue-operation',
       'usage-dedup',
+      'depth-2-sync',
     ]);
   });
 
@@ -99,11 +100,13 @@ describe('flat-tool-use (base join path 1)', () => {
     for (const record of child) {
       expect(record.agentId).toBe(hex);
     }
-    expect(child[0]!.meta.toolUseId).toBe(spawn.id);
 
+    // The sidecar is a SEPARATE .meta.json file (the child JSONL carries no
+    // inline meta); it holds the parent anchor toolUseId, agentType, spawnDepth.
     const meta = parsedLines(fixture, childFile.relativePath.replace('.jsonl', '.meta.json'))[0]!;
-    expect(meta.agentId).toBe(hex);
     expect(meta.toolUseId).toBe(spawn.id);
+    expect(meta.agentType).toBe('general-purpose');
+    expect(meta.spawnDepth).toBe(1);
   });
 
   it('carries the anchor id in prose too (substring joins must be impossible, gate #5)', () => {
@@ -130,7 +133,7 @@ describe('nested-workflow (base join path 2)', () => {
   it('directory-anchors both agents under the same wf_ dir as the journal', () => {
     const agentFiles = fixture.files.filter((f) => /agent-[0-9a-f]+\.jsonl$/.test(f.relativePath));
     expect(agentFiles).toHaveLength(2);
-    expect(workflowDir).toMatch(/^workflows\/wf_[0-9a-f]+$/);
+    expect(workflowDir).toMatch(/^subagents\/workflows\/wf_[0-9a-f]+$/);
     for (const file of agentFiles) {
       expect(file.relativePath.startsWith(`${workflowDir}/`)).toBe(true);
     }
@@ -153,7 +156,13 @@ describe('nested-workflow (base join path 2)', () => {
       const first = parsedLines(fixture, file.relativePath)[0]!;
       expect(first.agentId).toBe(hex);
       expect(first.parentUuid).toBeNull(); // first nested record has no parentUuid (spec 6.3)
-      expect(first.meta.promptId).toBe([...promptIds][0]);
+
+      // Workflow sidecar: agentType + worktreePath, and crucially NO toolUseId
+      // (workflow subagents join by directory, not by a spawn anchor).
+      const meta = parsedLines(fixture, file.relativePath.replace('.jsonl', '.meta.json'))[0]!;
+      expect(meta.agentType).toBe('general-purpose');
+      expect(meta.worktreePath).toContain(hex);
+      expect(meta.toolUseId).toBeUndefined();
     }
   });
 
@@ -175,7 +184,9 @@ describe('task-notification-recovery (recovery path N1)', () => {
     const content = first.message.content as string;
     expect(content).toContain(`<tool-use-id>${EVICTED_TOOL_USE_ID}</tool-use-id>`);
     expect(content).toContain(`<task-id>${TASK_ID}</task-id>`);
-    expect(first.meta.toolUseId).toBe(EVICTED_TOOL_USE_ID);
+    // Legacy session: no agent-<hex>.meta.json sidecar exists at all, so the
+    // child can only be re-anchored via the <task-notification> tags above.
+    expect(fixture.files.some((f) => f.relativePath.endsWith('.meta.json'))).toBe(false);
   });
 
   it('the parent-side tool_use block is genuinely absent (evicted by compaction)', () => {
@@ -197,11 +208,18 @@ describe('queue-operation (recovery path N2)', () => {
     expect(queueRecord.content).toContain(`<tool-use-id>${QUEUED_TOOL_USE_ID}</tool-use-id>`);
     expect(queueRecord.content).toContain(`<task-id>${QUEUED_TASK_ID}</task-id>`);
 
-    const childFile = fixture.files.find((f) => f.relativePath.includes('agent-'))!;
+    const childFile = fixture.files.find((f) => /agent-[0-9a-f]+\.jsonl$/.test(f.relativePath))!;
     const first = parsedLines(fixture, childFile.relativePath)[0]!;
-    expect(first.meta.toolUseId).toBe(QUEUED_TOOL_USE_ID);
-    expect(first.meta.taskId).toBe(QUEUED_TASK_ID);
-    expect(first.agentId).toBe(agentHexFromPath(childFile.relativePath));
+    const hex = agentHexFromPath(childFile.relativePath);
+    expect(first.agentId).toBe(hex);
+    // The <task-id> IS the backgrounded child's agent hex — the queue join key.
+    expect(QUEUED_TASK_ID).toBe(hex);
+
+    // The child sidecar carries NO toolUseId, forcing the parser off the
+    // sidecar-anchor path and onto the queue-operation join.
+    const meta = parsedLines(fixture, childFile.relativePath.replace('.jsonl', '.meta.json'))[0]!;
+    expect(meta.toolUseId).toBeUndefined();
+    expect(meta.agentType).toBe('general-purpose');
   });
 
   it('no parent tool_use block exists for the backgrounded spawn', () => {
@@ -221,11 +239,20 @@ describe('usage-dedup (correctness gate N3)', () => {
     expect(new Set(lines.map((record) => record.message.model)).size).toBe(2);
   });
 
-  it('the 3 lines sharing one message.id carry byte-identical usage blocks', () => {
+  it('the 3 lines sharing one message.id are streamed partials (constant input/cache, growing output)', () => {
     const duplicates = lines.filter((record) => record.message.id === DUPLICATED_MESSAGE_ID);
     expect(duplicates).toHaveLength(3);
-    const serialized = duplicates.map((record) => JSON.stringify(record.message.usage));
-    expect(new Set(serialized).size).toBe(1);
+
+    // Non-output buckets are constant across the streamed partials.
+    const inputs = new Set(duplicates.map((r) => r.message.usage.input_tokens));
+    const cacheReads = new Set(duplicates.map((r) => r.message.usage.cache_read_input_tokens));
+    expect(inputs.size).toBe(1);
+    expect(cacheReads.size).toBe(1);
+
+    // output_tokens grows toward the final total, which the last line carries.
+    const outputs = duplicates.map((r) => r.message.usage.output_tokens as number);
+    expect(new Set(outputs).size).toBeGreaterThan(1);
+    expect(outputs.at(-1)).toBe(Math.max(...outputs));
   });
 
   it('includes cache_read-heavy buckets on both models', () => {

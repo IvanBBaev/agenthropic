@@ -25,6 +25,36 @@ snapshot in §4–§5.
 > held.** A 2026-07-07 state check found the repo unchanged since the 07-06 close: all
 > five Step-0 boxes unchecked, 0 commits. **KC-0 (2026-07-13) is 6 days away.**
 
+> **⚠️ Update — 2026-07-30 (read this before acting on §1, §4 or §5).** This file is a
+> navigator, and its 07-06 snapshot has been overtaken by events. Three things in it are
+> now factually wrong, and a fresh session that trusts them will act incorrectly:
+>
+> 1. **"Zero application code. Zero git commits" is false.** Implementation began
+>    **2026-07-11**. What runs today: the loopback-bound token-gated Fastify server, the
+>    SQLite/WAL substrate with migrations and an append-only `events_raw` enforced by
+>    triggers, JSONL corpus ingest with replay-on-startup, the persisted subagent DAG,
+>    the cost engine, the hook receiver, the SSE hub, the read API, and all four SPA
+>    views. **72 test files / 879 tests pass**, coverage gated >90% in every shipped
+>    package. The three P0 moat proofs and the 12-scenario negative catalogue are green.
+> 2. **"No production code until Gate A + WP-S7 GO — CD-8 is still binding" no longer
+>    describes the operating reality.** CD-8 was **overridden by the owner in chat on
+>    2026-07-11** ("пускай агенти и започвай да имплементираш"), and again on 2026-07-18
+>    to keep dispatching past a failed checkpoint. The override covers **dispatching
+>    only** — it does not relax the security invariants, the LABEL-ME ratification
+>    (Phase-0 numbers stay **PROVISIONAL**), Ivan's two physical KC acts, or
+>    no-commit-without-an-explicit-ask. Record it as an override, never as a pass.
+> 3. **KC-0 (2026-07-13) and KC-1 (2026-07-27) both passed UNMET.** KC-0 closed with 2 of
+>    5 boxes open. KC-1's clauses 1 and 2 were green, but clause 3 — "the friction log has
+>    not crowned a rival" — was **unsatisfiable by construction**, because the friction
+>    log was never opened. A checkpoint whose condition cannot be evaluated has not been
+>    passed; it was skipped. The next real checkpoint is **KC-2, 2026-09-14**.
+>
+> Still true and still binding: the security invariants (§ everywhere), the analysis
+> freeze (9 of 9 — decline #10), the **immovable KC-4 date of 2026-12-01**, and the rule
+> that at a failed checkpoint you report and stop rather than archiving anything
+> yourself. **Newest truth lives in [`../../DONE.md`](../../DONE.md) Milestone 1,
+> [`../../TODO.md`](../../TODO.md) and `WORKLOG.md`** — prefer them over §4–§5 below.
+
 ---
 
 ## 1. What this project is

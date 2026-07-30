@@ -26,6 +26,7 @@ describe('security contract (WP-F7)', () => {
       DASHBOARD_TOKEN: TEST_TOKEN,
       DASHBOARD_PORT: '0',
       DASHBOARD_DB_PATH: join(dir, 'data', 'agenthropic.db'),
+      DASHBOARD_INGEST: '0', // tests must never resolve the real ~/.claude/projects
     });
     const address = server.app.addresses()[0];
     if (address === undefined) {

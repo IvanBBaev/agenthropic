@@ -17,6 +17,49 @@ important limit of what that CI gate can and cannot prove
 [§3](../../analysis/concept-analysis-v2.md) CD-9; development-plan
 [`WP-F5`/`WP-F6`](../../analysis/development-plan.md)).
 
+> **Update — 2026-07 (as built).** Both gates named in §6 exist and are wired into
+> the root `package.json`, so the CD-9 mechanism below is live rather than planned:
+>
+> - **`WP-F6` — `pnpm run gate:licenses`** → [`scripts/check-licenses.mjs`](https://github.com/IvanBBaev/agenthropic/blob/main/scripts/check-licenses.mjs).
+>   It enumerates every installed dependency in the workspace (prod + dev) via
+>   `pnpm licenses list --json` and exits 1 on anything outside an explicit
+>   allowlist — `MIT`, `MIT-0`, `ISC`, `Apache-2.0`, `BSD-2-Clause`, `BSD-3-Clause`,
+>   `0BSD`, `BlueOak-1.0.0`, `CC0-1.0`, `Unlicense`, `Python-2.0` — with SPDX
+>   expressions resolved properly (an `OR` passes if any branch is allowlisted, an
+>   `AND` requires every part). There is exactly one documented per-package
+>   exception: `caniuse-lite` under `CC-BY-4.0`, an attribution-only data file
+>   pulled in transitively by the Vite toolchain. The scan currently passes over
+>   **412 packages**. §7's open question — "which SPDX identifiers are on the
+>   allowlist" — is answered by that file; it is no longer undecided.
+> - **`WP-F5` — `pnpm run gate:spawner`** → `scripts/check-no-spawner.mjs`, scanning
+>   174 files across 4 roots for `child_process`/`exec`/`spawn` reachability.
+>   Sanctioned exceptions must carry an inline `spawner-gate-allow` marker, and the
+>   only one in the repository is the license scanner's own fixed-argv
+>   `execFileSync('pnpm', ['licenses', 'list', '--json'])` — no shell, no
+>   interpolation.
+>
+> **§4's undecided attribution mechanism has not been decided, because nothing has
+> triggered it.** No source text from any of the six audited projects has been
+> copied into this repository. The two MIT rows in §5's ledger describe work that
+> either was written from scratch anyway (the tree/layout code lives in
+> `apps/web/src/views/layout/layered.ts` and `cost-flow.ts`, not a port of
+> `simple10`'s) or has not been built at all (`hoangsonww`'s Telegram/webhook
+> provider belongs to the alerts workstream, which is v2.0 and gated behind KC-5).
+> Consequently there is no `NOTICE` or `THIRD-PARTY-NOTICES` file — none is owed
+> yet. The moment any MIT-licensed source is pasted in, the obligation activates and
+> the mechanism has to be chosen; until then this is an open decision with no
+> outstanding debt behind it.
+>
+> **One real licensing defect is open, and it is about this repository's own
+> license, not anyone else's.** A root `LICENSE` file exists (MIT, © 2026 Ivan
+> Baev), but it is **untracked** — `git ls-files LICENSE` returns nothing. The
+> repository is public with no license grant visible to anyone who clones it, and
+> GitHub's API reports `license: null`. Under exactly the Berne reasoning §2 applies
+> to `cast` and `disler`, an unpublished `LICENSE` file grants nothing;
+> `agenthropic` currently presents to the world as all-rights-reserved. Tracking
+> that file is a release blocker owned by Ivan, listed in
+> [`RELEASE.md`](https://github.com/IvanBBaev/agenthropic/blob/main/RELEASE.md).
+
 ## 1. The rule, in one table
 
 | Project | License fact | Mode | Governing decision |

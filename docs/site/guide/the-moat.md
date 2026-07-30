@@ -22,6 +22,41 @@ which project's due-diligence proves nobody else has them, exactly which file/pa
 gets stolen from where, how the ranking got corrected, and why the correction still
 doesn't change the "build" verdict.
 
+> **Update — 2026-07 (as built).** This page was written before any code existed, when
+> the moat was an argument. It is now partly a shipped artifact and should be read that
+> way:
+>
+> - **The moat proper is built and proven.** The persisted per-instance DAG (`agents` +
+>   `orchestration_edges`, the latter carrying `instance` and `host_id` as `NOT NULL`) and
+>   the cost engine (compaction repricing + delegation savings) run today. Three **P0 proofs are
+>   green and merge-blocking**: Σ `token_usage` equals the JSONL, verified by an
+>   independently written reader inside the test so a parser bug cannot make its own proof
+>   pass; a double replay produces a **byte-identical** database; and the DAG **rebuilds
+>   from JSONL alone** after a simulated outage, with hooks separately proven
+>   liveness-only — appending hook events leaves the DAG dump unchanged. A 12-scenario
+>   negative catalogue passes alongside them. Those three proofs are the whole of what is
+>   proven; do not read them as a general correctness guarantee.
+> - **LB1 is answered in code, not just on paper.** §2.1 below calls "can the DAG be
+>   rebuilt from JSONL alone?" the #1 architectural unknown. It is now a passing test.
+>   The parser walks both on-disk layouts, keys on `Agent`/`Workflow`, sums tokens from
+>   child transcripts, and joins parents to children over four structural paths
+>   (`tool_use`, `directory`, `queue_operation`, `task_notification`).
+> - **Two of the five market-gap features are not built.** Telegram alerting (§2.3) is
+>   **v2.0, entered only via KC-5, and may never start** — the operator-alerts API and UI
+>   were cut outright, and the server makes no outbound network request of any kind.
+>   Fleet aggregation (§2.4) is still only the schema hedge; no second host exists.
+> - **The rival survey was never re-run against running software.** Every ranking, grade
+>   and absence claim below rests on the source-level due-diligence *reading* — **no rival
+>   dashboard was ever installed and run head-to-head**, and the project's friction log
+>   was never opened. Treat §3's grades as documented analysis, not lived comparison.
+> - **The Phase-0 numbers below (confidence 85/100, 85.2% nested) remain PROVISIONAL**
+>   until ratified against a hand-labeled corpus. The "no production code ships before the
+>   formal spike" promise in §2.1's blockquote **did not hold**: implementation began
+>   2026-07-11 by explicit owner override of that gate.
+>
+> The argument below is kept as the design record, with `*(As built: … )*` notes where a
+> specific claim resolved differently.
+
 ## 1. The baseline everyone must clear first
 
 Before talking about the moat, position against the real market leader, not a vacuum.
@@ -45,11 +80,11 @@ adopting:
 
 | # | Feature | Steal the proven piece from | Where it lands |
 |---|---|---|---|
-| 1 | Global, persistent, per-instance orchestration DAG | `simple10` — tree algorithm (not its storage model) | Phase 3, [architecture: the DAG moat](../architecture/dag-moat.md) |
-| 2 | Live dollar-cost attribution + delegation-savings | `cast` — the ~50-LOC formula (clean-room reimplemented) | Phase 3 (cost engine) / Phase 4 (dashboard tile), [architecture: cost model](../architecture/cost-model.md) |
-| 3 | Telegram alert sink → `@baev_bot_bot` | `hoangsonww` — `formatTelegram` webhook provider | Phase 5 — post-1.0 (a planned convenience, not part of the moat) |
-| 4 | Cross-machine / fleet aggregation | nobody — genuinely unclaimed; hedge only (`instance`/`host_id` column) | Deferred until a second host physically exists ([ADR-0002](../contributing/decisions/adr-lb-2-personal-first-commercial-clean.md)/[ADR-0012](../contributing/decisions/adr-cd-10-scope-secrets-retention.md)); not scheduled |
-| 5 | Persistence the owner controls | nobody, cleanly — closest gap is `claude-code-templates`'s in-memory-only cache | Phase 1 baseline (SQLite WAL) |
+| 1 | Global, persistent, per-instance orchestration DAG | `simple10` — tree algorithm (not its storage model) | Phase 3, [architecture: the DAG moat](../architecture/dag-moat.md) — **built** |
+| 2 | Live dollar-cost attribution + delegation-savings | `cast` — the ~50-LOC formula (clean-room reimplemented) | Phase 3 (cost engine) / Phase 4 (dashboard tile), [architecture: cost model](../architecture/cost-model.md) — **built** |
+| 3 | Telegram alert sink → `@baev_bot_bot` | `hoangsonww` — `formatTelegram` webhook provider | ~~Phase 5 — post-1.0~~ → **not built**; v2.0, entered only via KC-5, may never start. Nothing was grafted from `hoangsonww`. |
+| 4 | Cross-machine / fleet aggregation | nobody — genuinely unclaimed; hedge only (`instance`/`host_id` column) | Deferred until a second host physically exists ([ADR-0002](../contributing/decisions/adr-lb-2-personal-first-commercial-clean.md)/[ADR-0012](../contributing/decisions/adr-cd-10-scope-secrets-retention.md)); not scheduled. **As built: the hedge shipped, but narrower than promised** — `instance`/`host_id` are `NOT NULL` on `orchestration_edges` only, **not on every row of every table**; the rollup itself does not exist. |
+| 5 | Persistence the owner controls | nobody, cleanly — closest gap is `claude-code-templates`'s in-memory-only cache | Phase 1 baseline (SQLite WAL) — **built** |
 
 Phase numbers above follow [the roadmap page](roadmap.md)'s dependency-derived
 renumbering, which supersedes `DESIGN.md` §9's original sketch on
@@ -109,11 +144,21 @@ CREATE TABLE agents (
 );
 ```
 
+> **As built, this sketch is close but not exact** (`apps/server/src/db/migrations.ts`,
+> migration 4). The shipped `agents` table adds a fifth status value — `'unknown'`, for an
+> agent seen in the transcript whose terminal state cannot be established — and two
+> timestamps, `first_seen_at` / `last_seen_at`. It does **not** carry `instance`/`host_id`;
+> that fleet key lives on `orchestration_edges` only (see §2.4).
+
 The persisted `orchestration_edges` table (self-referential `parent_agent_id`,
 `derived_from_event_id`, `instance`/`host_id`) is the moat's core artefact — queried
 from the table, never reconstructed at render time — per concept-analysis-v2's CD-4/CD-2
-(see [architecture: the DAG moat](../architecture/dag-moat.md), an open page at the time
-of writing).
+(see [architecture: the DAG moat](../architecture/dag-moat.md); that page has since been
+written).
+*(As built: shipped in migration 5, with a `source` column constrained to the four
+structural join paths — `tool_use`, `directory`, `task_notification`, `queue_operation` —
+and `UNIQUE (session_id, parent_agent_id, child_agent_id)` so a replay cannot duplicate an
+edge. It is queried, never reconstructed, exactly as described.)*
 
 This item is also the single biggest execution risk: whether the DAG can be **rebuilt
 from `~/.claude/projects/*.jsonl` alone** after an outage is LB1, the #1 architectural
@@ -121,8 +166,15 @@ unknown. It is now empirically **pre-answered `CONDITIONAL-GO` → build (confid
 85/100)** by the 2026-07-04 desktop corpus probe — the formal Phase-0 spike *confirms*
 it on the paired-capture corpus rather than deciding it from scratch
 (concept-analysis-v2 [§2](../../analysis/concept-analysis-v2.md)). See
-[architecture: ingest & reconciliation](../architecture/ingest-reconciliation.md) (open
-page) for the CD-1 decision this gates.
+[architecture: ingest & reconciliation](../architecture/ingest-reconciliation.md) for the
+CD-1 decision this gates.
+
+> **As built, LB1 is settled by a test, not by a confidence score.** The DAG is rebuilt
+> from JSONL alone after a simulated outage in a merge-blocking P0 proof, and hooks are
+> separately proven liveness-only — replaying with hook events appended leaves the DAG dump
+> byte-identical. The `85/100` figure above is a **PROVISIONAL estimate from the probe**,
+> not a measurement of the shipped parser, and stays provisional until the parser is
+> ratified against a hand-labeled corpus.
 
 > **Empirical basis (2026-07-04).** The read-only
 > [Phase-0 corpus probe](../../analysis/phase0-probe.md) — 17 projects · 117 sessions ·
@@ -131,6 +183,12 @@ page) for the CD-1 decision this gates.
 > `Agent`/`Workflow` spawn tools (not `Task`), walks **both** on-disk layouts, and sums
 > tokens **from child transcripts**. This **de-risks** but does **not** replace the
 > formal Phase-0 spike: the GO gate still stands, and no production code ships before it.
+>
+> *(As built: the last clause did not hold. Production code began **2026-07-11** by
+> explicit owner override of the CD-8 no-code-before-GO gate. The three parser
+> requirements above are implemented and covered by the P0 proofs; the probe's own
+> numbers — 17 projects · 117 sessions · 85.2% nested — remain **PROVISIONAL** until
+> ratified against a hand-labeled corpus.)*
 
 ### 2.2 Live dollar-cost attribution + delegation-savings
 
@@ -156,10 +214,27 @@ bucketed by `speed` / `inference_geo` / `service_tier` (each changes the per-tok
 rate), preserving **compaction baselines** so historical totals still price correctly
 after a context rewrite, plus a `model_pricing` table to drive the tile
 (`DESIGN.md` §4). Land on
-[architecture: cost model](../architecture/cost-model.md) (open page) once written; the
+[architecture: cost model](../architecture/cost-model.md); the
 tile itself is Phase 4 in the roadmap (§6 below).
 
+> **As built: shipped.** The cost engine computes delegation savings and re-prices across
+> compaction baselines (`token_usage` carries `is_compaction_baseline`), driven by a
+> `model_pricing` table with dated rates rather than a hardcoded constant — the "stale
+> pricing table" caveat above was designed out. The dashboard surfaces it at
+> `/api/sessions/:id/cost-analysis` and `/api/cost/summary`, rendered by the cost/Sankey
+> view. The formula was reimplemented clean-room per CD-9; `cast`'s source was not read
+> while writing it.
+
 ### 2.3 Telegram alert sink → `@baev_bot_bot`
+
+> **As built: none of this exists.** No Telegram sink, no `alert_rules`, no
+> `webhook_targets`, no `webhook_deliveries`, no dispatcher. Nothing was grafted from
+> `hoangsonww`. **The server makes no outbound network request of any kind**, which is why
+> the SSRF gate below currently has nothing to guard — the surface was never opened.
+> Alerting is **v2.0**, entered only via **KC-5**, a checkpoint that is earned by real
+> daily use and has no date; it may never be entered. The operator-alerts API and UI
+> (WP-A8/A9) were **cut outright**, so the "Phase 6" row in §6 has no owner. The section
+> below is the design record for work that has not started.
 
 No audited project has a Telegram integration ready to graft except one:
 `hoangsonww` ships a first-class `formatTelegram` webhook provider
@@ -217,7 +292,13 @@ well-resourced incumbent; they are not, on their own, a defensible moat (see §4
 What makes ours worth owning is combining full SQLite WAL persistence with the harder,
 non-retrofittable pieces (the persisted per-instance DAG and the security posture) under
 one roof, with retention/redaction policy from day one (concept-analysis-v2 CD-10). See
-[operations: backup & restore](../operations/backup-restore.md) (open page).
+[operations: backup & restore](../operations/backup-restore.md).
+
+> **As built: persistence shipped, the policy half only partly.** SQLite in WAL mode with
+> a migration runner is live, and **redaction is implemented** (`hooks/redact.ts`, applied at
+> the hook ingest boundary). **Retention is not implemented** — WP-D10 is still open and
+> stays blocked on the unresolved open decisions OPEN-1/2/3. "Retention/redaction from day
+> one" is therefore half true; say redaction, not retention.
 
 ## 3. The corrected ranking: `simple10` #1, not `hoangsonww`
 
@@ -354,7 +435,14 @@ legal blocker under commercial intent (concept-analysis-v2
 [§4.5](../../analysis/concept-analysis-v2.md)). Only `simple10` and `hoangsonww` carry
 an MIT LICENSE that permits copying source with attribution. This per-artifact rule is
 enforced by a CI provenance/license scan (CD-9) — see
-[contributing: licensing](../contributing/licensing.md) (open page).
+[contributing: licensing](../contributing/licensing.md).
+
+> **As built.** The gate is real: `scripts/check-licenses.mjs`, run as `pnpm run
+> gate:licenses` in `.github/workflows/ci.yml`. In practice it has had little to enforce —
+> **nothing was copied from `hoangsonww` at all**, because the only artifact scheduled from
+> it was the Telegram provider (§2.3), which was never built. The `cast` items were
+> clean-room reimplemented as required. The repository's own `LICENSE` (MIT) exists but is
+> **not yet tracked in git** — an owner action, not a code one.
 
 ## 6. Where the moat lands in the roadmap
 
@@ -369,30 +457,36 @@ DESIGN.md sketch. One later refinement applies on top: the best-path decision
 ([`best-path-decision.md` §6.1](../../analysis/best-path-decision.md)) draws the v1.0
 line after the dashboard — the alerting work in Phases 5–6 ships **post-1.0**:
 
-| Phase | Deliverable | Moat item |
-|---|---|---|
-| 0 | Feasibility spike — reconstruct the subagent tree from `~/.claude/projects/*.jsonl` alone, confirm token reconciliation is exact | Prerequisite for #2.1 (LB1) |
-| 1 | Foundation, security spine, storage — loopback + mandatory token, append-only `events_raw`, WAL + backup | #2.5 (persistence baseline) |
-| 1.5 | Animated-room view (optional, cosmetic, deferred — no earlier than Phase 5) | — |
-| 2 | Ingest substrate — hook receiver + transcript tailer collapse into one deduplicated event log | Prerequisite for #2.1–#2.3 |
-| 3 | Projection, the DAG moat, reconciliation, cost — persisted `orchestration_edges`; the cost engine, including delegation-savings | #2.1, #2.2 (engine) |
-| 4 | Read API, the dashboard — subagent tree, global DAG, cost/Sankey tile | #2.2 (dashboard tile) |
-| 5 *(post-1.0)* | Alerting core — Telegram delivery adapter, `alert_rules`, SSRF-hardened dispatcher | #2.3 |
-| 6 *(alerts UI post-1.0)* | Operator alerts UI + release hardening | — |
-| Deferred | Cross-machine fleet aggregation — schema hedge (`instance`/`host_id`) ships early; the rollup itself is deferred until a second host physically exists, not scheduled | #2.4 |
+| Phase | Deliverable | Moat item | As built |
+|---|---|---|---|
+| 0 | Feasibility spike — reconstruct the subagent tree from `~/.claude/projects/*.jsonl` alone, confirm token reconciliation is exact | Prerequisite for #2.1 (LB1) | Probe done (`CONDITIONAL GO`); the formal spike's numbers stay **PROVISIONAL** pending hand-labeled ratification |
+| 1 | Foundation, security spine, storage — loopback + mandatory token, append-only `events_raw`, WAL + backup | #2.5 (persistence baseline) | **Built** |
+| 1.5 | Animated-room view (optional, cosmetic, deferred — no earlier than Phase 5) | — | Not built; still optional and unscheduled |
+| 2 | Ingest substrate — hook receiver + transcript tailer collapse into one deduplicated event log | Prerequisite for #2.1–#2.3 | **Built**, but *not* as one merged log: JSONL ingest and the hook receiver stay separate, `events_raw` holds hook events only, and structure comes from JSONL alone |
+| 3 | Projection, the DAG moat, reconciliation, cost — persisted `orchestration_edges`; the cost engine, including delegation-savings | #2.1, #2.2 (engine) | **Built**, with no separate Normalizer→Projection stage — JSONL parses straight into the projections in one transaction per session |
+| 4 | Read API, the dashboard — subagent tree, global DAG, cost/Sankey tile | #2.2 (dashboard tile) | **Built** — all four views |
+| 5 *(post-1.0)* | Alerting core — Telegram delivery adapter, `alert_rules`, SSRF-hardened dispatcher | #2.3 | **Not started.** v2.0, behind KC-5; may never start |
+| 6 *(alerts UI post-1.0)* | Operator alerts UI + release hardening | — | Alerts API + UI (WP-A8/A9) **cut outright**; release hardening tracked separately |
+| Deferred | Cross-machine fleet aggregation — schema hedge (`instance`/`host_id`) ships early; the rollup itself is deferred until a second host physically exists, not scheduled | #2.4 | Hedge shipped on `orchestration_edges` only; rollup not built |
 
 Full phase detail, including the context-layer feed (kept as a strictly experimental,
 off-critical-path track rather than a numbered phase), lives on
-[the roadmap page](roadmap.md) (open page at the time of writing).
+[the roadmap page](roadmap.md).
+*(As built: the roadmap has since been superseded by a **kill-checkpoint calendar with
+default-death semantics** — KC-0…KC-5, with v1.0 fixed at 2026-12-01. **KC-0 and KC-1 both
+passed unmet.** Read that page before treating the phase numbering above as a schedule.)*
 
 ## See also
 
-- [What is agenthropic](what-is-agenthropic.md) — the one-paragraph pitch (open page)
-- [Comparison vs the field](comparison.md) — full baseline + six-rival comparison table (open page)
-- [Roadmap](roadmap.md) — phases 0–6, public-friendly (open page)
-- [FAQ](faq.md) — "why not just fork simple10 or hoangsonww?" (open page)
-- [Architecture overview](../architecture/overview.md) — the ingest loop + ports & adapters (open page)
-- [The DAG moat](../architecture/dag-moat.md) — persisted `orchestration_edges` in depth (open page)
-- [Cost model](../architecture/cost-model.md) — `token_usage` buckets + delegation-savings (open page)
-- [Security model](../security/model.md) — the posture that rules out forking `hoangsonww` or `simple10` as-is (open page)
-- [Contributing: licensing](../contributing/licensing.md) — the CD-9 clean-room/attribution rule enforced in CI (open page)
+*(The "(open page)" tags below were written when these pages did not exist yet. All of
+them have since been written.)*
+
+- [What is agenthropic](what-is-agenthropic.md) — the one-paragraph pitch
+- [Comparison vs the field](comparison.md) — full baseline + six-rival comparison table
+- [Roadmap](roadmap.md) — phases 0–6, and the kill-checkpoint calendar that superseded them
+- [FAQ](faq.md) — "why not just fork simple10 or hoangsonww?"
+- [Architecture overview](../architecture/overview.md) — the ingest loop + ports & adapters
+- [The DAG moat](../architecture/dag-moat.md) — persisted `orchestration_edges` in depth
+- [Cost model](../architecture/cost-model.md) — `token_usage` buckets + delegation-savings
+- [Security model](../security/model.md) — the posture that rules out forking `hoangsonww` or `simple10` as-is
+- [Contributing: licensing](../contributing/licensing.md) — the CD-9 clean-room/attribution rule enforced in CI

@@ -8,10 +8,93 @@ Completed milestones for **agenthropic**. Newest first. Open work lives in
 
 ---
 
+## Milestone 1 — Implementation (Phases 1–4)
+
+_Started 2026-07-11 by an explicit owner override of CD-8, and continued past two
+kill checkpoints that were **not** satisfied. That is recorded here rather than
+smoothed over: KC-0 (2026-07-13) passed with 2 of 5 boxes open, and KC-1
+(2026-07-27) passed with clauses 1 and 2 green but clause 3 — "the friction log has
+not crowned a rival" — **unsatisfiable by construction**, because the friction log
+was never opened. A checkpoint whose condition cannot be evaluated has not been
+passed; it has been skipped. The override covers **dispatching only**: it does not
+relax the security invariants, the LABEL-ME ratification (Phase-0 numbers stay
+PROVISIONAL), Ivan's two physical KC acts, or no-commit-without-an-explicit-ask._
+
+### 2026-07-11 → 2026-07-17 · Phase-1 foundation, security spine, parser
+- Monorepo scaffold (`apps/server` · `apps/web` · `packages/shared` · `packages/core` ·
+  `packages/test-fixtures` · `hooks/`, Node 22), lint + prettier, v8 coverage harness,
+  CI, the **no-spawner gate** and the **license provenance scan**.
+- SQLite/WAL with pragmas asserted at open, the migration runner, `events_raw` as an
+  **append-only** substrate enforced by SQLite triggers, sessions/agents/edges/usage.
+- Fastify bootstrap: **loopback-or-fail** plus a post-listen address re-verification
+  that hard-exits, timing-safe token compare, same-origin SSE, TypeBox.
+- Security review with a **critical auth fix**; WP-IN8 read-side reconstruction parser
+  built and independently verified; a parser join-model defect found and rewritten;
+  the disk substrate adapter and corpus ingest runner landed with two source defects
+  fixed along the way.
+
+### 2026-07-20 · Wave 1 — five parallel lanes + integration
+- Ingest loop (poll tick, fingerprint-gated admission, replay-on-startup as the first
+  tick) and the missing-Stop watchdog → `'unknown'`, an honest visible state.
+- Cost engine: compaction repricing, delegation savings carrying `isEstimate: true`,
+  and a model with no price **halting** with `PricingError` — never a silent $0.
+- Read API + the SSE hub (CD-5: SSE, same-origin checked, never WebSocket), with the
+  session tree and global DAG served by a query over the **persisted** edges.
+- Hook receiver that **stores** unknown event types instead of crashing, redaction at
+  the ingest boundary, and the hooks installer.
+- SPA shell: token gate (sessionStorage only), connection chip, hash router, SSE client.
+
+### 2026-07-29 → 2026-07-30 · Waves 2–4 — proofs, negatives, the real UI, release readiness
+- **The three P0 moat proofs are green** (`apps/server/test/p0/`): Σ `token_usage` ==
+  JSONL, checked by an **independent reader written inside the test** so a parser bug
+  cannot make its own proof pass; a **byte-identical** double replay (`VACUUM INTO`
+  snapshots compared with `Buffer.equals` under a fixed clock); and the DAG rebuilt
+  from JSONL alone after a simulated outage, with hooks separately proven
+  liveness-only — appending them leaves the DAG dump unchanged.
+- **The 12-scenario negative catalogue** passes in full, including byte-identical 401
+  bodies across four wrong-token shapes (no token echo, no length oracle), a 403 on a
+  foreign `Origin` **with and without** a valid token (no auth oracle), and an unpriced
+  model halting before the write transaction leaves the DB entirely empty.
+- **The four dashboard views are real**: live status, session tree, global DAG,
+  cost/Sankey — with `unknown` as a first-class always-rendered bucket kept distinct
+  from a `null` "unrecorded" status, observed vs inferred edges visually distinguished
+  behind a permanent legend, truncation announced with real numbers, and
+  `unpricedTokens` given its own KPI instead of being drawn as a $0 flow.
+- **WP-D5 closed honestly**: the `events` table was created but never written to — a
+  lie by omission in a shipped schema. It is now **wired**, not retired: raw row plus
+  normalized projection in one transaction, identifiers only (never payload content),
+  receipt time labelled as such via `occurredAtSource: 'receipt'`, and a reader at
+  `GET /api/sessions/:id/events`.
+- **Release readiness**: `RELEASE.md` with the backup→restore drill **actually executed**
+  (`integrity_check` = ok), README badges backed by real signals only, and a GitHub
+  Pages workflow using official actions and zero new dependencies.
+- **Two honesty defects found and fixed rather than shipped**: the README still claimed
+  "Pre-code … no application code yet", untrue since 2026-07-11; and ">90% coverage,
+  CI-gated" actually held for three of five packages — `apps/web` ran without
+  `--coverage`, so its thresholds never executed.
+- **Full gate, real numbers:** typecheck · lint · format:check all green ·
+  `gate:spawner` OK (174 files, 4 roots) · `gate:licenses` OK (412 packages) ·
+  **72 test files / 879 tests passing** — server 489 (99.75% stmts / 97.70% branches),
+  core 168 (100% / 95.62%), shared 72 (100% / 100%), web 127 (99.07% / 91.50%),
+  test-fixtures 23 (a documented, deliberate coverage-gate exclusion).
+
+### Still open, and owned by Ivan — not by any agent
+- **Everything above is UNCOMMITTED.** Committing and pushing is his explicit call.
+- The two physical KC acts: open the friction log, install ≥1 rival dashboard.
+- **LABEL-ME ratification** — until the hand-labeled corpus exists, the Phase-0 numbers
+  stay PROVISIONAL and the hierarchy ≥95% gate cannot be signed by machine.
+- LICENSE tracking (GitHub still reports `license: null`), enabling GitHub Pages, and
+  branch protection on `main`.
+- **"<30s to understand a session" is unmeasured.** Nobody has sat in front of it with
+  a real corpus and timed it; an agent cannot sign a usability claim.
+
+---
+
 ## Milestone 0 — Analysis & planning (pre-code)
 
-_No application code is scaffolded yet. Everything below is design, audit, and
-planning documentation — the evidence base the build stands on._
+_Everything in this milestone is design, audit, and planning documentation — the
+evidence base the build stands on. No application code existed while it ran;
+implementation began 2026-07-11 and is recorded in Milestone 1 above._
 
 ### 2026-07-03 · Repo bootstrap & design basis
 - `git init`, branch `main`, personal identity verified (`ivanbbaev@gmail.com`).

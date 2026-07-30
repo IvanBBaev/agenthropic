@@ -1,11 +1,44 @@
 # ADR-0002: LB2 — Identity: personal-first / commercial-clean
 
-- **Status:** accepted
+- **Status:** accepted — scope discipline **holds**; **amended 2026-07-30**: the `instance`/`host_id` hedge shipped on `orchestration_edges` only, not on every row, and "OPCⁿ" remains undefined (see the as-built update below)
 - **Date:** 2026-07-03
 - **Deciders:** Ivan Baev (project owner), via the six-lens concept-analysis-v2 workflow
   (Architect · Developer · QA · Business Analyst · Gap · Holistic)
 - **Source:** [`concept-analysis-v2.md` §2 "LB2 — Identity"](../../../analysis/concept-analysis-v2.md#2-the-two-load-bearing-decisions),
   §4.4 (Business Analyst), §4.6 (Holistic), §5, §7 point 9
+
+## As-built update — 2026-07-30
+
+**Verdict: holds on scope; the fleet hedge shipped narrower than written; "OPCⁿ" is
+still undefined.**
+
+**Scope discipline held.** No fleet, no multi-tenancy, no vector-DB feed. The solo
+owner did not build the enterprise-cosplay version. That is the load-bearing half of
+this ADR and it survived contact with an actual implementation.
+
+**The fleet hedge is on one table, not "every row."** The criterion below says
+`instance`/`host_id` land "on every row in the first migration." As built they are
+`NOT NULL` on **`orchestration_edges` only** — `sessions`, `agents`, `token_usage`,
+`events_raw` and `events` carry neither. The reasoning is defensible (the DAG is the
+artifact whose rows would collide across hosts, and it is the moat) and the schema is
+still not *blocked* from tenancy, which is what the Decision actually asks for. But
+the acceptance criterion as written is not met, and a future second host would need a
+migration on four more tables rather than none. The hedge was paid partially, and
+the "paid once, not retrofitted later" framing no longer fully applies.
+
+**"OPCⁿ" is still undefined.** It was open when this ADR was written and it is open
+today. Nothing since has defined or dropped it. Per this ADR's own rule it therefore
+still may not drive tenancy/schema/license-strictness investment — and, correctly, it
+has not.
+
+**Commercial-clean is asserted but not yet published.** The CI provenance check is
+live and green ([ADR-0011](adr-cd-9-per-artifact-licensing.md)), but the project's
+own `LICENSE` file is untracked, so GitHub reports this repository's license as
+`null`. Until that is committed, "MIT-clean code only" describes the dependencies and
+the authoring discipline, not the repository's own public licensing posture.
+
+**"< 30s time-to-understand a session" is unmeasured** — see
+[ADR-0012](adr-cd-10-scope-secrets-retention.md)'s as-built update.
 
 ## Context
 

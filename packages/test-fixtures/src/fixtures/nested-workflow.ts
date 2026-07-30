@@ -1,8 +1,10 @@
 /**
  * Fixture `nested-workflow` — parser-spec section 4, base path 2.
  *
- * Nested layout: agents live under `workflows/wf_<id>/`; the parent edge
- * comes from directory anchoring, not from a tool_use block. The journal's
+ * Nested layout: agents live under `subagents/workflows/wf_<id>/`; the parent
+ * edge comes from directory anchoring, not from a tool_use block. Each agent
+ * has an `agent-<hex>.meta.json` sidecar with an `agentType` (recovering the
+ * subagent type) and a `worktreePath` but NO `toolUseId`. The journal's
  * `started` lines carry line-order plus a content-hash `key` (not a sequence
  * number), and every member of the workflow shares one `promptId` — a batch
  * key, not an ordinal (parser-spec section 6.3 / EMP-1). The two siblings
@@ -41,10 +43,13 @@ const mainTranscript = [
       model: 'synthetic-model-a',
       content: [
         {
+          // Real Workflow tool_use blocks carry only the prompt — no
+          // workflow_id — so the workflowDispatcher stays empty and the
+          // siblings anchor to the session id purely by directory (gate #2).
           type: 'tool_use',
           id: 'toolu_01SynthWfDispatch0001',
           name: 'Workflow',
-          input: { workflow_id: WORKFLOW_ID, prompt: 'Synthetic workflow dispatch.' },
+          input: { prompt: 'Synthetic workflow dispatch.' },
         },
       ],
       usage: {
@@ -84,7 +89,6 @@ function childLines(hex: string, uuidBase: string, firstTs: string, msgId: strin
       isSidechain: true,
       sessionId: SESSION_ID,
       agentId: hex,
-      meta: { workflowId: WORKFLOW_ID, promptId: PROMPT_ID, layout: 'nested' },
       type: 'user',
       message: { role: 'user', content: `Synthetic nested task for agent ${hex}.` },
       uuid: `${uuidBase}1`,
@@ -115,17 +119,34 @@ function childLines(hex: string, uuidBase: string, firstTs: string, msgId: strin
   ];
 }
 
+const WORKFLOW_DIR = `subagents/workflows/${WORKFLOW_ID}`;
+
+/**
+ * Real `agent-<hex>.meta.json` sidecar shape for a WORKFLOW subagent: single
+ * line carrying `agentType`, `spawnDepth` and a `worktreePath` — and NO
+ * `toolUseId` (workflow subagents are joined by directory, not by anchor).
+ */
+function workflowMeta(hex: string): string[] {
+  return [
+    jsonLine({
+      agentType: 'general-purpose',
+      spawnDepth: 1,
+      worktreePath: `/tmp/agenthropic-wt/${hex}`,
+    }),
+  ];
+}
+
 export const nestedWorkflow: Fixture = {
   name: 'nested-workflow',
   description:
-    'Nested layout, base join path 2: workflows/wf_<id>/ directory anchoring provides the ' +
-    'parent edge; journal.jsonl "started" lines carry line-order + content-hash key; both ' +
+    'Nested layout, base join path 2: subagents/workflows/wf_<id>/ directory anchoring provides ' +
+    'the parent edge; journal.jsonl "started" lines carry line-order + content-hash key; both ' +
     'siblings share one promptId (batch key) and start 2 ms apart (same-wave, UNORDERED).',
   files: [
     { relativePath: `${SESSION_ID}.jsonl`, lines: mainTranscript },
-    { relativePath: `workflows/${WORKFLOW_ID}/journal.jsonl`, lines: journal },
+    { relativePath: `${WORKFLOW_DIR}/journal.jsonl`, lines: journal },
     {
-      relativePath: `workflows/${WORKFLOW_ID}/agent-${AGENT_A_HEX}.jsonl`,
+      relativePath: `${WORKFLOW_DIR}/agent-${AGENT_A_HEX}.jsonl`,
       lines: childLines(
         AGENT_A_HEX,
         'dddddddd-0000-4000-8000-00000000000',
@@ -134,13 +155,21 @@ export const nestedWorkflow: Fixture = {
       ),
     },
     {
-      relativePath: `workflows/${WORKFLOW_ID}/agent-${AGENT_B_HEX}.jsonl`,
+      relativePath: `${WORKFLOW_DIR}/agent-${AGENT_A_HEX}.meta.json`,
+      lines: workflowMeta(AGENT_A_HEX),
+    },
+    {
+      relativePath: `${WORKFLOW_DIR}/agent-${AGENT_B_HEX}.jsonl`,
       lines: childLines(
         AGENT_B_HEX,
         'eeeeeeee-0000-4000-8000-00000000000',
         '2026-01-16T09:00:05.003Z',
         'msg_synth_wf_child_b_0001',
       ),
+    },
+    {
+      relativePath: `${WORKFLOW_DIR}/agent-${AGENT_B_HEX}.meta.json`,
+      lines: workflowMeta(AGENT_B_HEX),
     },
   ],
 };

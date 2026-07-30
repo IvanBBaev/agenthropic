@@ -8,11 +8,41 @@
 > _(planned)_ or _(leaning-unconfirmed)_ may change; the **security invariants are binding
 > and will not**. This replaces the earlier stub.
 
+> **Update — 2026-07 (as built).** The installer exists: **`hooks/install.mjs`**, a
+> dependency-free Node ESM script, with `hooks/README.md` as its runbook. Run
+> `node hooks/install.mjs` to print the generated configuration, or
+> `node hooks/install.mjs --out <path-to>/.claude/settings.json` to install it. Four
+> corrections to the page below, each verified against the repository:
+>
+> - **There are four real hooks, not twelve, and `SubagentStart` does not exist.**
+>   The installer wires `UserPromptSubmit`, `Stop`, `SubagentStop` and `PreCompact`
+>   (`HOOK_EVENTS` in `hooks/install.mjs`). The `G0.2` hedge below resolved against
+>   `SubagentStart`; the other seven events in the twelve-event list were simply not
+>   adopted, because nothing downstream consumes them.
+> - **Hooks carry liveness ONLY, never structure.** This is the biggest change from
+>   the design text below. **No hook creates an agent row, asserts a parent→child
+>   edge, or writes a token row.** The subagent DAG and every token count are built
+>   entirely from the `~/.claude/projects/*.jsonl` transcripts — the Phase-0 probe
+>   found **0 of 463** spawn edges were hook-sourced. It follows that the *absence*
+>   of hook events means nothing about whether an agent ran.
+> - **Leak-free token acquisition is resolved.** The generated command references
+>   the token only as a shell expansion — `Authorization: Bearer ${DASHBOARD_TOKEN}`
+>   — expanded by the shell **at fire time**. `install.mjs` never reads, embeds or
+>   prints the token value, and the POST target is hard-pinned to `127.0.0.1`.
+> - **`hooks/` is confirmed**, not "leaning-unconfirmed", and it contains no
+>   long-lived scripts: each hook is a single fail-silent `curl` POST written into
+>   the settings file. There is no `hooks/dispatch.sh` and no dispatcher indirection.
+>
+> Verification no longer needs a raw `sqlite3` query either: `GET /api/sessions/:id/events`
+> serves the hook-liveness timeline of one session (see [the API reference](api.md)).
+
 This page documents how the Claude Code lifecycle hooks are designed to be installed and
 verified end to end: where the hook scripts live, how they're registered in Claude Code's
 own settings, the authed loopback receiver they POST to, how a hook acquires
 `DASHBOARD_TOKEN` without leaking it, and how to confirm a real session actually produced
-an `events_raw` row. The key takeaway: **there is no installer yet** — this is the target
+an `events_raw` row. The key takeaway: **there is no installer yet** *(As built: there
+is — `hooks/install.mjs`; the sentence stands as the state at the time of writing.)* —
+this is the target
 contract one devops-owned work package, `WP-X8`, has to satisfy, and its own Done-when is
 exactly the phrase the title of this page describes: *"Install → working end-to-end hook →
 loopback ingest → `events_raw` on a real session"* (`docs/analysis/development-plan.md`).
@@ -39,6 +69,26 @@ reconciles against JSONL (`CD-3`). The installer's job is purely mechanical rela
 that distinction — it wires all twelve the same way; the *dedicated handling* happens
 downstream in the Normalizer/Projection, not in the hook script itself.
 
+> **Update — 2026-07 (as built): this whole framing was overturned.** Two facts
+> replace it:
+>
+> 1. **Four events, not twelve.** `hooks/install.mjs` wires exactly
+>    `UserPromptSubmit`, `Stop`, `SubagentStop`, `PreCompact`. **`SubagentStart` does
+>    not exist** as a Claude Code hook — the `G0.2` hedge below resolved in the
+>    negative. The remaining seven names in the list above were not adopted.
+> 2. **No hook asserts structure — ever.** Contrary to the paragraph above,
+>    `agents.parent_agent_id` and `orchestration_edges` are **not** built from
+>    `SubagentStop` or from any other hook. They are built exclusively from the JSONL
+>    transcripts, and so is `token_usage`. A hook delivery writes an `events_raw` row
+>    plus one **identifier-only** row in the `events` liveness timeline (session id,
+>    agent id, event type, time) — never payload content, and never a DAG or token
+>    row. `apps/server/src/db/event-store.ts` states the rule directly: "hooks
+>    contribute liveness only, NEVER structure."
+>
+> The practical consequence for a reader: hooks make the dashboard *live*, they do
+> not make it *correct*. Uninstall them and the DAG and the dollar figures are
+> unaffected; you only lose the sub-poll-interval freshness.
+
 One caveat that directly affects what the installer can register: `SubagentStart` is
 listed in parentheses in `DESIGN.md` §5 — `` `SubagentStop` (+ `SubagentStart`) `` —
 because the source-level pass behind the build plan flags it as "probably not a real
@@ -48,7 +98,9 @@ reason — the installer can't finalize which event names it registers until the
 catalog itself is confirmed. If `SubagentStart` turns out not to fire, the installer still
 registers the other eleven; edge derivation falls back to the JSONL `Agent`/`Workflow`
 spawn chain plus `SubagentStop` (`WP-IN8`, dual-path derivation), with no change to what
-gets installed.
+gets installed. *(As built: `SubagentStart` was confirmed **not** to exist, and edge
+derivation went further than the fallback described here — it is JSONL-only, with no
+`SubagentStop` contribution at all.)*
 Full treatment of the hedge is the dedicated `SubagentStart` section in
 [hook ingestion](../architecture/hooks.md).
 
@@ -62,6 +114,30 @@ separately-tracked `WP-IN4`). It depends on `WP-S4` (hook catalog confirmed), `W
 production code before it, `CD-8`), and `WP-IN3` (the receiver has to exist before there's
 anything to install against). None of those four have landed as of this writing, which is
 exactly why this page is design-target, not a runbook you can follow today.
+
+> **As built:** they landed, and there *is* a runbook — `hooks/README.md`. The real
+> commands:
+>
+> ```sh
+> node hooks/install.mjs                                   # print, write nothing
+> node hooks/install.mjs --out .claude/settings.json        # create or update
+> node hooks/install.mjs --out .claude/settings.json --dry-run
+> node hooks/install.mjs --out .claude/settings.json --remove
+> ```
+>
+> Other flags: `--port <n>` (default `4317`, matching the server default) and
+> `--token-env <NAME>` (default `DASHBOARD_TOKEN`) — the *name* of the env var the
+> generated command expands, never its value.
+>
+> Three behaviors worth knowing before you run it: the merge is **non-destructive**
+> (unrelated settings keys and foreign hook entries are preserved verbatim, and
+> previously installed agenthropic entries — recognized by the loopback
+> `/api/hooks/event` target in the command string — are replaced rather than
+> duplicated); an existing file is **backed up** to `<file>.backup-<timestamp>`
+> before it is modified, which is also the rollback path; and the installer
+> **refuses** to touch a settings file it cannot parse as JSON rather than
+> overwriting it. It never writes to `~/.claude` unless you explicitly point `--out`
+> there, never spawns a process, and never opens a network connection.
 
 ```
 ~/.claude settings                              Mac Mini M4 — 127.0.0.1 only
@@ -94,12 +170,20 @@ keeping `hooks/` as the installable-scripts home and adding `packages/test-fixtu
 ([security model](../security/model.md), [development plan](../../analysis/development-plan.md)).
 Mark this `hooks/` path _(leaning-unconfirmed)_ — it is not fixed until `WP-X8` ships.
 
+> **As built:** confirmed. `hooks/` exists at the repo root and holds
+> `install.mjs`, its type declaration `install.d.mts`, and `README.md` — nothing
+> else. The monorepo around it settled as `apps/server`, `apps/web`,
+> `packages/shared`, `packages/core`, `packages/test-fixtures`, `hooks/`.
+
 The structural pattern the scripts are meant to follow — not copy — is `simple10`'s
 strategy-pattern separation, `hooks/scripts/lib/agents/<class>.mjs`, which cleanly
 isolates the Claude-Code-specific ingestion shape from everything downstream (`DESIGN.md`
 §3, §7; [architecture overview](../architecture/overview.md)). The single-hook-handler
 design (one script every event calls into, per the diagram above) is exactly this
 separation applied at the installer level: twelve registrations, one implementation.
+*(As built: **four** registrations, and **no** implementation script at all — each
+registration is a self-contained one-line `curl` POST, so there is nothing on disk for
+a hook to call into.)*
 
 What the scripts are explicitly **not**: a copy of `disler`'s `send_event.py`.
 `DESIGN.md` calls that ~180-line script "the clearest teaching example of hook→HTTP→
@@ -144,6 +228,31 @@ event list is provisional until that probe reports — consistent with the inges
 itself being **accept-any-event** (below), a hook name the installer doesn't yet know
 about is still safe to leave registered.
 
+> **As built:** the registration shape is fixed, and there is **no dispatcher script**
+> — no `hooks/dispatch.sh`, no shared `.mjs` handler on the hook path. Each of the
+> four events gets one entry whose command is a self-contained, fail-silent `curl`
+> that pipes the hook's stdin JSON straight to the loopback receiver:
+>
+> ```jsonc
+> // Generated by `node hooks/install.mjs` — shape is real, not illustrative.
+> // The same command string is used for all four events.
+> {
+>   "hooks": {
+>     "UserPromptSubmit": [{ "hooks": [{ "type": "command", "timeout": 5, "command": "curl --silent --fail --max-time 3 --output /dev/null --request POST --header 'Content-Type: application/json' --header \"Authorization: Bearer ${DASHBOARD_TOKEN}\" --data-binary @- 'http://127.0.0.1:4317/api/hooks/event' || true" }] }],
+>     "Stop":             [{ "hooks": [{ "type": "command", "timeout": 5, "command": "…same…" }] }],
+>     "SubagentStop":     [{ "hooks": [{ "type": "command", "timeout": 5, "command": "…same…" }] }],
+>     "PreCompact":       [{ "hooks": [{ "type": "command", "timeout": 5, "command": "…same…" }] }]
+>   }
+> }
+> ```
+>
+> Note the deliberate belt-and-braces on failure: `--silent --fail`, a 3-second
+> `--max-time`, a 5-second hook `timeout`, and a trailing `|| true`. A dashboard that
+> is down, slow, or missing must never block or slow a Claude Code session — hooks
+> are optional telemetry, and the JSONL transcripts remain the ground truth either
+> way. The `${DASHBOARD_TOKEN}` in the command is a literal shell expansion written
+> into the file; the value is resolved by the shell when the hook fires.
+
 ### The receiver they POST to: `HookSource` _(WP-IN3)_
 
 Every hook script POSTs to the same server every other agenthropic client talks to — not
@@ -168,12 +277,41 @@ receiver, **accept-any-event**. Never-seen `event_type` → 202 + a row lands
   anything derived from a payload and never dials a URL taken from one
   ([security model](../security/model.md) rules 3 and 6).
 
+> **As built:** the receiver is `POST /api/hooks/event`
+> (`apps/server/src/hooks/routes.ts`), and every bullet above holds. What the design
+> text does not mention, in the order it happens on each delivery:
+>
+> 1. **Redaction first** (`WP-IN14`, `apps/server/src/hooks/redact.ts`) — secret-named
+>    fields (`token`, `authorization`, `api_key`, `secret`, `password`, `bearer`,
+>    `credential`, `private_key`, `access_key`, `cookie`…) become `[REDACTED]`, and
+>    string values are scanned for credential shapes (`sk-`/`ghp_`/`xox`/`AKIA`, JWTs,
+>    `Bearer …`) and masked in place. An explicit allowlist keeps token-**count**
+>    fields (`input_tokens`, `output_tokens`, …) intact — counts are observability
+>    data, not credentials. Redaction runs *before* the idempotency key is computed,
+>    so a redelivered event redacts identically and still dedupes.
+> 2. **Envelope + key** (`WP-IN1`) — `{ source: 'hook', hookName, sessionId?,
+>    receivedAt, payload }`, keyed by a SHA-256 hash over the canonicalized envelope
+>    **minus `receivedAt`**, so the same event delivered twice at different times
+>    yields the same key regardless of JSON property order.
+> 3. **One transaction, two tables** — `INSERT OR IGNORE` into `events_raw`, and, only
+>    when that actually inserted, one identifier-only row into `events`. A duplicate
+>    inserts zero rows in **both**. The reply is `202` with `{ "stored": true|false }`,
+>    where `false` means "already had it".
+>
+> Two honesty notes carried in the code: `occurred_at` on the projected row is
+> **receipt** time, because Claude Code hook stdin carries no event timestamp — the
+> read DTO says `occurredAtSource: 'receipt'` so nothing downstream mistakes it for
+> event time. And the idempotency key is **hook-scoped**: it does not collapse a hook
+> delivery against a JSONL line describing the same fact, because the two never share
+> a table (see the verification section below).
+
 ## Leak-free token acquisition _(security-critical)_
 
 This is explicitly part of `WP-X8`'s scope, not an afterthought — the work package is
 defined as *"`hooks/` scripts + install docs + **leak-free token acquisition** +
 end-to-end smoke"* (`development-plan.md` §2, merge note 4). It is also, as of this
-writing, an **open, unresolved question**: `concept-analysis-v2.md` §7, item 8, asks
+writing, an **open, unresolved question** *(As built: **resolved** — see the box at the
+end of this section.)*: `concept-analysis-v2.md` §7, item 8, asks
 directly — *"is the loopback hook endpoint itself authenticated, and how does the hook
 script obtain the token without leaking it into `~/.claude` scripts?"* —
 [hook ingestion](../architecture/hooks.md#open-items-not-yet-built) names `WP-X8`/this page
@@ -215,6 +353,26 @@ reads from as **unresolved**, not merely unconfirmed detail — this page states
 precisely so `WP-X8` implements exactly this and nothing weaker, not to imply the design
 is finished.
 
+> **As built: resolved, and it satisfies every "never" in the table above.** The
+> generated command contains the *reference* `Authorization: Bearer
+> ${DASHBOARD_TOKEN}` — a shell expansion the shell performs **at fire time**, when
+> Claude Code runs the hook. Therefore:
+>
+> - the settings file on disk holds the variable **name**, never the value;
+> - the token is never a CLI argument, so it never appears in `argv`/`ps`;
+> - the command writes to `/dev/null` (`--silent --output /dev/null`) and prints
+>   nothing, so it cannot leak into a transcript;
+> - `hooks/install.mjs` itself never reads, embeds or prints the token — it has no
+>   code path that touches the value at all;
+> - the server's log serializer strips `?token=` from logged URLs, and the token is
+>   never persisted or echoed.
+>
+> The env var name is configurable via `--token-env <NAME>` (default
+> `DASHBOARD_TOKEN`, validated as UPPER_SNAKE_CASE). How that variable gets into the
+> environment is left to the operator — a `launchd`-injected value or a `chmod 600`
+> dotfile sourced at login both work, exactly as D7 intended; the installer takes no
+> position and needs none.
+
 ## End-to-end verification
 
 `WP-X8`'s Done-when is the same phrase this page opened with: *"Install → working
@@ -224,6 +382,30 @@ same check: *"a hook event and a transcript line describing the same fact collap
 exactly one `events_raw` row… an unrecognized event type is stored, never fatal"*
 ([roadmap](../guide/roadmap.md)). The designed verification sequence — every step below
 marked _(planned)_ since no installer or receiver exists yet:
+
+> **As built:** steps 1–4 are runnable today; step 5 tests something that turned out
+> not to exist. The real sequence:
+>
+> 1. `node hooks/install.mjs --out <project>/.claude/settings.json` (add `--dry-run`
+>    first to see the diff).
+> 2. Export `DASHBOARD_TOKEN` (**≥16 characters** — the server refuses to start
+>    otherwise) and start the server; it binds `127.0.0.1` on port `4317`.
+> 3. Run a real Claude Code session. Submitting a prompt fires `UserPromptSubmit`;
+>    finishing fires `Stop`; a subagent finishing fires `SubagentStop`.
+> 4. `curl -H "Authorization: Bearer $DASHBOARD_TOKEN"
+>    http://127.0.0.1:4317/api/sessions/<id>/events` — a **200 with an empty array**
+>    means the session is known but produced no hook events; only an unknown session
+>    id gives a **404**. The API never conflates those two facts, and no raw
+>    `sqlite3` query is needed.
+>
+> **Step 5 does not apply.** A hook event and a JSONL line describing the same fact
+> do **not** collapse into one `events_raw` row, because they never meet: hooks land
+> in `events_raw` + `events`, JSONL parses straight into `sessions`/`agents`/
+> `orchestration_edges`/`token_usage`, and the idempotency key is hook-scoped. The
+> Phase-2 exit-gate wording quoted above describes a reconciliation design that was
+> **deliberately not built** — a recorded divergence, not an oversight. Dedup within
+> the JSONL path is real and separate; dedup within the hook path is real and
+> separate; there is no cross-path collapse to test.
 
 1. **Install.** Register the hooks in a real `~/.claude` settings file per the (planned)
    shape above, pointing at the shared dispatcher script under `hooks/`.
@@ -268,11 +450,15 @@ marked _(planned)_ since no installer or receiver exists yet:
 ## See also
 
 - [Hook ingestion](../architecture/hooks.md) — the full twelve-event catalogue, the
-  `SubagentStart` hedge, and accept-any-event in depth.
+  `SubagentStart` hedge, and accept-any-event in depth. *(As built: four events, and
+  `SubagentStart` does not exist.)*
 - [Ingest & reconciliation](../architecture/ingest-reconciliation.md) — the `WP-IN1`
   idempotency contract and JSONL-vs-hook precedence this installer's output feeds into.
+  *(As built: the envelope and its idempotency key are real; the cross-path
+  hook-vs-JSONL reconciliation was not built.)*
 - [Data model](../architecture/data-model.md) — the `events_raw` DDL used for
-  verification in step 4 above.
+  verification in step 4 above. *(As built: verify through
+  `GET /api/sessions/:id/events` instead.)*
 - [Security model](../security/model.md) — the loopback, token, and no-spawner
   invariants the receiver and this installer must never weaken.
 - [Configuration](configuration.md) — `DASHBOARD_TOKEN` and the other environment

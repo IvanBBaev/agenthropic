@@ -11,6 +11,38 @@
 > _(leaning — unconfirmed)_ may change; the **security invariants are binding and will
 > not**. This replaces the earlier stub.
 
+> **Update — 2026-07 (as built).** The configuration surface is built and is smaller and
+> more decided than this page assumes. Verified against `apps/server/src/config.ts`:
+>
+> - **Configuration is environment variables and nothing else.** There is no config
+>   file, no JSON/YAML/`.env` loader, and therefore **no precedence question** — the
+>   `(planned)` precedence discussion below describes a layering that was never built.
+>   `loadConfig(env)` reads seven variables and throws on anything unparseable rather
+>   than falling back to a default.
+> - **The full env surface:** `DASHBOARD_TOKEN` (mandatory, **minimum 16 characters**),
+>   `DASHBOARD_PORT` (default **4317**), `DASHBOARD_DB_PATH` (default
+>   **`data/agenthropic.db`**), `DASHBOARD_INGEST` (`1`/`true`/`0`/`false`, default on),
+>   **`CLAUDE_PROJECTS_DIR`** (the corpus-root override this page says may not exist —
+>   it does), `DASHBOARD_POLL_INTERVAL_MS` (default 3000) and
+>   `DASHBOARD_WATCHDOG_MINUTES` (default 10).
+> - **The bind host has no variable at all.** It is the exported constant
+>   `HOST = '127.0.0.1'`. Not overridable, not even by env.
+> - **The two poll/watchdog defaults are PROVISIONAL (LABEL-ME)** — marked so in the
+>   source, not yet ratified. Do not quote them as tuned values.
+> - **Retention is not implemented.** `WP-D10`'s TTL sweeper does not exist and is
+>   blocked on open owner decisions (OPEN-1/2/3). **Redaction is live** — applied at the
+>   hook ingest boundary before anything is stored, though its policy is likewise
+>   pending sign-off.
+> - **Backup exists as a function, not as a configured job.** `backupDatabase` /
+>   `restoreDatabase` take an explicit destination path; there is no backup-directory
+>   setting, no scheduler and no pruning step.
+> - **The alerting rows in the table below do not exist.** No `alert_rules`, no
+>   `webhook_targets`, no `token_ref` resolver, no Telegram token handling — that whole
+>   slice is v2.0, gated behind KC-5. See [Telegram alerts](telegram.md).
+>
+> Design-era prose is kept below with `As built` notes where the shipped code settled a
+> question this page left open.
+
 This page is the complete reference for every configuration and environment option the
 design basis and build plan have fixed for agenthropic, as a table plus per-option
 detail. The key takeaway: **two values are non-negotiable and fixed today** — the
@@ -21,30 +53,53 @@ the exact config-file format) is either a **fixed requirement with an illustrati
 shape** or **explicitly `(planned)`**, because `WP-U0`'s config loader is designed but
 its concrete file format is not yet decided. Nothing below should be read as a value
 you can put in a `.env` file today — this documents what the loader will accept once
-`WP-U0` lands, so Phase 1 implements exactly this and nothing weaker.
+`WP-U0` lands, so Phase 1 implements exactly this and nothing weaker. *(As built:
+`WP-U0` landed. The seven environment variables in the next section are real and usable
+now — though there is no `.env` file support; they must be actual environment
+variables.)*
 
 ## Reference table
 
-| Option | Required? | Default | What it controls | Source |
+**As built — the actual environment surface.** This is the complete list; there is no
+config file and no other variable. Anything not in this table cannot be configured.
+
+| Variable | Required? | Default | What it controls | Validation |
 |---|---|---|---|---|
-| `DASHBOARD_TOKEN` | **Mandatory** | none — server **refuses to start** if unset | Bearer token, compared with `timingSafeEqual`, gating every read endpoint, every write endpoint, and the SSE stream | `WP-U0`, `WP-F7`; DESIGN §8 |
-| Listen host | **Fixed** | `127.0.0.1` — `0.0.0.0` is never an accepted value, not even behind a flag | The bind address for every listener the server opens (read API, hook-ingest receiver, `/api/stream`) | `WP-U0`, `WP-F7`; DESIGN §8 |
-| Listen port | _(planned — default undecided)_ | _(planned)_ | TCP port the Fastify server listens on, loopback-side only | `WP-U0` (stack itself leaning, unconfirmed per the project `CLAUDE.md`) |
-| `~/.claude/projects` path | Fixed conventional location; an override mechanism, if any, is _(planned)_ | the standard Claude Code transcript directory | Ground-truth source of session/agent/token-usage JSONL, read by the `TokenReader`/`TokenSource` port | CD-6 (`concept-analysis-v2.md`); `WP-IN5` |
-| SQLite database path | _(planned — exact path undecided)_ | _(planned)_ | Location of the single WAL-mode SQLite file (+ its `-wal`/`-shm` siblings) | `WP-D2`; [data model](../architecture/data-model.md) |
-| WAL mode / `foreign_keys` | **Fixed**, not a toggle | asserted `ON` on every connection open | Journal mode and FK enforcement pragma-checked at connect time, not merely configured once | `WP-D2`; DESIGN §8 |
-| Backup directory | _(planned)_ | _(planned)_ | Where `WP-F8`'s online-backup artifacts (`agenthropic-<ts>.db`) land | `WP-F8`; [backup & restore](../operations/backup-restore.md) §2 |
-| Backup retention window | _(planned — no default days fixed)_ | _(planned)_ | How long backup files are kept before the pruning step deletes them | `WP-D10`; [backup & restore](../operations/backup-restore.md) §4 |
-| `model_pricing` source | Fixed requirement; seed content/refresh mechanism _(planned)_ | seeded, versioned, dated (`effective_from`, `verified_on`) | Per-token rates keyed by `model` × `service_tier` × `speed` × `inference_geo`, driving every dollar figure shown | `WP-C1`; DESIGN §4; [data model](../architecture/data-model.md) |
-| Alert rules (`alert_rules`) | Operator-configured | none by default | Cost-threshold, stuck-agent, and error trigger conditions | `WP-A2`, `WP-A5`; Phase 5, roadmap |
-| Webhook targets (`webhook_targets`) | Operator-configured | none by default | Outbound delivery destinations (Telegram today); dialed **only** from this operator-set table, never from an event payload | `WP-A2`, `WP-A4`; [Telegram alerts](telegram.md) |
-| Telegram bot token | **Mandatory when Telegram alerting is enabled** | none — held by reference only | The `@baev_bot_bot` bot token, resolved through `token_ref` (`launchd` env or a `chmod 600` dotfile), never a raw column value | `WP-A3`, `WP-A6`; CD-10 |
+| `DASHBOARD_TOKEN` | **Mandatory** | none — the process **throws at startup** if unset | Bearer token for every `/api/*` route and the SSE stream; hashed to SHA-256 then compared with `timingSafeEqual` | Must be present and **≥ 16 characters**; shorter is a startup error naming the actual length |
+| `DASHBOARD_PORT` | optional | `4317` | TCP port on the loopback bind | Integer 0–65535; anything else is a startup error |
+| `DASHBOARD_DB_PATH` | optional | `data/agenthropic.db` | Path to the WAL-mode SQLite file | Free-form path |
+| `DASHBOARD_INGEST` | optional | on | Master switch for corpus ingest. Tests boot with `0` so they never touch the real corpus | `1`/`true`/`0`/`false` only; anything else is a startup error |
+| `CLAUDE_PROJECTS_DIR` | optional | unset → the canonical `~/.claude/projects` | Corpus root override — where session transcripts are read from | Empty string counts as unset, so a stray `CLAUDE_PROJECTS_DIR=` cannot silently mean the working directory |
+| `DASHBOARD_POLL_INTERVAL_MS` | optional | `3000` — **PROVISIONAL (LABEL-ME), not ratified** | Tail-follow poll cadence (`WP-IN5`) | Positive integer |
+| `DASHBOARD_WATCHDOG_MINUTES` | optional | `10` — **PROVISIONAL (LABEL-ME), not ratified** | Inactivity window after which the missing-Stop watchdog marks an agent `unknown` (`WP-IN12`) | Positive integer |
+
+There is **no** listen-host variable: the bind is the exported constant
+`HOST = '127.0.0.1'` with no configuration path at all.
+
+*The design-era table follows, kept as the record. Every `(planned)` row in it is now
+resolved or withdrawn; see the `As built` column.*
+
+| Option | Required? | Default | What it controls | Source | As built |
+|---|---|---|---|---|---|
+| `DASHBOARD_TOKEN` | **Mandatory** | none — server **refuses to start** if unset | Bearer token, compared with `timingSafeEqual`, gating every read endpoint, every write endpoint, and the SSE stream | `WP-U0`, `WP-F7`; DESIGN §8 | Holds, plus a **16-character minimum** the design did not state |
+| Listen host | **Fixed** | `127.0.0.1` — `0.0.0.0` is never an accepted value, not even behind a flag | The bind address for every listener the server opens (read API, hook-ingest receiver, `/api/stream`) | `WP-U0`, `WP-F7`; DESIGN §8 | Holds — a constant, not a defaulted option |
+| Listen port | _(planned — default undecided)_ | _(planned)_ | TCP port the Fastify server listens on, loopback-side only | `WP-U0` (stack itself leaning, unconfirmed per the project `CLAUDE.md`) | Decided: `DASHBOARD_PORT`, default **4317** |
+| `~/.claude/projects` path | Fixed conventional location; an override mechanism, if any, is _(planned)_ | the standard Claude Code transcript directory | Ground-truth source of session/agent/token-usage JSONL, read by the `TokenReader`/`TokenSource` port | CD-6 (`concept-analysis-v2.md`); `WP-IN5` | An override **does** exist: `CLAUDE_PROJECTS_DIR` |
+| SQLite database path | _(planned — exact path undecided)_ | _(planned)_ | Location of the single WAL-mode SQLite file (+ its `-wal`/`-shm` siblings) | `WP-D2`; [data model](../architecture/data-model.md) | Decided: `DASHBOARD_DB_PATH`, default `data/agenthropic.db` |
+| WAL mode / `foreign_keys` | **Fixed**, not a toggle | asserted `ON` on every connection open | Journal mode and FK enforcement pragma-checked at connect time, not merely configured once | `WP-D2`; DESIGN §8 | Holds — both pragmas are set *and* read back on every open, and a mismatch throws rather than warns |
+| Backup directory | _(planned)_ | _(planned)_ | Where `WP-F8`'s online-backup artifacts (`agenthropic-<ts>.db`) land | `WP-F8`; [backup & restore](../operations/backup-restore.md) §2 | **Withdrawn** — backup is a function taking an explicit destination; there is no directory setting and no scheduler |
+| Backup retention window | _(planned — no default days fixed)_ | _(planned)_ | How long backup files are kept before the pruning step deletes them | `WP-D10`; [backup & restore](../operations/backup-restore.md) §4 | **Not implemented.** No pruning step exists; `WP-D10` is blocked on the OPEN-1/2/3 owner decisions |
+| `model_pricing` source | Fixed requirement; seed content/refresh mechanism _(planned)_ | seeded, versioned, dated (`effective_from`, `verified_on`) | Per-token rates keyed by `model` × `service_tier` × `speed` × `inference_geo`, driving every dollar figure shown | `WP-C1`; DESIGN §4; [data model](../architecture/data-model.md) | Table exists and is seeded by migration 7, keyed `(model, bucket, effective_from)`. **There is no `verified_on` column**, and the seeded rates are marked as awaiting ratification. There is no refresh mechanism and no configuration for one |
+| Alert rules (`alert_rules`) | Operator-configured | none by default | Cost-threshold, stuck-agent, and error trigger conditions | `WP-A2`, `WP-A5`; Phase 5, roadmap | **Does not exist** — v2.0, KC-5-gated |
+| Webhook targets (`webhook_targets`) | Operator-configured | none by default | Outbound delivery destinations (Telegram today); dialed **only** from this operator-set table, never from an event payload | `WP-A2`, `WP-A4`; [Telegram alerts](telegram.md) | **Does not exist** — v2.0, KC-5-gated |
+| Telegram bot token | **Mandatory when Telegram alerting is enabled** | none — held by reference only | The `@baev_bot_bot` bot token, resolved through `token_ref` (`launchd` env or a `chmod 600` dotfile), never a raw column value | `WP-A3`, `WP-A6`; CD-10 | **Does not exist** — no `token_ref` resolver, no Telegram code path, nothing to enable |
 
 Every non-fixed row above is either `(planned)` — a shape the design commits to but
 without a literal default yet — or `(leaning — unconfirmed)`, tied directly to the
 still-open stack decision (the project `CLAUDE.md`: pnpm monorepo, Fastify,
 better-sqlite3, React/Vite/D3 are leaning, not confirmed). Nothing in this table is
-invented to fill the gap.
+invented to fill the gap. *(As built: the stack is no longer leaning — pnpm monorepo,
+Fastify + TypeBox, better-sqlite3 and React/Vite are what shipped.)*
 
 ## How configuration is supplied
 
@@ -56,6 +111,14 @@ loader's literal shape: whether it reads only process environment variables, lay
 config file (JSON/YAML/`.env`) underneath the environment, or does both with a defined
 precedence. Treat the following as the *designed intent*, marked `(planned)` where the
 concrete mechanism is still open:
+
+> **As built:** the loader reads **process environment variables only**. No config file
+> of any format is read, so the precedence question below never had to be answered — it
+> is not an open decision, it is a path not taken. `launchd`'s
+> `EnvironmentVariables` dictionary and a `chmod 600` dotfile that exports variables
+> into the process both still work, because both end up as environment variables; but
+> the server itself knows nothing about either mechanism. The `token_ref` resolver was
+> never built (nothing needs it — see the alerting note above).
 
 - **Environment variables** — the mechanism every security-critical option (the table
   above) is expressed through in every source example, e.g. `DASHBOARD_TOKEN=<token>`
@@ -116,6 +179,15 @@ file — always a placeholder, never a real value:
 DASHBOARD_TOKEN=<token>
 ```
 
+> **As built:** all of this holds, with two additions the design did not state. The
+> token must be **at least 16 characters** — a shorter value is rejected at startup with
+> an error naming its length, so a one-character "token" is not a valid deployment.
+> And the comparison hashes *both* sides to SHA-256 digests before `timingSafeEqual`,
+> so differing input lengths leak nothing through timing and cannot trip
+> `timingSafeEqual`'s equal-length precondition. The token is held in a closure, never
+> persisted, and the request-log serializer strips it from the SSE `?token=` URL before
+> any log line is written.
+
 ### Listen host — fixed at `127.0.0.1`, never `0.0.0.0`
 
 This is not a default that can be overridden — it is a fixed, loopback-or-fail bind.
@@ -138,6 +210,13 @@ port-forward or Tailscale only, terminating at `127.0.0.1`, never a reverse prox
 widened bind.
 
 ### `token_ref` — secrets held by reference, never by value
+
+> **Update — 2026-07 (as built): nothing in this section exists.** There is no
+> `webhook_targets` table, no `token_ref` column, no resolver, and no permissions gate,
+> because there is no outbound secret to hold — Telegram delivery and the whole alerting
+> slice are v2.0 material behind KC-5. The invariant below is recorded as a **design
+> commitment that binds whoever eventually builds alerting**, not as a mechanism you can
+> configure today.
 
 The Telegram bot token (and any future webhook credential) is never stored as a raw
 value anywhere the server writes to disk or sends over the wire. `WP-A3` owns a
@@ -163,6 +242,14 @@ from. No source document names an environment variable or config key for overrid
 this location; whether one exists is `(planned)`. Treat the conventional path as fixed
 today and any override mechanism as undecided.
 
+> **As built:** an override exists and is named **`CLAUDE_PROJECTS_DIR`**. Unset (or set
+> to the empty string, which is deliberately treated as unset so a stray
+> `CLAUDE_PROJECTS_DIR=` cannot resolve to the working directory) means the canonical
+> `~/.claude/projects`. Corpus reading is additionally governed by
+> `DASHBOARD_INGEST` — set it to `0` or `false` and the watcher never opens the corpus
+> at all, which is how the test suite guarantees it cannot touch real transcripts. The
+> tail-follow cadence is `DASHBOARD_POLL_INTERVAL_MS` (default 3000, **PROVISIONAL**).
+
 ## Storage: SQLite path and WAL mode
 
 The single persisted store is SQLite, and it always runs in **WAL** journaling mode
@@ -173,6 +260,11 @@ for live views), not a tuning knob an operator can turn off. The exact filesyste
 the database lives at is `(planned)` — no source document fixes it; see
 [data model](../architecture/data-model.md) for the schema this file holds and
 [backup & restore](../operations/backup-restore.md) §1 for why WAL specifically.
+
+> **As built:** the path is `DASHBOARD_DB_PATH`, default `data/agenthropic.db`; the
+> parent directory is created on open. The pragma discipline is stronger than
+> "configured once": both pragmas are set and then **read back**, and a connection that
+> does not report WAL journaling or enforced foreign keys throws and refuses to be used.
 
 ```sql
 -- Asserted on every connection open (WP-D2), not merely configured once:
@@ -192,6 +284,25 @@ and payload redaction live from Phase 1, not deferred as later cleanup. Full det
 including the tested-restore drill and the reference `launchd` scheduling shape:
 [backup & restore](../operations/backup-restore.md).
 
+> **As built:** this section splits three ways.
+>
+> - **Backup/restore is built, but is not configured.** `backupDatabase(db, destPath)`
+>   uses the online-backup API (safe under a live WAL database) and
+>   `restoreDatabase(src, dest)` reopens the copy with the same pragma assertions and
+>   **refuses to return a database that fails `PRAGMA integrity_check`**. Both take an
+>   explicit destination, so there is no backup-directory option to set and no built-in
+>   schedule — scheduling is left to the operator.
+> - **Retention is NOT implemented.** There is no TTL sweeper, no pruning, and no
+>   retention window — for backups or for stored rows. `WP-D10` is blocked on the
+>   OPEN-1/OPEN-2/OPEN-3 owner decisions, so CD-10's "retention TTL live from Phase 1"
+>   is currently **unmet**, and this page should not be read as describing a knob you
+>   can turn.
+> - **Redaction IS live.** It runs at the hook ingest boundary, before the payload is
+>   hashed into the idempotency key or written anywhere, and uses key-based plus
+>   value-based matching with an allowlist so token *counts* survive the scrub. Its
+>   policy implements the recommended resolution of OPEN-3 and is itself pending owner
+>   sign-off.
+
 ## Cost engine: `model_pricing` source
 
 `WP-C1` owns the versioned `model_pricing` table and its authoritative, dated seed —
@@ -206,7 +317,31 @@ cadence for keeping this table current after ship is `(planned)`. See
 [cost model](../architecture/cost-model.md) for dated-price resolution and
 delegation-savings mechanics.
 
+> **As built:** the table exists, seeded by a migration, keyed
+> `(model, bucket, effective_from)` so several dated rows can coexist per model+bucket.
+> Three corrections to the paragraph above:
+>
+> - **There is no `verified_on` column.** Only `effective_from` shipped; CD-4's second
+>   versioning column was not implemented.
+> - **The seeded rates are not ratified.** They are marked PROVISIONAL in the source and
+>   must not be quoted as verified pricing.
+> - **The refusal is at runtime, not only in CI.** Model ids are matched as **exact
+>   byte-strings** from the corpus, with no normalization; a model with no matching row
+>   raises `PricingError` and halts the affected computation rather than costing it at
+>   `$0`. In the DB-backed rollups the same gap surfaces as `unpricedTokens` — counted
+>   and displayed, never folded into the dollar figure. There is still no refresh
+>   mechanism and nothing to configure for one.
+
 ## Alert rules and webhook targets
+
+> **Update — 2026-07 (as built): none of this exists.** There is no `alert_rules` table,
+> no `webhook_targets` table, no dispatcher and no operator alerts API — `WP-A8`/`WP-A9`
+> were **cut outright**. Alerting is v2.0, entered only through kill checkpoint
+> **KC-5**, which demands evidence of sustained real v1.0 use before a line of it is
+> written; if that evidence never appears, none of it is ever built and the roadmap
+> counts that as a success. The SSRF invariant stated below remains **binding on
+> whoever eventually builds it**, but there is nothing to configure today. See
+> [Telegram alerts](telegram.md) for the full gating story.
 
 `alert_rules` and `webhook_targets` are entirely **operator-configured** — there is no
 default rule and no default target. An operator creates a rule (`cost_threshold`,
@@ -241,19 +376,20 @@ only restates the subset that is directly configuration-shaped.
 
 ## What's decided vs. open
 
-| Aspect | Status |
-|---|---|
-| `DASHBOARD_TOKEN` mandatory, `timingSafeEqual`, fail-startup-when-unset | **Fixed** (DESIGN §8, `WP-U0`, `WP-F7`) |
-| Listen host `127.0.0.1`, `0.0.0.0` never accepted | **Fixed** (DESIGN §8, `WP-U0`, `WP-F7`) |
-| WAL mode + `foreign_keys` asserted on connect | **Fixed** (`WP-D2`, DESIGN §8) |
-| Secret handling via `token_ref` (`launchd` env / `chmod 600`, `>0600` rejected) | **Fixed mechanism** (`WP-A3`, CD-10) |
-| Listen port default | **Planned** — undecided |
-| Config loader's env-vs-file precedence | **Planned** — `WP-U0` names a "config loader," format/precedence undecided |
-| SQLite database path | **Planned** — undecided |
-| Backup directory + retention window (days) | **Planned** — requirement fixed (CD-10, `WP-F8`/`WP-D10`), numbers undecided |
-| `~/.claude/projects` override mechanism | **Planned** — conventional path assumed fixed, override undecided |
-| `model_pricing` seed refresh cadence | **Planned** — versioning columns fixed (CD-4), cadence undecided |
-| Stack underneath all of the above (Fastify, better-sqlite3, pnpm monorepo) | **Leaning — unconfirmed** (the project `CLAUDE.md`) |
+| Aspect | Status | As built |
+|---|---|---|
+| `DASHBOARD_TOKEN` mandatory, `timingSafeEqual`, fail-startup-when-unset | **Fixed** (DESIGN §8, `WP-U0`, `WP-F7`) | Holds, plus a 16-character minimum |
+| Listen host `127.0.0.1`, `0.0.0.0` never accepted | **Fixed** (DESIGN §8, `WP-U0`, `WP-F7`) | Holds — a constant with no configuration path |
+| WAL mode + `foreign_keys` asserted on connect | **Fixed** (`WP-D2`, DESIGN §8) | Holds — set *and* read back; a mismatch throws |
+| Secret handling via `token_ref` (`launchd` env / `chmod 600`, `>0600` rejected) | **Fixed mechanism** (`WP-A3`, CD-10) | **Not built** — no secret exists to hold; binding only on a future v2.0 alerting build |
+| Listen port default | **Planned** — undecided | Decided: `DASHBOARD_PORT`, default 4317 |
+| Config loader's env-vs-file precedence | **Planned** — `WP-U0` names a "config loader," format/precedence undecided | **Moot** — environment variables only; no file is read |
+| SQLite database path | **Planned** — undecided | Decided: `DASHBOARD_DB_PATH`, default `data/agenthropic.db` |
+| Backup directory + retention window (days) | **Planned** — requirement fixed (CD-10, `WP-F8`/`WP-D10`), numbers undecided | Backup/restore built as functions with a caller-supplied path; **retention not implemented**, blocked on OPEN-1/2/3 |
+| `~/.claude/projects` override mechanism | **Planned** — conventional path assumed fixed, override undecided | Decided: `CLAUDE_PROJECTS_DIR` (plus `DASHBOARD_INGEST` as a master off switch) |
+| `model_pricing` seed refresh cadence | **Planned** — versioning columns fixed (CD-4), cadence undecided | Still no cadence and no refresh mechanism; `verified_on` was never added and the seeded rates are PROVISIONAL |
+| Stack underneath all of the above (Fastify, better-sqlite3, pnpm monorepo) | **Leaning — unconfirmed** (the project `CLAUDE.md`) | Confirmed and shipped |
+| Poll interval / watchdog window | *(not in the design-era table)* | `DASHBOARD_POLL_INTERVAL_MS` = 3000 and `DASHBOARD_WATCHDOG_MINUTES` = 10, both **PROVISIONAL (LABEL-ME)** — chosen, not ratified |
 
 ## See also
 
@@ -264,8 +400,9 @@ only restates the subset that is directly configuration-shaped.
 - [Backup & restore](../operations/backup-restore.md) — the tested-restore drill and
   retention/redaction mechanics behind the backup options above.
 - [Telegram alerts](telegram.md) — configuring the alert rules and the Telegram
-  delivery target this page only summarizes.
-- [Getting started](getting-started.md) — installation and first run, once Phase 1
-  ships.
+  delivery target this page only summarizes. *(As built: v2.0 only, KC-5-gated, nothing
+  built and nothing to configure.)*
+- [Getting started](getting-started.md) — installation and first run. *(As built:
+  Phase 1 shipped; the run instructions there are current.)*
 - [Roadmap](../guide/roadmap.md) — where each configuration slice lands, phase by
   phase.

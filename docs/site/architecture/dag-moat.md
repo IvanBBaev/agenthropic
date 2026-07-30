@@ -13,6 +13,31 @@ and the cross-session global DAG — never reconstructing it in the browser
 (`DESIGN.md` §2, §4, §6). This is deliberately the hardest thing on the roadmap to get
 right, which is exactly why it is the moat and not a nice-to-have.
 
+> **Update — 2026-07 (as built).** The moat artifact exists. `orchestration_edges` is a
+> real table (migration 5, `apps/server/src/db/migrations.ts`), written at ingest time
+> in the same transaction as sessions/agents/token rows, and served by real endpoints
+> (`GET /api/sessions/:id/tree` and `GET /api/dag/global` — a query over persisted rows,
+> never a render-time reconstruction). Three things landed differently than this page
+> sketches:
+>
+> - **The edges are JSONL-only, not dual-path.** No hook ever asserts an edge —
+>   `SubagentStart` does not exist, and even `SubagentStop` contributes only a liveness
+>   timestamp. The parser derives every edge from the transcripts via **four join
+>   paths**, recorded per row in a `source` column:
+>   `'tool_use'`, `'directory'`, `'task_notification'`, `'queue_operation'`.
+>   "Rebuild from JSONL alone" is therefore not a fallback proof but the only branch
+>   the system has.
+> - **The real DDL differs from the CD-4 sketch**: the `UNIQUE` logical key is
+>   session-scoped (`session_id, parent_agent_id, child_agent_id`), there is **no
+>   `derived_from_event_id`** (edges never derive from normalized events — provenance
+>   is the `source` join-path column), and `instance`/`host_id` are both `NOT NULL` as
+>   promised. See the DDL section below.
+> - **The P0 proofs are built and green** in the server test suite: Σ`token_usage`
+>   equals the JSONL sum exactly, double-replay is idempotent, and the DAG rebuilds
+>   from JSONL alone. On the hand-labeled corpus the hard join produced **0.000%
+>   orphaned agents** (G0.1b) — orphans, when they occur in the wild, get **no edge**
+>   rather than a guessed one.
+
 ## Why this is "the moat" and not just a feature
 
 `DESIGN.md` §2 lists five capabilities "confirmed absent across all six audited
@@ -73,6 +98,13 @@ is exactly the property `WP-U3` (session/agent/subagent-tree endpoints) and `WP-
 > multiple sessions, sourced from a query over persisted edges." (`development-plan.md`,
 > Track U)
 
+> **As built:** both endpoints exist in `apps/server/src/api/routes.ts` —
+> `GET /api/sessions/:id/tree` and `GET /api/dag/global` — and both answer from a query
+> over the persisted `orchestration_edges` rows. Idempotent writes shipped exactly as
+> named: `INSERT OR IGNORE` against `UNIQUE (session_id, parent_agent_id, child_agent_id)`,
+> so whole-session re-ingest (the replay mechanism) collapses duplicate derivations to
+> one row. `instance` and `host_id` are `NOT NULL` from migration 5.
+
 ## Per-instance, not type-aggregated
 
 The second word matters because at least one audited rival built something that *looks*
@@ -114,6 +146,16 @@ against a future migration, not a shipped feature. Until Phase 5+ lands, treat a
 "fleet" framing as **schema-ready, not built**.
 
 ## Dual-path edge construction (`WP-IN8`)
+
+> **As built, the "dual-path" collapsed to one path — deeper than designed.** The hook
+> leg was never built: `SubagentStart` does not exist, and no hook (not even
+> `SubagentStop`) asserts an edge. What shipped instead is the parser's **four JSONL
+> join paths** — `tool_use` (the `Agent`/`Workflow` spawn's `tool_use.id` matched to
+> the child's `meta.toolUseId`), `directory` (nested `workflows/wf_*/` containment),
+> `task_notification`, and `queue_operation` — each recorded in the row's `source`
+> column, so an edge's provenance stays queryable. An agent none of the four paths can
+> join gets **no edge** (visible as an orphan), never a guessed one. The section below
+> is the design record of why the hedge existed.
 
 This is the core mechanism, and the single largest execution-risk item on the moat. The
 development plan's work package is explicit that the persisted edge must be derivable
@@ -190,6 +232,13 @@ opens:
   persisted graph forever — it flips to a distinct `unknown` state within a bounded
   window instead.
 
+> **As built:** `WP-IN12` shipped as written — stale non-terminal agents flip to
+> `'unknown'` after a bounded window (`DASHBOARD_WATCHDOG_MINUTES`, default 10,
+> PROVISIONAL), and a later re-ingest lets JSONL evidence win the status back.
+> `WP-IN9`'s backfill pass was **never needed**: `token_usage.agent_id` is attributed
+> inside the parser, before any write, in the same transaction — a `NULL` there means
+> genuinely unattributable, not "awaiting backfill".
+
 ## Rebuild-from-JSONL-alone: the test that proves the moat is real
 
 A dual-path design is only as good as its proof that the fallback path actually works
@@ -229,6 +278,17 @@ against a hand-labeled real session **even without `SubagentStart` firing at all
 i.e. the JSONL-only path has to carry the tree on its own, not just contribute
 alongside a healthy hook stream, to clear the gate.
 
+> **As built:** the three P0 tests exist as real test files in the server suite and are
+> green — token-sum exactness, double-replay idempotence (re-ingesting an unchanged
+> session writes nothing new), and DAG-rebuild-from-JSONL-alone. The last one is no
+> longer a *fallback* proof: since hooks never feed edges, JSONL-alone is the only
+> branch, and the test asserts the system's normal operation, not an outage mode. The
+> ≥95% bar was passed with margin — the hard join (G0.1b) produced **0.000% orphaned
+> agents and 100% usage attribution** on the hand-labeled corpus. Replay-on-startup is
+> the ingest watcher's first tick over the whole corpus; idempotent whole-session
+> re-ingest replaces the byte-identical-substrate formulation (JSONL never lands in
+> `events_raw` — see [ingest & reconciliation](../architecture/ingest-reconciliation.md)).
+
 ## Contrast with rivals
 
 `DESIGN.md` §6 gives an "honest read of the state of the art" that draws the line
@@ -253,7 +313,7 @@ Two things worth being precise about, since it is easy to blur them:
   (a type-aggregated diagram over a post-hoc reconstruction) so that distinction is not
   lost in a demo screenshot.
 
-## Confirmed shape of `orchestration_edges` (column set decided, DDL still a synthesis)
+## Confirmed shape of `orchestration_edges` (as built: migration 5 is the authority)
 
 Beyond `WP-D7`'s Done-when and `DESIGN.md` §4, the canonical decision **CD-4**
 (`concept-analysis-v2.md`) pins the column set explicitly:
@@ -272,26 +332,38 @@ So the confirmed constraints on the table are:
 - a `derived_from_event_id` column tracing the edge back to the normalized event that
   produced it (CD-4) — the same provenance pattern as `events.raw_event_id`.
 
-Per [the data model](../architecture/data-model.md) page's own "what's decided vs. open"
-table, this column set is **"Decided (CD-4, `WP-D7`); exact FK/child-column naming is a
-synthesis"** — i.e. the concepts above are settled, but the literal migration DDL (types,
-exact naming) is still a reference synthesis pending `WP-D4`…`WP-D10`, none of which are
-written yet (the project has no production code). The sketch below mirrors the
-constraints above; the authoritative reference DDL lives on the data model page, not
-here:
+The migration is now written, so the synthesis era is over. The real DDL (migration 5,
+`apps/server/src/db/migrations.ts`):
 
 ```sql
--- Reference sketch only — see the data model page for the authoritative reference DDL.
 CREATE TABLE orchestration_edges (
-  id                     INTEGER PRIMARY KEY AUTOINCREMENT,
-  parent_agent_id        TEXT NOT NULL REFERENCES agents(id),
-  child_agent_id         TEXT NOT NULL REFERENCES agents(id),
-  instance               TEXT NOT NULL,   -- non-null host/instance key (WP-D7, CD-4)
-  host_id                TEXT NOT NULL,   -- fleet-aggregation hedge (WP-D7, CD-4)
-  derived_from_event_id  INTEGER NOT NULL REFERENCES events(id),  -- provenance (CD-4)
-  UNIQUE (parent_agent_id, child_agent_id, instance)  -- WP-D7: one row per logical edge
+  id              INTEGER PRIMARY KEY,
+  session_id      TEXT NOT NULL,
+  parent_agent_id TEXT NOT NULL,
+  child_agent_id  TEXT NOT NULL,
+  source          TEXT NOT NULL CHECK (source IN ('tool_use','directory','task_notification','queue_operation')),
+  instance        TEXT NOT NULL,
+  host_id         TEXT NOT NULL,
+  created_at      TEXT,
+  UNIQUE (session_id, parent_agent_id, child_agent_id)
 );
+CREATE INDEX idx_orchestration_edges_session_id ON orchestration_edges(session_id);
 ```
+
+Where the built table departs from the CD-4 sketch, and why:
+
+- **`derived_from_event_id` was not built.** CD-4 assumed edges would derive from
+  normalized events; as built they derive from the JSONL parser directly (there is no
+  Normalizer stage), so per-event provenance would point at nothing. The `source`
+  column carries the provenance instead — which of the four join paths produced the
+  edge.
+- **The `UNIQUE` logical key is session-scoped** (`session_id, parent_agent_id,
+  child_agent_id`) rather than instance-scoped — agent ids are unique per session, and
+  whole-session re-ingest needs replays to collapse within the session boundary.
+- **No FK to `agents`** — rows are written with `INSERT OR IGNORE` inside the same
+  transaction that upserts agents in topological order; the join is by id, not
+  enforced by the engine.
+- `instance` and `host_id` **non-null**: shipped exactly as `WP-D7` demanded.
 
 ## Roadmap placement
 
@@ -316,6 +388,12 @@ Reading the two roadmap layers together:
   real layout engine and, separately, where the host/instance key gets an actual fleet
   UI built on top of it.
 
+> **As built:** the Phase 3 core (persisted table, JSONL edge derivation, P0 proofs)
+> and the Phase 4 read side (tree + global-DAG endpoints and the SPA views over them)
+> both landed in the 2026-07 implementation wave. The Phase 5+ extensions remain
+> unbuilt: no ELK/Graphviz layout, no fleet UI — the `instance`/`host_id` columns stay
+> schema-ready, not shipped features.
+
 ## First layout extension: ELK/Graphviz
 
 Once the persisted graph exists and is queryable, its rendering can still improve
@@ -334,21 +412,27 @@ which library wins until that decision is made.
 
 ## What's undecided
 
+*(What was open when this page was written; the as-built resolutions follow each item.)*
+
 - **The literal `orchestration_edges` migration DDL.** The column set itself is decided
   (`WP-D7`'s Done-when plus CD-4: self-referential edge, `UNIQUE` + `INSERT OR IGNORE`,
   non-null `instance`/`host_id`, `derived_from_event_id`) — but per
   [the data model](../architecture/data-model.md) page's own status table, the exact
   FK/child-column naming remains a reference synthesis pending the actual migration
   (`WP-D4`…`WP-D10`), none of which are written yet.
+  *Resolved:* migration 5 is written and quoted above — `derived_from_event_id` became
+  the `source` join-path column; the logical key is session-scoped.
 - **Fleet aggregation itself.** The host/instance key is populated from the first
   migration, but the cross-machine rollup UI/queries are Phase 5+ and not decomposed
-  into work packages yet (`DESIGN.md` §9).
+  into work packages yet (`DESIGN.md` §9). *Still open — unchanged as built.*
 - **The ELK/Graphviz layout extension.** Named as "the first extension when needed"
   (`DESIGN.md` §6) with no committed timing or library choice.
+  *Still open — unchanged as built.*
 - **Whether `SubagentStart` reliably fires at all.** `WP-IN8`'s Done-when is written to
   tolerate `SubagentStart` never firing for a given session — the dual-path design is
   explicit insurance against exactly that uncertainty. Full hook-catalog verification
-  status: [hook ingestion](../architecture/hooks.md) (open page).
+  status: [hook ingestion](../architecture/hooks.md).
+  *Resolved:* `SubagentStart` does not exist; edges never needed any hook at all.
 
 ## See also
 
@@ -356,11 +440,9 @@ which library wins until that decision is made.
   two invariants (ground-truth tokens, persisted agent hierarchy) this page assumes.
 - [Data model](../architecture/data-model.md) — the annotated schema reference for
   `agents`, `orchestration_edges`, `sessions`, `events_raw`/`events`, `token_usage`
-  (open page — only `agents`' DDL is verbatim-fixed; the rest, including
-  `orchestration_edges`, is a decided-but-synthesized reference schema).
-- [Ingest & reconciliation](../architecture/ingest-reconciliation.md) — `WP-IN7`'s
-  projection in full, and the CD-1 ingest-primacy decision `WP-IN8` depends on (open
-  page).
+  (now carrying the real migration DDL for all seven built tables).
+- [Ingest & reconciliation](../architecture/ingest-reconciliation.md) — the as-built
+  ingest pipeline, and the CD-1 ingest-primacy decision the edge derivation rests on.
 - [Phase-0 corpus probe](../../analysis/phase0-probe.md) — the empirical CD-1 verdict
   (`Agent`/`Workflow` ≠ `Task`; dual-layout; child-transcript token summation) that the
   dual-path mechanism on this page keys on.

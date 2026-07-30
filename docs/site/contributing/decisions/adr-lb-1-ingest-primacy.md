@@ -1,8 +1,10 @@
 # ADR-0001: LB1 — Ingest primacy (the data-foundation seam)
 
-- **Status:** accepted — decision procedure locked; the specific branch (JSONL-primary vs
-  hooks-primary+outbox) is **pre-answered by the 2026-07-04 desktop probe (CONDITIONAL-GO,
-  conf 85); formal spike pending** (see Empirical update below, and Consequences → Follow-ups)
+- **Status:** accepted — the branch resolved **JSONL-primary and is built** (2026-07);
+  ~~formal spike pending~~ *(the `WP-S7` gate was overridden by the owner on 2026-07-11, not
+  passed — [ADR-0010](adr-cd-8-phase-0-spike.md))*. **Open:** the ≥95%-vs-labeled-corpus
+  criterion has never been measured; parser thresholds remain PROVISIONAL (see the as-built
+  update below)
 - **Date:** 2026-07-03
 - **Deciders:** Ivan Baev (project owner), via the six-lens concept-analysis-v2 workflow
   (Architect · Developer · QA · Business Analyst · Gap · Holistic)
@@ -33,6 +35,44 @@ code before it). Three points the probe forces on the prose that follows:
   or hooks becoming a data source not also present in JSONL). The proven load-bearing hedges are
   instead dual-layout parsing (85% nested) and child-transcript token summation (parent rollup
   ≈0%).
+
+## As-built update — 2026-07-30
+
+**Verdict: the branch resolved JSONL-primary and was built; the golden-corpus
+criterion that was supposed to certify it has not been run.**
+
+**What is settled.** Ingest is JSONL-primary. Hooks carry liveness only and cannot
+write structure or tokens. The DAG rebuilds from JSONL alone after a simulated
+outage, and a double replay is byte-identical — both asserted by merge-blocking P0
+proofs. The `Agent`/`Workflow` correction from the desktop probe held: nothing keys
+on `Task`.
+
+**The dual-path complexity named in Consequences did not materialize** — but not
+because it was avoided. `SubagentStart` **does not exist**, so the "forward-link if it
+exists" arm was never needed and the reconstructor is post-hoc only. That is the
+probe's suspicion confirmed by the shipped hook installer, which wires four hooks
+(`UserPromptSubmit`, `Stop`, `SubagentStop`, `PreCompact`). Edge detection turned out
+to need **four** mechanisms rather than two, recorded per-row in
+`orchestration_edges.source`: `tool_use`, `directory`, `task_notification`,
+`queue_operation`.
+
+**Two acceptance criteria below are not met as written:**
+
+1. "Both hooks and JSONL land in `events_raw`" — as built, only hooks do. JSONL is
+   parsed straight into the projections; see
+   [ADR-0004](adr-cd-2-immutable-substrate-projection.md)'s as-built update. The
+   replay guarantee survives via re-reading the corpus, not via replaying rows.
+2. **"Hierarchy correctness ≥95% vs a labeled golden corpus of ≥3 real sessions
+   including crashed-no-Stop, deep nesting, mid-session PreCompact, two concurrent
+   instances" — this has not been measured.** No hand-labelled corpus exists. The
+   parser's thresholds are marked PROVISIONAL (LABEL-ME) throughout the source and
+   await ratification. The P0 proofs run against **fixtures**, which prove the
+   reconstruction is self-consistent and outage-surviving; they do not prove it
+   matches a human-labelled ground truth on real sessions. Those are different
+   claims, and only the first one has evidence.
+
+The `WP-S7` gate this ADR defers to was overridden, not passed — see
+[ADR-0010](adr-cd-8-phase-0-spike.md).
 
 ## Context
 

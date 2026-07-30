@@ -20,6 +20,10 @@ import Fastify, {
 } from 'fastify';
 import { Type, type TypeBoxTypeProvider } from '@fastify/type-provider-typebox';
 import { isAllowedOrigin, redactTokenInUrl, timingSafeTokenEqual } from '@agenthropic/shared';
+import { apiRoutes } from './api/routes';
+import type { SubstrateProvider } from './api/substrate-provider';
+import type { SqliteDatabase } from './db/connection';
+import { RealtimeHub } from './realtime/hub';
 
 export interface BuildServerOptions {
   /** Mandatory auth token (already validated by loadConfig). */
@@ -31,6 +35,22 @@ export interface BuildServerOptions {
   /** SSE reconnect hint sent as the `retry:` field. */
   readonly sseRetryMs?: number;
   readonly logger?: boolean;
+  /**
+   * Open, migrated database handle (WP-U2). When absent, the read API routes
+   * are not registered and unknown /api/* paths 404 exactly as before.
+   */
+  readonly db?: SqliteDatabase;
+  /**
+   * Realtime hub whose published events fan out to /api/stream subscribers
+   * (WP-U1). The orchestrator shares ONE hub between ingest and this server;
+   * when absent a private hub is constructed so the stream still works.
+   */
+  readonly hub?: RealtimeHub;
+  /**
+   * Read-only corpus seam for the WP-C4/C5 cost-analysis endpoint. When
+   * absent, that endpoint replies 503 and every other route is unaffected.
+   */
+  readonly substrateProvider?: SubstrateProvider;
 }
 
 const HealthResponseSchema = Type.Object(
@@ -99,6 +119,7 @@ export function buildServer(options: BuildServerOptions) {
   const { token, schemaVersion } = options;
   const heartbeatIntervalMs = options.heartbeatIntervalMs ?? 15_000;
   const sseRetryMs = options.sseRetryMs ?? 3_000;
+  const hub = options.hub ?? new RealtimeHub();
 
   const app: FastifyInstance = Fastify({ logger: buildLoggerOptions(options.logger ?? false) });
   const typed = app.withTypeProvider<TypeBoxTypeProvider>();
@@ -153,11 +174,17 @@ export function buildServer(options: BuildServerOptions) {
       'x-accel-buffering': 'no',
     });
     raw.write(`retry: ${sseRetryMs}\n\n`);
+    // Subscribe BEFORE the ': connected' comment goes out: a client that has
+    // seen 'connected' is provably subscribed to hub fan-out already.
+    const unsubscribe = hub.subscribe((frame) => {
+      raw.write(frame);
+    });
     raw.write(': connected\n\n');
     const heartbeat = setInterval(() => {
       raw.write(': heartbeat\n\n');
     }, heartbeatIntervalMs);
     const close = (): void => {
+      unsubscribe();
       clearInterval(heartbeat);
       activeStreams.delete(close);
       raw.end();
@@ -172,6 +199,15 @@ export function buildServer(options: BuildServerOptions) {
     }
     done();
   });
+
+  // Read API routes exist only when a database handle was provided; they are
+  // registered INSIDE this scope, so the auth gate above covers all of them.
+  if (options.db !== undefined) {
+    void app.register(apiRoutes, {
+      db: options.db,
+      substrateProvider: options.substrateProvider,
+    });
+  }
 
   return app;
 }

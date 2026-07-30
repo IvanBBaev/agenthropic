@@ -1,8 +1,8 @@
 # Contributing overview
 
 This page is the entry point for anyone about to work on agenthropic: what the repo is
-trying to be, how to get a dev environment up (mostly **TBD today** — there is no
-scaffold to install yet), how work is decomposed and handed out, and the rules every
+trying to be, how to get a dev environment up (the scaffold exists as of 2026-07-11 —
+the commands below are runnable), how work is decomposed and handed out, and the rules every
 contribution — human or agent-authored — has to clear before it merges. The key
 takeaway up front: agenthropic is built as **one work package (WP) → one agent → one
 PR**, gated by a **merge-blocking >90% coverage bar** and a fixed set of security
@@ -38,37 +38,47 @@ For the full pitch and the "why build instead of fork" argument, see
 
 ## Where the project stands today
 
-As of this writing agenthropic is in the **bootstrap phase**: the design basis and the
-development plan are written, but **no application code is scaffolded** — there is no
-`package.json`, no workspace, no `src/` yet. Concretely, this means:
+> **Update — 2026-07 (as built).** The section below was written during the pre-code
+> bootstrap phase and its answers are **no longer true**. Implementation began
+> **2026-07-11**. The table has been rewritten with the real answers; the paragraph after
+> it preserves why the original said what it said.
 
-| Question | Answer today |
+The scaffold exists and the commands in this guide are runnable:
+
+| Question | Answer today (verified 2026-07-30) |
 |---|---|
-| Can I `pnpm install` and run something? | **No.** There is nothing to install. |
-| Is the stack decided? | **Leaning**, not locked: Fastify + `better-sqlite3` + React/Vite/D3 in a pnpm monorepo (server + web) — per the project `CLAUDE.md` and the Senior Developer verdict in concept-analysis-v2 [§4.2](../../analysis/concept-analysis-v2.md) ("the stack lean … is correct"), still open per `WP-F1`'s hard dependency on `WP-S7`. |
-| What Node version? | **Node 22** — already fixed as part of `WP-F1`'s Done-when ("clean install on Node 22 with a committed lockfile"), even though `WP-F1` itself hasn't landed. |
-| When does the scaffold land? | Only after `WP-S7` reads **GO** — see [Why there's nothing to scaffold yet](#why-theres-nothing-to-scaffold-yet) below. `WP-F1` has a hard dependency on `WP-S7` for exactly this reason. |
-| Where do lint/test commands come from? | `WP-F2` fixes `pnpm run lint` (zero errors) and `WP-F3` adds a Vitest coverage harness producing lcov + json-summary — both still open. |
+| Can I `pnpm install` and run something? | **Yes.** `pnpm install` against the committed `pnpm-lock.yaml`, then `pnpm --filter @agenthropic/server dev` (needs `DASHBOARD_TOKEN`) and `pnpm --filter @agenthropic/web dev`. |
+| Is the stack decided? | **Locked and built**: Fastify + TypeBox, `better-sqlite3` (single driver), React/Vite/D3, SSE, in a pnpm monorepo — `apps/server`, `apps/web`, `packages/shared`, `packages/core`, `packages/test-fixtures`, `hooks/`. |
+| What Node version? | **Node 22** (`engines.node: ">=22"`), `pnpm@11.11.0` pinned via `packageManager`. |
+| When does the scaffold land? | It landed. `WP-F1`'s dependency on a `WP-S7` **GO** was resolved by an owner override, not by a GO — see the note below. |
+| Where do lint/test commands come from? | They exist at the repo root: `pnpm run typecheck` · `lint` · `format:check` · `test` · `gate:spawner` · `gate:licenses`. |
+| Is the test suite real? | **72 test files / 879 tests**, >90% coverage gated in every shipped package. See [Testing & quality](testing.md). |
 
-Until those land, **treat every command in this guide as illustrative, not runnable**.
-The [Roadmap](../guide/roadmap.md) tracks phase-by-phase when each piece of tooling is
-expected to exist; [`TODO.md`](../../../TODO.md) at the repo root is the live,
-authoritative status of what's actually done vs. open.
+[`TODO.md`](../../../TODO.md) at the repo root remains the live, authoritative status of
+what's done vs. open, and [`DONE.md`](../../../DONE.md) Milestone 1 records the
+implementation phase. The [Roadmap](../guide/roadmap.md) carries the checkpoint calendar.
 
-### Why there's nothing to scaffold yet
+### Why there was nothing to scaffold — and what changed
 
-CD-8 (the Phase-0 hard-stop) means **no production code — not even the monorepo
-scaffold — starts before a throwaway feasibility spike returns a verdict.** That
-sequencing is encoded as a literal dependency in the plan: `WP-F1` (the scaffold)
-depends on `WP-S7` (the GO/NO-GO report), which itself depends on five upstream
-Phase-0 probes (`WP-S2`…`WP-S6`) that empirically test whether the subagent tree can
-be rebuilt from the JSONL transcript alone. Two human approval gates sit above even
-that: Ivan must **approve the ten canonical decisions (CD-1…CD-10)** and **approve
-running Phase 0 at all** before the spike itself starts (`TODO.md`, "Gate A"). This is
-why a contributing guide for a codebase with zero lines of application code is not
-premature — the WP/PR discipline described below already governs the Phase-0 spike
-work packages (`WP-S1`…`WP-S7`, `WP-X10`), which are the only things anyone can pick up
-right now.
+CD-8 (the Phase-0 hard-stop) meant **no production code — not even the monorepo
+scaffold — before a throwaway feasibility spike returned a verdict.** That sequencing was
+encoded as a literal dependency in the plan: `WP-F1` (the scaffold) depended on `WP-S7`
+(the GO/NO-GO report), which itself depended on five upstream Phase-0 probes
+(`WP-S2`…`WP-S6`) that empirically tested whether the subagent tree could be rebuilt from
+the JSONL transcript alone. Two human approval gates sat above even that: Ivan had to
+**approve the ten canonical decisions (CD-1…CD-10)** and **approve running Phase 0 at
+all** (`TODO.md`, "Gate A").
+
+**What actually happened, stated without varnish:** the spike ran and returned
+**CONDITIONAL GO** — not GO. Implementation began on **2026-07-11** by an **explicit
+owner override**, while some of the conditions were still open. Record it as an override,
+never as a gate that was cleared. Two consequences that still bind today: the
+spike-derived accuracy numbers remain **PROVISIONAL** until they are ratified against a
+hand-labeled corpus, and the roadmap's kill checkpoints **KC-0 (2026-07-13) and KC-1
+(2026-07-27) both passed unmet** — KC-1's third clause was *unsatisfiable by
+construction*, because the friction log it referred to was never opened. A checkpoint
+whose condition cannot be evaluated has not been passed; it was skipped. Work continues
+because the owner said so, not because the evidence said so.
 
 ## Reading order before you touch anything
 

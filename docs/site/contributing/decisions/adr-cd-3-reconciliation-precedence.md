@@ -1,6 +1,6 @@
 # ADR-0005: CD-3 — Reconciliation precedence
 
-- **Status:** accepted
+- **Status:** accepted, **partly moot as built 2026-07-30** — JSONL-authoritative tokens hold and are P0-proven; the cross-source precedence and the two-phase `agent_id` backfill were never needed (see the as-built update below)
 - **Date:** 2026-07-03
 - **Deciders:** Ivan Baev (project owner), via the six-lens concept-analysis-v2 workflow
 - **Source:** [`concept-analysis-v2.md` §3, row CD-3](../../../analysis/concept-analysis-v2.md#3-canonical-decision-register-v2)
@@ -23,6 +23,45 @@ toolUseResult.agentId`), and **100% of `message.usage` lines attribute to an `ag
 match uncertainty. Backfill remains load-bearing because the tokens themselves must be **summed
 from child transcripts** (parent-side rollup is ≈ 0% for the async spawn majority). Formal
 confirmation still flows through `WP-S3` / the Phase-0 spike before the open question is closed.
+
+## As-built update — 2026-07-30
+
+**Verdict: the load-bearing half holds; the reconciliation half became unnecessary.**
+
+**Tokens are JSONL-authoritative, and it is proven.** No token row can originate
+from a hook: `token_usage` is written only on the JSONL ingest path, from parsed
+ground truth. The P0 token-reconciliation proof asserts Σ `token_usage` per session
+against an **independently written in-test reader** — a second implementation, not a
+re-run of the same code — and it is merge-blocking. The `UNIQUE (message_id, bucket)`
+key is what makes the sum exact rather than approximately right; naive row summation
+over-counts by ≈2.4× (parser-spec §5.2).
+
+**The two-phase attribution did not happen, and did not need to.** The Decision
+below allows `token_usage.agent_id` to be NULL at first write and backfilled later.
+As built, an entire session is parsed *before* any write, and the whole projection
+lands in **one transaction** — so the agent is already known when the usage row is
+inserted. The column is still nullable in the schema, but there is no backfill pass,
+and therefore no window in which a row is misattributed. The Consequences section
+below anticipates "a consistency concern that needs its own dedicated reconciliation
+test"; that concern was designed out rather than tested around.
+
+**Cross-source idempotent upsert has nothing to reconcile.** This decision's premise
+is that a fact might be seen by both a hook and JSONL. As built that cannot happen:
+hooks carry liveness only and never write structure or tokens
+([ADR-0003](adr-cd-1-ingest-source-of-truth.md)'s as-built update), so the two
+sources describe disjoint facts. Per-field precedence was never exercised because no
+field has two claimants. Idempotency is still real, but it is per-source and enforced
+in the schema (`events_raw.idempotency_key UNIQUE`,
+`token_usage UNIQUE (message_id, bucket)`), not by a precedence rule at projection
+time.
+
+**The open question below is still open.** The `WP-S3` probe of whether the
+JSONL→`agent_id` join is a hard key or needs confidence scoring was not run as a
+formal spike. In practice the parser resolves the join structurally and the P0 proofs
+pass on the real corpus shape, which is evidence that it behaves as a hard key — but
+that is an observation from working code, not a ratified answer, and the parser's
+thresholds remain PROVISIONAL (LABEL-ME) pending ratification against a hand-labelled
+corpus.
 
 ## Context
 

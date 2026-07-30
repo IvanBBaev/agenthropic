@@ -8,6 +8,33 @@
 > Values marked _(planned)_ or _(leaning — unconfirmed)_ may change; the **security
 > invariants are binding and will not**. This replaces the earlier stub.
 
+> **Update — 2026-07 (as built).** The code exists now (implementation began
+> 2026-07-11), so the flow below is runnable, not aspirational. The real values, all
+> verified against the repository:
+>
+> - **Install:** pnpm monorepo (`pnpm@11`, Node ≥ 22 per `package.json` `engines`),
+>   workspaces `apps/server`, `apps/web`, `packages/shared`, `packages/core`,
+>   `packages/test-fixtures`, plus `hooks/`. `pnpm install` with the committed
+>   `pnpm-lock.yaml` is the real step 2.
+> - **Run the server:** `DASHBOARD_TOKEN=<token> pnpm --filter @agenthropic/server dev`.
+>   It binds `127.0.0.1:4317` by default — the bind host is a constant in
+>   `apps/server/src/config.ts` (deliberately not configurable); the port is
+>   `DASHBOARD_PORT` (default **4317**). Startup fails without `DASHBOARD_TOKEN`,
+>   exactly as promised.
+> - **Run the SPA:** `pnpm --filter @agenthropic/web dev` (Vite dev server; React +
+>   D3, four real views).
+> - **Install the hooks:** `node hooks/install.mjs` (`WP-X8`, shipped) — generates
+>   four fail-silent hooks (`UserPromptSubmit`, `Stop`, `SubagentStop`, `PreCompact`)
+>   that POST to the loopback receiver with `Authorization: Bearer ${DASHBOARD_TOKEN}`
+>   expanded by the shell at fire time, never written to disk. See
+>   [hooks installer](hooks-installer.md).
+> - **Data flows without hooks too:** the ingest watcher polls
+>   `~/.claude/projects/*.jsonl` directly (JSONL is the primary source, CD-1), so
+>   step 4 alone already yields populated views; hooks add liveness freshness only.
+>
+> Every `(planned)` / `(leaning — unconfirmed)` tag below is design history — the
+> per-section notes mark what each one resolved to.
+
 This page walks the designed install → configure → run → verify flow end to end, for a
 single self-hoster standing agenthropic up on their own machine. The key takeaway: two
 things about this flow are already **fixed** and will not change regardless of how the
@@ -17,14 +44,16 @@ almost everything else below (the exact install command, the package manager, th
 port) is a **leaning**, not yet a locked decision (`CLAUDE.md` current-state;
 `ai/DESIGN.md` §10). Where a step names a concrete command or path, this page marks it
 `(planned)` or `(leaning — unconfirmed)` rather than inventing one, per the same
-sourcing discipline as every other page under `docs/site/`.
+sourcing discipline as every other page under `docs/site/`. *(As built, the two fixed
+things held exactly — token-or-exit and loopback-or-nothing — and the open ones
+resolved: pnpm monorepo, Fastify, port 4317. See the update box above.)*
 
 ## Prerequisites
 
 | Requirement | Status | Source |
 |---|---|---|
 | A macOS or Linux host | Fixed shape; no OS-specific dependency named in the design | `ai/DESIGN.md` §1 describes the reference deployment as "real sessions on a Mac Mini M4" |
-| Node runtime + **pnpm** | _(leaning — unconfirmed)_ | `CLAUDE.md` current-state: "Leaning Fastify + better-sqlite3 + React/Vite/D3, pnpm monorepo (server + web), but unconfirmed" |
+| Node runtime + **pnpm** | _(leaning — unconfirmed)_ *(Resolved as built: Node ≥ 22 and `pnpm@11`, per the root `package.json` `engines` and `packageManager` fields)* | `CLAUDE.md` current-state: "Leaning Fastify + better-sqlite3 + React/Vite/D3, pnpm monorepo (server + web), but unconfirmed" |
 | A local Claude Code install already producing `~/.claude/projects/*.jsonl` | Fixed — this file is the system's **ground-truth** input, not optional tooling | `ai/DESIGN.md` §3, §8; [architecture overview](../architecture/overview.md) Invariant 1 |
 
 The reference host throughout the design basis is Ivan's own **Mac Mini M4**, run as a
@@ -57,6 +86,13 @@ git clone <repo-url> agenthropic     # (planned — exact URL not fixed pre-Phas
 cd agenthropic
 ```
 
+> **As built:** the repository exists (github.com/IvanBBaev/agenthropic, first commit
+> pushed 2026-07-11) and the open question resolved to a **pnpm monorepo** —
+> `apps/server`, `apps/web`, `packages/shared`, `packages/core`,
+> `packages/test-fixtures`, `hooks/`. Scaffolding proceeded under an explicit owner
+> override of the CD-8 gate condition (recorded in the project's state documents);
+> the security invariants were not relaxed by that override.
+
 ### 2. Install dependencies — *(planned, pnpm workspace)*
 
 `WP-F1`'s Done-when is "clean install on Node 22 with a committed lockfile"
@@ -68,6 +104,10 @@ assumes is still open per `ai/DESIGN.md` §10. The illustrative shape:
 ```bash
 pnpm install     # (planned — pnpm monorepo is a leaning, unconfirmed choice; WP-F1)
 ```
+
+> **As built:** exactly this command, no longer illustrative — `WP-F1`'s done-when
+> is met: clean install on Node 22 against the committed `pnpm-lock.yaml`
+> (`pnpm install --frozen-lockfile` is what CI runs).
 
 ### 3. Set the mandatory `DASHBOARD_TOKEN` — **fixed: mandatory, never optional**
 
@@ -89,6 +129,12 @@ docs style guide). At runtime the token is compared with Node's
 compare leaks timing information about how many leading bytes matched
 ([security model](../security/model.md) rule 2).
 
+> **As built:** both halves shipped and are contract-tested every run
+> (`apps/server/test/security-contract.test.ts`): the server exits at startup when
+> `DASHBOARD_TOKEN` is unset, and the comparison hashes both values to a fixed
+> length before `timingSafeEqual` — slightly stronger than the sketch, since even
+> the length of the correct token is not observable.
+
 ### 4. Start the server — **fixed: loopback-or-fail, never `0.0.0.0`**
 
 `WP-U0` (Fastify server bootstrap, owner `backend`, Phase 1) implements a
@@ -106,6 +152,16 @@ DASHBOARD_TOKEN=<token> pnpm --filter server start   # (planned — exact comman
 # with DASHBOARD_TOKEN unset (WP-U0 / WP-F7)
 ```
 
+> **As built:** the real command is
+> `DASHBOARD_TOKEN=<token> pnpm --filter @agenthropic/server dev`, and the port
+> question is settled — default **4317**, overridable with `DASHBOARD_PORT`. The
+> bind host is **not** an environment variable at all: `127.0.0.1` is a constant in
+> `apps/server/src/config.ts` with a comment saying it is intentionally not
+> configurable, which is the strongest possible form of "refuses to start on
+> `0.0.0.0`". The framework question resolved to Fastify (+ TypeBox). The
+> security-contract test suite boots this exact composition root and asserts every
+> bound address is `127.0.0.1`.
+
 If you are only ever going to sit at the host's own keyboard, step 4 already gets you a
 working local dashboard. Step 5 is what makes it useful: real data flowing in, and (if
 needed) a way to reach it from another machine.
@@ -121,7 +177,11 @@ than duplicated here:
   `events_raw` on a real session" (`docs/analysis/development-plan.md` §5, Track X).
   Per the [roadmap](../guide/roadmap.md), this ships in **Phase 2 — Ingest substrate**,
   one phase after the server itself. Full procedure:
-  [hooks installer](hooks-installer.md).
+  [hooks installer](hooks-installer.md). *(As built: shipped —
+  `node hooks/install.mjs` installs four fail-silent hooks. Note also that hooks are
+  optional for data: the server's polling watcher ingests
+  `~/.claude/projects/*.jsonl` directly, so sessions, agents, edges and costs appear
+  without any hook installed; hooks add interim liveness only.)*
 - **Reaching the dashboard from a machine other than the host** is never done by
   widening the bind address — it is always an SSH local port-forward or a Tailscale
   tunnel terminating at the same unmoved `127.0.0.1` socket (`ai/DESIGN.md` §8; never
@@ -159,11 +219,25 @@ summarizes the shape, not the diagram, to avoid drifting out of sync with it:
    the browser SPA, which redraws the subagent DAG and the cost/token Sankey view
    ([architecture overview](../architecture/overview.md) steps 5–6).
 
-The full walkthrough — including the webhook-sink side branch to Telegram, the
-component-responsibility table, and the ports-&-adapters seams behind each stage — is
-the dedicated subject of [architecture overview](../architecture/overview.md); this
-page stops at "here is the loop your install produces," not "here is how each stage is
-built."
+> **As built, one structural correction to steps 2–4:** `events_raw` holds **hook
+> events only**, and the projections are **not** derived from it. The JSONL
+> transcript is parsed by the pure parser (`packages/core/src/parser`) and written
+> straight into `sessions` / `agents` / `orchestration_edges` / `token_usage` in a
+> **single transaction per session** (`apps/server/src/ingest/ingest-session.ts`),
+> with the cost computation acting as a halt gate before any row is written. A hook
+> envelope lands in `events_raw` plus one identifier-only liveness row in `events`
+> in the same transaction. Replay stays idempotent and CD-1 (JSONL-primary) holds —
+> hooks contribute liveness, never structure. The separate normalizer/projection
+> stages the design sketched were never built as stages; see
+> [ingest & reconciliation](../architecture/ingest-reconciliation.md) for the
+> as-built pipeline.
+
+The full walkthrough — including the webhook-sink side branch to Telegram *(as
+built: not present — the server makes no outbound network request of any kind;
+alerts are post-1.0, gated by KC-5)*, the component-responsibility table, and the
+ports-&-adapters seams behind each stage — is the dedicated subject of
+[architecture overview](../architecture/overview.md); this page stops at "here is
+the loop your install produces," not "here is how each stage is built."
 
 ## Honesty box — fixed vs. leaning-open
 
@@ -179,6 +253,15 @@ rather than gloss over it:
 | Token counts are ground truth read from `~/.claude/projects/*.jsonl`, never inferred (`ai/DESIGN.md` §3; [architecture overview](../architecture/overview.md) Invariant 1) | Exact install/start commands, package names, and the listening port — none are named yet anywhere citable |
 | No browser-driven subprocess/`claude` spawner is ever built (`ai/DESIGN.md` §8) | Whether ingestion is JSONL-primary or hooks-primary-with-outbox — Phase-0's `WP-S7` GO/NO-GO decides this (CD-1, CD-8) |
 | Remote access only via SSH port-forward or Tailscale tunnel, never a reverse proxy to the open port (`ai/DESIGN.md` §8) | Exact hook-endpoint auth mechanics for the hook-POST leg specifically ([architecture overview](../architecture/overview.md) "What's undecided") |
+
+> **As built:** every "fixed" row held without exception, and every "leaning / open"
+> row is now resolved — Fastify (+ TypeBox); React + Vite + D3 confirmed; pnpm
+> monorepo confirmed; commands and port are real (`pnpm install`,
+> `pnpm --filter @agenthropic/server dev`, default port 4317); ingestion resolved to
+> **JSONL-primary** (no outbox — hooks are liveness only); and the hook-POST leg
+> authenticates with the same mandatory Bearer token as every other endpoint, sent
+> as `Authorization: Bearer ${DASHBOARD_TOKEN}` by the installed hook command with
+> the variable expanded at fire time, never stored in the hook file.
 
 ## Next steps
 

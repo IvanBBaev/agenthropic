@@ -1,6 +1,6 @@
 # ADR-0010: CD-8 — Phase 0 is a throwaway GO/NO-GO feasibility spike
 
-- **Status:** accepted
+- **Status:** accepted, then **OVERRIDDEN by the owner on 2026-07-11** — the hard ❌-stop gate ("no production code until green") was bypassed, **not** satisfied; spike numbers remain PROVISIONAL (LABEL-ME) pending ratification. See the as-built update below.
 - **Date:** 2026-07-03
 - **Deciders:** Ivan Baev (project owner), via the six-lens concept-analysis-v2 workflow
 - **Source:** [`concept-analysis-v2.md` §3, row CD-8](../../../analysis/concept-analysis-v2.md#3-canonical-decision-register-v2)
@@ -27,6 +27,55 @@ production code before it)**. Three corrections apply to the acceptance criteria
   **child-transcript token summation** (parent rollup ≈0%).
 - Layout is **spawn-mechanism-driven, not version-driven** (C2): flat and nested coexist
   within the same CC version; the parser branches on **directory shape**, not `version`.
+
+## As-built update — 2026-07-30
+
+**Verdict: overridden. Not passed.**
+
+This is the one ADR in this directory whose gate was bypassed rather than cleared,
+and it must be read that way. The `WP-S7` verdict was **CONDITIONAL-GO**, meaning
+conditions attached. Implementation began on **2026-07-11**, while those conditions
+were still open, by an **explicit instruction from the project owner (Ivan Baev) in
+chat**, given after he was told that the outstanding CD-8 conditions were precisely
+what was blocking the work. Two further dispatch overrides followed (2026-07-18,
+2026-07-29).
+
+The distinction matters more here than anywhere else in this corpus. This ADR exists
+because both external reports reached their conclusions **by default, without running
+the experiment**. An override that gets recorded as a pass would reproduce exactly
+that failure mode one level up: a gate that was skipped, remembered as a gate that
+was met. So, stated without softening:
+
+- **The hard ❌ stop below was not honoured.** "No production code until green" was
+  overridden by the owner, not satisfied.
+- **The override did not relax anything else.** It did not touch the security
+  invariants ([ADR-0009](adr-cd-7-security-and-coverage-boundary.md)), the coverage
+  gate, the kill-checkpoint calendar, the LABEL-ME ratification requirement, or the
+  no-commit-without-an-explicit-ask rule. It authorized starting, and nothing more.
+- **The spike numbers remain PROVISIONAL (LABEL-ME).** Every threshold derived from
+  the desktop probe — read limits, layout heuristics, edge-detection confidence — is
+  marked provisional in the source and **awaits ratification against a hand-labelled
+  corpus**. They have not been ratified. Working code that passes tests built on
+  those numbers is not the same thing as those numbers being right.
+- **`WP-S3` / G0.1b was never run as a formal probe** — see
+  [ADR-0005](adr-cd-3-reconciliation-precedence.md)'s as-built update.
+
+**What the built system does independently evidence.** Three merge-blocking P0
+proofs now assert, against fixture corpora, what G0.1 and G0.4 set out to measure:
+the DAG rebuilds from JSONL alone after a simulated outage; a double replay is
+byte-identical; Σ `token_usage` matches an independently written in-test reader.
+G0.2 is answered by construction — the shipped installer wires **four** hooks
+(`UserPromptSubmit`, `Stop`, `SubagentStop`, `PreCompact`), and **`SubagentStart`
+does not exist**, confirming the §4.2 suspicion this ADR was written to test.
+
+That is real evidence and it points the same way the probe did. It is still not the
+thing this ADR asked for. The spike was meant to produce a **ratified verdict on a
+paired-capture corpus with the owner's tree sign-off, before the schema was poured**.
+The schema is poured. The sign-off is outstanding. The honest summary is: the
+architecture was validated *after* being committed to, by tests the same author
+wrote, on fixtures rather than a hand-labelled corpus — which is better than
+EXPANDED's "validate at the Phase-4 UI walkthrough," and worse than what CD-8
+specified.
 
 ## Context
 

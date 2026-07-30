@@ -1,6 +1,6 @@
 # ADR-0004: CD-2 — Single immutable substrate + deterministic projection
 
-- **Status:** accepted
+- **Status:** accepted, **amended in practice 2026-07-30** — append-only immutability shipped and is trigger-enforced; the two-stage Normalizer → Projection pipeline was not built (see the as-built update below)
 - **Date:** 2026-07-03
 - **Deciders:** Ivan Baev (project owner), via the six-lens concept-analysis-v2 workflow
 - **Source:** [`concept-analysis-v2.md` §3, row CD-2](../../../analysis/concept-analysis-v2.md#3-canonical-decision-register-v2)
@@ -22,6 +22,52 @@ no production code precedes it. Two points bear on this ADR:
   source not also present in JSONL).
 - The probe's proven load-bearing hedges are **dual-layout parsing** (85% of agent files are nested)
   and **child-transcript token summation** (parent rollups ≈ 0%) — not the outbox.
+
+## As-built update — 2026-07-30
+
+**Verdict: amended in practice.** This ADR has two halves. The immutability half
+shipped and is enforced in the database engine. The pipeline-shape half — the
+two-stage `Normalizer` → `Projection` pair drawn in the diagram below — was never
+built.
+
+**What holds:**
+
+- `events_raw` is genuinely append-only, and not by convention: migration 1 creates
+  SQLite `BEFORE UPDATE` and `BEFORE DELETE` triggers
+  (`events_raw_no_update` / `events_raw_no_delete`) that `RAISE(ABORT, 'events_raw is
+  append-only')`. There is no UPDATE/DELETE path to find, because the engine refuses
+  one. A negative test asserts both aborts and is merge-blocking.
+- Idempotency is a `UNIQUE` constraint on `idempotency_key`, so re-ingesting the same
+  log is a no-op at the storage layer rather than a de-duplication pass in
+  application code.
+- Deterministic replay is proven: the P0 double-replay proof asserts a **byte-identical**
+  result across two ingests of the same corpus, and the P0 DAG-rebuild proof
+  reconstructs the projection after a simulated outage.
+
+**What diverged:** there is no pure `Normalizer` stage and no separate `Projection`
+stage. `WP-IN6`/`WP-IN7` as drawn were collapsed. As built, JSONL is parsed by
+`packages/core` (a pure parser with no DB imports) and the result is written straight
+into `sessions`, `agents`, `orchestration_edges` and `token_usage` — **one
+transaction per session**, no intermediate normalized-event representation.
+Consequently `events_raw` in practice holds **hook events only**: the JSONL path
+does not round-trip through the substrate on its way to the projections.
+
+**Why:** the substrate-then-project shape earns its keep when two drifting sources
+must be reconciled at projection time. Once CD-1 settled into "JSONL is the only
+structural source, hooks are liveness only" ([ADR-0003](adr-cd-1-ingest-source-of-truth.md)),
+there was nothing to reconcile on the structural path, and the intermediate stage
+became a rewrite of the same facts with no reader. The per-session transaction
+preserves the property that actually mattered — a session is projected atomically or
+not at all, and replay is deterministic — without the second table.
+
+**What this costs, stated plainly:** the replay guarantee is now "re-read the JSONL
+corpus and re-project," not "re-run a pure function over rows already in the
+database." That is weaker in one specific way: it depends on the corpus still being
+on disk. It is exactly as strong for the failure mode this project actually faces
+(process crash, restart, backfill), because Claude Code writes that corpus
+independently and does not truncate it — the property CD-1's probe measured. If a
+hooks-only data source ever appears, this half of CD-2 has to be rebuilt as
+originally drawn.
 
 ## Context
 

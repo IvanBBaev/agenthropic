@@ -6,20 +6,47 @@ isn't a fork of an existing tool, whether it spans machines, and how alerts reac
 **Short version:** agenthropic is a self-hosted, local-first dashboard that binds to
 `127.0.0.1` on your own machine, never sends telemetry anywhere, has no cloud bill
 because there is no cloud tier, and the only thing it ever sends outbound is an alert
-*you* configured. Every answer below links to the deeper reference page for the full
-detail.
+*you* configured — *(as built: nothing at all, because the alert sink was never built)*.
+Every answer below links to the deeper reference page for the full detail.
+
+> **Update — 2026-07 (as built).** This page was written before any code existed. Four
+> corrections, and one of them changes an answer above:
+>
+> - **agenthropic is no longer pre-code.** Implementation began **2026-07-11**. Running
+>   today: the loopback-bound, token-gated server; SQLite/WAL with migrations; JSONL ingest
+>   with replay-on-startup; the persisted subagent DAG; the cost engine; the hook receiver;
+>   the SSE hub; the read API; and all four dashboard views. **72 test files / 879 tests
+>   pass**, coverage gated >90% in every shipped package.
+> - **"The only outbound traffic is a Telegram alert" is now simply "no outbound traffic."**
+>   Alerting was not built and may never be: it is v2.0, entered only via **KC-5**, and the
+>   operator-alerts API and UI were **cut outright**. The running server **makes no
+>   outbound network request of any kind**. Read every "Phase 5, not yet built" below as
+>   "not built, not scheduled, possibly never."
+> - **Retention is still not implemented.** Redaction *is* (`hooks/redact.ts`, applied at
+>   the hook ingest boundary), but the retention TTL is blocked on unresolved policy
+>   decisions. Nothing prunes the database today; plan disk accordingly.
+> - **Still no benchmarks.** No CPU/RAM/disk footprint has been measured even now, and the
+>   v1.0 usability target ("<30s to understand a session") is **unmeasured** too. Where this
+>   page says a number does not exist, that is still true.
+>
+> Two standing caveats: the Phase-0 spike numbers remain **PROVISIONAL** until ratified
+> against a hand-labeled corpus, and the roadmap's kill checkpoints **KC-0 and KC-1 both
+> passed unmet** — work continues by explicit owner override, not because the gates were
+> satisfied. Also note that **no rival dashboard was ever installed and run**: the
+> comparisons on this page come from reading their source during due diligence, and the
+> project's friction log was never opened.
 
 ## Quick answers
 
 | Question | Short answer |
 |---|---|
 | Cloud / SaaS? | No — self-hosted, local-first. Runs on your own machine. |
-| Phones home? | No telemetry egress. The only outbound traffic is an operator-configured Telegram alert (Phase 5, not yet built). |
-| Cost to run? | No cloud bill — it's a local process + SQLite on hardware you already own. No published CPU/RAM/disk figures yet (pre-code). |
-| Data safety / location? | Local SQLite (WAL) on your machine; tokens read from your own `~/.claude/projects/*.jsonl`; auth-gated writes; nothing leaves the box by default. |
-| Why not fork simple10 / hoangsonww? | Neither ships the actual moat; greenfield lets us take the good parts of each without inheriting either's baggage (one's non-persisted edges, the other's RCE). |
-| Works across machines? | Not yet — single-host by design for now; the schema is hedged (`instance`/`host_id`) so fleet aggregation doesn't require a rewrite later. |
-| How do alerts reach me? | Telegram, to a bot you own (`@baev_bot_bot`) — a Phase 5 roadmap item, not yet built. |
+| Phones home? | No telemetry egress. **As built: no outbound traffic at all** — the alert sink was never built, so the server makes no outbound network request of any kind. |
+| Cost to run? | No cloud bill — it's a local process + SQLite on hardware you already own. **Still no published CPU/RAM/disk figures**: nothing has been benchmarked, before or since the code was written. |
+| Data safety / location? | Local SQLite (WAL) on your machine; tokens read from your own `~/.claude/projects/*.jsonl`; auth-gated writes; nothing leaves the box by default. *(As built: all four hold. Redaction is live; **retention is not** — nothing prunes the database yet.)* |
+| Why not fork simple10 / hoangsonww? | Neither ships the actual moat; greenfield lets us take the good parts of each without inheriting either's baggage (one's non-persisted edges, the other's RCE). *(Judged by reading their source in 2026-07 — neither was installed and run.)* |
+| Works across machines? | Not yet — single-host by design for now; the schema is hedged (`instance`/`host_id`) so fleet aggregation doesn't require a rewrite later. *(As built: the hedge is on `orchestration_edges` only, not every table.)* |
+| How do alerts reach me? | **They don't — nothing is built.** Telegram to a bot you own was the design; it is now v2.0 behind KC-5, may never start, and its API and UI were cut. Alerts reach you only as the dashboard UI updating over SSE. |
 
 ---
 
@@ -62,6 +89,12 @@ Claude Code ──►  hook-ingest ──► SQLite (WAL) ──► SSE ──�
                                                                             up an
                                                                             alert rule
 ```
+
+> **As built, delete the bottom branch.** There is no webhook sink and no Telegram relay —
+> not a stub, not a disabled feature, nothing. The running system's outbound arrow count is
+> **zero**. The rest of the diagram is accurate, with one refinement: the hook-ingest arrow
+> carries *liveness only*. The load-bearing input is the JSONL read, which is what
+> builds the DAG, the agents, and every token row.
 
 The Telegram relay (roadmap Phase 5, not built yet) is the sole outbound network call
 in the whole design, and it only fires against `webhook_targets` you configured
@@ -107,6 +140,17 @@ not yet implemented. See [the cost model](../architecture/cost-model.md) for the
 dollar-cost/delegation-savings design and [backup & restore](../operations/backup-restore.md)
 for retention.
 
+> **As built: the code exists, the numbers still don't.** The "pre-code" reason is stale —
+> the system has been running since 2026-07 — but the conclusion is unchanged: **no
+> CPU/RAM/disk footprint has been measured**, so there is still no figure to quote. Treat
+> any expectation you form as a guess.
+>
+> The storage sentence needs a sharper correction. **Payload redaction is implemented**
+> (`hooks/redact.ts`, applied at the hook ingest boundary). **The retention TTL is not** —
+> the work package is open and blocked on unresolved policy decisions. So storage growth is
+> currently **unbounded**: nothing prunes the database. On a single developer machine this
+> is small, but it is not capped by anything, and no one has measured how fast it grows.
+
 ## Is my data safe? Where does it live?
 
 **It lives in a SQLite database file on your own machine, in WAL mode, and it never
@@ -124,9 +168,15 @@ leaves that machine by default.** Concretely:
 - **No secret leakage:** `ANTHROPIC_API_KEY` is kept out of the dashboard's
   environment unless a feature genuinely requires it, and any Telegram bot token is
   planned to live behind a `token_ref` into `launchd` env / a chmod-600 file — never
-  inside SQLite, never shipped to the browser.
+  inside SQLite, never shipped to the browser. *(As built: no Telegram bot token exists,
+  because no alerting was built. The `ANTHROPIC_API_KEY` rule holds — the server never
+  calls an LLM API, or any API.)*
 - **Retention:** a retention TTL and payload-redaction rule for stored tool payloads
   is planned from Phase 1 (not yet implemented — this project has no code yet).
+  *(As built: half done, and the "no code yet" reason is stale. **Payload redaction is
+  implemented** at the hook ingest boundary (`hooks/redact.ts`). **The retention TTL is
+  not implemented** — that work package is open and blocked on unresolved policy
+  decisions, so nothing currently expires or prunes stored data.)*
 - **Remote access, if you ever want it, is tunnel-only** — SSH port-forward or a
   Tailscale tunnel (e.g. `--host <tailscale-host>`), never a reverse proxy exposing
   the port publicly.
@@ -141,6 +191,15 @@ Short answer: **because neither ships the actual product** — and the one that 
 richer out of the box carries a real remote-code-execution hole. The due-diligence
 evaluated six real, running rivals; `simple10/agents-observe` and
 `hoangsonww/Claude-Code-Agent-Monitor` were the two serious fork candidates.
+
+> **How this was judged, honestly.** "Evaluated" here means **their source and
+> documentation were read**, at commit state as of 2026-07-03. Neither project was
+> installed, run, or used alongside agenthropic, and the project's friction log — the
+> mechanism that was supposed to capture lived comparison — was never opened. The
+> security findings below (the `0.0.0.0` bind, the no-op token, the `/api/run`
+> permission-mode allow-list) are code-reading results, which is a fair basis for those
+> specific claims; the usability and "what it feels like to live with" judgements are not
+> claims this project has earned. Those repositories may also have changed since.
 
 | | `simple10/agents-observe` | `hoangsonww/Claude-Code-Agent-Monitor` |
 |---|---|---|
@@ -176,7 +235,12 @@ schema, copied **with attribution** as MIT permits (the dual-SQLite-driver fallb
 was dropped per best-path §6.3 — single `better-sqlite3` driver); `cast`'s
 auth-gate shape and delegation-savings formula reimplemented
 clean-room (its license is not compatible with copying); the `disler` hook-ingest
-loop studied only as a teaching reference. If out-of-box speed ever matters more
+loop studied only as a teaching reference.
+*(As built: **nothing was ever taken from `hoangsonww`** — its Telegram/webhook schema was
+the only scheduled graft and alerting was never built. The `cast` auth-gate shape and
+delegation-savings formula were clean-room reimplemented as required. The CD-9 licensing
+rule is enforced in CI by `scripts/check-licenses.mjs`.)*
+If out-of-box speed ever matters more
 than clean ownership later, the documented fallback is to fork **simple10**
 specifically (hardened: loopback + mandatory token, `local` runtime under
 `launchd`) — never hoangsonww, because of the spawner.
@@ -200,6 +264,13 @@ graph — `orchestration_edges`, and the schema generally — carries a non-null
 aggregates across that key yet. That means a future "watch two Macs from one
 dashboard" feature is an additive migration, not a data-model rewrite.
 
+> **As built, the hedge is narrower than that sentence promises.** `instance` and `host_id`
+> are `NOT NULL` columns on **`orchestration_edges` only** — not on "the schema generally,"
+> and not on `agents`, `sessions`, `events` or `token_usage`. The moat artifact is
+> fleet-keyed; the rest of the tables are not. A future fleet rollup is still an additive
+> migration rather than a rewrite, but it would be a larger one than this paragraph
+> implies. Nothing reads the key today, and no second host exists.
+
 Cross-machine/fleet aggregation is explicitly listed as one of the five capabilities
 no existing tool delivers, but it is **deferred until a second host physically
 exists** ([ADR-0002](../contributing/decisions/adr-lb-2-personal-first-commercial-clean.md)/[ADR-0012](../contributing/decisions/adr-cd-10-scope-secrets-retention.md))
@@ -209,6 +280,14 @@ for the persisted-edges design that carries the `instance`/`host_id` key, and
 [the roadmap](roadmap.md) for why fleet aggregation is not in the phase sequence.
 
 ## How do alerts reach me?
+
+> **As built: they don't, and this may never change.** No Telegram sink, no `alert_rules`,
+> no `webhook_targets`, no dispatcher, no bot token — none of it was built, and the server
+> makes no outbound network request of any kind. Alerting is **v2.0**, entered only via
+> **KC-5**, a checkpoint earned by sustained real daily use and deliberately given no date;
+> the operator-alerts API and UI (WP-A8/A9) were **cut outright**. The description below is
+> the design record for work that has not started. If you need to be notified away from
+> your desk, agenthropic does not do that today — watch the dashboard.
 
 **Telegram, to a bot you control (`@baev_bot_bot`) — this is a Phase 5 roadmap item
 and is not built yet.** The design grafts `hoangsonww`'s `formatTelegram` webhook
@@ -228,7 +307,9 @@ Two invariants apply here specifically:
   file, kept separate from `SQLite` and never returned by any API response.
 
 Until Phase 5 ships, the only place alerts "reach you" is the dashboard UI itself
-(SSE-pushed, loopback-only). Details: [telegram alerts](../usage/telegram.md)
+(SSE-pushed, loopback-only). *(As built: that is the current and only answer — the SSE
+live view is built and working, and there is no "until" with a date attached to it.)*
+Details: [telegram alerts](../usage/telegram.md)
 (usage guide, filled once Phase 5 lands) and [the roadmap](roadmap.md) for the full
 phase sequence.
 

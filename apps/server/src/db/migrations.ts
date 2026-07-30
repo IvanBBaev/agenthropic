@@ -19,24 +19,41 @@ const TOKEN_BUCKETS = ['input', 'output', 'cache_read', 'cache_write_5m', 'cache
 const BUCKET_CHECK = TOKEN_BUCKETS.map((b) => `'${b}'`).join(',');
 
 /**
- * WP-C1 pricing seed, dated 2026-07-11, from parser-spec section 5.4.
+ * WP-C1 pricing seed, authored 2026-07-11, from parser-spec section 5.4.
  *
  * These are APPROXIMATE LIST prices - a mechanism proof for the cost engine,
  * NOT a billing source. Derived buckets per model: cache_read = 0.1 x input,
  * cache_write_5m = 1.25 x input, cache_write_1h = 2.0 x input.
  * '<synthetic>' is priced 0 for all buckets. The parser must halt loudly on
  * an unknown model id - never silently price it at 0.
+ *
+ * effective_from is the FLOOR from which these list prices apply, NOT the seed
+ * authoring date. computeCostUsd resolves the latest rate with
+ * effectiveFrom <= message timestamp and throws when none is effective; the
+ * real corpus contains messages back to 2026-07-03 (~12.2k before the authoring
+ * date), so a 2026-07-11 floor would halt every historical ingest. These are a
+ * single flat mechanism-proof price applied across the whole observed window,
+ * so the floor is set before the corpus. PROVISIONAL (WP-C1) - the price
+ * NUMBERS are unchanged and still await ratification; only the coverage floor
+ * moved so the engine can price historical data at all.
  */
-const PRICING_SEED_EFFECTIVE_FROM = '2026-07-11';
+const PRICING_SEED_EFFECTIVE_FROM = '2026-01-01';
 const PRICING_SEED: ReadonlyArray<{
   model: string;
   inputUsdPerMtok: number;
   outputUsdPerMtok: number;
 }> = [
-  { model: 'opus-4-8', inputUsdPerMtok: 5, outputUsdPerMtok: 25 },
-  { model: 'sonnet-5', inputUsdPerMtok: 3, outputUsdPerMtok: 15 },
-  { model: 'fable-5', inputUsdPerMtok: 10, outputUsdPerMtok: 50 },
-  { model: 'haiku-4-5', inputUsdPerMtok: 1, outputUsdPerMtok: 5 },
+  // Keys are the EXACT `message.model` byte-strings emitted in the corpus
+  // (verified 2026-07-13 against ~/.claude/projects: claude-opus-4-8 x4819,
+  // claude-sonnet-5 x3286, claude-fable-5 x1849, claude-haiku-4-5-20251001 x2,
+  // <synthetic> x17). computeCostUsd does a HARD exact-string lookup and halts
+  // loudly on any id absent here - so a bare 'opus-4-8' key (no 'claude-'
+  // prefix; haiku also carries a date suffix) would make every real ingest
+  // halt. Do not "normalize" the id on the read side; add the exact string.
+  { model: 'claude-opus-4-8', inputUsdPerMtok: 5, outputUsdPerMtok: 25 },
+  { model: 'claude-sonnet-5', inputUsdPerMtok: 3, outputUsdPerMtok: 15 },
+  { model: 'claude-fable-5', inputUsdPerMtok: 10, outputUsdPerMtok: 50 },
+  { model: 'claude-haiku-4-5-20251001', inputUsdPerMtok: 1, outputUsdPerMtok: 5 },
   { model: '<synthetic>', inputUsdPerMtok: 0, outputUsdPerMtok: 0 },
 ];
 

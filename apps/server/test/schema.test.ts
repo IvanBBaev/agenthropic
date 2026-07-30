@@ -167,7 +167,7 @@ describe('Phase-1 schema', () => {
       temp.db
         .prepare(
           `INSERT INTO token_usage (session_id, agent_id, message_id, model, bucket, tokens, occurred_at)
-           VALUES ('s1', NULL, ?, 'sonnet-5', ?, ?, '2026-07-11T00:00:00Z')`,
+           VALUES ('s1', NULL, ?, 'claude-sonnet-5', ?, ?, '2026-07-11T00:00:00Z')`,
         )
         .run(messageId, bucket, tokens);
     }
@@ -201,7 +201,7 @@ describe('Phase-1 schema', () => {
   });
 
   describe('model_pricing (WP-C1)', () => {
-    it('is seeded with the 2026-07-11 approximate list prices for all five models', () => {
+    it('is seeded with the WP-C1 approximate list prices (2026-01-01 floor) for all five models', () => {
       const rows = temp.db
         .prepare('SELECT model, bucket, usd_per_mtok, effective_from FROM model_pricing')
         .all() as Array<{
@@ -211,22 +211,22 @@ describe('Phase-1 schema', () => {
         effective_from: string;
       }>;
       expect(rows).toHaveLength(25); // 5 models x 5 buckets
-      expect(rows.every((r) => r.effective_from === '2026-07-11')).toBe(true);
+      expect(rows.every((r) => r.effective_from === '2026-01-01')).toBe(true);
 
       const rate = (model: string, bucket: string): number | undefined =>
         rows.find((r) => r.model === model && r.bucket === bucket)?.usd_per_mtok;
 
-      expect(rate('opus-4-8', 'input')).toBe(5);
-      expect(rate('opus-4-8', 'output')).toBe(25);
-      expect(rate('opus-4-8', 'cache_read')).toBeCloseTo(0.5);
-      expect(rate('opus-4-8', 'cache_write_5m')).toBeCloseTo(6.25);
-      expect(rate('opus-4-8', 'cache_write_1h')).toBeCloseTo(10);
-      expect(rate('sonnet-5', 'input')).toBe(3);
-      expect(rate('sonnet-5', 'output')).toBe(15);
-      expect(rate('fable-5', 'input')).toBe(10);
-      expect(rate('fable-5', 'output')).toBe(50);
-      expect(rate('haiku-4-5', 'input')).toBe(1);
-      expect(rate('haiku-4-5', 'output')).toBe(5);
+      expect(rate('claude-opus-4-8', 'input')).toBe(5);
+      expect(rate('claude-opus-4-8', 'output')).toBe(25);
+      expect(rate('claude-opus-4-8', 'cache_read')).toBeCloseTo(0.5);
+      expect(rate('claude-opus-4-8', 'cache_write_5m')).toBeCloseTo(6.25);
+      expect(rate('claude-opus-4-8', 'cache_write_1h')).toBeCloseTo(10);
+      expect(rate('claude-sonnet-5', 'input')).toBe(3);
+      expect(rate('claude-sonnet-5', 'output')).toBe(15);
+      expect(rate('claude-fable-5', 'input')).toBe(10);
+      expect(rate('claude-fable-5', 'output')).toBe(50);
+      expect(rate('claude-haiku-4-5-20251001', 'input')).toBe(1);
+      expect(rate('claude-haiku-4-5-20251001', 'output')).toBe(5);
       for (const bucket of ['input', 'output', 'cache_read', 'cache_write_5m', 'cache_write_1h']) {
         expect(rate('<synthetic>', bucket)).toBe(0);
       }
@@ -236,16 +236,18 @@ describe('Phase-1 schema', () => {
       const insert = temp.db.prepare(
         'INSERT INTO model_pricing (model, bucket, usd_per_mtok, effective_from) VALUES (?, ?, ?, ?)',
       );
-      insert.run('sonnet-5', 'input', 2, '2026-09-01');
+      insert.run('claude-sonnet-5', 'input', 2, '2026-09-01');
       const rows = temp.db
         .prepare(
-          "SELECT effective_from FROM model_pricing WHERE model = 'sonnet-5' AND bucket = 'input' ORDER BY effective_from",
+          "SELECT effective_from FROM model_pricing WHERE model = 'claude-sonnet-5' AND bucket = 'input' ORDER BY effective_from",
         )
         .all() as Array<{ effective_from: string }>;
-      expect(rows.map((r) => r.effective_from)).toEqual(['2026-07-11', '2026-09-01']);
+      expect(rows.map((r) => r.effective_from)).toEqual(['2026-01-01', '2026-09-01']);
 
       // Same (model, bucket, effective_from) triple is rejected by the PK.
-      expect(() => insert.run('sonnet-5', 'input', 2.5, '2026-09-01')).toThrow(/UNIQUE|PRIMARY/);
+      expect(() => insert.run('claude-sonnet-5', 'input', 2.5, '2026-09-01')).toThrow(
+        /UNIQUE|PRIMARY/,
+      );
     });
   });
 });

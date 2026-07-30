@@ -1,12 +1,12 @@
 # Hook ingestion
 
-agenthropic wires all twelve Claude Code lifecycle hooks to a **single hook-handler**,
-which forwards every event, unmodified, to one authed loopback receiver
-(`HookSource`). Two of the twelve — `SubagentStart` and `SubagentStop` — get
-**dedicated handling** because they are the only events that can directly assert a
-parent→child relationship, and the hierarchy tables (`agents.parent_agent_id`,
-`orchestration_edges`) are built from them. Everything else lands as a normal row.
-The governing principle, stated directly in the design basis:
+The design basis wired all twelve assumed Claude Code lifecycle hooks to a **single
+hook-handler**, forwarding every event, unmodified, to one authed loopback receiver
+(`HookSource`). Two of the twelve — `SubagentStart` and `SubagentStop` — were to get
+**dedicated handling** because they are the only events that could directly assert a
+parent→child relationship. *(As built, neither the twelve nor the dedicated handling
+survived contact with reality — see the update below.)* The governing principle, stated
+directly in the design basis:
 
 > "The differentiator is what we do with events after ingestion, not which we
 > receive." — `DESIGN.md` §5
@@ -17,9 +17,38 @@ dumb; the value is created downstream, in the Normalizer and Projection stages
 described in [ingest & reconciliation](ingest-reconciliation.md) and
 [the data model](data-model.md).
 
-## The twelve lifecycle events
+> **Update — 2026-07 (as built).** This page was written before the hook catalog was
+> verified and before any code existed. The running system is simpler and stricter than
+> the design above:
+>
+> - **Four real hooks, not twelve.** The hooks installer registers exactly
+>   `UserPromptSubmit`, `Stop`, `SubagentStop`, and `PreCompact` — each a fail-silent
+>   `curl` POST to the authed loopback receiver (`POST /api/hooks/event`).
+>   **`SubagentStart` does not exist** (the Phase-0 hedge below held).
+> - **No hook has structural handling — including `SubagentStop`.** Hooks contribute
+>   **liveness only, never structure**: no hook ever creates or closes an agent row,
+>   asserts a parent→child edge, or writes a token row. The hierarchy tables
+>   (`agents.parent_agent_id`, `orchestration_edges`) are built **entirely from the JSONL
+>   transcripts** by the parser's four join paths. A hook delivery lands one raw row in
+>   `events_raw` plus one identifier-only row in the `events` liveness timeline, in the
+>   same transaction — that is the whole hook pipeline.
+> - **Accept-any-event shipped as designed**: any body shape → `202` + a durable row.
+>   There is no Normalizer stage; the only interpretation is the defensive extraction of
+>   `session_id`/`agent_id` for the liveness timeline.
+> - The receiver's **auth question is answered**: it sits behind the same mandatory-token
+>   gate as every endpoint, and hook commands reference `${DASHBOARD_TOKEN}` by shell
+>   expansion — the token never lands verbatim in `~/.claude` scripts.
+>
+> The twelve-event table and the dual-path sections below are kept as the design record,
+> with notes where the as-built system settled the open questions.
 
-The hook configuration registers all twelve event names (`DESIGN.md` §5):
+## The twelve lifecycle events (the design catalog)
+
+The design basis assumed twelve event names (`DESIGN.md` §5). **As built, the installer
+registers four** — `UserPromptSubmit` (row 4), `Stop` (row 6), `SubagentStop` (row 7),
+and `PreCompact` (row 11) — and every registered hook is treated identically: one
+liveness row, no structural interpretation. The "what ingest does with it" column below
+records design intent, not running behavior:
 
 | # | Event | Fires around | What ingest does with it | Dedicated handling |
 |---|---|---|---|---|
@@ -90,6 +119,15 @@ Phase-0 spike confirms it fires; if it doesn't, the same tables are populated fr
 code change to the schema. This is why `hooks.md` and [the DAG moat](dag-moat.md) both
 describe `orchestration_edges` as *dual-path*, not *hook-derived*.
 
+> **As built, the hedge resolved past its own base case:** `SubagentStart` indeed does
+> not exist — and the shipped edge derivation ended up needing **no hook at all**, not
+> even `SubagentStop`. All four `orchestration_edges` join paths (`tool_use`,
+> `directory`, `queue_operation`, `task_notification`) come from the JSONL parser alone;
+> `SubagentStop` contributes a liveness timestamp and nothing else. "Dedicated handling"
+> for `SubagentStart`/`Stop` therefore exists nowhere in the codebase — the hierarchy
+> tables never read hook data. The `disler` lesson was still honored, one layer down:
+> the *parser* preserves `agent_id`/`agent_type` faithfully instead of dropping them.
+
 > **Empirically grounded (2026-07-04 desktop corpus probe).** The read-only full-corpus
 > probe confirms the spawn tool is `Agent`/`Workflow`, never `Task` (`Task` blocks = **0**,
 > `Agent` = 142, `Workflow` = 29) — a parser hard-keyed to `name=='Task'` reconstructs an
@@ -133,7 +171,26 @@ Two things fall out of this:
    page does not, and should not, assume the twelve are final or fully confirmed
    (see the `SubagentStart` hedge above).
 
+> **As built:** point 1 shipped exactly as written — the receiver validates nothing
+> about the body and answers `202` with a durable row for any shape. Point 2 has no
+> Normalizer to version: the only downstream "recognition" is the liveness projection's
+> defensive identifier extraction (non-empty string `session_id`/`agent_id` only, snake
+> case winning over camelCase, nothing coerced), which is total and cannot crash on a
+> new event type. A thirteenth hook would land, be stored, and appear on the liveness
+> timeline with whatever identifiers it honestly carries.
+
 ## From raw envelope to projection
+
+> **As built, this diagram is design history.** JSONL never enters this pipeline: the
+> parser reads transcripts directly and writes the projections (`sessions` / `agents` /
+> `orchestration_edges` / `token_usage`) in one transaction per session, bypassing
+> `events_raw` entirely — so the cross-source idempotency key (`WP-IN1` as drawn) was
+> never built. The real hook flow is: envelope → redaction → **hook-only** key
+> (`hook:` + SHA-256 over the canonicalized envelope minus `receivedAt`, computed
+> *after* redaction) → one `events_raw` row + one identifier-only `events` row, same
+> transaction. The Normalizer (`WP-IN6`) and Projection (`WP-IN7`) stages below were
+> never built as separate stages; see
+> [ingest & reconciliation](ingest-reconciliation.md) for the as-built pipeline.
 
 Every event — hook or JSONL line — goes through the same immutable-substrate,
 deterministic-projection pipeline (`CD-2`, `development-plan.md` Track IN):
@@ -180,7 +237,9 @@ through, so **appending the same envelope twice produces exactly one row** — t
 idempotency contract holds regardless of which source saw the fact first.
 
 The self-referential shape those hierarchy tables are ultimately built into (from
-`DESIGN.md` §4, the full annotated schema lives in [the data model](data-model.md)):
+`DESIGN.md` §4 — a design-basis sketch; the real migration adds a fifth status,
+`'unknown'`, plus `first_seen_at`/`last_seen_at`. The as-built DDL lives in
+[the data model](data-model.md)):
 
 ```sql
 CREATE TABLE agents (
@@ -214,6 +273,16 @@ JSONL-derived final state. Full treatment of the JSONL-vs-hooks precedence quest
 (`CD-1`, the Phase-0 primacy probe) is [ingest & reconciliation](ingest-reconciliation.md),
 not this page.
 
+> **As built, the precedence holds — but hook liveness surfaces differently than
+> sketched.** Hooks never flip `agents.status`: interim liveness is served as the
+> `events` timeline (identifier-only rows, `occurred_at` = receipt time), while
+> `agents.status` comes from the parser plus the missing-Stop watchdog (`WP-IN12` —
+> stale agents flip to `'unknown'`, and a later re-ingest lets JSONL evidence win back).
+> The last bullet is also design history: there is no backfill pass —
+> `token_usage.agent_id` is attributed **in the parser**, before any write, and a `NULL`
+> means genuinely unattributable, not "not yet backfilled" (`WP-IN9` was never needed).
+> Tokens JSONL-authoritative and never inferred from hooks: true as built, verbatim.
+
 ## Security posture of the hook receiver
 
 The `HookSource` adapter is a write endpoint and follows the same non-negotiable
@@ -235,9 +304,28 @@ Full detail: [security model](../security/model.md) and
 
 ## Open items (not yet built)
 
-Nothing in this page is implemented yet — Phase 0 (the feasibility spike) gates all
-production code (`CD-8`), and `HookSource` itself is Phase 2 (`WP-IN3`). Concretely
-open, sourced from the analysis:
+> **Resolved as built (2026-07).** "Nothing in this page is implemented yet" is no
+> longer true — implementation began 2026-07-11 (owner override of CD-8) and the hook
+> receiver, installer, and liveness pipeline are running. The four bullets below landed
+> as follows:
+>
+> - **Which fire:** verified — the installer registers `UserPromptSubmit`, `Stop`,
+>   `SubagentStop`, `PreCompact`; `SubagentStart` does not exist.
+> - **PreCompact marker (G0.2b):** compaction boundaries are **parsed from the JSONL
+>   substrate** at parse time; the `PreCompact` hook contributes liveness only.
+> - **Hook-POST auth:** answered — the receiver sits behind the mandatory token gate,
+>   and installed hook commands reference `${DASHBOARD_TOKEN}` by shell expansion, so
+>   the token never lands verbatim in `~/.claude` scripts
+>   ([usage/hooks-installer](../usage/hooks-installer.md) — the installer is built,
+>   no longer a blocked stub).
+> - **Envelope shape:** fixed in code — the idempotency key is **hook-only**
+>   (`hook:` + SHA-256 over the canonicalized envelope minus `receivedAt`, computed
+>   after redaction); the cross-source byte-identical contract was never built because
+>   JSONL never flows through `events_raw`.
+
+Nothing in this page was implemented when it was written — Phase 0 (the feasibility
+spike) gated all production code (`CD-8`), and `HookSource` itself was Phase 2
+(`WP-IN3`). Concretely open at the time, sourced from the analysis:
 
 - **Which of the twelve actually fire.** `WP-S4` / **G0.2** must confirm or deny
   `SubagentStart` (and, per the narrower nine-event "documented set" in

@@ -1,10 +1,47 @@
 # ADR-0011: CD-9 — Per-artifact licensing
 
-- **Status:** accepted
+- **Status:** accepted — CI provenance scan **live and green** (412 packages) as of 2026-07-30; **open blocker:** the project's own `LICENSE` is untracked, so GitHub reports this repository's license as `null` (see the as-built update below)
 - **Date:** 2026-07-03
 - **Deciders:** Ivan Baev (project owner), via the six-lens concept-analysis-v2 workflow
 - **Source:** [`concept-analysis-v2.md` §3, row CD-9](../../../analysis/concept-analysis-v2.md#3-canonical-decision-register-v2)
   (consolidates SD6, BA-D4, G-D4, LB2); §4.4 (Business Analyst)
+
+## As-built update — 2026-07-30
+
+**Verdict: the automatable half is live and green; the project's own license is not
+yet published.**
+
+**What shipped.** `scripts/check-licenses.mjs` runs as `gate:licenses` in CI on every
+push and exits non-zero on any dependency whose license falls outside an explicit
+allowlist (`MIT`, `MIT-0`, `ISC`, `Apache-2.0`, `BSD-2-Clause`, `BSD-3-Clause`,
+`0BSD`, `BlueOak-1.0.0`, `CC0-1.0`, `Unlicense`, `Python-2.0`, plus a short list of
+documented per-package exceptions). SPDX `OR` expressions pass if any branch is
+allowlisted; `AND` expressions require every part to be. It currently reports **OK
+across 412 installed packages**. The allowlist that [licensing.md](../licensing.md)
+listed under "What's undecided" is now decided and in the repository.
+
+The gate is also the one sanctioned exception to the no-spawner rule
+([ADR-0009](adr-cd-7-security-and-coverage-boundary.md)): it shells out to
+`pnpm licenses list --json` with a fixed argv, marked inline with a
+`spawner-gate-allow` comment that the spawner gate itself recognizes. That exception
+is deliberate, narrow, and visible — not a hole.
+
+**The honest blocker: the repository still has no license as far as anyone can
+tell.** A `LICENSE` file (MIT, © 2026 Ivan Baev) exists in the working tree but is
+**not tracked in git**. GitHub therefore reports this repository's license as
+`null` — which means agenthropic currently sits in exactly the position this ADR
+condemns in `cast`, `disler` and `nirdiamant`: source published with no license
+grant, all-rights-reserved by the Berne default. The reasoning in
+[licensing.md §2](../licensing.md) applies to this project too, and right now it
+applies against it. This is a one-line fix owned by Ivan (the file must be committed);
+until it is, the "commercial-clean" posture of [ADR-0002](adr-lb-2-personal-first-commercial-clean.md)
+is asserted but not published.
+
+**The clean-room half is still discipline, not tooling**, exactly as
+[licensing.md §6](../licensing.md) says. Nothing built since changes that. The
+attribution mechanism for `simple10`/`hoangsonww` (a `NOTICE` file, file headers, or a
+credits page) remains unchosen — and remains unexercised, because the
+`hoangsonww`-attributed alert schema is post-1.0 and has not been written.
 
 ## Context
 

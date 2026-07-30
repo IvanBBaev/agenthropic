@@ -18,6 +18,31 @@ cross-checked against the GitHub API on 2026-07-03 — not from each project's o
 README claims. Letter grades are cited for context only; they are not the point of
 this page (full grading rationale: [the moat §3](the-moat.md)).
 
+> **Update — 2026-07 (as built).** Two corrections to how this page should be read.
+>
+> **1. agenthropic's own row is no longer "planned."** Implementation began 2026-07-11,
+> and of the five feature columns, three now ship: the persisted per-instance subagent DAG
+> (`agents` + `orchestration_edges`), dollar-cost attribution with delegation savings, and
+> SQLite/WAL persistence. **Telegram remains ❌ not built** — it is v2.0, entered only via
+> KC-5, may never start, and its operator-alerts API and UI were cut outright.
+> **Cross-machine remains ❌ not built** — only the `instance`/`host_id` key on
+> `orchestration_edges` exists, and no second host does. The security row was implemented
+> exactly as committed: loopback-only bind, mandatory `DASHBOARD_TOKEN` compared with
+> `timingSafeEqual`, no spawner, no SSRF (the server makes no outbound network request at
+> all). **72 test files / 879 tests pass**, coverage gated >90% in every shipped package.
+> Three P0 correctness proofs are green and merge-blocking — Σ tokens against an
+> independently written reader, a byte-identical double replay, and the DAG rebuilt from
+> JSONL alone after a simulated outage. That is the whole of what is proven; nothing here
+> should be read as a broader guarantee.
+>
+> **2. No rival was ever installed.** Every claim about the six audited projects and the
+> baseline rests on **reading their source and documentation** during due diligence in
+> 2026-07 — none was run head-to-head against agenthropic, no benchmark was executed, and
+> the project's friction log was never opened. Nothing on this page is grounded in lived
+> comparative use, and the rival columns have not been re-checked since 2026-07-03; those
+> projects may have changed. Read the comparison as documented analysis with a date on it,
+> not as a bake-off result.
+
 ## The baseline: `davila7/claude-code-templates`
 
 Before comparing against five niche rivals, agenthropic has to clear the bar set by the
@@ -59,7 +84,7 @@ Legend: **✅** shipped and confirmed · **⚠️** partial or caveated · **❌
 
 | Project | Subagent DAG | Dollar-cost attribution | Persistence | Telegram sink | Cross-machine |
 |---|---|---|---|---|---|
-| **agenthropic** *(design target, pre-code)* | ⚠️ **planned** — persisted, per-instance `orchestration_edges`, built two independent ways (Phase 3) | ⚠️ **planned** — delegation-savings off ground-truth `token_usage` (Phase 3) | ⚠️ **planned** — append-only `events_raw` + SQLite WAL (Phase 1) | ⚠️ **planned** — Telegram delivery adapter (Phase 5) | ⚠️ **not scheduled** — `instance`/`host` key reserved on every row, aggregation itself not yet a work package |
+| **agenthropic** *(as built, 2026-07)* | ✅ **built** — persisted, per-instance `orchestration_edges` over four structural join paths; proven rebuildable from JSONL alone *(was: ⚠️ planned, Phase 3)* | ✅ **built** — delegation-savings + compaction repricing off ground-truth `token_usage`; Σ verified against the JSONL by an independent reader *(was: ⚠️ planned, Phase 3)* | ✅ **built** — SQLite WAL + migrations; `events_raw` is append-only but holds **hook events only** *(was: ⚠️ planned, Phase 1)* | ❌ **not built** — v2.0, entered only via KC-5; may never start; alerts API + UI cut *(was: ⚠️ planned, Phase 5)* | ❌ **not built** — `instance`/`host_id` key exists on `orchestration_edges` only (not on every row); the rollup is not a work package |
 | `davila7/claude-code-templates` (28.4k★, MIT) | ❌ flat leaderboard/timeline only | ❌ | ❌ in-memory TTL cache | ❌ | ❌ |
 | `simple10/agents-observe` (607★, MIT) | ⚠️ real `buildAgentTree()` parent→child tree + force-directed graph, but edges are event-derived at render time, session-scoped, never persisted as first-class rows | ❌ | ✅ SQLite (`projects`/`sessions`/`agents`/`events`/`filters`) | ❌ | ❌ single-host |
 | `hoangsonww/Claude-Code-Agent-Monitor` (92,163 LOC, MIT) | ⚠️ real nested tree via a persisted `agents.parent_agent_id` column, recursively rendered — but the flagship `OrchestrationDAG.tsx` is a **type-aggregated**, 3–4-layer diagram of agent *categories*, not a per-instance graph | — no cost/pricing schema or live delegation-savings metric documented in the audit | ✅ 12-table schema, dual SQLite driver | ✅ first-class `formatTelegram` webhook provider + `alert_rules`/`webhook_targets`/`webhook_deliveries` schema | ❌ single-host |
@@ -75,7 +100,11 @@ the edges; `hoangsonww` genuinely persists parent/child as a column, yet the tre
 stays session-scoped and it oversells a separate, type-aggregated visualization as if
 it were that same per-instance graph. Nobody
 ships a **global, cross-session, instance-keyed** orchestration graph — that is
-exactly moat item #1 (see [the DAG moat](../architecture/dag-moat.md), open page).
+exactly moat item #1 (see [the DAG moat](../architecture/dag-moat.md)).
+*(As built: agenthropic's side of that claim is now shipped and proven — the edges are
+rows, not a render-time reconstruction, and a merge-blocking test rebuilds the whole DAG
+from JSONL alone after a simulated outage. The rival side of the claim is still
+2026-07-03 reading, not a re-test.)*
 
 ## Security posture
 
@@ -94,8 +123,7 @@ Every viable candidate binds `0.0.0.0` and/or ships auth that is a no-op in prac
 | `NirDiamant/claude-watch` | not documented in the audit | none | **command injection** in the snapshot name via a double-quoted `execSync $(...)` |
 
 Two takeaways worth calling out explicitly, since they define agenthropic's own
-non-negotiable posture (in full on [the security model](../security/model.md), open
-page):
+non-negotiable posture (in full on [the security model](../security/model.md)):
 
 - **Worst in class:** `hoangsonww`. On `0.0.0.0` with no token set, `/api/run` is a
   remote-code-execution box — a browser request runs `claude` as the host user in a
@@ -107,6 +135,12 @@ page):
   non-safe verbs 404 unless a control flag **and** a token are both set,
   `timingSafeEqual` compare, mounted before the router. ~73 dependency-free lines.
   Adopted regardless of what else is grafted (see [the moat §5](the-moat.md)).
+  *(As built: adopted in shape, not in code — clean-room per CD-9, in
+  `packages/shared/src/security/`. The compare hashes both sides to SHA-256 **before**
+  `timingSafeEqual`, so unequal input lengths cannot leak through timing or trip
+  `timingSafeEqual`'s equal-length precondition. There is no read-only/control-flag split
+  to make: the API is read-only apart from the hook receiver, and the token is mandatory
+  on every route — the server refuses to start without one.)*
 
 ## The persisted-DAG gap, visualized
 
@@ -132,6 +166,18 @@ in-memory tree, rebuilt on every render           deterministic projection
                                                    ready for cross-machine rollup
 ```
 
+> **As built, the right-hand column is real but its top two boxes are wrong.** The
+> persisted DAG, the queryability, and the restart/cross-session survival all shipped. But
+> `events_raw` is **not** what feeds it — that table holds **hook events only**, and hooks
+> are liveness-only, never structure. There is also no separate "deterministic projection"
+> stage: the JSONL transcripts are parsed **straight into** `agents` and
+> `orchestration_edges`, one transaction per session. Read the right-hand column as
+> `~/.claude/projects/*.jsonl → agents + orchestration_edges → queried`. Likewise, "built
+> two independent ways" did not survive: edges are derived from **JSONL alone**, over four
+> structural join paths (`tool_use`, `directory`, `queue_operation`, `task_notification`).
+> That is stronger than it sounds — it is why a merge-blocking test can rebuild the entire
+> DAG after a simulated hook outage and get a byte-identical dump.
+
 The persisted side of that diagram starts from the self-referential column
 `agenthropic` grafts from `hoangsonww`'s schema onto `simple10`'s clean base:
 
@@ -147,11 +193,17 @@ CREATE TABLE agents (
 );
 ```
 
+> **As built, this DDL is close but not exact** (`apps/server/src/db/migrations.ts`,
+> migration 4): `status` gained a fifth value, `'unknown'`, and the table carries
+> `first_seen_at` / `last_seen_at`. It does not carry `instance`/`host_id` — that key is on
+> `orchestration_edges` only.
+
 The full `orchestration_edges` design (dual derivation paths, `instance`/`host` keys,
 rebuild-from-JSONL) is covered in depth on
 [the DAG moat](../architecture/dag-moat.md) and
-[the data model](../architecture/data-model.md) (both open pages at the time of
-writing).
+[the data model](../architecture/data-model.md) (both pages have since been written).
+*(As built: "dual derivation paths" is not what shipped — see the note above the DDL.
+Edges come from JSONL alone.)*
 
 ## Field notes on the six audited rivals
 
@@ -201,12 +253,35 @@ live RCE that is the exact anti-pattern agenthropic's design forbids outright. S
 call was to build clean, ports-and-adapters, and **steal the specific proven pieces**
 — `simple10`'s tree algorithm and Docker-optional runtime, `hoangsonww`'s Telegram
 provider, CAST's auth gate and delegation-savings formula, `nirdiamant`'s
-run-checkpoint pattern — rather than inherit any one project's baggage. The full
+run-checkpoint pattern — rather than inherit any one project's baggage.
+*(As built: two of those five grafts never happened. **Nothing was taken from
+`hoangsonww`** — its Telegram provider was the only scheduled artifact and alerting was
+never built — and the `nirdiamant` run-checkpoint pattern was not implemented either. The
+CAST auth-gate shape and delegation-savings formula were clean-room reimplemented per
+CD-9, and the tree work was written against the JSONL parser spec rather than ported from
+`simple10`.)*
+The full
 per-project reasoning, the corrected ranking table, and the licensing rule that
 governs what is copied-with-attribution versus clean-room reimplemented all live on
 [the moat](the-moat.md).
 
 ## Where agenthropic stands today
+
+> **Update — 2026-07 (as built).** The paragraph below is superseded; it is kept because
+> other pages link to this section. **The bootstrap phase is over.** Implementation began
+> **2026-07-11**, by explicit owner override of the CD-8 no-code-before-spike gate — not
+> because the gate was cleared. What runs: the loopback-bound, token-gated server; the
+> SQLite/WAL substrate and migrations; JSONL ingest with replay-on-startup; the persisted
+> subagent DAG; the cost engine; the hook receiver; the SSE hub; the read API; and all four
+> dashboard views. **72 test files / 879 tests pass**, coverage gated >90% in every shipped
+> package (`packages/test-fixtures` is a deliberate, documented exclusion).
+>
+> Three things are still honestly open, and matter more than the feature list:
+> the Phase-0 spike numbers remain **PROVISIONAL** until ratified against a hand-labeled
+> corpus; the v1.0 usability target ("<30s to understand a session") is **unmeasured**, so
+> nothing on this page claims agenthropic is *faster to read* than a rival; and the
+> roadmap's kill checkpoints **KC-0 and KC-1 both passed unmet** — see
+> [the roadmap](roadmap.md) for that record in full.
 
 As of this writing, every "planned" row above is exactly that — planned, not shipped.
 agenthropic is in its **bootstrap phase**: the design basis (architecture, data model,

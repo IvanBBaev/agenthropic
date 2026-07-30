@@ -13,19 +13,37 @@ templates).
 
 ## Scope: policy now, artifacts later
 
-| Artifact | Physical location (planned) | Status |
-|---|---|---|
-| Security disclosure policy | `SECURITY.md` at repo root | Not yet created — policy defined on this page |
-| Code of Conduct | `CODE_OF_CONDUCT.md` at repo root | Not yet created — Contributor Covenant adoption defined on this page |
-| Bug report template | `.github/ISSUE_TEMPLATE/bug_report.md` | Not yet created — outline defined on this page |
-| Feature request template | `.github/ISSUE_TEMPLATE/feature_request.md` | Not yet created — outline defined on this page |
-| Issue template chooser config | `.github/ISSUE_TEMPLATE/config.yml` | Not yet created — outline defined on this page |
-| Pull request template | `.github/PULL_REQUEST_TEMPLATE.md` | Not yet created — outline defined on this page |
+> **Update — 2026-07 (as built).** Re-verified against the repository on **2026-07-30**.
+> `.github/` now exists, but it contains **only workflows** — `ci.yml` and `pages.yml`.
+> **All six governance artifacts below are still uncreated**, so this page remains
+> policy-only exactly as it says. Two corrections to the paragraph after the table:
+> a `LICENSE` file **does** now exist at the repo root (MIT), but it is **untracked** —
+> which is why GitHub still reports this repository's license as `null`, and why
+> [licensing & provenance](licensing.md) lists it as an open release blocker. Nothing
+> else in the table has changed.
 
-Confirmed by `ls .github` and repo-root `ls` at the time of writing: no `.github/`
-directory, no `SECURITY.md`, no `CODE_OF_CONDUCT.md`, and no `LICENSE` file exist
-yet in this repository. Creating these six files is out of scope for this page —
-see [open decisions](#open-decisions--follow-ups) for how that work is tracked.
+| Artifact | Physical location (planned) | Status (verified 2026-07-30) |
+|---|---|---|
+| Security disclosure policy | `SECURITY.md` at repo root | **Not created** — policy defined on this page |
+| Code of Conduct | `CODE_OF_CONDUCT.md` at repo root | **Not created** — Contributor Covenant adoption defined on this page |
+| Bug report template | `.github/ISSUE_TEMPLATE/bug_report.md` | **Not created** — outline defined on this page |
+| Feature request template | `.github/ISSUE_TEMPLATE/feature_request.md` | **Not created** — outline defined on this page |
+| Issue template chooser config | `.github/ISSUE_TEMPLATE/config.yml` | **Not created** — outline defined on this page |
+| Pull request template | `.github/PULL_REQUEST_TEMPLATE.md` | **Not created** — outline defined on this page |
+
+Originally confirmed by `ls .github` and repo-root `ls` at the time of writing: no
+`.github/` directory, no `SECURITY.md`, no `CODE_OF_CONDUCT.md`, and no `LICENSE` file
+existed. As of 2026-07-30 `.github/workflows/` and an untracked `LICENSE` exist; the six
+artifacts above do not. Creating them is out of scope for this page — see
+[open decisions](#open-decisions--follow-ups) for how that work is tracked.
+
+**One governance control that is worth stating plainly, because it is enforced today
+and is not in the table:** `main` is **not branch-protected**
+(`gh api repos/IvanBBaev/agenthropic/branches/main/protection` → `404`). CD-7 requires
+the coverage gate to *block merges*; CI runs it and fails on a violation, but without a
+branch-protection rule nothing physically prevents a merge. That gap is tracked in
+[`RELEASE.md`](../../../RELEASE.md) as a human-owned pre-tag blocker, not silently
+assumed away.
 
 ## 1. Security disclosure policy (`SECURITY.md`)
 

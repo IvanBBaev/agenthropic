@@ -13,12 +13,17 @@ request-driven spawner, no SSRF) are not generic hardening boilerplate borrowed 
 checklist. They are named, structural responses to four real bugs this project read at
 the source and decided never to repeat.
 
-> **Status.** agenthropic is in the bootstrap phase — harness and design digest exist,
-> no server code is scaffolded yet (`CLAUDE.md`, "Current state"). Every mitigation
-> below is a **locked, non-negotiable design invariant** (`DESIGN.md` §8), not yet
-> shipped code. This page exists so that when implementation lands, PRs are held to
-> these commitments — see [what's not yet built](#status-and-whats-not-yet-built) at
-> the end.
+> **Status (updated 2026-07, as built).** This page was written in the bootstrap
+> phase, when every mitigation below was a locked design invariant and nothing more.
+> Implementation began 2026-07-11, and the mitigations are now **shipped and
+> test-proven**: loopback-or-fail bind, mandatory-token-or-fail-startup with a
+> timing-safe compare on every route, same-origin-before-auth SSE, the
+> no-spawner/no-wide-bind/no-eval static gate running in CI, and hook-payload
+> redaction at the ingest boundary. The SSRF mitigation is currently satisfied by
+> absence — no outbound-dialing code exists at all (the webhook sink is post-1.0).
+> None of the invariants was relaxed. The rival findings and attacker models below
+> are the historical record and remain accurate; per-section as-built notes mark
+> what changed — see [status](#status-and-whats-not-yet-built) at the end.
 
 ## Scope of this page
 
@@ -123,6 +128,15 @@ different acts — agenthropic does the first, never the second.
   [status](#status-and-whats-not-yet-built) and
   [backup & restore](../operations/backup-restore.md) §6.
 
+  > **As built:** the ingest-boundary redaction (`WP-IN14`) is implemented — hook
+  > payloads are redacted *before* the idempotency key is computed, so unredacted
+  > secrets never reach the stored envelope or its hash — with the final field-list
+  > sign-off (OPEN-3) still pending. The retention TTL (`WP-D10`) is not built yet.
+  > Note also a structural narrowing that helps here: JSONL transcripts are parsed
+  > into projections (sessions, agents, edges, token counts) — raw transcript
+  > payloads are **not** stored in the database at all; `events_raw` holds redacted
+  > hook envelopes only.
+
 ## 2. cast — `0.0.0.0` + unauthenticated GET reads
 
 **Threat.** `cast`'s `controlGate.ts` is, on its own terms, good security engineering:
@@ -146,11 +160,15 @@ attempt is needed to exfiltrate session contents, tool payloads, or cost data; a
   as the pattern to steal ("`controlGate.ts` (~73 LOC: read-only by default, non-safe
   verbs 404 unless token, `timingSafeEqual`, mounted before router)"). The shape — a
   single dependency-free middleware, constant-time comparison, mounted ahead of
-  routing — is worth keeping. Illustrative pseudocode of that shape (no code is
-  scaffolded yet — see [status](#status-and-whats-not-yet-built)):
+  routing — is worth keeping. Illustrative pseudocode of that shape, kept as the
+  design record (the real gate is now built — a single global `onRequest` hook in
+  `apps/server/src/server.ts` covering every route, reads included, with the token
+  compare hashing both sides to fixed length before `timingSafeEqual`; see
+  [security model](model.md) rule 2's as-built note):
 
   ```ts
-  // Illustrative only — not shipped code. Shape adapted from cast's controlGate.ts
+  // Illustrative only — design-basis sketch, not the shipped code. Shape adapted
+  // from cast's controlGate.ts
   // (docs/due-diligence/projects/cast.md), mounted before the router.
   function authGate(req: Request, res: Response, next: NextFunction) {
     const supplied = extractToken(req);          // e.g. Authorization header
@@ -256,6 +274,9 @@ to *learn the loop from, not build on*). The webhook-sink leg of agenthropic's o
 architecture (event → outbound HTTP → Telegram) is structurally the same shape as the
 code that has the bug. The mitigation therefore has to be a rule about **where a
 dial target is allowed to come from**, not merely "don't copy disler's file."
+*(As built, that leg does not exist yet — the webhook sink is post-1.0, entered only
+via KC-5, and today the server makes no outbound request of any kind. The rule below
+is what any future dispatcher will be held to.)*
 
 **Our mitigation.**
 
@@ -321,21 +342,38 @@ greenfield rather than fork: the RCE spawner, the wildcard CORS, the no-op token
 not bugs to patch in agenthropic's own code because that code does not exist in the
 first place — they only had to be studied, named, and excluded at the design stage.
 
+> **As built:** the top of the diagram is now running code and each `X` is now
+> *enforced*, not only designed: the static gate (`scripts/check-no-spawner.mjs`, a CI
+> step) turns the build red on any subprocess import, wide bind, WebSocket server, or
+> dynamic eval anywhere in the tree, and the security-contract tests boot the real
+> server and prove the loopback bind, mandatory token, and same-origin SSE. Two
+> as-built refinements to the picture: the realtime leg is **SSE** (CD-5), as drawn;
+> and the bottom leg — webhook sink → Telegram relay — is **not built** (post-1.0,
+> KC-5), so its `X` currently holds in the strongest form: no outbound dial exists at
+> all. There is also a second ingest path the diagram predates: JSONL transcripts
+> read directly from the local filesystem (`~/.claude/projects`), which never crosses
+> an HTTP surface in the first place.
+
 ## Status and what's not yet built
 
 Consistent with `docs/site/STYLE-GUIDE.md`'s rule to say plainly when something is
 undecided rather than gloss over it:
 
-- **No server code is scaffolded yet** (`CLAUDE.md`, "Current state"). Every mitigation
-  on this page is a locked design invariant (`DESIGN.md` §8), not a verified
-  implementation. Treat this page as the acceptance bar for the security-relevant PRs
-  that land once the stack is chosen (`DESIGN.md` §10).
+- **Server code now exists and the mitigations are verified implementations.**
+  *(Resolved 2026-07 — this bullet originally read "no server code is scaffolded
+  yet.")* Implementation began 2026-07-11; the loopback bind, mandatory timing-safe
+  token gate, and same-origin SSE are asserted by
+  `apps/server/test/security-contract.test.ts` against the real composition root, and
+  the no-spawner static gate runs in CI. This page served as the acceptance bar it
+  promised to be.
 - **The redaction rule for stored tool payloads** (the corrective to simple10's
   full-payload storage) is decided at the requirement level — a retention TTL plus
   ingest-boundary redaction, owned by `WP-D10`/`WP-IN14` — but the exact retention
   window, redacted field list, and "huge payload" reject-vs-truncate threshold remain
   open Phase-0 policy inputs; see [backup & restore](../operations/backup-restore.md)
-  §6 for the full decided-vs-open tally.
+  §6 for the full decided-vs-open tally. *(Partially resolved: `WP-IN14`'s
+  redaction-before-keying is built; the OPEN-3 field-list sign-off and the `WP-D10`
+  retention TTL are still open.)*
 - **`GET`/read endpoints are token-gated, not left to the loopback bind alone** —
   resolved in [security model](model.md) (rule 5), which closes exactly the gap
   flagged in the `cast` section above.

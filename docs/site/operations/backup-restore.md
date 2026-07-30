@@ -19,6 +19,22 @@ by any source document and are not yet built (`WP-F8`, `WP-D10`, `WP-IN14` are a
 unmerged). Every command and path below is a placeholder for the real operational
 procedure `WP-F8` will ship; §6 tallies precisely what is decided versus still open.
 
+> **Update — 2026-07 (as built).** Implementation began 2026-07-11 and two of the
+> three work packages above are now merged. **Built:** WAL + `foreign_keys` asserted
+> on every connection open, with a throw if either pragma did not take
+> (`apps/server/src/db/connection.ts`, `WP-D2`); backup + restore as code
+> (`apps/server/src/db/backup.ts`, `WP-F8`) — backup via better-sqlite3's **online
+> backup API** (in-process, safe under WAL), restore via copy + reopen through the
+> same pragma-asserting path + a hard refusal to return a database that fails
+> `PRAGMA integrity_check`; the restore path is exercised by
+> `apps/server/test/backup.test.ts` on every test run; and redaction at the ingest
+> boundary (`apps/server/src/hooks/redact.ts`, `WP-IN14`) — applied **before** the
+> idempotency key is computed, pending the OPEN-3 field-list sign-off. **Not built:**
+> the `WP-D10` retention-TTL sweeper, the scheduled (`launchd`) backup job, and the
+> operator-level release drill (`WP-X9`) — those sections below remain the target
+> procedure. The live database default is `data/agenthropic.db`, overridable via
+> `DASHBOARD_DB_PATH` (not the `AGENTHROPIC_DB_PATH` placeholder used below).
+
 ## 1. Why WAL mode
 
 `docs/ai/DESIGN.md` §8 states the requirement in five words: **"SQLite
@@ -63,6 +79,12 @@ command (driver-agnostic, shown below) or, once the driver is fixed, the equival
 call on the storage driver itself (`better-sqlite3` — the leaning driver per
 `docs/ai/DESIGN.md` §10, still an open decision — exposes the same
 SQLite online-backup API in-process).
+
+> **As built:** the driver decision landed on `better-sqlite3`, and the shipped
+> backup (`apps/server/src/db/backup.ts`) takes the in-process branch —
+> `db.backup(destPath)` on the live connection — not the `sqlite3` CLI. The shell
+> script below remains an illustrative operator-side shape; the scheduled `launchd`
+> job has not been set up.
 
 ```bash
 #!/usr/bin/env bash
@@ -159,6 +181,15 @@ scripted job, or a manual runbook step performed by the operator before tagging 
 release — that automation detail is open (§6). The drill itself, however, is
 concrete enough to write down as a runbook regardless of who or what runs it:
 
+> **As built:** moment 1 shipped stronger than promised — the restore path is not
+> proven "once" but on **every test run**: `apps/server/test/backup.test.ts` backs up
+> a live database, restores it through `restoreDatabase()` (which reopens via the
+> pragma-asserting `openDatabase` and throws unless `PRAGMA integrity_check` returns
+> `ok`), and compares content. Moment 2 — the operator-level drill re-run per release
+> candidate and recorded in `RELEASE.md` (`WP-X9`) — remains a manual checklist
+> obligation; a CI-exercised restore is necessary but not sufficient for it, and this
+> page cannot attest it has been performed against real production data.
+
 ```
 ┌────────────────────────────┐
 │  agenthropic.db (WAL)      │
@@ -242,6 +273,14 @@ truncate strategy on `events_raw` specifically (which would need to be a documen
 narrowly-scoped exception to the no-delete triggers), or something else. This page
 does not invent a resolution; it is tracked as an open issue against `WP-D10`.
 
+> **As built:** `WP-D10` is **not built** — there is no TTL sweeper, so the tension
+> above remains open but is not yet load-bearing. Two as-built facts narrow it:
+> `events_raw` holds **hook envelopes only** (JSONL transcripts are parsed straight
+> into the projections and their raw payloads never land in the database at all), so
+> the append-only table grows only with redacted hook events; and the no-UPDATE/
+> no-DELETE triggers are live and test-enforced, so any future sweeper will have to
+> resolve the exception explicitly rather than quietly.
+
 ## 5. Redaction at the ingest boundary — secrets never persisted
 
 The mechanism split follows the development plan's own merge reconciliation
@@ -252,6 +291,16 @@ sequencing is deliberate — the mechanism is built in Phase 1 with the rest of
 storage, then wired onto the live write path once there is a write path to wire it
 onto. The Phase 2 exit gate names the observable result: *"redaction live"*
 (development-plan §3, Phase 2).
+
+> **As built:** redaction is live, but the mechanism split landed differently than
+> the plan's merge #3 assumed: the redactor shipped **with** the ingest boundary as
+> `WP-IN14` (`apps/server/src/hooks/redact.ts`), invoked in the hook receiver
+> *before* the idempotency key is computed — so a redelivered event redacts
+> identically and still deduplicates, and unredacted material never reaches the
+> stored envelope or its hash. `WP-D10` (the sweeper and the fuller
+> retention/redaction policy) is not built and the field list implements the
+> *recommended* resolution of OPEN-3, pending sign-off — the code says so in its own
+> header. The "before the row exists" property below shipped exactly as stated.
 
 The load-bearing property, already stated on [the data model](../architecture/data-model.md)
 page and worth repeating here because it is the whole point of this page's title:
@@ -295,6 +344,17 @@ different work packages at two different boundaries. See
 | Whether the exercised-restore drill runs in CI, a scheduled job, or a manual runbook step | **Open** — `WP-F8` proves it once in Phase 1; `WP-X9` requires it again per release; the automation detail is unspecified |
 | Webhook credential handling (`token_ref`, distinct from payload redaction) | **Decided**, different mechanism, different WP (`WP-A3`, CD-10) — see §5 |
 
+> **As-built delta to this table (2026-07):** rows 1-2 are now **built and
+> test-proven** (pragma assertion in `connection.ts`; backup/restore in `backup.ts`
+> with the restore exercised on every test run). Row 3 (`WP-X9` per-release re-run)
+> is an obligation that has not yet had a release to bind to. Rows 4 and 6-7
+> (`WP-D10` retention TTL, the policy numbers, the append-only tension) remain
+> **open** — no sweeper exists. Row 5 is **built** with the OPEN-3 field list pending
+> sign-off. Row 8's real mechanism is the in-process better-sqlite3 online backup,
+> not the CLI script. Row 9 is now partially answered: a restore runs in the test
+> suite automatically; the release-time drill remains manual. Row 10's `WP-A3` is
+> not built (alerts are post-1.0).
+
 ## 7. Roadmap positioning
 
 | Phase | WP | Lands |
@@ -310,13 +370,15 @@ alongside the rest of each phase.
 
 ## Current state
 
-As of this writing, agenthropic is **pre-Phase-0** (see the
-[roadmap](../guide/roadmap.md)): none of `WP-F8`, `WP-D10`, or `WP-IN14` are merged,
-and CD-8's hard stop means no production code — including the backup script itself —
-starts before the Phase-0 feasibility spike returns a GO or CONDITIONAL-GO verdict.
-Everything on this page is therefore a **binding operational commitment to build
-against**, backed by the source documents cited throughout, not a description of a
-runbook that already runs.
+This page was written **pre-Phase-0**, when none of `WP-F8`, `WP-D10`, or `WP-IN14`
+existed. Implementation began 2026-07-11 (explicit owner override of CD-8, after the
+Phase-0 spike's CONDITIONAL GO). As built today: **`WP-D2` and `WP-F8` are code**
+(`apps/server/src/db/connection.ts`, `apps/server/src/db/backup.ts`) with the restore
+path exercised on every test run; **`WP-IN14` redaction is live** at the hook-ingest
+boundary, before the idempotency key, pending the OPEN-3 sign-off; **`WP-D10` and the
+scheduled backup job are not built**, and the per-release operator drill (`WP-X9`)
+has not yet had a release to run against. The illustrative script, `launchd` plist,
+and policy numbers above remain reference shapes, not shipped operational procedure.
 
 ## See also
 

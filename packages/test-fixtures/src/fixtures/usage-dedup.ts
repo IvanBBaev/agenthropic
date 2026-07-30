@@ -1,12 +1,15 @@
 /**
  * Fixture `usage-dedup` — parser-spec section 5.2, correctness gate N3.
  *
- * Claude Code writes one JSONL line per content block, and every line sharing
- * a `message.id` carries a byte-identical `usage` block. This fixture has 6
- * usage-bearing lines but only 4 distinct message ids: 3 lines share
- * `msg_synth_dup_0001` with identical usage (the over-count case). Two models
- * are present, and the dominant buckets are cache reads — a flat per-token
- * rate would misprice them (section 5.4).
+ * Claude Code writes one JSONL line per content block, and lines sharing a
+ * `message.id` are STREAMED PARTIALS of one message: `input` and the cache
+ * buckets are constant across them while `output_tokens` grows toward the final
+ * total. This fixture has 6 usage-bearing lines but only 4 distinct message
+ * ids: 3 lines share `msg_synth_dup_0001` with constant input/cache and
+ * `output_tokens` streaming 7 -> 7 -> 310 (the final, complete value). Dedup
+ * must collapse them to the per-bucket maximum (output 310, cache_read 52000),
+ * NOT sum. Two models are present, and the dominant buckets are cache reads — a
+ * flat per-token rate would misprice them (section 5.4).
  */
 import { type Fixture, jsonLine } from './types.js';
 
@@ -15,14 +18,18 @@ const AGENT_HEX = 'facade07';
 
 export const DUPLICATED_MESSAGE_ID = 'msg_synth_dup_0001';
 
-/** The single usage block shared byte-identically by the 3 duplicate lines. */
-const DUP_USAGE = {
+/** Constant (non-output) buckets shared by the 3 streamed partials. */
+const DUP_USAGE_BASE = {
   input_tokens: 8,
   cache_creation_input_tokens: 0,
   cache_read_input_tokens: 52000,
-  output_tokens: 310,
   cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 },
 };
+
+/** One streamed partial: constant buckets + the growing `output_tokens`. */
+function dupUsage(outputTokens: number): Record<string, unknown> {
+  return { ...DUP_USAGE_BASE, output_tokens: outputTokens };
+}
 
 function usageLine(opts: {
   uuid: string;
@@ -52,13 +59,14 @@ function usageLine(opts: {
 }
 
 const childLines = [
-  // Three lines, one message: identical message.id, byte-identical usage.
+  // Three lines, one message: same message.id, constant input/cache, and
+  // output_tokens streaming 7 -> 7 -> 310 (the final row carries the total).
   usageLine({
     uuid: '66666666-0000-4000-8000-000000000001',
     timestamp: '2026-01-19T11:00:01.000Z',
     messageId: DUPLICATED_MESSAGE_ID,
     model: 'synthetic-model-a',
-    usage: DUP_USAGE,
+    usage: dupUsage(7),
     blockIndex: 1,
   }),
   usageLine({
@@ -66,7 +74,7 @@ const childLines = [
     timestamp: '2026-01-19T11:00:01.100Z',
     messageId: DUPLICATED_MESSAGE_ID,
     model: 'synthetic-model-a',
-    usage: DUP_USAGE,
+    usage: dupUsage(7),
     blockIndex: 2,
   }),
   usageLine({
@@ -74,7 +82,7 @@ const childLines = [
     timestamp: '2026-01-19T11:00:01.200Z',
     messageId: DUPLICATED_MESSAGE_ID,
     model: 'synthetic-model-a',
-    usage: DUP_USAGE,
+    usage: dupUsage(310),
     blockIndex: 3,
   }),
   // Distinct message on the same model, cache-read heavy.
@@ -128,7 +136,8 @@ export const usageDedup: Fixture = {
   name: 'usage-dedup',
   description:
     'N3 usage-dedup case: 6 usage-bearing JSONL lines, 4 distinct message.ids — 3 lines ' +
-    'share msg_synth_dup_0001 with byte-identical usage blocks (naive row-summation ' +
-    'over-counts 3x on that message). Two models; cache_read-heavy buckets dominate.',
+    'share msg_synth_dup_0001 as streamed partials (constant input/cache, output_tokens ' +
+    '7->7->310); per-bucket-max dedup yields output 310, naive summation over-counts. ' +
+    'Two models; cache_read-heavy buckets dominate.',
   files: [{ relativePath: `subagents/agent-${AGENT_HEX}.jsonl`, lines: childLines }],
 };

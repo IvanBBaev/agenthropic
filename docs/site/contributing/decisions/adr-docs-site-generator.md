@@ -1,11 +1,46 @@
 # ADR-0013: Docs-site generator choice
 
-- **Status:** deferred — decision not yet made; recorded here as the candidate set and
-  acceptance criteria so `DOC-P1` can execute against a fixed target
+- **Status:** deferred — **still deferred as of 2026-07-30**; `DOC-P1` has not run. The Pages
+  publish pipeline (`DOC-P2`/`WP-X7`) shipped on the stock Jekyll builder with zero new
+  dependencies precisely so it does **not** decide this (see the as-built update below)
 - **Date:** 2026-07-04
 - **Deciders:** Ivan Baev (project owner) — to be finalized when `DOC-P1` runs
 - **Source:** [`docs/DOCS-PLAN.md`](../../../DOCS-PLAN.md) §3 (`DOC-P1`), §1 (principles),
   §4 (wave schedule)
+
+## As-built update — 2026-07-30
+
+**Verdict: still deferred — deliberately, and the publish pipeline was built without
+deciding it.**
+
+`DOC-P1` has not run. No generator has been chosen. VitePress, Docusaurus and MkDocs
+Material are all still on the table, exactly as recorded below.
+
+What *did* ship is `DOC-P2` / `WP-X7`: `.github/workflows/pages.yml` builds and
+publishes the docs tree to GitHub Pages on merge to `main`. It does so with the
+**stock `actions/jekyll-build-pages` builder**, which adds **zero dependencies** to
+the repository, specifically so that shipping a publish pipeline does not quietly
+decide the thing this ADR defers. The workflow says so in its own header. When
+`DOC-P1` picks a generator, the build job is replaced wholesale; nothing authored
+under `docs/site/` has to change, because the content stayed plain CommonMark as the
+fourth acceptance criterion requires.
+
+Two operational notes:
+
+- The workflow's source root is `docs/`, not `docs/site/`, because 129 relative links
+  point outward from `docs/site/` into the analysis and due-diligence trees at the
+  time of writing. Narrowing the root would break them.
+- **GitHub Pages is not yet enabled on this repository** (`has_pages: false`).
+  Enabling it is a one-time owner action in *Settings → Pages → Source: "GitHub
+  Actions"*. Until Ivan does that, the workflow builds and publishes into a Pages
+  environment that is not serving — so "CI builds & publishes on merge" is true of
+  the CI half and not yet true of the published half.
+
+One note on the Context below: it quotes `CLAUDE.md`'s bootstrap-phase wording ("no
+code scaffolded yet"), which was accurate on 2026-07-04 and is not accurate now —
+implementation began 2026-07-11 ([ADR-0010](adr-cd-8-phase-0-spike.md)). The quote is
+left as written because it records what was true when the deferral was decided; the
+deferral itself does not depend on it.
 
 ## Context
 

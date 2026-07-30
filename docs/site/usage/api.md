@@ -8,6 +8,36 @@
 > daily questions**. Values marked _(planned)_ or _(leaning — unconfirmed)_ may change;
 > the **security invariants are binding and will not**. This replaces the earlier stub.
 
+> **Update — 2026-07 (as built).** The read API is built. This page was written before any
+> code existed, so the "no application code is built yet" framing above and every
+> _(planned shape — exact path undecided)_ marking below are out of date. What actually
+> ships in `apps/server/src`:
+>
+> - **Ten routes, all under `/api/`, all behind the one auth gate.** Nine `GET`
+>   (`/api/health`, `/api/stream`, `/api/sessions`, `/api/sessions/:id`,
+>   `/api/sessions/:id/tree`, `/api/sessions/:id/events`,
+>   `/api/sessions/:id/cost-analysis`, `/api/cost/summary`, `/api/dag/global`) and one
+>   `POST` (`/api/hooks/event`, the hook liveness receiver). Note the `/api` prefix — the
+>   design-era table below writes the tree route as `GET /sessions/:id/tree`; the real
+>   path is `/api/sessions/:id/tree`.
+> - **The gate is registered before any route** and authorizes on the *routed* path
+>   (`request.routeOptions.url`), not the raw URL, because the router percent-decodes and
+>   a raw-prefix check would let `/%61pi/health` through. Loopback bind, timing-safe
+>   token compare and the stream's same-origin check are all as designed and binding.
+> - **Every route carries TypeBox response schemas with `additionalProperties: false`,**
+>   a uniform `{ "error": "…" }` shape on every non-2xx, and capped limit/offset
+>   pagination on everything unbounded (`limit` ≤ 200, `offset` ≤ 1000000, `topN` ≤ 50,
+>   DAG `limit` ≤ 5000).
+> - **There is no write surface beyond the hook receiver.** The alerts CRUD described in
+>   [Operator alerts API](#operator-alerts-api-wp-a8-phase-6) below was **cut** — see the
+>   note in that section.
+> - **The stream carries two typed event types, not generic projection deltas:**
+>   `session-ingested` and `agent-status-changed`. Resumability is **not** implemented as
+>   replay — see the "Resumability" note in the realtime-feed section below.
+>
+> The design-era prose and tables are kept below as the record, with `As built` notes
+> where the shipped system settled a question the page left open.
+
 This page covers the two things a client of agenthropic ever talks to: a set of
 authenticated HTTP **read** endpoints over the projected SQLite state, and one
 authenticated **realtime push** endpoint, `/api/stream`, that fans out projection
@@ -57,6 +87,9 @@ here rather than per-endpoint because there is no exception anywhere in the desi
               (WP-U2 … U4)                    (WP-U1)                    (WP-A8, write)
 ```
 
+*(As built: the diagram's third branch never happened — the alerts CRUD surface was cut.
+The only write route is `POST /api/hooks/event`, which crosses the identical gate.)*
+
 There is no route in this design — present or planned — that is reachable without
 crossing both checks that apply to it. See the [security model](../security/model.md)
 for the full nine-rule catalogue this API sits inside, and
@@ -67,7 +100,18 @@ running server.
 
 `/api/stream` is the one concrete path the sources name explicitly (`WP-U1`,
 `RealtimeHub SSE endpoint`). Every other path in this page is a planned shape, not a
-literal one — see the [Read endpoints](#read-endpoints) table below.
+literal one — see the [Read endpoints](#read-endpoints) table below. *(As built: every
+path is now literal — see the table's "As built" column.)*
+
+> **As built:** `/api/stream` is a hijacked Fastify reply that writes a `retry: <ms>`
+> field, a `: connected` comment, then hub frames, with a `: heartbeat` comment every
+> 15 s. Heartbeats are SSE **comment** frames and therefore never surface to
+> `EventSource` — client liveness is the connection state, not a heartbeat count. Two
+> typed frames are emitted: `session-ingested` and `agent-status-changed`. The token may
+> be presented as `?token=` here (and only here) because `EventSource` cannot set
+> headers; the server's request-log serializer redacts it. The same-origin check runs
+> **before** the token check, so a foreign `Origin` gets 403 whether or not it holds a
+> valid token.
 
 | Property | Value | Source |
 |---|---|---|
@@ -78,6 +122,13 @@ literal one — see the [Read endpoints](#read-endpoints) table below.
 | Origin check | Same-origin only; a cross-origin `Origin` header is rejected; no wildcard CORS | `WP-U1` Done-when: "a cross-origin `Origin` on `/api/stream` is rejected; no wildcard CORS" |
 | Resumability | Resumable — the connection can pick back up after a drop | `WP-U1`: "server→browser, same-origin, auth-gated, **resumable**" |
 | What it pushes | Deltas from the projection layer (new/changed `sessions`, `agents`, `orchestration_edges`, `token_usage` rows) | `docs/analysis/development-plan.md` §7: "`WP-U1` needs a projection change-notifier that only exists after `WP-IN7`" |
+
+*As built, the last two rows resolved differently:*
+
+| Property | As built |
+|---|---|
+| Resumability | **Reconnect, not replay.** The server sends a `retry:` hint and the browser's `EventSource` auto-reconnects; there is no `Last-Event-ID` handling and no `events_raw.seq` replay. Frames emitted while a client was disconnected are **lost**. The SPA compensates by treating any stream event as a cue to refetch persisted truth, so the displayed state re-converges — but a client that needs a gapless event log must read `GET /api/sessions/:id/events`, not the stream. |
+| What it pushes | Two typed frames only — `session-ingested` (a session was persisted; refetch) and `agent-status-changed` (one agent moved between status buckets, including into `unknown` via the missing-Stop watchdog). Not a generic row-delta feed over `sessions`/`agents`/`orchestration_edges`/`token_usage`. |
 
 **The event-push model.** `/api/stream` is a fan-out off already-committed projection
 state, not a raw firehose of `events_raw` — the same "single-writer pipeline, read-only
@@ -107,6 +158,14 @@ replay-on-startup) is a plausible shape given the schema, but no source states t
 the literal mechanism. Treat resumability as a fixed requirement and its exact protocol
 as _(planned)_.
 
+> **As built:** the mechanism chosen was **browser auto-reconnect, not replay**. The
+> server emits a `retry:` hint and nothing else; no `Last-Event-ID` is read or honoured,
+> and no `events_raw.seq` cursor is exposed on the stream. That is a real gap against
+> `WP-U1`'s "resumable" wording and is recorded here rather than papered over: a client
+> that drops the connection misses the frames sent in the interim. The SPA's answer is
+> to refetch from the read API on reconnect, which restores correct *state* but not the
+> missed *event sequence*.
+
 ## Read endpoints
 
 Every row below other than `/api/stream` (above) and `GET /sessions/:id/tree` is a
@@ -114,19 +173,50 @@ Every row below other than `/api/stream` (above) and `GET /sessions/:id/tree` is
 data, and the owning work package, but not a literal REST path. Do not treat any path
 other than those two as decided.
 
-| Resource | Purpose | Backing data | Source WP |
-|---|---|---|---|
-| `GET /sessions/:id/tree` | The session-scoped subagent tree (daily Q1/Q3/Q5) | Query over `orchestration_edges`, joined to `agents` | `WP-U3` — fixed path: "`GET /sessions/:id/tree` built from a query over `orchestration_edges` (proven, not reconstruction)" |
-| Sessions & agents _(planned shape)_ | List/get sessions and their agents, including per-agent `status` (`working`/`waiting`/`completed`/`error`) | `sessions`, `agents` projection tables | `WP-U3` |
-| Cost & delegation-savings _(planned shape)_ | Per-session/agent dollar cost and the Haiku/Sonnet-routing delegation-savings figure (daily Q2/Q4) | `token_usage` × `model_pricing`, via `CostEngine` (`WP-C3`), delegation-savings via `WP-C5` | `WP-U4` |
-| Global orchestration DAG _(planned shape)_ | The cross-session, per-instance persisted DAG (the moat view) | Query over `orchestration_edges` across sessions, keyed by `instance`/`host_id` | `WP-U4`; see [the DAG moat](../architecture/dag-moat.md) |
-| Token usage _(planned shape)_ | Fine-grained ground-truth token buckets (`speed`/`inference_geo`/`service_tier`), including PreCompact baselines | `token_usage` | `WP-U3`/`WP-U4`, backed by `WP-D8` |
-| Events _(planned shape)_ | Read access to normalized `events` (and, where exposed, `events_raw`) for a session/agent | `events`, `events_raw` | Implied by `WP-U2`'s Read API foundation over the projection; no dedicated WP names an events-listing endpoint explicitly |
+*(The paths are all decided now. The design-era table is kept below; the "As built"
+column names the route that actually shipped.)*
+
+| Resource | Purpose | Backing data | Source WP | As built |
+|---|---|---|---|---|
+| `GET /sessions/:id/tree` | The session-scoped subagent tree (daily Q1/Q3/Q5) | Query over `orchestration_edges`, joined to `agents` | `WP-U3` — fixed path: "`GET /sessions/:id/tree` built from a query over `orchestration_edges` (proven, not reconstruction)" | `GET /api/sessions/:id/tree` — note the `/api` prefix |
+| Sessions & agents _(planned shape)_ | List/get sessions and their agents, including per-agent `status` (`working`/`waiting`/`completed`/`error`) | `sessions`, `agents` projection tables | `WP-U3` | `GET /api/sessions?limit&offset` (returns `{sessions,total,limit,offset}`) and `GET /api/sessions/:id`. The status enumeration gained a **fifth** value, `unknown` — see below |
+| Cost & delegation-savings _(planned shape)_ | Per-session/agent dollar cost and the Haiku/Sonnet-routing delegation-savings figure (daily Q2/Q4) | `token_usage` × `model_pricing`, via `CostEngine` (`WP-C3`), delegation-savings via `WP-C5` | `WP-U4` | Split in two: `GET /api/cost/summary?topN` (DB rollup: totals, per-model, per-day, top sessions) and `GET /api/sessions/:id/cost-analysis?topTierModel` (compaction-aware cost + delegation savings, computed from the JSONL substrate) |
+| Global orchestration DAG _(planned shape)_ | The cross-session, per-instance persisted DAG (the moat view) | Query over `orchestration_edges` across sessions, keyed by `instance`/`host_id` | `WP-U4`; see [the DAG moat](../architecture/dag-moat.md) | `GET /api/dag/global?limit` — returns nodes, edges and a `counts` block whose `truncated` flag the client must surface |
+| Token usage _(planned shape)_ | Fine-grained ground-truth token buckets (`speed`/`inference_geo`/`service_tier`), including PreCompact baselines | `token_usage` | `WP-U3`/`WP-U4`, backed by `WP-D8` | **No dedicated endpoint.** Token figures are served folded into the session, tree, DAG and cost responses (`totalTokens`, `costUsd`, `unpricedTokens`); there is no route that returns raw `token_usage` rows or per-bucket breakdowns |
+| Events _(planned shape)_ | Read access to normalized `events` (and, where exposed, `events_raw`) for a session/agent | `events`, `events_raw` | Implied by `WP-U2`'s Read API foundation over the projection; no dedicated WP names an events-listing endpoint explicitly | `GET /api/sessions/:id/events?limit&offset` (WP-D5). Serves the normalized `events` table only — `events_raw` is never exposed |
 
 Every route in this table — fixed or planned — is TypeBox-contract-validated and shares
 one auth guard implementation: `WP-U2` (Read API foundation) is explicitly "a Fastify
 plugin, TypeBox contracts, auth guard, shared DTOs," so no individual route author can
-forget to wrap a new endpoint in the gate.
+forget to wrap a new endpoint in the gate. *(As built: this held — the gate is a single
+`onRequest` hook on the whole app, and the route plugin is registered inside its scope,
+so a new route is gated by construction rather than by remembering.)*
+
+### As-built details worth knowing before you call these
+
+- **`GET /api/sessions/:id/events` never conflates "no events" with "no session".** A
+  known session with zero hook events is `200` with an empty array; only an unknown
+  session id is `404`. Rows are oldest-first with `id` as tiebreak and carry a `total`
+  so truncation stays visible.
+- **Those event rows are hook *liveness* only.** They are not the DAG, they never
+  influence `agents` / `orchestration_edges` / `token_usage`, and their **absence means
+  nothing** about whether an agent ran — hooks are a best-effort secondary channel and
+  JSONL transcripts are ground truth. Only identifiers are projected into `events`,
+  never payload content.
+- **Event timestamps are receipt time.** The hook envelope carries no event-originated
+  timestamp, so every row reports `occurredAtSource: "receipt"` — the DTO says so on
+  every row rather than letting a reader assume the time is when the thing happened.
+- **`GET /api/sessions/:id/cost-analysis` has three failure modes that are all
+  deliberate:** `503` when no corpus provider is configured (a DB-only deployment does
+  not guess where the transcripts live), `422` when a transcript cannot be parsed, and
+  `422` with the offending model named when a model has no price row — a `PricingError`,
+  never a silent `$0`. Corpus paths and offending lines are never echoed to the client.
+- **The `agents.status` enumeration is five values:** `working`, `waiting`, `completed`,
+  `error`, `unknown`. `unknown` is what the missing-Stop watchdog assigns and is a
+  first-class bucket in every rollup, not an error state to be hidden.
+- **Pagination caps are contract, not convention:** `limit` default 50 / max 200,
+  `offset` max 1000000, `topN` default 5 / max 50, DAG `limit` default 1000 / max 5000.
+  Exceeding one is a `400` with the uniform `{ "error": … }` body, not a clamp.
 
 ### No API-side inference — ever
 
@@ -147,6 +237,23 @@ runtime best-effort:
   failure** (`WP-C6`'s staleness gate), never a silent runtime "estimated" label — see
   [the cost model](../architecture/cost-model.md).
 
+> **As built:** the no-inference guarantee holds, and an unpriced model is never costed
+> at `$0` — but the *shape* of the refusal differs by endpoint, and a client must handle
+> both:
+>
+> - **DB rollups** (`/api/sessions`, `/api/sessions/:id`, `/api/sessions/:id/tree`,
+>   `/api/cost/summary`, `/api/dag/global`) resolve each `token_usage` row against the
+>   newest `model_pricing` row with `effective_from <= occurred_at` for that exact
+>   `(model, bucket)`. Rows with no resolvable rate contribute `$0` to `costUsd` **and
+>   are counted separately in `unpricedTokens`**, which appears on every one of those
+>   payloads. The dollar figure is therefore always "cost of what could be priced", and
+>   `unpricedTokens` is the declared size of what could not. A client that renders
+>   `costUsd` without `unpricedTokens` is misreporting.
+> - **`/api/sessions/:id/cost-analysis`** does not degrade: it throws `PricingError` and
+>   answers `422` naming the model. The compaction and delegation-savings figures are
+>   all-or-nothing by design, and `delegationSavings` carries `isEstimate: true` in the
+>   DTO so the hypothetical can never be read as a measurement.
+
 ### The tree is a query, not a reconstruction
 
 `GET /sessions/:id/tree` (`WP-U3`) and the global DAG endpoint (`WP-U4`) both read from
@@ -162,7 +269,33 @@ survives a missing `SubagentStart` hook — the edge may have been derived from 
 of the two derivation paths produced a given row, because both write into the same
 idempotent table before the API ever queries it.
 
+> **As built:** the query-not-reconstruction property held, and the API does serve
+> `orchestration_edges` verbatim. Two corrections to the paragraph above:
+>
+> - **There is no `SubagentStart` hook.** It does not exist in Claude Code. The shipped
+>   installer registers four hooks (`UserPromptSubmit`, `Stop`, `SubagentStop`,
+>   `PreCompact`) and **no hook ever asserts a parent→child edge**. The DAG is built
+>   entirely from the JSONL transcripts; a session's tree does not merely "survive"
+>   missing hooks, it never depended on them.
+> - **The API does tell you which derivation path produced a row.** Every edge carries a
+>   `source` of `tool_use` (observed) or `directory` / `task_notification` /
+>   `queue_operation` (inferred), and the SPA is required to draw observed edges solid
+>   and inferred edges dashed behind a permanent legend. Provenance is served, not
+>   flattened.
+
 ## Operator alerts API (`WP-A8`, Phase 6)
+
+> **Update — 2026-07 (as built): this surface was CUT and does not exist.** `WP-A8`
+> (operator alerts API) and `WP-A9` (alerts UI) were cut outright, not deferred. There
+> is no `alert_rules` table, no `webhook_targets` table, no alerts schema module, no
+> alerts route and no alerts view anywhere in the codebase — the only `POST` route the
+> server exposes is `/api/hooks/event`. Alerting as a whole is **v2.0 material**, off
+> the v1.0 critical path, and v2.0 is entered only through kill checkpoint **KC-5**,
+> which requires evidence of real daily v1.0 use before any of it is written. If that
+> evidence never appears, this API is never built — and the roadmap counts that as a
+> success, not a shortfall. Everything below is the design record for a surface that
+> was deliberately abandoned. See [Telegram alerts](telegram.md) for the full v2.0
+> gating story.
 
 The alerts CRUD surface is the write side of this API and lands later than the read API
 and stream above — Phase 6 (`WP-A8`, `WP-A9`, `WP-A10`) per the
@@ -184,21 +317,25 @@ preamble exactly:
 Full rule configuration (cost thresholds, stuck-agent detection, error conditions) and
 the Telegram delivery path this API manages are the dedicated subject of
 [Telegram alerts](telegram.md), which itself ships with Phase 5's alerting core, one
-phase ahead of this CRUD surface.
+phase ahead of this CRUD surface. *(As built: neither the Phase 5 alerting core nor
+this Phase 6 CRUD surface was built; both are v2.0, KC-5-gated.)*
 
 ## What's fixed vs. planned, at a glance
 
-| Claim | Status |
-|---|---|
-| Transport is SSE, not WebSocket; `/api/stream` is the path | **Fixed** — CD-5; `WP-U1` |
-| Same-origin enforcement, no wildcard CORS, on the stream | **Fixed** — `WP-U1` Done-when |
-| Every route (read + write) is `timingSafeEqual`-gated | **Fixed** — `WP-U2`, `WP-A8` Done-when |
-| Loopback-only bind for the whole server | **Fixed** — `WP-U0`; security model rule 1 |
-| `GET /sessions/:id/tree` reads `orchestration_edges` | **Fixed path & mechanism** — `WP-U3` Done-when |
-| Stream is resumable | **Fixed requirement**; exact resume protocol _(planned)_ |
-| Cost/delegation/global-DAG/token/events endpoint paths | _(planned shape — exact path undecided)_ — `WP-U4`/`WP-U3` name the resource, not the route |
-| Alerts CRUD paths | _(planned shape — exact path undecided)_ — `WP-A8` names the surface, not the route |
-| Underlying stack (Fastify, TypeBox) | _(leaning — unconfirmed)_ per the project's `CLAUDE.md`; treated here as the working assumption because the sources name it, not because it is locked |
+The `Status` column is the design-era assessment. `As built` records what the shipped
+code actually does.
+
+| Claim | Status | As built |
+|---|---|---|
+| Transport is SSE, not WebSocket; `/api/stream` is the path | **Fixed** — CD-5; `WP-U1` | Holds. SSE, `/api/stream`, no WebSocket anywhere |
+| Same-origin enforcement, no wildcard CORS, on the stream | **Fixed** — `WP-U1` Done-when | Holds — and the origin check runs *before* the token check, so a foreign origin is 403 even with a valid token |
+| Every route (read + write) is `timingSafeEqual`-gated | **Fixed** — `WP-U2`, `WP-A8` Done-when | Holds for every `/api/*` route including `/api/health` and `POST /api/hooks/event`. `WP-A8` was cut, so it contributes nothing |
+| Loopback-only bind for the whole server | **Fixed** — `WP-U0`; security model rule 1 | Holds. `HOST = '127.0.0.1'` is an exported constant with no configuration path |
+| `GET /sessions/:id/tree` reads `orchestration_edges` | **Fixed path & mechanism** — `WP-U3` Done-when | Mechanism holds; path is `/api/sessions/:id/tree` |
+| Stream is resumable | **Fixed requirement**; exact resume protocol _(planned)_ | **Not met as stated.** Browser auto-reconnect only — no `Last-Event-ID`, no replay. Frames sent while disconnected are lost |
+| Cost/delegation/global-DAG/token/events endpoint paths | _(planned shape — exact path undecided)_ — `WP-U4`/`WP-U3` name the resource, not the route | All decided: `/api/cost/summary`, `/api/sessions/:id/cost-analysis`, `/api/dag/global`, `/api/sessions/:id/events`. **No token-usage endpoint exists** — token figures are folded into the other payloads |
+| Alerts CRUD paths | _(planned shape — exact path undecided)_ — `WP-A8` names the surface, not the route | **Cut.** `WP-A8`/`WP-A9` will not be built on the v1.0 path; v2.0 requires KC-5 |
+| Underlying stack (Fastify, TypeBox) | _(leaning — unconfirmed)_ per the project's `CLAUDE.md`; treated here as the working assumption because the sources name it, not because it is locked | Confirmed and shipped: Fastify with `@fastify/type-provider-typebox`, `additionalProperties: false` on every response schema |
 
 ## See also
 
@@ -209,10 +346,10 @@ phase ahead of this CRUD surface.
 - [Data model](../architecture/data-model.md) — the `events_raw` → `events` →
   `sessions`/`agents`/`orchestration_edges`/`token_usage` schema this API reads from.
 - [Using the dashboard](dashboard.md) — the SPA built on top of this API and the
-  realtime feed, once Phase 4 ships it.
+  realtime feed. *(As built: shipped, with all four views.)*
 - [Configuration](configuration.md) — how `DASHBOARD_TOKEN` and the server's other
   settings are supplied to the process this API runs inside.
 - [Telegram alerts](telegram.md) — the Phase 5 alerting core the Phase 6 alerts API in
-  this page manages.
+  this page manages. *(As built: v2.0 only, KC-5-gated, nothing built.)*
 - [Roadmap](../guide/roadmap.md) — Phase 4's exit gate in full, and where the alerts API
   sits relative to it in Phase 6.

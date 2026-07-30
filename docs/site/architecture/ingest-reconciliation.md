@@ -26,6 +26,37 @@ tests that gate every merge from Phase 3 onward.
 > spike below — `WP-S1`/`WP-S5` still need the paired-capture corpus and Ivan's tree sign-off,
 > and the `WP-S7` GO gate still stands (no production code before it).
 
+> **Update — 2026-07 (as built).** Implementation began 2026-07-11 (explicit owner
+> override of the CD-8 hard stop; the spike numbers remain PROVISIONAL until ratified
+> against the hand-labeled corpus). The shipped ingest resolves this page's central
+> question the JSONL-primary way, with one deliberate simplification of the substrate
+> design: **JSONL is parsed and projected directly** — the pure parser
+> (`packages/core/src/parser`) reconstructs a session, cost is computed as a halt-gate,
+> and one transaction per session writes `sessions`/`agents`/`orchestration_edges`/
+> `token_usage` (`apps/server/src/ingest/ingest-session.ts`). Consequences for the
+> contract described below, stated plainly:
+>
+> - **`events_raw` holds hook events only.** JSONL lines are never enveloped into it, so
+>   the cross-source idempotency key (§5) and the separate Normalizer/Projection stages
+>   (`WP-IN6`/`WP-IN7`, §4) were **never built**. Idempotency-keyed `events_raw` exists
+>   and is append-only (trigger-enforced) — for the hook leg.
+> - **Change detection is an lstat fingerprint** (`rel:size:mtime` per session file,
+>   in-memory), not a durable byte/line tail offset (§6). Any change triggers an
+>   **idempotent whole-session re-ingest**; a restart's first watcher tick *is* the
+>   replay (§7). Determinism comes from the parse being pure and the writes being
+>   upserts/INSERT-OR-IGNORE, not from a persisted offset.
+> - **CD-1 is intact**: hooks contribute **liveness only, never structure** — no hook
+>   ever creates an agent, an edge, or a token row. Hook deliveries are normalized into a
+>   small `events` liveness timeline (identifiers only, same transaction as the raw
+>   append).
+> - **The outbox (§9) was never needed** — the YAGNI-leaning verdict held.
+> - **The three P0 tests exist and run green** in the server suite
+>   (`apps/server/test/p0/`): token reconciliation, double-replay idempotency, and
+>   DAG-rebuild-from-JSONL-alone.
+>
+> Sections below are kept as the design record; per-section updates mark where the
+> as-built system diverges.
+
 ## 1. Why this is make-or-break (LB1)
 
 Two candidate sources exist for every fact agenthropic needs, and they have opposite
@@ -85,6 +116,10 @@ of CD-1 are designed for, and the spike output picks one — though the 2026-07-
 `CONDITIONAL-GO` → build (JSONL-primary; confidence 85/100), which the formal Phase-0 spike (§3)
 confirms rather than newly decides.
 
+> **As built:** the shipped ingest implements the **JSONL-primary** branch — chosen by that
+> verdict, not assumed ahead of it. The hooks-primary + outbox branch remains the documented
+> fallback that was never triggered (§9).
+
 ## 3. The Phase-0 probe that decides CD-1
 
 Phase 0 is a **throwaway GO/NO-GO feasibility spike with a hard ❌ stop** (CD-8) — no
@@ -117,6 +152,12 @@ post-hoc-on-Stop** is the likely real design" (concept-analysis-v2 §4.2, Develo
 is exactly why `WP-IN8` (dual-path edge derivation, [the DAG moat](../architecture/dag-moat.md))
 is designed to build the correct tree **even if `SubagentStart` never fires** — it does not bet
 on the optimistic hook existing.
+
+> **As built:** the prediction held — `SubagentStart` does not exist. The hooks installer ships
+> exactly **four** real lifecycle hooks (`UserPromptSubmit`, `Stop`, `SubagentStop`,
+> `PreCompact`), and the edge derivation never needed any of them: all four
+> `orchestration_edges` join paths (`tool_use`, `directory`, `queue_operation`,
+> `task_notification`) come from the JSONL parser alone.
 
 ## 4. The substrate that makes either verdict safe: `events_raw` + deterministic projection
 
@@ -168,6 +209,18 @@ sessions/agents/`token_usage` (precedence-aware). Σ `token_usage` per session =
 projected tables is the scope of [the data model](../architecture/data-model.md), not this
 page — this page is about the *contract*, not the schema shape.
 
+> **As built:** the diagram above is the design record, not the running shape. `events_raw`
+> exists and is exactly as promised — append-only (`UPDATE`/`DELETE` blocked by SQLite
+> triggers, test-proven), idempotency-keyed, accept-any-shape — but it receives **hook
+> envelopes only**. The JSONL leg never writes to it: the pure parser
+> (`packages/core/src/parser`) plays the Normalizer/Projection role in one step, and
+> `apps/server/src/ingest/ingest-session.ts` writes the projected tables in **one transaction
+> per session**. Determinism survived the simplification — the parse is a pure function of the
+> transcript bytes, and re-ingesting an unchanged session is a no-op by upsert/`INSERT OR
+> IGNORE`. `WP-IN6`/`WP-IN7` were therefore never built as separate stages. The
+> accept-and-store-raw rule holds on the hook side: the receiver accepts **any** body shape,
+> stores it raw, and projects only identifiers into the `events` liveness timeline.
+
 ## 5. Idempotency keys — collapsing dual writes into one fact
 
 Because both a hook and a JSONL line can describe the *same* underlying fact (e.g. the same
@@ -190,6 +243,17 @@ protects (concept-analysis-v2 §2, LB1), and it is what makes the Phase-2 exit g
 (development-plan §3, Phase 2). The same mechanism is what absorbs redelivery from the
 contingent outbox (§9 below) without double-counting.
 
+> **As built: the cross-source key was never needed and was not built.** JSONL lines never
+> enter `events_raw`, so there is no dual-write to collapse — the two sources never share a
+> store, and the "same fact twice" problem this section designs for cannot occur. What *was*
+> built is the single-source half of the contract, and it does real work: every hook delivery
+> gets a deterministic `hook:`-prefixed SHA-256 key over the canonicalized envelope
+> (**minus** `receivedAt`, and computed **after** payload redaction), and the append is an
+> `INSERT OR IGNORE` against a `UNIQUE` key inside one transaction with the `events`
+> projection — so a duplicate or retried hook delivery lands **zero** new rows in both tables.
+> On the JSONL side, idempotency is carried by the whole-session re-ingest being an
+> upsert/`INSERT OR IGNORE` write (§6–7), not by an event-level key.
+
 ## 6. Durable JSONL tail offsets
 
 The JSONL leg of ingest is a **tail-follow**, not a re-read: `WP-IN5` — **"`TokenReader`/
@@ -209,6 +273,18 @@ Tokens are copied **verbatim** off this tail — never re-derived, never estimat
 the mechanical enforcement of the ground-truth-tokens invariant at the one place tokens enter
 the system at all (DESIGN §3; concept-analysis-v2 §5, Strengths).
 
+> **As built: no tail-follow, no durable offsets.** `WP-IN5` shipped as a **polling corpus
+> watcher** (default interval 3 s, `PROVISIONAL`; deliberately polling rather than
+> `fs.watch`) with an **in-memory lstat fingerprint** per session file
+> (`relative-path:size:mtime`). Any fingerprint change triggers an **idempotent whole-session
+> re-ingest** — the file is re-parsed from the start and re-projected in one transaction. This
+> is the first bullet's "re-read on restart, rely on idempotent writes to de-dupe" branch,
+> chosen deliberately: session transcripts are small enough that a full re-parse is cheap, and
+> the double-replay P0 test (§10) proves the de-dupe rather than assuming it. The trade is
+> honest — a restart re-ingests rather than resumes, so recovery costs a full pass over the
+> corpus (the watcher's first tick), never data loss. The verbatim-tokens rule is unchanged:
+> the parser copies `usage` counts as-is, and per-message dedupe happens before summation.
+
 ## 7. Replay-on-startup
 
 Durable offsets on the read side only matter if the write side can safely re-derive state from
@@ -226,6 +302,15 @@ produce the same output. This determinism is also the concrete reason a >90% cov
 achievable at all: **"replay-from-fixtures needs a deterministic durable source"**
 (concept-analysis-v2 §2, LB1) — the golden fixture corpus (see
 [testing](../contributing/testing.md)) is replayed against exactly this mechanism.
+
+> **As built: replay-on-startup *is* the watcher's first tick.** There is no separate replay
+> mode — on process start the corpus watcher scans every session file, every fingerprint is
+> new to the fresh in-memory map, and every session is re-ingested through the same
+> parse → cost halt-gate → one-transaction path as live changes; a replay summary is logged.
+> Because the parse is pure and every write is an upsert/`INSERT OR IGNORE`, running it twice
+> leaves the projected tables identical — the double-replay P0 test (§10) asserts exactly
+> this. Determinism is delivered by purity + idempotent writes rather than by
+> replaying an `events_raw` log of JSONL envelopes (which does not exist, §4).
 
 ## 8. Reconciliation precedence & backfill (CD-3)
 
@@ -260,6 +345,21 @@ completed, or stay flagged?** This needs an explicit state-transition rule not y
 within the window, never a permanent 'working'"** (development-plan §5, Track IN) — an agent
 can never appear falsely alive forever; it can only ever fail toward visible uncertainty.
 
+> **As built:** the precedence table above holds, but the **two-phase backfill does not exist
+> as a phase** — because ingest parses the *whole session* before writing anything,
+> `token_usage.agent_id` is attributed inside the parser and written already-resolved in the
+> same transaction. `NULL` remains what it always meant: a row that is *genuinely*
+> unattributable, surfaced as such in the API and UI, never guessed. `WP-IN9`'s invariant
+> (every attributed row belongs to exactly one agent; the session-sum never changes) is
+> enforced by the P0 token-reconciliation test rather than by a backfill pass. The
+> **watchdog is built** (`WP-IN12`): a non-terminal agent whose last-seen anchor
+> (`lastSeenAt`, else `firstSeenAt`) is older than `DASHBOARD_WATCHDOG_MINUTES` (default 10,
+> `PROVISIONAL`) — or whose anchor is unparseable — flips to `unknown`; `completed`, `error`
+> and `unknown` are terminal for the sweep. The once-open late-arrival rule (open question 5)
+> is answered in practice by the re-ingest path: a later whole-session re-ingest upserts the
+> status the JSONL evidence supports, so a stale `unknown` yields to the durable record
+> instead of sticking forever.
+
 ## 9. The contingent outbox — hooks-primary fallback only
 
 If the Phase-0 spike (§3) reads CONDITIONAL-GO rather than GO — i.e. JSONL does **not** carry
@@ -286,6 +386,10 @@ Two things make this fallback safe rather than a second, parallel ingest design:
 > The empirically **proven** load-bearing hedges are instead (a) **dual-layout parsing** (~85% of
 > agent files are nested) and (b) **child-transcript token summation** (parent token rollup is
 > ≈0%). `WP-IN11` stays the contingent fallback described above, not an expected build item.
+
+> **As built:** exactly as the update above predicted — the verdict was JSONL-primary, the
+> trigger never fired, and **no outbox exists in the codebase**. Both proven hedges *are*
+> built: the parser walks both on-disk layouts and sums tokens from child transcripts.
 
 The DAG-rebuild acceptance criterion is written to cover both branches explicitly:
 
@@ -316,6 +420,15 @@ corpus; `WP-IN13` wires them as **"Reconciliation / idempotency / DAG-rebuild su
 blockers). All three P0 tests green in CI and **blocking**"** (development-plan §5, Track IN,
 Track X).
 
+> **As built: all three exist and run in the server suite** —
+> `apps/server/test/p0/p0-token-reconciliation.test.ts`,
+> `apps/server/test/p0/p0-double-replay.test.ts`, and
+> `apps/server/test/p0/p0-dag-rebuild.test.ts`, over a shared harness that ingests fixture
+> corpora through the real parse → one-transaction path. Under the as-built shape, test 3's
+> "from JSONL alone" is the *only* branch — hooks never contribute structure, so there is no
+> outbox variant to exercise. They are joined by negative suites (`apps/server/test/negative/`)
+> covering hook-receiver abuse, ingest restart, and the SSE security contract.
+
 Two adjacent, non-P0 acceptance bars sharpen what "passing" is allowed to mean:
 
 - **Hierarchy correctness gate is ≥95%** against a labeled golden corpus of ≥3 real sessions —
@@ -338,10 +451,48 @@ Two adjacent, non-P0 acceptance bars sharpen what "passing" is allowed to mean:
 monorepo scaffold itself — **depends on `WP-S7`**, so "no production code before GO" is a real
 dependency edge in the build graph, not a note in a README (development-plan §1, §2).
 
+> **As built**, the Phase-2 row reads differently in two places: the collapse-to-one-row gate
+> holds for the **hook leg** (a duplicate hook delivery lands zero new rows, §5); and
+> "resumes at the persisted offset" was replaced by **fingerprint change → idempotent
+> whole-session re-ingest** (§6) — same zero-loss/zero-dup outcome, different mechanism. The
+> unknown-`event_type`-stored-not-crashed gate holds as written. The Phase-3 row's substance
+> is built: the three P0 tests exist (§10), the missing-`Stop` watchdog is live (§8), and
+> `PreCompact` repricing runs compaction-aware with the delta≈0 invariant (see
+> [cost model](../architecture/cost-model.md)). Note also that the CD-8 hard stop described
+> here was ultimately crossed by **explicit owner override on 2026-07-11**, not by a ratified
+> `WP-S7` GO — which is why the spike numbers stay `PROVISIONAL`.
+
 ## What's undecided
 
+> **Update — 2026-07 (as built).** This section is kept as the historical record of what was
+> open when the page was written. Where each item landed:
+>
+> - **CD-1** — resolved in code: JSONL-primary, per the `CONDITIONAL-GO` verdict.
+>   Implementation began 2026-07-11 by explicit owner override of CD-8; the spike numbers
+>   remain `PROVISIONAL` until ratified against the hand-labeled corpus.
+> - **Join key (G0.1b)** — resolved as a **hard key**: the parser keys on the
+>   `Agent`/`Workflow` `tool_use` spawns and joins edges through four deterministic paths
+>   (`tool_use`, `directory`, `queue_operation`, `task_notification`); the desktop probe
+>   measured 0.000% depth-1 orphans and 100% usage attribution. No confidence-scored
+>   heuristic ships — an unresolvable row stays honestly `NULL` and an orphan gets **no**
+>   edge, never a guessed one.
+> - **Hook catalog (G0.2)** — verified: four real hooks (`UserPromptSubmit`, `Stop`,
+>   `SubagentStop`, `PreCompact`); `SubagentStart` does not exist.
+> - **Missing-`Stop` late-arrival rule** — built (§8): the watchdog flips stale non-terminal
+>   agents to `unknown`, and a later re-ingest upserts the status the JSONL evidence
+>   supports.
+> - **Retention / redaction / huge-payload** — partially resolved: payload **redaction is
+>   built at ingest** (key-name matching plus credential-shape masking, applied *before* the
+>   idempotency key), with the exact policy pending owner sign-off; the retention TTL sweeper
+>   and the huge-payload threshold are **not built** and remain open.
+> - **Hook-POST authentication** — answered: the hook receiver sits behind the same
+>   mandatory-token gate as every other endpoint, and the installer writes hook commands that
+>   reference `${DASHBOARD_TOKEN}` by shell expansion — the token never lands verbatim in
+>   `~/.claude` scripts.
+
 This page documents a contract that is fixed (CD-2, CD-3, idempotency, replay) wrapped around
-a decision that is explicitly **not** fixed yet (CD-1). Being precise about which is which:
+a decision that was, when this was written, explicitly **not** fixed yet (CD-1). Being precise
+about which was which at the time:
 
 - **CD-1 itself** — JSONL-primary vs. hooks-primary+outbox — has been empirically
   **pre-answered `CONDITIONAL-GO` → build** (confidence 85/100) by the 2026-07-04 desktop

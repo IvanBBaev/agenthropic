@@ -1,11 +1,13 @@
 /**
  * Fixture `task-notification-recovery` — parser-spec section 4, recovery path N1.
  *
- * Compaction evicted the parent-side tool_use block: the main transcript has a
+ * Models a LEGACY no-sidecar session: there is no `agent-<hex>.meta.json`, so
+ * the child cannot be anchored by a sidecar `toolUseId`. Compaction also
+ * evicted the parent-side tool_use block: the main transcript has a
  * `compact_boundary` record and deliberately NO tool_use with the spawn id.
- * The child-side `<task-notification>` message carries `<task-id>` /
- * `<tool-use-id>` tags that re-anchor the edge. Tests assert both the
- * child-side match AND the parent-side absence.
+ * The child's first-record message content is a STRING carrying a
+ * `<task-notification>` with `<task-id>` / `<tool-use-id>` tags that re-anchor
+ * the edge to the main agent (the legacy task_notification recovery path).
  */
 import { type Fixture, jsonLine } from './types.js';
 
@@ -45,7 +47,6 @@ const childLines = [
     isSidechain: true,
     sessionId: SESSION_ID,
     agentId: AGENT_HEX,
-    meta: { toolUseId: EVICTED_TOOL_USE_ID, layout: 'flat' },
     type: 'user',
     message: {
       role: 'user',

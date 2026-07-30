@@ -1,10 +1,37 @@
 # ADR-0007: CD-5 — Transport is SSE with same-origin enforcement
 
-- **Status:** accepted
+- **Status:** accepted — **built and holding** as of 2026-07-30 (one open item: `Last-Event-ID` resumability, see the as-built update below)
 - **Date:** 2026-07-03
 - **Deciders:** Ivan Baev (project owner), via the six-lens concept-analysis-v2 workflow
 - **Source:** [`concept-analysis-v2.md` §3, row CD-5](../../../analysis/concept-analysis-v2.md#3-canonical-decision-register-v2)
   (consolidates AD5)
+
+## As-built update — 2026-07-30
+
+**Verdict: holds, built as decided.** SSE is the transport; no WebSocket dependency
+exists anywhere in the tree.
+
+- `/api/stream` is a hijacked Fastify route writing `text/event-stream` with
+  `cache-control: no-cache, no-transform` and a periodic heartbeat comment, fanned
+  out by a `RealtimeHub`.
+- **Same-origin is enforced before auth, not after.** A foreign `Origin` on
+  `/api/stream` is rejected with 403 whether or not a valid token was presented — the
+  browser attack surface closes before the token is even examined. There is no
+  wildcard CORS.
+- The auth hook gates on the **routed** path (`request.routeOptions.url`), not the
+  raw request URL, specifically so a percent-encoded path like `/%61pi/health` cannot
+  slip past a prefix check that the router would then decode back to `/api/`.
+- Both behaviours are in the negative-test catalogue and are merge-blocking: a
+  foreign `Origin` yields 403 **with and without** a valid token, and the four
+  wrong-token shapes return **byte-identical** 401 bodies, so neither check leaks an
+  oracle.
+
+One acceptance item is not built as written: `WP-U1` calls the endpoint "resumable."
+The server emits a `retry:` directive so a dropped client reconnects, but there is no
+`Last-Event-ID` replay — a reconnecting client resubscribes to the live feed rather
+than being caught up on frames it missed. For a liveness channel whose durable facts
+all live in the database this is a small gap, but it is a gap, not a completed
+criterion.
 
 ## Context
 

@@ -1,11 +1,60 @@
 # ADR-0006: CD-4 — Schema: events_raw/events, orchestration_edges, token_usage, model_pricing
 
-- **Status:** accepted (exact DDL is a Track D implementation deliverable, not yet written —
-  see Consequences → Follow-ups)
+- **Status:** accepted — ~~exact DDL is a Track D implementation deliverable, not yet written~~
+  *(DDL written and shipped 2026-07; `apps/server/src/db/migrations.ts`)*; **amended in detail
+  2026-07-30** — all tables exist and are written, with named column-level divergences from the
+  sketch below (see the as-built update)
 - **Date:** 2026-07-03
 - **Deciders:** Ivan Baev (project owner), via the six-lens concept-analysis-v2 workflow
 - **Source:** [`concept-analysis-v2.md` §3, row CD-4](../../../analysis/concept-analysis-v2.md#3-canonical-decision-register-v2)
   (consolidates AD4, G-D6, SD5); `docs/ai/DESIGN.md` §4
+
+## As-built update — 2026-07-30
+
+**Verdict: holds in substance, amended in detail.** Every table this ADR names
+exists and is written to, and every acceptance criterion below that could be tested
+is tested. The sketched DDL was explicitly labelled "not yet fully specified"; the
+real DDL (`apps/server/src/db/migrations.ts`, seven forward-only migrations) differs
+from the sketch in ways worth recording, because two of the differences change what
+a column *means*.
+
+**`events` is now genuinely written, not just created.** This is worth stating
+because for a period it was not: the table was created by its migration and nothing
+ever inserted into it — a lie by omission in a shipped schema. As built, a hook
+delivery writes **both** rows in one transaction: the raw envelope into `events_raw`,
+and an **identifier-only** normalized row into `events` (`raw_event_id`,
+`session_id`, `agent_id`, `event_type`, `occurred_at`). No payload content is ever
+projected into `events` — the normalized row carries identifiers and a type, nothing
+else. There is no `schema_version` column on `events`; schema versioning lives in the
+migration runner's own `schema_version` table instead.
+
+**`occurred_at` is receipt time, not event time.** The dashboard records when the
+hook was *received*, because a hook payload does not carry a trustworthy occurrence
+timestamp. Rather than let that ambiguity ride, every timeline DTO row declares
+`occurredAtSource: 'receipt'` explicitly, so no consumer can mistake one for the
+other. This is a deliberate honesty affordance, not a placeholder.
+
+**Where the as-built DDL differs from the sketch below:**
+
+| Sketch | As built | Why it matters |
+|---|---|---|
+| `token_usage.service_tier` / `speed` / `inference_geo` | a single `bucket` column, `CHECK (bucket IN ('input','output','cache_read','cache_write_5m','cache_write_1h'))`, with `UNIQUE (message_id, bucket)` | The five priced buckets are what the corpus actually distinguishes (parser-spec §5.4). The UNIQUE key is load-bearing: naive row summation over-counts by ≈2.4× (parser-spec §5.2). |
+| `token_usage.compaction_baseline TEXT` | `is_compaction_baseline INTEGER NOT NULL DEFAULT 0` | Same guarantee (a compacted session still reprices), expressed as a flag on the row rather than a separate reference. |
+| `model_pricing (model, effective_from, verified_on)` | `model_pricing (model, bucket, usd_per_mtok, effective_from)`, PK `(model, bucket, effective_from)` | **There is no `verified_on` column.** Pricing is versioned by `effective_from` only, and is bucket-aware (a cache-read token is not priced like an input token). The auditability the sketch wanted from `verified_on` is not in the schema. |
+| `orchestration_edges.derived_from_event_id NOT NULL`, `UNIQUE (parent, child, instance)` | `source TEXT CHECK (source IN ('tool_use','directory','task_notification','queue_operation'))`, `UNIQUE (session_id, parent_agent_id, child_agent_id)` | Edges derive from parsed JSONL, not from an `events_raw` row (see [ADR-0004](adr-cd-2-immutable-substrate-projection.md)'s as-built update), so `derived_from_event_id` had nothing to point at. `source` records *which of the four detection mechanisms* found the edge — strictly more useful for auditing the DAG than a raw-row pointer would have been. `instance` and `host_id` are still `NOT NULL` on every row, as §6 requires. |
+| `agents.status IN ('working','waiting','completed','error')` | the same four plus `'unknown'` | The corpus contains agents whose terminal state is genuinely not determinable. `'unknown'` is preferred over silently defaulting one of the other four. |
+
+**On "a fixture model with no price row FAILS CI":** the mechanism shipped as a
+*hard runtime halt* rather than a separate CI gate — `computeCostUsd` throws
+`PricingError` on an unknown model id or a missing bucket price, refusing to price
+at $0, and that halt is exercised by tests that run in CI. The cost-trust chain
+holds; the enforcement point moved from a dedicated staleness gate (`WP-C6`, not
+built) into the pricing function itself.
+
+**The seeded prices are PROVISIONAL.** `model_pricing` is seeded with approximate
+list prices, labelled in the migration as "a mechanism proof for the cost engine,
+NOT a billing source," awaiting ratification. The *mechanism* is verified; the
+*numbers* are not.
 
 ## Context
 

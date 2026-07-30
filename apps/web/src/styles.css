@@ -34,8 +34,9 @@ code {
   border-radius: 4px;
 }
 
-.token-form,
-.dashboard {
+/* --- Token entry screen --- */
+
+.token-form {
   max-width: 26rem;
   margin: 4rem auto;
   padding: 1.5rem;
@@ -87,39 +88,464 @@ button:hover {
   background: #3a72ba;
 }
 
-.dashboard section {
-  margin-bottom: 1.25rem;
+button:disabled {
+  background: #3a3f47;
+  cursor: default;
 }
 
-.muted {
+/* --- Shell layout --- */
+
+.shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.shell-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 1rem;
+  background: #1a1d22;
+  border-bottom: 1px solid #2a2f37;
+}
+
+.brand {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.schema {
+  font-size: 0.8rem;
+}
+
+.lock {
+  margin-left: auto;
+  background: #3a3f47;
+}
+
+.lock:hover {
+  background: #4a505a;
+}
+
+.shell-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  width: 10rem;
+  padding: 0.75rem 0.5rem;
+  background: #171a1f;
+  border-right: 1px solid #2a2f37;
+}
+
+.nav-link {
+  display: block;
+  padding: 0.45rem 0.7rem;
+  color: #9aa2ad;
+  text-decoration: none;
+  border-radius: 6px;
+}
+
+.nav-link:hover {
+  background: #1f232a;
+  color: #e6e8eb;
+}
+
+.nav-active {
+  background: #22303f;
+  color: #e6e8eb;
+}
+
+.legend {
+  margin-top: auto;
+  padding: 0.5rem 0.7rem;
+  font-size: 0.72rem;
+  line-height: 1.6;
+  color: #9aa2ad;
+  border-top: 1px solid #2a2f37;
+}
+
+.view {
+  flex: 1;
+  padding: 1.25rem 1.5rem;
+  min-width: 0;
+}
+
+/* --- Connection chip --- */
+
+.chip {
+  padding: 0.15rem 0.6rem;
+  font-size: 0.8rem;
+  border-radius: 999px;
+  border: 1px solid #2a2f37;
+}
+
+.chip-ok {
+  color: #6fbf73;
+  border-color: #2f4a33;
+}
+
+.chip-wait {
   color: #9aa2ad;
 }
 
-.status-ok {
-  color: #6fbf73;
-  font-weight: 600;
+.chip-warn {
+  color: #d6b95c;
+  border-color: #4a422a;
+}
+
+.chip-error {
+  color: #e07070;
+  border-color: #4a2c2c;
+}
+
+/* --- Status text + empty states --- */
+
+.muted {
+  color: #9aa2ad;
 }
 
 .status-error {
   color: #e07070;
 }
 
-.stream-connecting {
+.status-warn {
   color: #d6b95c;
 }
 
-.stream-open {
-  color: #6fbf73;
+.empty-state {
+  padding: 1rem;
+  color: #9aa2ad;
+  background: #1a1d22;
+  border: 1px dashed #2a2f37;
+  border-radius: 8px;
 }
 
-.stream-error {
-  color: #e07070;
+/* --- Live raw event feed --- */
+
+.feed {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 0.85rem;
 }
 
-.disconnect {
-  background: #3a3f47;
+.feed-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  padding: 0.35rem 0.2rem;
+  border-bottom: 1px solid #1f232a;
 }
 
-.disconnect:hover {
-  background: #4a505a;
+.feed-time {
+  color: #9aa2ad;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.feed-type {
+  color: #4b8dd6;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.feed-json {
+  overflow-wrap: anywhere;
+}
+
+/* --- Status vocabulary (WP-U6..U9) ---
+   Colors validated against the dark surface #14161a (dataviz palette run);
+   a status is never color alone - views always pair symbol + label. */
+
+.status-working {
+  color: #3987e5;
+}
+
+.status-waiting {
+  color: #9085e9;
+}
+
+.status-completed {
+  color: #199e70;
+}
+
+.status-unknown {
+  color: #c98500;
+}
+
+.status-null {
+  color: #9aa2ad;
+}
+
+/* Categorical series slots - the validated dark-mode order, fixed, never
+   cycled (extra series fold into "other"). SVG marks use currentColor. */
+
+.cat-0 {
+  color: #3987e5;
+}
+
+.cat-1 {
+  color: #d95926;
+}
+
+.cat-2 {
+  color: #199e70;
+}
+
+.cat-3 {
+  color: #c98500;
+}
+
+.cat-4 {
+  color: #d55181;
+}
+
+.cat-5 {
+  color: #008300;
+}
+
+.cat-6 {
+  color: #9085e9;
+}
+
+.cat-7 {
+  color: #e66767;
+}
+
+/* Unpriced tokens: an honest gap, marked with ~ and never silently $0. */
+.unpriced {
+  color: #c98500;
+}
+
+/* --- Live status board (WP-U6) --- */
+
+.board {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.card {
+  padding: 0.7rem 0.9rem;
+  background: #1a1d22;
+  border: 1px solid #2a2f37;
+  border-radius: 8px;
+}
+
+.card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+}
+
+.card-recency {
+  margin-left: auto;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.card-buckets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  margin: 0.45rem 0;
+  font-size: 0.85rem;
+}
+
+.bucket-zero {
+  opacity: 0.45;
+}
+
+.card-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  font-size: 0.8rem;
+}
+
+/* --- Session tree + DAG (WP-U7/U8) --- */
+
+.split {
+  display: grid;
+  grid-template-columns: minmax(16rem, 24rem) 1fr;
+  gap: 1.25rem;
+  align-items: start;
+}
+
+.session-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.session-row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: #1a1d22;
+  border: 1px solid #2a2f37;
+  font-size: 0.85rem;
+}
+
+.session-row:hover {
+  background: #1f232a;
+}
+
+.session-active {
+  background: #22303f;
+  border-color: #3a5a7a;
+}
+
+.chart-scroll {
+  overflow-x: auto;
+  background: #171a1f;
+  border: 1px solid #2a2f37;
+  border-radius: 8px;
+  padding: 0.5rem;
+}
+
+.edge {
+  stroke-width: 2;
+}
+
+.edge-observed {
+  stroke: #9aa2ad;
+}
+
+.edge-inferred {
+  stroke: #9aa2ad;
+  stroke-dasharray: 5 4;
+  stroke-opacity: 0.8;
+}
+
+.node-symbol {
+  fill: #14161a;
+  font-size: 10px;
+  pointer-events: none;
+}
+
+.node-label {
+  fill: #e6e8eb;
+  font-size: 11px;
+}
+
+.legend-inline {
+  font-size: 0.78rem;
+}
+
+.unattributed {
+  padding: 0.5rem 0.7rem;
+  background: #1a1d22;
+  border: 1px solid #2a2f37;
+  border-radius: 8px;
+  font-size: 0.85rem;
+}
+
+.truncation-banner {
+  padding: 0.5rem 0.7rem;
+  background: #2a2416;
+  border: 1px solid #4a422a;
+  border-radius: 8px;
+  color: #d6b95c;
+  font-size: 0.85rem;
+}
+
+/* --- Cost view (WP-U9) --- */
+
+.kpis {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+  margin-bottom: 1.1rem;
+}
+
+.kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 9rem;
+  padding: 0.7rem 0.9rem;
+  background: #1a1d22;
+  border: 1px solid #2a2f37;
+  border-radius: 8px;
+}
+
+.kpi-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #9aa2ad;
+}
+
+.kpi-value {
+  font-size: 1.3rem;
+  font-weight: 700;
+}
+
+.kpi-note {
+  font-size: 0.72rem;
+}
+
+.flow-link {
+  fill: none;
+  stroke: currentColor;
+  stroke-opacity: 0.45;
+}
+
+.flow-neutral {
+  color: #9aa2ad;
+}
+
+.chart-legend {
+  list-style: none;
+  margin: 0.4rem 0 1rem;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  font-size: 0.8rem;
+}
+
+.data-table {
+  border-collapse: collapse;
+  margin-bottom: 1.1rem;
+  font-size: 0.85rem;
+}
+
+.data-table th,
+.data-table td {
+  padding: 0.35rem 0.8rem 0.35rem 0;
+  border-bottom: 1px solid #1f232a;
+  text-align: left;
+}
+
+.data-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.bar-cell {
+  width: 10rem;
+}
+
+.bar-fill {
+  display: inline-block;
+  height: 0.55rem;
+  border-radius: 0 4px 4px 0;
+  background: #3987e5;
+  vertical-align: middle;
 }

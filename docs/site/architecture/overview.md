@@ -12,9 +12,27 @@ from an event log on the fly. Everything else in this document — the named por
 schema shape, the transport choice — exists to protect those two guarantees under
 restart, partial failure, and an unverified hook catalog.
 
+> **Update — 2026-07 (as built).** Implementation began 2026-07-11 (owner override of the
+> CD-8 hard stop; the security invariants, the KC calendar, and the PROVISIONAL status of
+> the spike numbers are unchanged). The running system differs from the original design
+> sketch below in one deliberate way: **JSONL transcripts are parsed and projected
+> directly** — `parseSession` (pure, in `packages/core`) feeds
+> `sessions`/`agents`/`orchestration_edges`/`token_usage` inside **one transaction per
+> session** (`apps/server/src/ingest/ingest-session.ts`), with cost computed *before* any
+> write so an unpriceable model halts the session's ingest rather than storing a silent
+> $0. `events_raw` therefore holds **hook events only**, and the separate
+> Normalizer → Projection stages sketched below were never built as distinct pipeline
+> stages. CD-1 is intact — hooks contribute **liveness only, never structure** — and
+> replay stays idempotent. Hook deliveries are additionally normalized into a small
+> `events` liveness timeline (identifiers only, same transaction, never the payload
+> body). The Telegram/webhook alert branch remains **post-1.0 and unbuilt**. Sections
+> below that describe the two-stage substrate design are the design history; per-section
+> updates mark what actually runs.
+
 ## The loop in one picture
 
-The canonical shape of the pipeline (the design basis, §3):
+The canonical shape of the pipeline (the design basis, §3 — see the as-built update
+above for where the running system deliberately simplifies this):
 
 ```
 Claude Code (subagents)
@@ -84,6 +102,16 @@ Reading the diagram left to right, one subagent turn produces (at minimum) this 
    track ships **post-1.0** ([data model](../architecture/data-model.md) and
    [cost model](../architecture/cost-model.md) record the same resolution).
 
+> **Update — 2026-07 (as built).** Steps 2–4 ran into the empirical facts: Claude Code
+> ships **four** of the listed hooks in a wireable form (`UserPromptSubmit`, `Stop`,
+> `SubagentStop`, `PreCompact` — `SubagentStart` does not exist; spike S4), and the
+> as-built ingest does not route JSONL through `events_raw` at all. A polling corpus
+> watcher (lstat fingerprint per session, default 3 s interval) detects change, the pure
+> parser reconstructs the session, cost is computed as a halt-gate, and one transaction
+> writes the projections. Hook POSTs land in `events_raw` (append-only, idempotency-keyed,
+> redacted first) plus one `events` liveness row. Step 7 (webhook sink / Telegram) is
+> unbuilt, post-1.0.
+
 ## Component responsibilities
 
 | Component | Responsibility | Reads | Writes | Source |
@@ -97,6 +125,13 @@ Reading the diagram left to right, one subagent turn produces (at minimum) this 
 | Browser SPA | Render the subagent DAG and the token/cost Sankey view; read-only | Realtime feed + read API | — | DESIGN §3, §6 |
 | Webhook sink | Match `alert_rules` against persisted state; format and deliver to configured targets only | Projected tables, `alert_rules` | `webhook_deliveries` | DESIGN §4 (hoangsonww graft); Phase 5, post-1.0, per the [roadmap](../guide/roadmap.md) (DESIGN §9's sketch says Phase 2 — superseded) |
 | Telegram relay | Deliver formatted alerts to `@baev_bot_bot` | Webhook sink payload | Telegram API | DESIGN §2.3, §7 (`formatTelegram`) |
+
+> **Update — 2026-07 (as built).** In the running system the "Normalizer / Projection"
+> row is realized as the pure parser (`packages/core/src/parser`) plus the
+> single-transaction session writer — not a separate `events_raw`-fed stage; the
+> `hook-ingest` row is `POST /api/hooks/event` (auth-gated, accept-any-shape, 202); the
+> hook catalog is four real events, not twelve; and the webhook-sink / Telegram rows are
+> **unbuilt (post-1.0)**.
 
 ## Ports & adapters
 
@@ -120,6 +155,14 @@ around:
 *(Port names and the full rationale: concept-analysis-v2 §3, CD-6. This table is a
 summary for the architecture-overview reader — treat concept-analysis-v2 as the source
 of record if the two ever drift.)*
+
+> **Update — 2026-07 (as built).** The seams that exist in code today: a read-only
+> `CorpusFs` port (the JSONL reader — `TokenReader`'s realization), the append-only
+> `EventStorePort` (hook envelopes → `events_raw` + the `events` liveness projection),
+> the `RealtimeHub` (SSE fan-out), and the read-only `SubstrateProvider` seam for the
+> cost-analysis endpoint. The pure parser + cost engine live in `packages/core` with no
+> DB imports. `AlertSink` has **no adapter yet** (alerts are post-1.0), and there is no
+> separate Normalizer/Projection pair — see the page-top update.
 
 Why this shape, concretely:
 
@@ -158,7 +201,12 @@ Strengths). The reconciliation precedence that enforces this in the schema:
 - A **compaction baseline is preserved** in `token_usage` (bucketed by `speed` /
   `inference_geo` / `service_tier`) so a session that hits `PreCompact` still reprices
   correctly against its pre-compaction figures rather than silently losing history
-  (DESIGN §4; concept-analysis-v2 §6, Cost).
+  (DESIGN §4; concept-analysis-v2 §6, Cost). *(As built, the buckets that actually
+  materialized are the API's real price axes — `input` / `output` / `cache_read` /
+  `cache_write_5m` / `cache_write_1h`, one row per `(message_id, bucket)` — plus an
+  `is_compaction_baseline` flag; the `speed`/`inference_geo`/`service_tier` axes from the
+  design sketch did not survive contact with the real JSONL. See
+  [data model](../architecture/data-model.md).)*
 
 This is why the ingest loop reads the JSONL transcript directly rather than trusting hook
 payloads for anything cost-bearing — see
@@ -181,7 +229,10 @@ CREATE TABLE agents (
 );
 ```
 
-(DESIGN §4 — `hoangsonww` graft.) The moat this protects sits one layer up, in
+(DESIGN §4 — `hoangsonww` graft. As built, the real `agents` table keeps this shape but
+its status `CHECK` carries **five** values — `'working','waiting','completed','error','unknown'`
+— because `unknown` is a real, visible state the watchdog assigns when liveness evidence
+goes stale; see [data model](../architecture/data-model.md) for the shipped DDL.) The moat this protects sits one layer up, in
 `orchestration_edges`: those edges must be **persisted** (written once, at ingest or
 projection time) and **per-instance** (not type-aggregated), carrying an
 `instance`/`host` key from the first migration for future fleet aggregation
@@ -210,8 +261,12 @@ control, which nothing on the current roadmap does (concept-analysis-v2 CD-5). S
 checking and the mandatory auth token apply to this channel exactly as they apply to every
 other endpoint — see [security model](../security/model.md) for the enforcement detail.
 This SSE-vs-WebSocket resolution is one of the CD-1…CD-10 canonical decisions; the ADR
-recording it in full lives under
-[decisions](../contributing/decisions/README.md) once written.
+recording it in full lives under [decisions](../contributing/decisions/README.md)
+(ADR-0007). As built, `/api/stream` is exactly this: SSE via a hijacked reply, a
+same-origin check that rejects a foreign `Origin` with 403 *before* auth, the mandatory
+token (Bearer header, or `?token=` for `EventSource`, redacted from logs), a `retry:`
+reconnect hint and comment heartbeats. There is **no resume protocol** — event ids are a
+per-process counter and a reconnecting client re-fetches state from the read API.
 
 ## Visualization surface: DAG + Sankey
 
@@ -231,6 +286,12 @@ The browser SPA renders two coordinated views over the same persisted state:
   is a collapsible indented tree reconstructed post-hoc on `SubagentStop` (DESIGN §6).
   agenthropic borrows the Sankey rendering idea, not the aggregation-instead-of-persistence
   shortcut.
+
+> **Update — 2026-07 (as built).** The SPA is real: a token-gated shell with four views
+> (live status, sessions/tree, the global DAG queried from `orchestration_edges`, and
+> cost). Truncation of the capped global DAG stays visible in the UI, inferred edges are
+> distinguishable from observed ones, and unpriced tokens surface as their own figure —
+> never folded into a dollar total. See [the dashboard](../usage/dashboard.md).
 
 ## Patterns we steal, not the repos
 
@@ -253,8 +314,20 @@ merely "ambiguous" (concept-analysis-v2 §4.5, Gap #4; §6). Full rule and CI en
 
 ## What's undecided
 
-This is a design-basis page, not a shipped-system page — several load-bearing details
-are explicitly open. Stating them here rather than glossing over them:
+> **Update — 2026-07 (as built).** Every item in this section has since resolved:
+> ingest is **JSONL-primary** in code (the spike ran, CONDITIONAL-GO; numbers stay
+> PROVISIONAL until the hand-labeled corpus ratifies them); the hook catalog is
+> **verified** — `SubagentStart` does not exist and the installer wires the four real
+> events; the hook endpoint **is authenticated** (the same mandatory Bearer token,
+> supplied to the hook `curl` by shell expansion of `${DASHBOARD_TOKEN}` at fire time, so
+> the token never lands in `~/.claude` settings files); and the stack is **locked and
+> shipped** — Fastify + TypeBox, single `better-sqlite3` driver, React + Vite, pnpm
+> monorepo (`apps/server`, `apps/web`, `packages/shared`, `packages/core`,
+> `packages/test-fixtures`, `hooks/`). The list below is preserved as the honest record
+> of what was open when this page was written.
+
+This was written as a design-basis page before any code existed — at the time, several
+load-bearing details were explicitly open. Stating them rather than glossing over them:
 
 - **Ingest primacy (CD-1 / LB1).** The question — JSONL-primary with replay-on-startup,
   or hooks-primary with a durable local outbox/spool — is **empirically pre-answered

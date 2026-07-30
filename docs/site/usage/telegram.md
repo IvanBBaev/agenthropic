@@ -9,6 +9,35 @@
 > Phase 6). Values marked _(planned)_ or _(leaning — unconfirmed)_ may change; the
 > **security invariants are binding and will not**. This replaces the earlier stub.
 
+> **Update — 2026-07 (as built): nothing on this page exists, and it is not on the
+> path to existing.** Read the whole page as a design record, not as a feature you
+> can configure. Specifically:
+>
+> - **Alerting is v2.0, and v2.0 has no start date.** It is off the v1.0 critical
+>   path entirely. v1.0 (hard date **2026-12-01**) is explicitly defined as the
+>   persisted cross-session DAG plus dollar-accurate cost, **"no alerts"**.
+> - **v2.0 is entered only through kill checkpoint KC-5**, which is earned rather
+>   than scheduled: **14 consecutive days of real daily use of v1.0 by its own
+>   author**, plus **≥3 dated friction-log entries** actually wishing for a
+>   notification. There is no other entry path. If that evidence never materialises,
+>   **v2.0 never starts — and the roadmap counts that as a success, not a failure**,
+>   because it will have prevented building a notification system for a dashboard
+>   nobody opens.
+> - **`WP-A8` (operator alerts API) and `WP-A9` (alerts UI) were CUT outright.** They
+>   stay dead even if KC-5 is passed: "a single operator does not need CRUD screens
+>   for himself" — configuration would live in a file. Every _(planned, `WP-A8`)_
+>   step in the setup flow below therefore describes something that will not be
+>   built in that form. The reduced v2.0 scope is `WP-A1`–`WP-A7` plus `WP-A10`.
+> - **Zero alerting code exists in the repository**: no `alert_rules`,
+>   `alert_events`, `webhook_targets` or `webhook_deliveries` table, no rules engine,
+>   no dispatcher, no Telegram adapter, and no `token_ref` resolver. There is nothing
+>   to enable, no flag to flip, and no partial version running.
+>
+> The security *rules* on this page do hold today, because they are project-wide and
+> not alerting-specific: the server dials nothing derived from an ingested payload,
+> and secrets never reach SQLite, SSE or logs. They hold trivially, in the sense that
+> the outbound-dispatch code path they constrain has never been written.
+
 This page covers the designed alerting core — the rule engine, the no-SSRF webhook
 dispatcher, the secret-handling contract, and the delivery guarantees — and its one
 concrete delivery adapter, Telegram, relaying to `@baev_bot_bot`. The key takeaway:

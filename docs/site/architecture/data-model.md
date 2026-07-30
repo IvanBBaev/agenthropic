@@ -17,21 +17,38 @@ the project is still in its pre-code bootstrap phase. Column names for raw token
 and price rates are illustrative pending those migrations; every bucket dimension,
 constraint, and invariant named in the tables is sourced.
 
+> **Update — 2026-07 (as built).** The paragraph above described the pre-code state.
+> Implementation began 2026-07-11, and the schema is now **real**: seven ordered, idempotent,
+> in-code migrations in `apps/server/src/db/migrations.ts`, applied inside transactions and
+> recorded in a `schema_version` table (running the runner twice applies nothing). The SQL
+> blocks on this page have been replaced with the **actual migration DDL**; the original
+> synthesized sketches are kept only where they document design rationale, clearly marked.
+> Two structural differences from the design narrative matter throughout:
+>
+> - **`events_raw` receives hook events only.** JSONL is parsed by the pure parser
+>   (`packages/core/src/parser`) and projected **directly** into
+>   `sessions`/`agents`/`orchestration_edges`/`token_usage` in one transaction per session
+>   (`apps/server/src/ingest/ingest-session.ts`) — the separate Normalizer/Projection stages
+>   were never built. Hooks contribute **liveness only, never structure**.
+> - **The alert/webhook tables do not exist.** Alerts are post-1.0, entered only via the
+>   KC-5 gate (earned by real daily use) — no `alert_rules`, `alert_events`,
+>   `webhook_targets`, or `webhook_deliveries` migration exists in the repository.
+
 ## Table inventory
 
 | Table | Layer | Status | Purpose | Primary source |
 |---|---|---|---|---|
-| `events_raw` | Substrate | Designed, not built | Immutable, idempotency-keyed landing zone for every hook and JSONL fact | CD-2, CD-4, `WP-D4` |
-| `events` | Normalized | Designed, not built | Deterministic, queryable normalization of `events_raw`, FK-linked back to it | CD-4, `WP-D5`, `WP-IN6` |
-| `sessions` | Projection | Designed, not built | One row per Claude Code session | `WP-D6` |
-| `agents` | Projection | **DDL fixed** (DESIGN §4) | Self-referential subagent tree — a data fact, not a UI reconstruction | DESIGN §4, `WP-D6` |
-| `orchestration_edges` | Projection (moat) | Designed, not built | Persisted, per-instance, dual-derived parent→child edges; the source every tree/DAG view queries | DESIGN §4/§6, CD-4, `WP-D7`, `WP-IN8` |
-| `token_usage` | Projection | Designed, not built | Fine-grained cost buckets with compaction baselines | DESIGN §4, CD-3/CD-4, `WP-D8` |
-| `model_pricing` | Reference | Designed, not built | Versioned per-token rates, dated | CD-4, `WP-C1` |
-| `alert_rules` | Alerting (Phase 5 — post-1.0 per best-path §6.1) | Designed, not built | Operator-defined trigger conditions | DESIGN §4/§7, `WP-A2` |
-| `alert_events` | Alerting (Phase 5 — post-1.0 per best-path §6.1) | Designed, not built | Fired-alert log | DESIGN §4/§7, `WP-A2` |
-| `webhook_targets` | Alerting (Phase 5 — post-1.0 per best-path §6.1) | Designed, not built | Outbound delivery targets (Telegram, etc.), secret held by reference only | DESIGN §4/§7, `WP-A2`, `WP-A3` |
-| `webhook_deliveries` | Alerting (Phase 5 — post-1.0 per best-path §6.1) | Designed, not built | Delivery attempts with retry/backoff | DESIGN §4/§7, `WP-A2`, `WP-A7` |
+| `events_raw` | Substrate | **Built** (migration 1) | Immutable, idempotency-keyed landing zone — as built, for **hook deliveries only** (JSONL never lands here) | CD-2, CD-4, `WP-D4` |
+| `events` | Normalized | **Built** (migration 3) | As built: the **hook liveness timeline** — identifiers only, FK-linked to `events_raw`, written in the same transaction | CD-4, `WP-D5` |
+| `sessions` | Projection | **Built** (migration 2) | One row per Claude Code session | `WP-D6` |
+| `agents` | Projection | **Built** (migration 4) | Self-referential subagent tree — a data fact, not a UI reconstruction; as built the `status` CHECK carries **five** values incl. `'unknown'` | DESIGN §4, `WP-D6` |
+| `orchestration_edges` | Projection (moat) | **Built** (migration 5) | Persisted, per-instance parent→child edges; the source every tree/DAG view queries; as built derived from JSONL via four join paths | DESIGN §4/§6, CD-4, `WP-D7`, `WP-IN8` |
+| `token_usage` | Projection | **Built** (migration 6) | Ground-truth token rows — as built one row per `(message_id, bucket)` over five priced buckets, with compaction baselines | DESIGN §4, CD-3/CD-4, `WP-D8` |
+| `model_pricing` | Reference | **Built** (migration 7, `PROVISIONAL` seed) | Versioned per-token rates, dated, per `(model, bucket)` | CD-4, `WP-C1` |
+| `alert_rules` | Alerting (post-1.0, KC-5 gated) | Designed, **not built** | Operator-defined trigger conditions | DESIGN §4/§7, `WP-A2` |
+| `alert_events` | Alerting (post-1.0, KC-5 gated) | Designed, **not built** | Fired-alert log | DESIGN §4/§7, `WP-A2` |
+| `webhook_targets` | Alerting (post-1.0, KC-5 gated) | Designed, **not built** | Outbound delivery targets (Telegram, etc.), secret held by reference only | DESIGN §4/§7, `WP-A2`, `WP-A3` |
+| `webhook_deliveries` | Alerting (post-1.0, KC-5 gated) | Designed, **not built** | Delivery attempts with retry/backoff | DESIGN §4/§7, `WP-A2`, `WP-A7` |
 
 **Not in this inventory: `projects` and `filters`.** DESIGN §4 names them as part of the
 `simple10`-derived base schema alongside `sessions`/`agents`/`events`: *"Start from
@@ -96,65 +113,74 @@ Two consequences follow directly from this shape:
    state with zero loss (`concept-analysis-v2` §6). This is also why the schema below
    never lets a projection table's write path be the row of record — `events_raw` is.
 
+> **As built:** the diagram above is the design record. In the running system the JSONL leg
+> **bypasses `events_raw` entirely**: the pure parser reconstructs the whole session from the
+> transcript, cost is computed as a halt-gate, and one transaction writes
+> `sessions`/`agents`/`orchestration_edges`/`token_usage` directly. `events_raw` → `events`
+> exists exactly as drawn — but only for the **hook** leg, as a liveness timeline. Both
+> consequences survive in different clothes: reconciliation is still decided at write time,
+> never at query time (hooks simply never write structure at all), and replay is still the
+> correctness contract — re-ingesting an unchanged corpus is provably a no-op because the
+> parse is pure and every write is an upsert/`INSERT OR IGNORE` (the double-replay P0 test).
+> For JSONL, the transcript file itself is the immutable row of record — Claude Code owns it,
+> and the projections can always be rebuilt from it alone.
+
 ## `events_raw` — the append-only substrate
 
-Both ingestion sources — the hook receiver and the JSONL tail-follower — write every
-fact they see into this one table before anything is interpreted (DESIGN §3; CD-2). It
-must accept **any** `event_type`, including ones the system has never seen, so a new or
-unrecognized Claude Code hook is preserved rather than dropped or crashing the ingest
-path (`WP-IN3`: *"accept-any-event... Never-seen `event_type` → 202 + a row lands
-(audit-preserving)"*).
+The design intent (DESIGN §3; CD-2) was that both ingestion sources write every fact they
+see into this one table before anything is interpreted. **As built, only the hook receiver
+does** — JSONL is projected directly (see the pipeline note above) — but the table's own
+contract shipped intact. It accepts **any** `event_type`, including ones the system has
+never seen, so a new or unrecognized Claude Code hook is preserved rather than dropped or
+crashing the ingest path (`WP-IN3`: *"accept-any-event... Never-seen `event_type` → 202 + a
+row lands (audit-preserving)"*).
+
+The real DDL (migration 1, `events-raw-append-only`; WAL mode and FK enforcement are
+asserted on every connection open by the WP-D2 connection module):
 
 ```sql
--- WAL mode + FK enforcement asserted on every connection open (WP-D2; DESIGN §8)
-PRAGMA journal_mode = WAL;
-PRAGMA foreign_keys = ON;
-
 CREATE TABLE events_raw (
-  id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  idempotency_key TEXT NOT NULL UNIQUE,   -- byte-identical for the same fact seen twice
-                                           -- (once via hook, once via JSONL) — WP-IN1
-  source          TEXT NOT NULL CHECK(source IN ('hook','jsonl')),
-  event_type      TEXT NOT NULL,          -- unconstrained: accept-any-event, WP-IN3
-  seq             INTEGER NOT NULL,       -- monotonic sequence for readSince() — WP-IN2
-  payload         TEXT NOT NULL,          -- raw JSON, verbatim, pre-redaction boundary
-  received_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  id              INTEGER PRIMARY KEY,
+  idempotency_key TEXT NOT NULL UNIQUE,
+  source          TEXT NOT NULL CHECK (source IN ('hook','jsonl')),
+  event_type      TEXT NOT NULL,
+  payload         TEXT NOT NULL,
+  received_at     TEXT NOT NULL
 );
-
--- Append-only enforcement: WP-D4 explicitly owns "the table, triggers and
--- append/getRaw repository" (development-plan.md §2, merge #2).
 CREATE TRIGGER events_raw_no_update
 BEFORE UPDATE ON events_raw
 BEGIN
-  SELECT RAISE(ABORT, 'events_raw is append-only: UPDATE forbidden');
+  SELECT RAISE(ABORT, 'events_raw is append-only');
 END;
-
 CREATE TRIGGER events_raw_no_delete
 BEFORE DELETE ON events_raw
 BEGIN
-  SELECT RAISE(ABORT, 'events_raw is append-only: DELETE forbidden');
+  SELECT RAISE(ABORT, 'events_raw is append-only');
 END;
 ```
 
-Rationale, per column/constraint:
+Rationale, per column/constraint — updated to the as-built facts:
 
-- **`idempotency_key UNIQUE`** — the cross-source contract from `WP-IN1`: a hook payload
-  and the JSONL line describing the *same* underlying fact must hash to the same key, so
-  `EventStore.append` (`WP-IN2`) collapses a duplicate to exactly one row instead of
-  double-counting.
+- **`idempotency_key UNIQUE`** — as built this is a **hook-only** key: a deterministic
+  `hook:`-prefixed SHA-256 over the canonicalized envelope (excluding `received_at`,
+  computed after redaction). The append is `INSERT OR IGNORE`, so a duplicate or retried
+  hook delivery lands exactly one row. The designed **cross-source** contract (`WP-IN1` —
+  a hook and a JSONL line for the same fact hashing identically) was **never built**,
+  because JSONL never writes here and there is no dual write to collapse.
 - **`source` + `event_type` unconstrained beyond the two-value source check** — the table
-  is deliberately schema-loose on `event_type` so an unverified or future hook (the hook
-  catalog itself is only confirmed/denied by the Phase-0 probe, `WP-S4`) is still captured
-  as evidence, never silently discarded.
-- **`seq`** — gives `EventStore`'s `readSince` a stable resumption point for the realtime
-  hub and for replay-on-startup (`WP-IN2`, `WP-IN10`).
-- **No UPDATE/DELETE path, enforced by triggers, not just convention** — this is a
-  concept-analysis-v2 §6 acceptance criterion in its own right: *"`events_raw` exposes no
-  UPDATE/DELETE path (enforced by test)."*
-- **Redaction happens at the ingest boundary, before the row exists** (`WP-D10` owns the
-  redactor; `WP-IN14` invokes it at write time), not as a later mutation of an already
-  written row — that is how payload redaction (CD-10) coexists with the append-only
-  invariant above without ever violating it.
+  is deliberately schema-loose on `event_type` so an unverified or future hook is still
+  captured as evidence, never silently discarded. The schema admits `'jsonl'` as a source
+  value, but the running system never writes it.
+- **No `seq` column** — the design sketch carried one for `readSince()` resumption; as
+  built the store exposes `readAll()` only (ordered by rowid) and the SSE stream has no
+  resume protocol, so no sequence column exists.
+- **No UPDATE/DELETE path, enforced by triggers, not just convention** — shipped exactly
+  as specified and test-proven, satisfying the concept-analysis-v2 §6 acceptance
+  criterion: *"`events_raw` exposes no UPDATE/DELETE path (enforced by test)."*
+- **Redaction happens at the ingest boundary, before the row exists** — built (`WP-IN14`):
+  key-name matching plus credential-shape masking runs on the payload *before* the
+  idempotency key is computed and before the row is written, so redaction never mutates an
+  already written row and the append-only invariant is never violated.
 
 > **Open tension in the sources, not resolved here.** `WP-D10` also names a "retention TTL
 > sweeper," and CD-10 requires "retention TTL... from Phase 1." Neither DESIGN.md nor
@@ -162,49 +188,77 @@ Rationale, per column/constraint:
 > the same table's "no UPDATE/DELETE path (enforced by test)" acceptance criterion — e.g.
 > whether the sweeper targets only the normalized/projected layer, uses an archive-and-
 > truncate strategy, or is a documented, narrowly-scoped exception to the trigger above.
-> Tracked as an open issue.
+> Tracked as an open issue. *(As built: still open — the retention TTL sweeper (`WP-D10`)
+> has not been built, so the tension has not yet had to be resolved.)*
 
-## `events` — normalized, queryable
+## `events` — the hook liveness timeline
 
-The pure `Normalizer` (`WP-IN6`) turns each `events_raw` row into a typed, queryable
-`events` row. Determinism is the acceptance bar: *"Identical input → identical output"*
-(`WP-IN6`).
+The design called this the output of a pure `Normalizer` stage (`WP-IN6`). As built there
+is no separate Normalizer — `events` is the **hook liveness projection** (`WP-D5`): when
+(and only when) a hook envelope actually lands in `events_raw`, one normalized row is
+written here **in the same transaction**, pointing back at the raw row. A duplicate
+delivery inserts zero rows in *both* tables. Only identifiers are projected — never the
+payload body — so no secrets and no free text leave `events_raw`.
+
+The real DDL (migration 3, `events`):
 
 ```sql
 CREATE TABLE events (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  raw_event_id  INTEGER NOT NULL REFERENCES events_raw(id),  -- FK enforced, WP-D5
-  event_type    TEXT NOT NULL,
-  session_id    TEXT,
-  agent_id      TEXT,
-  occurred_at   TEXT NOT NULL,
-  schema_version TEXT NOT NULL   -- normalizer keys off event type + schema_version only
+  id           INTEGER PRIMARY KEY,
+  raw_event_id INTEGER NOT NULL REFERENCES events_raw(id),
+  session_id   TEXT,
+  agent_id     TEXT,
+  event_type   TEXT,
+  occurred_at  TEXT
 );
+CREATE INDEX idx_events_session_id ON events(session_id);
 ```
 
 - **`raw_event_id` FK, explicitly required** — `WP-D5`'s done-when is literally
   *"`events.raw_event_id` FK enforced."* Every normalized row traces back to the exact raw
   fact it was derived from; there is no normalized row without a raw one.
-  `orchestration_edges` reuses this same provenance idea via its own
-  `derived_from_event_id` (below).
-- **`session_id` / `agent_id` nullable** — normalization is a per-event operation; not
-  every raw event resolves to a known agent immediately (see `token_usage.agent_id`,
-  which is nullable for the identical reason under CD-3).
+- **`session_id` / `agent_id` nullable** — extraction is total and defensive: only a
+  non-empty string id in the payload counts (`session_id`/`agent_id` win over the
+  camelCase variants; numbers, booleans, and `''` are never coerced). An unextractable id
+  honestly projects as `NULL` — the row belongs to no session timeline — while the raw
+  payload stays queryable in `events_raw`.
+- **`occurred_at` is receipt time.** Claude Code hook stdin carries no event-originated
+  timestamp, so receipt time is the only honest time available; the read DTO surfaces
+  this as `occurredAtSource: 'receipt'` so no consumer mistakes it for event time.
+- **No `schema_version` column** — the design sketch carried one for the Normalizer's
+  keying rule; with no Normalizer stage, none exists.
+- **These rows are liveness signals only.** They are not the DAG, they never influence
+  `agents`/`orchestration_edges`/`token_usage`, and the *absence* of events means nothing
+  about whether an agent ran — hooks are a secondary best-effort channel; JSONL
+  transcripts are ground truth. `GET /api/sessions/:id/events` serves this timeline (a
+  known session with zero hook events is a `200` with an empty list, never a `404`).
 
 ## `sessions`
 
 `WP-D6` groups `sessions` and `agents` as the two self-contained "projection tables" of
-the hierarchy layer, but only `agents`' DDL is fixed by the design basis (below). The
-column-level shape of `sessions` beyond "one row per Claude Code session, with a lifecycle
-bounded by `SessionStart`/`SessionEnd`" (DESIGN §5) is not yet specified in the source
-documents — tracked as an open issue for `WP-D6`.
+the hierarchy layer. The column-level shape was an open issue when this page was written;
+it is now fixed by the real migration (migration 2, `sessions`):
+
+```sql
+CREATE TABLE sessions (
+  id               TEXT PRIMARY KEY,
+  project_slug     TEXT,
+  started_at       TEXT,
+  last_activity_at TEXT,
+  status           TEXT
+);
+```
+
+The primary key is the **session UUID, never the project slug** — the parser spec (§6.2)
+requires that two concurrent sessions in the same project directory stay two distinct
+roots. Rows are upserted whole by the per-session ingest transaction.
 
 ## `agents` — the self-referential subagent tree
 
-This is the one table whose DDL is fixed by the design basis and must be reproduced
-verbatim (DESIGN §4):
+The design basis fixed this table's DDL verbatim (DESIGN §4):
 
 ```sql
+-- DESIGN §4 (the design-basis sketch, kept for the record):
 CREATE TABLE agents (
   id              TEXT PRIMARY KEY,
   session_id      TEXT NOT NULL,
@@ -214,6 +268,24 @@ CREATE TABLE agents (
   parent_agent_id TEXT,          -- self-ref: builds the subagent tree
   FOREIGN KEY (parent_agent_id) REFERENCES agents(id) ON DELETE SET NULL
 );
+```
+
+The **real DDL** (migration 4, `agents-self-referential`) keeps that shape and extends it
+in exactly the ways the later acceptance criteria demanded:
+
+```sql
+CREATE TABLE agents (
+  id              TEXT PRIMARY KEY,
+  session_id      TEXT NOT NULL REFERENCES sessions(id),
+  type            TEXT CHECK (type IN ('main','subagent')),
+  subagent_type   TEXT,
+  status          TEXT CHECK (status IN ('working','waiting','completed','error','unknown')),
+  parent_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+  first_seen_at   TEXT,
+  last_seen_at    TEXT
+);
+CREATE INDEX idx_agents_parent_agent_id ON agents(parent_agent_id);
+CREATE INDEX idx_agents_session_id ON agents(session_id);
 ```
 
 This is the invariant the whole project is built to protect: *"Agents & subagents are
@@ -233,6 +305,13 @@ cascades into deleting its subtree, it just detaches it.
 > acceptance criteria — not something this page invents a fix for. See
 > [troubleshooting](../operations/troubleshooting.md) for the watchdog itself.
 
+> **Resolved as built:** exactly as predicted — migration 4 adds `'unknown'` to the
+> `status` CHECK (five values), and the `WP-IN12` watchdog assigns it: a non-terminal agent
+> not seen within the watchdog window flips to `unknown`, a visible real state, never a
+> permanent `working`. The added `first_seen_at`/`last_seen_at` columns are the watchdog's
+> staleness anchor. A later re-ingest upserts whatever status the JSONL evidence supports,
+> so a stale `unknown` yields to the durable record.
+
 ## `orchestration_edges` — the persisted DAG (the moat artifact)
 
 This table is the concrete artifact behind the project's central differentiator (DESIGN
@@ -243,52 +322,56 @@ per-instance (not type-aggregated), and carry an instance/host key for future fl
 aggregation." CD-4 pins the column set: *"self-ref `parent_agent_id`, `instance`/
 `host_id`, `derived_from_event_id`, idempotent."*
 
+The **real DDL** (migration 5, `orchestration-edges`):
+
 ```sql
 CREATE TABLE orchestration_edges (
-  id                 INTEGER PRIMARY KEY AUTOINCREMENT,
-  parent_agent_id    TEXT NOT NULL REFERENCES agents(id),
-  child_agent_id     TEXT NOT NULL REFERENCES agents(id),
-  instance           TEXT NOT NULL,   -- which Claude Code process/instance produced this
-  host_id            TEXT NOT NULL,   -- which machine — the fleet-aggregation hedge
-  derived_from_event_id INTEGER NOT NULL REFERENCES events(id),
-  created_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-  UNIQUE(parent_agent_id, child_agent_id, instance)   -- idempotent: dup edge -> 1 row
+  id              INTEGER PRIMARY KEY,
+  session_id      TEXT NOT NULL,
+  parent_agent_id TEXT NOT NULL,
+  child_agent_id  TEXT NOT NULL,
+  source          TEXT NOT NULL CHECK (source IN ('tool_use','directory','task_notification','queue_operation')),
+  instance        TEXT NOT NULL,
+  host_id         TEXT NOT NULL,
+  created_at      TEXT,
+  UNIQUE (session_id, parent_agent_id, child_agent_id)
 );
+CREATE INDEX idx_orchestration_edges_session_id ON orchestration_edges(session_id);
 ```
 
-Rationale:
+Rationale — updated to the as-built facts:
 
-- **`UNIQUE(parent_agent_id, child_agent_id, instance)` + `INSERT OR IGNORE`** — the exact
-  acceptance test from `WP-D7`: *"Duplicate logical edge → exactly one row (UNIQUE +
-  INSERT OR IGNORE)."* This is what lets dual-path derivation (below) write the same
-  logical edge twice without corrupting the count.
-- **`instance` / `host_id`, both `NOT NULL`** — `WP-D7`'s own done-when: *"Non-null
-  `instance`/`host_id`."* This is the near-zero-cost hedge for cross-machine fleet
-  aggregation (DESIGN §2.4, §9 Phase 5+) — the column exists today even though fleet
-  aggregation itself is out of MVP scope (CD-10).
-- **`derived_from_event_id`** — traceability back to the normalized event that produced
-  the edge, mirroring `events.raw_event_id`'s provenance chain one layer up.
-- **Dual-path derivation** (`WP-IN8`): the edge can be derived either from a
-  `SubagentStart`/`SubagentStop` hook pair *or* from the JSONL `Agent`/`Workflow`
-  spawn-tool chain — the general-purpose `Agent` tool (flat
-  `subagents/agent-<hex>.jsonl`) and the `Workflow` tool (nested
-  `subagents/workflows/wf_<id>/`), **not** a `Task` tool — and must produce the
-  **correct** parent→child edge from the JSONL path alone *even if `SubagentStart` never
-  fires* (the hook's presence in the actual twelve-event catalog is itself unverified
-  pending the Phase-0 probe, `WP-S4`). The JSONL path therefore branches on directory
-  shape, joining flat edges by `meta.toolUseId == the Agent tool_use.id` (and
-  `filename hex == toolUseResult.agentId`) and nested edges by `wf_<id>/` containment.
-  Because both paths write into the same idempotent table, whichever path fires first
-  (or both) yields one row, not two.
+- **`UNIQUE(session_id, parent_agent_id, child_agent_id)` + `INSERT OR IGNORE`** — the
+  acceptance test from `WP-D7`: *"Duplicate logical edge → exactly one row."* The as-built
+  logical key is session-scoped rather than instance-scoped (the design sketch had
+  `UNIQUE(parent, child, instance)`); a re-ingested session rewrites the same edges as
+  no-ops.
+- **`instance` / `host_id`, both `NOT NULL`** — shipped exactly as designed: the
+  near-zero-cost hedge for cross-machine fleet aggregation (DESIGN §2.4) exists on every
+  row even though fleet aggregation itself is post-1.0.
+- **`source` replaces `derived_from_event_id`.** The design sketch traced each edge to a
+  normalized event; as built there is no JSONL `events` row to point at (JSONL bypasses
+  `events_raw`), so provenance is carried by the `source` CHECK instead — it names which
+  of the parser's **four structural join paths** produced the edge: `tool_use` (the
+  `Agent`/`Workflow` `tool_use` id join), `directory` (nested `wf_<id>/` containment),
+  `task_notification`, and `queue_operation`. Inferred and observed edges stay
+  distinguishable in every consumer.
+- **Derivation is JSONL-only** (`WP-IN8` as built): the designed second path — a
+  `SubagentStart`/`SubagentStop` hook pair — was never built, and never could be:
+  `SubagentStart` does not exist (Phase-0 `WP-S4` verified the real catalog), and hooks
+  contribute liveness only, never structure. The parser keys on the `Agent`/`Workflow`
+  spawn tools (**not** `Task`), branches on directory shape, and an orphan that no join
+  path can place gets **no** edge — never a guessed one.
 - **Why this table exists separately from `agents.parent_agent_id`.** The self-reference
   on `agents` already records an agent's own immediate parent, but `orchestration_edges`
   is what every tree and DAG *view* actually queries — including the **session-scoped**
   tree, not only the global one: `WP-U3`'s done-when for `GET /sessions/:id/tree` is
   *"built from a query over `orchestration_edges` (proven, not reconstruction)."*
   `orchestration_edges` is the single source of truth for all tree/DAG rendering because
-  it, and not the bare self-reference, carries the provenance (`derived_from_event_id`),
-  the per-instance/host key, and the idempotent dedupe across two derivation paths that a
-  plain parent pointer cannot.
+  it, and not the bare self-reference, carries the provenance (the `source` join-path
+  column), the per-instance/host key, and the idempotent dedupe that a plain parent
+  pointer cannot. As built this holds: both the session tree and the global DAG endpoints
+  query persisted edges, never a render-time reconstruction.
 
 > **Empirically confirmed by the desktop probe.** The 2026-07-04 read-only corpus probe
 > ([`phase0-probe.md`](../../analysis/phase0-probe.md)) found **zero** `Task` tool blocks
@@ -312,48 +395,55 @@ compaction baselines so historical totals still price correctly after a context
 rewrite."* CD-3 adds the nullability/backfill rule: *"`token_usage.agent_id` is nullable
 at first write, deterministically backfilled once the agent is known."*
 
+The **real DDL** (migration 6, `token-usage`) reshaped the bucketing after contact with
+the real JSONL — the `speed`/`inference_geo`/`service_tier` dimensions do not appear in
+Claude Code transcripts; what does is per-message `usage` with five priced token kinds:
+
 ```sql
 CREATE TABLE token_usage (
-  id                       INTEGER PRIMARY KEY AUTOINCREMENT,
-  session_id               TEXT NOT NULL,
-  agent_id                 TEXT REFERENCES agents(id),   -- nullable at first write (CD-3)
-  source_event_id          INTEGER NOT NULL REFERENCES events(id),
-  model                    TEXT NOT NULL,
-  service_tier             TEXT NOT NULL,   -- bucket dimension, DESIGN §4
-  speed                    TEXT NOT NULL,   -- bucket dimension, DESIGN §4
-  inference_geo            TEXT NOT NULL,   -- bucket dimension, DESIGN §4
-  is_precompact_baseline   INTEGER NOT NULL DEFAULT 0,  -- see rationale below
-  input_tokens             INTEGER NOT NULL,   -- ground truth, verbatim from JSONL
-  output_tokens            INTEGER NOT NULL,
-  cache_creation_tokens    INTEGER NOT NULL DEFAULT 0,
-  cache_read_tokens        INTEGER NOT NULL DEFAULT 0,
-  recorded_at              TEXT NOT NULL
+  id                      INTEGER PRIMARY KEY,
+  session_id              TEXT NOT NULL,
+  agent_id                TEXT,
+  message_id              TEXT NOT NULL,
+  model                   TEXT NOT NULL,
+  bucket                  TEXT NOT NULL CHECK (bucket IN ('input','output','cache_read','cache_write_5m','cache_write_1h')),
+  tokens                  INTEGER NOT NULL,
+  is_compaction_baseline  INTEGER NOT NULL DEFAULT 0,
+  occurred_at             TEXT,
+  UNIQUE (message_id, bucket)
 );
+CREATE INDEX idx_token_usage_session_id ON token_usage(session_id);
+CREATE INDEX idx_token_usage_agent_id ON token_usage(agent_id);
 ```
 
-Rationale:
+Rationale — updated to the as-built facts:
 
-- **Three bucket columns, each `NOT NULL`** — `service_tier`, `speed`, `inference_geo` are
-  named explicitly in DESIGN §4 and repeated in CD-4 as the fine-grained dimensions that
-  each independently change the per-token rate; they must all be present on every row so
-  `PricingProvider` (`WP-C2`) can resolve the correct dated rate.
-- **`agent_id` nullable, `WP-D8`'s explicit done-when**: *"Backfill deterministic, no
-  double-count/misattribution."* A token-usage record can be written before its owning
-  agent is projected, then attributed later — the reconciliation test proves that backfill
-  never double-counts or misattributes.
-- **Token count columns (`input_tokens`, etc.) are illustrative naming**, not literal
-  source text — the sources establish that raw usage counts are copied verbatim from the
-  JSONL (ground-truth tokens, never inferred) and that `WP-S6`'s reconciliation probe
-  proves "Σ per-record token usage == the session's JSONL ground-truth total exactly," but
-  they do not fix a column-name list. Flagged as an open issue.
-- **`is_precompact_baseline`** — represents the "preserving compaction baselines" language
-  in DESIGN §4 and the `WP-C4` acceptance test: *"A `PreCompact` session reprices to
-  baseline + post-compaction spend, matching the oracle."* The exact mechanism (a boolean
-  marker row vs. a separate baseline table vs. a `baseline_of` self-reference) is not
-  specified in the sources; the column here is a representative placeholder for that
-  requirement, not a literal name from any source document. `WP-S6` additionally requires
-  the Phase-0 corpus to "capture the PreCompact baseline" as empirical validation before
-  this lands.
+- **Long format: one row per `(message_id, bucket)`** over the five priced buckets
+  (`input`, `output`, `cache_read`, `cache_write_5m`, `cache_write_1h` — parser-spec
+  §5.4). The `UNIQUE(message_id, bucket)` constraint is the storage-level dedup
+  guarantee: the parser spec (§5.2) measured that naive row summation over-counts by
+  roughly 2.4×, because the same `message_id` recurs across transcript lines — the
+  constraint makes double-counting structurally impossible, not merely tested against.
+- **The designed bucket dimensions were dropped, not renamed** — `service_tier`, `speed`,
+  and `inference_geo` are simply not present in the real JSONL `usage` records, so
+  carrying them `NOT NULL` was impossible without inventing values. Pricing resolves per
+  `(model, bucket, effective_from)` instead (below).
+- **`agent_id` nullable — but there is no backfill phase.** Because ingest parses the
+  whole session before writing, attribution happens inside the parser (the hard
+  `tool_use`-id join, parser-spec §5.1) and rows are written already attributed in the
+  same transaction. `NULL` means *genuinely unattributable*, is surfaced as
+  `unattributed` in the API and UI, and is never guessed. The P0 token-reconciliation
+  test proves Σ`token_usage` == JSONL exactly, with no double-count or misattribution.
+- **Tokens are copied verbatim** from the JSONL `usage` counts — ground truth, never
+  inferred — satisfying the invariant the illustrative column list was designed around.
+- **`is_compaction_baseline`** — the designed placeholder landed as a boolean marker
+  flag. `PreCompact` repricing itself is computed compaction-aware from the substrate
+  (see [the cost model](../architecture/cost-model.md)), with the delta≈0 invariant as
+  its exit gate.
+- **No `source_event_id`** — the design sketch traced each row to a normalized event; as
+  built token rows come from the parser, not from `events`, so the provenance column has
+  nothing to reference. The transcript itself is the audit trail (`message_id` keys back
+  into it).
 
 Full cost mechanics — dated-price resolution, delegation-savings, and PreCompact
 repricing — belong to [the cost model](../architecture/cost-model.md).
@@ -363,36 +453,36 @@ repricing — belong to [the cost model](../architecture/cost-model.md).
 CD-4: *"versioned `model_pricing` (`effective_from`, `verified_on`)."* `WP-C1` adds the
 concurrency shape: *"Multiple `effective_from` rows per bucket without conflict."*
 
+The **real DDL** (migration 7, `model-pricing-with-seed`) is long-format to match
+`token_usage` — one rate row per `(model, bucket, effective_from)`:
+
 ```sql
 CREATE TABLE model_pricing (
-  id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  model           TEXT NOT NULL,
-  service_tier    TEXT NOT NULL,
-  speed           TEXT NOT NULL,
-  inference_geo   TEXT NOT NULL,
-  -- one rate per token kind; exact column names/units are illustrative, pending WP-C1
-  price_input_per_mtok        REAL NOT NULL,
-  price_output_per_mtok       REAL NOT NULL,
-  price_cache_write_per_mtok  REAL NOT NULL,
-  price_cache_read_per_mtok   REAL NOT NULL,
-  effective_from  TEXT NOT NULL,   -- CD-4, literal field name
-  verified_on     TEXT NOT NULL,   -- CD-4, literal field name
-  UNIQUE(model, service_tier, speed, inference_geo, effective_from)
+  model          TEXT NOT NULL,
+  bucket         TEXT NOT NULL CHECK (bucket IN ('input','output','cache_read','cache_write_5m','cache_write_1h')),
+  usd_per_mtok   REAL NOT NULL,
+  effective_from TEXT NOT NULL,
+  PRIMARY KEY (model, bucket, effective_from)
 );
 ```
 
-- **`effective_from` / `verified_on`** are literal field names from CD-4 — the only two
-  column names in this table sourced verbatim. `effective_from` is what lets a
-  dated-price resolver (`WP-C2`) pick the rate that was live at a given event's timestamp
-  ("the OLD rate before a change, the new rate at/after"); the `UNIQUE` constraint allows
-  a second row with a later `effective_from` for the same bucket without conflicting,
-  satisfying `WP-C1`'s done-when.
-- **The staleness gate** (`WP-C6`): a model+bucket combination observed in the golden
-  fixture corpus with no matching priced row **fails CI** — silent staleness is a red
-  build, not a runtime "estimated" label (`concept-analysis-v2` §3, cost-trust chain).
-- Rate columns (`price_input_per_mtok`, etc.) are a representative shape only — DESIGN §4
-  and CD-4 establish *that* pricing is per-bucket and dated, not the literal per-token-kind
-  column list. Flagged as an open issue.
+- **`effective_from`** shipped as designed: the resolver picks the latest rate with
+  `effective_from <=` the usage row's timestamp, and the composite primary key lets
+  multiple dated rows per `(model, bucket)` coexist without conflict — `WP-C1`'s
+  done-when. **`verified_on` was not built** — the seed carries its provenance in code
+  comments instead; a dedicated verification-date column remains a reasonable future
+  addition once prices are ratified.
+- **The seed is `PROVISIONAL`, and honestly so**: approximate list prices for the exact
+  model-id byte-strings observed in the real corpus, floored at an `effective_from` early
+  enough to cover all historical messages — a mechanism proof for the cost engine, not a
+  billing source. `<synthetic>` is priced $0 by design.
+- **No silent $0, enforced at runtime**: an unknown model id, or a missing rate for a
+  bucket with nonzero tokens, raises `PricingError` and **halts ingest before any row is
+  written** (or returns an explicit `422` on the analysis endpoint) — "refusing to price
+  at $0" is a hard gate, not a label. Zero-token buckets need no price row.
+- **The designed CI staleness gate** (`WP-C6` — an unpriced model+bucket in the fixture
+  corpus fails the build) is not verified as wired in CI; the runtime halt above is the
+  enforcement that provably exists.
 
 ## Alert & webhook tables (Phase 5, not yet built)
 
@@ -459,9 +549,28 @@ Rationale:
 These four tables are **designed, not implemented** — Phase 5–6 in
 [`development-plan.md`](../../analysis/development-plan.md) (Track A, `WP-A1`…`WP-A10`),
 well behind Phase 1's storage/foundation work. Nothing above should be read as an
-in-repo migration.
+in-repo migration. *(As built, this remains true: v1 ships without any of them, and the
+alerting phase is entered only via the KC-5 gate — earned by real daily use, per the
+roadmap of record.)*
 
 ## What's decided vs. open
+
+> **Update — 2026-07 (as built).** The table below is the design-time record; here is
+> where each open row landed:
+>
+> - **`sessions` column set** — resolved: migration 2 (id/slug/started/last-activity/status).
+> - **`agents.status` missing `'unknown'`** — resolved: migration 4 adds it; the watchdog
+>   assigns it.
+> - **Retention TTL vs. no-DELETE** — **still open**: the sweeper (`WP-D10`) is not built.
+> - **MVP schema scope** — resolved by shipping: the seven core tables exist; the four
+>   alert/webhook tables do not (post-1.0, KC-5).
+> - **`projects` / `filters`** — still not modeled anywhere; neither was created. The gap
+>   closed itself in practice: `sessions.project_slug` carries the only project fact the
+>   dashboard needs.
+> - The "reference synthesis" rows are superseded by the real DDL shown above; the
+>   decided invariants they encoded (append-only, idempotency, non-null instance/host,
+>   dated pricing, compaction baselines, nullable-but-never-guessed `agent_id`) all
+>   shipped.
 
 | Aspect | Status |
 |---|---|
@@ -481,8 +590,8 @@ in-repo migration.
 
 - [Architecture overview](../architecture/overview.md) — the end-to-end ingest loop this
   schema sits inside.
-- [Hook ingestion](../architecture/hooks.md) — the twelve lifecycle events that populate
-  `events_raw`.
+- [Hook ingestion](../architecture/hooks.md) — the lifecycle-event catalog (four real
+  hooks as built) that populates `events_raw`.
 - [Ingest & reconciliation](../architecture/ingest-reconciliation.md) — the CD-1
   JSONL-vs-hooks primacy decision and the per-field precedence rules at projection time.
 - [The DAG moat](../architecture/dag-moat.md) — dual-path edge derivation and

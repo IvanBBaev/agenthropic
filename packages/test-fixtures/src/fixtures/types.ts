@@ -28,6 +28,7 @@ export const FIXTURE_NAMES = [
   'task-notification-recovery',
   'queue-operation',
   'usage-dedup',
+  'depth-2-sync',
 ] as const;
 
 export type FixtureName = (typeof FIXTURE_NAMES)[number];

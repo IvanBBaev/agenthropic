@@ -2,6 +2,7 @@
  * Registry + typed loader for the synthetic fixture corpus
  * (parser-spec section 4 join paths + the N3 usage-dedup case).
  */
+import { depth2Sync } from './depth-2-sync.js';
 import { flatToolUse } from './flat-tool-use.js';
 import { nestedWorkflow } from './nested-workflow.js';
 import { queueOperation } from './queue-operation.js';
@@ -15,6 +16,7 @@ const REGISTRY: Readonly<Record<FixtureName, Fixture>> = {
   'task-notification-recovery': taskNotificationRecovery,
   'queue-operation': queueOperation,
   'usage-dedup': usageDedup,
+  'depth-2-sync': depth2Sync,
 };
 
 /** All fixture names, in a stable order. */

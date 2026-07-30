@@ -12,6 +12,16 @@ lists, or the deeper architecture page that expands it — so that "ground truth
 this docs site. Where a term names something not yet built (the watchdog, delegation
 savings), the definition says so and links the roadmap.
 
+> **Update — 2026-07 (as built).** The system these terms describe now exists, and a few
+> definitions shifted with it. The short version, expanded per term below: the installer
+> registers **four** hooks, not twelve; `agents.status` is a **five**-value enum
+> (`'unknown'` is real); a **token bucket** is one of five token kinds
+> (`input`/`output`/`cache_read`/`cache_write_5m`/`cache_write_1h`), not a
+> speed/geo/tier partition; JSONL lines are parsed straight into the projections and
+> never land in `events_raw` (which holds hook deliveries only); there is no `projects`
+> table — sessions carry a `project_slug` string; and the watchdog and delegation
+> savings are built, the latter honestly labeled `isEstimate: true`.
+
 ## How the terms relate
 
 Two shapes underlie almost every term below. The first is the persisted entity hierarchy —
@@ -44,6 +54,12 @@ JSONL line  ──┘                                                   orchestr
 "projection" step are named this way consistently across
 [architecture overview](../architecture/overview.md).)
 
+*(As built, only the hook leg of the second diagram exists: JSONL lines are parsed and
+written into the projections directly, in one transaction per session, bypassing
+`events_raw` entirely. In the first diagram, "project" is a `project_slug` string on
+`sessions` — there is no `projects` table — and an edge row carries a `source` join-path
+column rather than `derived_from_event_id`.)*
+
 ## Core entities
 
 **Agent** — a row in the `agents` table: a persisted, queryable participant in a session,
@@ -63,7 +79,9 @@ CREATE TABLE agents (
 );
 ```
 
-Full DDL and migration story: [data model](../architecture/data-model.md).
+*(Design-basis sketch. The real migration adds a fifth status `'unknown'` plus
+`first_seen_at`/`last_seen_at`.)* Full as-built DDL and migration story:
+[data model](../architecture/data-model.md).
 
 **Main agent** — an `agents` row with `type = 'main'`: the top-level agent for a session,
 i.e. the direct Claude Code conversation the operator is driving, as opposed to any work it
@@ -75,16 +93,23 @@ event (and, if it exists as a real hook, `SubagentStart`) is what feeds this par
 linkage into the persisted tree — see the [hook-event reference](#hook-event-reference-the-twelve-lifecycle-events)
 below and DESIGN §5. Whether `SubagentStart` actually fires is unverified pending the
 Phase-0 hook-catalog gate; see [what's undecided](../architecture/overview.md#whats-undecided).
+*(As built: `SubagentStart` does not exist, and no hook feeds the linkage — the
+parent→child tree comes entirely from the JSONL parser's four join paths;
+`SubagentStop` contributes a liveness timestamp only.)*
 
 **Session** — the scope every `agents` row belongs to (`agents.session_id NOT NULL`,
 DESIGN §4): one Claude Code conversation, corresponding to one transcript under
 `~/.claude/projects/*.jsonl` (DESIGN §3). `sessions` is one of the base tables the schema
 starts from, alongside `projects`, `agents`, `events`, and `filters` (DESIGN §4).
+*(As built: `sessions.id` is the session UUID from the transcript — never the directory
+slug — and the `projects`/`filters` tables were never created.)*
 
 **Project** — the Claude Code project (working directory) that groups one or more
 sessions, per the same base schema DESIGN §4 starts from (`projects`, `sessions`, `agents`,
 `events`, `filters` + disciplined migration tables) and the `~/.claude/projects/*.jsonl`
-directory convention the ingest loop reads from (DESIGN §3).
+directory convention the ingest loop reads from (DESIGN §3). *(As built: not a table —
+a `project_slug` string column on `sessions`, taken from the corpus directory name,
+turned out to suffice.)*
 
 **Instance / host** — the `instance`/`host` (also written `host_id`) key carried on
 `orchestration_edges` rows (and, per the schema hedge, intended for every row) from the
@@ -102,6 +127,10 @@ JSONL transcript. Every event lands first, unmodified, as a row in the immutable
 `events_raw` substrate, then is turned into a normalized `events` row and folded into
 projected state — the `events_raw`(immutable) + `events`(normalized) split (DESIGN §3–§4).
 Full catalogue: [hook ingestion](../architecture/hooks.md).
+*(As built, the term covers only the hook leg: `events_raw` holds hook deliveries
+exclusively — redacted, then keyed — and `events` is the identifier-only hook liveness
+timeline. JSONL lines never become "events"; they are parsed straight into the
+projections.)*
 
 **Orchestration edge** — a persisted row in `orchestration_edges` recording one
 parent→child agent relationship. Unlike every audited rival's tree, which is
@@ -122,6 +151,10 @@ row falls into; each dimension independently changes the per-token rate, so the 
 nominal token count can price differently depending on which bucket produced it — the
 `hoangsonww` graft DESIGN §4 adopts for production-grade costing. Detail:
 [cost model](../architecture/cost-model.md).
+*(As built, the term means something simpler: one of the five token kinds the real JSONL
+actually records — `input`, `output`, `cache_read`, `cache_write_5m`, `cache_write_1h` —
+each with its own dated rate in `model_pricing`. The speed/geo/tier dimensions do not
+appear in the transcripts and were never built.)*
 
 **Compaction baseline** — the pre-`PreCompact` token totals a `token_usage` row preserves
 so that historical totals still price correctly after Claude Code rewrites the context
@@ -129,6 +162,9 @@ window, instead of silently losing history at the rewrite boundary (DESIGN §4).
 ingest boundary `PreCompact` is handled like most other events — generic, not one of the
 two dedicated-handling hooks (see the hook-event reference below) — but its payload is
 what feeds this baseline-preservation logic downstream, at projection time.
+*(As built: baseline rows are flagged `token_usage.is_compaction_baseline = 1`, and the
+boundary is detected in the parsed JSONL substrate itself — the `PreCompact` hook feeds
+nothing but liveness.)*
 
 **Delegation savings** — the dollar amount saved by routing work to a cheaper model (e.g.
 Haiku) instead of pricing every token at the top-tier model's rate; part of the moat
@@ -138,6 +174,10 @@ original sketch places this in Phase 4; the verified build plan re-sequences it 
 3 alongside the rest of the cost engine — see [roadmap](../guide/roadmap.md) for the
 reconciled phase numbering. Computed strictly from ground-truth tokens × the versioned
 pricing table, never estimated. Detail: [cost model](../architecture/cost-model.md).
+*(As built, one honesty refinement to "never estimated": the actual-cost side is
+ground truth, but the top-tier re-price is by definition a counterfactual, so the
+shipped result carries a literal `isEstimate: true` and lists agents it could not
+attribute a model to in `skippedAgentIds` instead of guessing.)*
 
 ## System guarantees
 
@@ -154,6 +194,10 @@ Replaying the same `events_raw` log twice must yield byte-identical projected st
 is a release-blocking correctness property, not an aspiration (DESIGN §3–§4, as summarized
 in [architecture overview](../architecture/overview.md)). Full treatment:
 [data model](../architecture/data-model.md).
+*(As built, the pure function is the JSONL **parser** (`packages/core/src/parser`) and
+its input is the transcript, not `events_raw`; determinism survived as pure parsing plus
+idempotent whole-session writes — re-ingesting an unchanged session changes nothing,
+proven by the double-replay P0 test.)*
 
 **Reconciliation** — the per-field precedence rule the projection applies when a hook
 event and a JSONL fact describe the same thing, resolved **at projection time**, not as a
@@ -162,6 +206,10 @@ hooks may supply interim liveness/state, but the final session/agent state and c
 trace to the transcript (DESIGN §3, as summarized in
 [architecture overview](../architecture/overview.md), Invariant 1). Full contract,
 including the still-open ingest-primacy question: [ingest & reconciliation](../architecture/ingest-reconciliation.md).
+*(As built, the precedence rule got structurally simpler: hooks contribute liveness
+only — a timeline of receipt-stamped identifier rows — and never write structure, so
+there is no per-field merge to arbitrate. Everything structural is JSONL-derived by
+construction.)*
 
 > **CD-1 pre-answered (not replaced).** The trustworthiness of JSONL as the outage-surviving
 > single source of truth behind this rule — decision **CD-1** — is empirically **pre-answered
@@ -178,6 +226,10 @@ a ~15-second transcript-interrupt marker plus an idle-timeout fallback, implemen
 exact target state name are covered by
 [operations/troubleshooting](../operations/troubleshooting.md) and sequenced in the
 [roadmap](../guide/roadmap.md); see also the note on the `unknown` status below.
+*(As built: the watchdog exists — a non-terminal agent whose last activity anchor is
+older than `DASHBOARD_WATCHDOG_MINUTES` (default 10, PROVISIONAL) flips to the real
+`'unknown'` status, and a later re-ingest lets JSONL evidence win the status back.
+There is no `fs.watch` anywhere: the ingest watcher deliberately polls.)*
 
 ## Hook-event reference (the twelve lifecycle events)
 
@@ -192,6 +244,14 @@ This is exactly the open question [architecture overview](../architecture/overvi
 carries forward as a Phase-0 gate (`G0.2`, per [roadmap](../guide/roadmap.md)) — until it
 runs, treat the "confirmed" column below as **DESIGN §5's stated intent**, not verified
 fact.
+
+> **Resolved as built (G0.2).** The installer registers exactly four hooks —
+> `UserPromptSubmit`, `Stop`, `SubagentStop`, `PreCompact` — and `SubagentStart` does
+> not exist. Every registered hook is treated identically: one `events_raw` row plus one
+> identifier-only `events` liveness row, in the same transaction. **No hook has dedicated
+> handling** — the "Dedicated" cells below are design history; hierarchy and compaction
+> baselines both come from the parsed JSONL. Unregistered event names would still be
+> accepted and stored (accept-any-event shipped), they are simply never sent.
 
 | Event | Confirmed in the documented nine? | Dedicated handling in agenthropic | Source |
 |---|---|---|---|
@@ -214,8 +274,8 @@ Full lifecycle-event catalogue and normalizer behavior for unrecognized/new even
 
 ## Status enum
 
-The `agents.status` column is a four-value `CHECK` constraint — no fifth value exists in
-the DESIGN §4 schema quoted above:
+The DESIGN §4 schema quoted above sketched a four-value `CHECK` constraint; **as built,
+`agents.status` is a five-value enum** — migration 4 includes `'unknown'` from the start:
 
 | Status | Meaning | Source |
 |---|---|---|
@@ -223,8 +283,10 @@ the DESIGN §4 schema quoted above:
 | `waiting` | The agent is blocked — e.g. awaiting a permission decision or a delegated subagent's result. | DESIGN §4 |
 | `completed` | The agent finished normally. | DESIGN §4 |
 | `error` | The agent terminated in an error state. | DESIGN §4 |
+| `unknown` | Watchdog-assigned: the agent's stop evidence never arrived within the window. A visible, honest state — never hidden, never mapped onto `working`. | Migration 4 (as built); roadmap Phase 3 |
 
-> **Open item — the `unknown` status.** The roadmap and the underlying build plan describe
+> **Open item — the `unknown` status.** *(Resolved as built — kept for the record.)* The
+> roadmap and the underlying build plan describe
 > a fifth, watchdog-assigned state: when an agent's stop signal never arrives within the
 > watchdog window, it should be marked **`unknown`** rather than staying falsely `working`
 > forever (roadmap [Phase 3](../guide/roadmap.md)). This is a real, planned behavior, but it
@@ -232,7 +294,9 @@ the DESIGN §4 schema quoted above:
 > the schema to add it (or mapping "unknown" onto an existing value) is open work for
 > [data model](../architecture/data-model.md) and
 > [operations/troubleshooting](../operations/troubleshooting.md), not a decision this page
-> makes.
+> makes. *Resolution: the real migration added `'unknown'` to the `CHECK` constraint
+> directly, and the read API additionally counts agents with an absent status in the
+> `unknown` bucket rather than faking certainty.*
 
 ## See also
 

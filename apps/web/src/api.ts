@@ -1,0 +1,159 @@
+/**
+ * Same-origin API helpers (WP-U5, extended for WP-U6..U9). The SPA talks
+ * ONLY to its own origin; the token travels as `Authorization: Bearer` on
+ * every fetch (the `?token=` query form is reserved for the EventSource URL -
+ * see sse.ts). The token is never logged and never appears in any error
+ * message.
+ */
+import type { CostSummaryDto, GlobalDagDto, SessionListDto, SessionTreeDto } from './dto';
+
+export type HealthResult =
+  | { readonly kind: 'ok'; readonly schemaVersion: number }
+  | { readonly kind: 'unauthorized' }
+  | { readonly kind: 'unreachable'; readonly message: string };
+
+/**
+ * Validate a token by probing GET /api/health.
+ *
+ * - 200 with a well-formed body -> `ok` (+ the integer schemaVersion);
+ * - 401 -> `unauthorized` (bad token);
+ * - any network failure, non-401 error status, or malformed body ->
+ *   `unreachable` with a token-free message.
+ */
+export async function checkHealth(token: string, signal?: AbortSignal): Promise<HealthResult> {
+  let response: Response;
+  try {
+    response = await fetch('/api/health', {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: signal ?? null,
+    });
+  } catch (error) {
+    return {
+      kind: 'unreachable',
+      message: error instanceof Error ? error.message : 'network error',
+    };
+  }
+  if (response.status === 401) {
+    return { kind: 'unauthorized' };
+  }
+  if (!response.ok) {
+    return { kind: 'unreachable', message: `health check failed (HTTP ${response.status})` };
+  }
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    return { kind: 'unreachable', message: 'malformed health response' };
+  }
+  if (typeof body !== 'object' || body === null) {
+    return { kind: 'unreachable', message: 'malformed health response' };
+  }
+  const schemaVersion = (body as Record<string, unknown>)['schemaVersion'];
+  if (typeof schemaVersion !== 'number') {
+    return { kind: 'unreachable', message: 'malformed health response' };
+  }
+  return { kind: 'ok', schemaVersion };
+}
+
+/**
+ * Result union shared by every data fetch (WP-U6..U9). `unauthorized` is a
+ * distinct arm because the shell reacts to it by dropping the token and
+ * returning to the entry screen; every other failure is a view-local,
+ * token-free error message.
+ */
+export type ApiResult<T> =
+  | { readonly kind: 'ok'; readonly data: T }
+  | { readonly kind: 'unauthorized' }
+  | { readonly kind: 'error'; readonly message: string };
+
+/**
+ * One GET against the same origin. 401 -> `unauthorized`; other non-2xx ->
+ * `error` carrying the server's uniform `{error}` message when parseable
+ * (never the token); network/parse failures -> `error`. Callers pass an
+ * AbortSignal and check `signal.aborted` before applying the result.
+ */
+async function getJson<T>(
+  path: string,
+  token: string,
+  signal?: AbortSignal,
+): Promise<ApiResult<T>> {
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: signal ?? null,
+    });
+  } catch (error) {
+    return { kind: 'error', message: error instanceof Error ? error.message : 'network error' };
+  }
+  if (response.status === 401) {
+    return { kind: 'unauthorized' };
+  }
+  if (!response.ok) {
+    let message = `request failed (HTTP ${response.status})`;
+    try {
+      const body: unknown = await response.json();
+      const serverError = (body as Record<string, unknown> | null)?.['error'];
+      if (typeof serverError === 'string') message = serverError;
+    } catch {
+      // Keep the status-only message; the body is not required to be JSON.
+    }
+    return { kind: 'error', message };
+  }
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    return { kind: 'error', message: 'malformed response body' };
+  }
+  if (typeof body !== 'object' || body === null) {
+    return { kind: 'error', message: 'malformed response body' };
+  }
+  return { kind: 'ok', data: body as T };
+}
+
+/** GET /api/sessions - the summaries backing the live board and session list. */
+export function fetchSessions(
+  token: string,
+  options: { readonly limit?: number; readonly offset?: number } = {},
+  signal?: AbortSignal,
+): Promise<ApiResult<SessionListDto>> {
+  const params = new URLSearchParams();
+  if (options.limit !== undefined) params.set('limit', String(options.limit));
+  if (options.offset !== undefined) params.set('offset', String(options.offset));
+  const query = params.size > 0 ? `?${params.toString()}` : '';
+  return getJson<SessionListDto>(`/api/sessions${query}`, token, signal);
+}
+
+/** GET /api/sessions/:id/tree - the PERSISTED agent tree for one session. */
+export function fetchSessionTree(
+  token: string,
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<ApiResult<SessionTreeDto>> {
+  return getJson<SessionTreeDto>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/tree`,
+    token,
+    signal,
+  );
+}
+
+/** GET /api/dag/global - the cross-session orchestration DAG (node-limited). */
+export function fetchGlobalDag(
+  token: string,
+  limit?: number,
+  signal?: AbortSignal,
+): Promise<ApiResult<GlobalDagDto>> {
+  const query = limit !== undefined ? `?limit=${String(limit)}` : '';
+  return getJson<GlobalDagDto>(`/api/dag/global${query}`, token, signal);
+}
+
+/** GET /api/cost/summary - totals, per-model, per-day and top-N sessions. */
+export function fetchCostSummary(
+  token: string,
+  topN?: number,
+  signal?: AbortSignal,
+): Promise<ApiResult<CostSummaryDto>> {
+  const query = topN !== undefined ? `?topN=${String(topN)}` : '';
+  return getJson<CostSummaryDto>(`/api/cost/summary${query}`, token, signal);
+}

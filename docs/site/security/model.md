@@ -14,10 +14,25 @@ auth that is a no-op in practice, one of them with a live remote-code-execution
 spawner, and the design basis (`ai/DESIGN.md` §8, digesting that audit) calls this
 "non-negotiable." The build plan backs every rule with a CI gate that is meant to turn
 the build **red** on violation, not a review-time reminder — see
-[CI gates enforcing this](#ci-gates-enforcing-this) below. As of this writing
-(pre-Phase-0, see the [roadmap](../guide/roadmap.md)) these gates are **designed, not
-yet implemented** — this page states the target contract precisely so Phase 1
-implements exactly this and nothing weaker.
+[CI gates enforcing this](#ci-gates-enforcing-this) below.
+
+> **Update — 2026-07 (as built).** This page was written pre-Phase-0, when every gate
+> was designed but unimplemented. Implementation began 2026-07-11, and the code-level
+> controls above now **exist and are test-proven**: the server binds `127.0.0.1` only
+> and refuses to start without `DASHBOARD_TOKEN`
+> (`apps/server/src/config.ts` / `src/index.ts`); a single global `onRequest` hook in
+> `apps/server/src/server.ts` gates **every** route with a timing-safe token compare;
+> `/api/stream` rejects foreign `Origin` headers with 403 *before* auth; SQLite opens
+> in WAL mode with `foreign_keys=ON` asserted on every connection
+> (`apps/server/src/db/connection.ts`); the no-spawner static gate
+> (`scripts/check-no-spawner.mjs`) and the license gate run as CI steps in
+> `.github/workflows/ci.yml`; and the WP-F7 security-contract suite
+> (`apps/server/test/security-contract.test.ts`) boots the **real** composition root
+> and asserts loopback bind, 401-without-token, same-origin-only SSE, and
+> no-token-no-start. Two boxes in the picture below — the webhook sink and the
+> Telegram relay — remain **planned, post-1.0** (entered only via KC-5); they are kept
+> in the diagram as the target contract, marked as such. Per-rule as-built notes
+> follow each rule.
 
 ## Why a flagship page: the field failed at exactly this
 
@@ -84,6 +99,17 @@ nothing inside the box is reachable from outside the box except through the tunn
 This is the same ingest-loop diagram as [the architecture overview](../architecture/overview.md)
 with the trust boundary drawn explicitly around it.
 
+> **As built:** everything from the tunnel down through "SQLite (WAL mode) — backup —
+> tested restore" exists and runs. The two bottom boxes — the **webhook sink** and the
+> **Telegram relay** — are **not built**: alerting is post-1.0 and is entered only via
+> KC-5 (earned by real daily use). Today the server makes **no outbound network
+> request of any kind**, so the "operator-configured targets only" constraint is
+> currently satisfied in the strongest possible way — the dial-out surface does not
+> exist. One refinement the diagram's token box undersells: the same-origin check on
+> `/api/stream` runs *before* the token check (a cross-origin request is 403 even with
+> a valid token), and the JSONL ingest path enters the box directly from the local
+> filesystem (`~/.claude/projects`), never through an HTTP endpoint.
+
 ## The control catalogue
 
 Nine rules, each stated as **rule → why → how enforced**. Sources: `ai/DESIGN.md` §8
@@ -109,6 +135,12 @@ packages and Definition-of-Done that turn each rule into CI-blocking code).
   canonical decision recording "loopback-or-fail bind" as a CI-blocking condition from
   commit one is CD-7 in `docs/analysis/concept-analysis-v2.md`.
 
+  > **As built:** shipped exactly as specified. The composition root
+  > (`apps/server/src/index.ts`) listens on `127.0.0.1` with no configuration path to
+  > any other host, and `security-contract.test.ts` boots the real server and asserts
+  > that **every** bound address is `127.0.0.1`. The static gate (rule 3's scanner)
+  > additionally rejects the `0.0.0.0`/`::` bind patterns anywhere in the tree.
+
 ### 2. Auth token is mandatory — `timingSafeEqual`, not a no-op-when-unset
 
 - **Rule.** Every endpoint (read and write, see rule 5) sits behind a
@@ -131,8 +163,25 @@ packages and Definition-of-Done that turn each rule into CI-blocking code).
   requires *every* read route to carry the auth guard, not only the ones an author
   remembers to gate.
 
+  > **As built:** the rule holds; the implementation shape is *stronger* than the
+  > sketches below in three ways. (1) There is no per-route guard to remember — a
+  > single global `onRequest` hook in `apps/server/src/server.ts` gates every
+  > registered route, and it matches the exemptions (none today except the
+  > same-origin-then-token SSE ordering) on Fastify's **decoded** `routeOptions.url`,
+  > not the raw request URL, so a percent-encoded path like `/%61pi/stream` cannot
+  > slip past the gate (the contract suite tests exactly this). (2) The timing-safe
+  > compare hashes both sides to a fixed length *before* `timingSafeEqual`, so the
+  > length-mismatch early-return in the sketch — a small length oracle — does not
+  > exist in the real code. (3) Startup fails without `DASHBOARD_TOKEN`
+  > (`apps/server/src/config.ts`), exactly as sketched. One deliberate accommodation:
+  > `/api/stream` also accepts the token as `?token=` because the browser
+  > `EventSource` API cannot set headers — and the server redacts that query value
+  > from its own logs (`redactTokenInUrl`). The two blocks below are kept as the
+  > design-basis record.
+
   ```ts
-  // apps/server/src/security/token-guard.ts — illustrative shape, not yet built (WP-F7/WP-U0)
+  // apps/server/src/security/token-guard.ts — design-basis sketch (WP-F7/WP-U0);
+  // the real implementation differs, see the as-built note above
   import { timingSafeEqual } from 'node:crypto';
 
   export function verifyToken(provided: string | undefined, expected: string): boolean {
@@ -148,7 +197,8 @@ packages and Definition-of-Done that turn each rule into CI-blocking code).
   ```
 
   ```ts
-  // apps/server/src/bootstrap.ts — illustrative shape, not yet built (WP-U0)
+  // apps/server/src/bootstrap.ts — design-basis sketch (WP-U0); the real
+  // composition root is apps/server/src/index.ts and behaves exactly like this
   const token = process.env.DASHBOARD_TOKEN;
   if (!token) {
     throw new Error('DASHBOARD_TOKEN is required — refusing to start without auth.');
@@ -218,6 +268,18 @@ packages and Definition-of-Done that turn each rule into CI-blocking code).
   graft `hoangsonww` patterns is equally simple: that surface is never mounted here in
   the first place.
 
+  > **As built:** `WP-F5` shipped as `scripts/check-no-spawner.mjs`, wired as the
+  > `gate:spawner` step in `.github/workflows/ci.yml`, and it is **broader** than the
+  > design here promised: it scans all of `apps/*`, `packages/*`, `scripts/`,
+  > `hooks/`, and the repo-root config files — source *and* tests — for the whole
+  > subprocess API family, wide binds (`0.0.0.0`/`::`), WebSocket-server patterns,
+  > and dynamic code evaluation (indirect eval, `data:`/concatenated dynamic import).
+  > Its two escape hatches are explicit and auditable (a logged whole-file allowlist
+  > containing only the policy file itself, and a per-line `spawner-gate-allow`
+  > marker), and its header is honest about scope: a regex gate stops the idiomatic
+  > reintroduction paths, not a deliberately obfuscating insider — the runtime
+  > loopback backstop and code review remain the real controls.
+
 ### 4. Same-origin check on the realtime channel
 
 - **Rule.** The server→browser realtime feed rejects any request whose `Origin` header
@@ -238,6 +300,13 @@ packages and Definition-of-Done that turn each rule into CI-blocking code).
   to implement that check is one of the three `shared/security` primitives `WP-F7`
   builds and unit-tests before `WP-U0` wires it into the bootstrap.
 
+  > **As built:** shipped, with one strengthening detail: the same-origin check on
+  > `/api/stream` runs **before** the token check — a request with a foreign `Origin`
+  > is 403 *even when it carries a valid token* (`security-contract.test.ts` asserts
+  > "403, token or not"). Loopback origins (`127.0.0.1` and `localhost` on the bound
+  > port) are accepted; nothing sends a wildcard CORS header. The transport is SSE
+  > per CD-5, exactly as this section says.
+
 ### 5. No unauthenticated endpoints — read or write
 
 - **Rule.** Every endpoint, not only the ones that mutate state, sits behind the
@@ -255,6 +324,14 @@ packages and Definition-of-Done that turn each rule into CI-blocking code).
   framing, precisely because `cast`'s read-side gap is documented and known. `WP-A8`
   (operator alerts API) carries the same requirement forward for the CRUD surface:
   "all write endpoints token-guarded, cross-origin rejected."
+
+  > **As built:** enforced *structurally*, which is stronger than "every route carries
+  > the guard": there are no per-route guards to forget, because one global
+  > `onRequest` hook in `apps/server/src/server.ts` gates everything registered on the
+  > server — read routes, the hook receiver, `/api/stream`, even `/api/health`. A new
+  > route added tomorrow is token-gated by construction. The contract suite asserts
+  > 401 without a token and 401 for wrong tokens of *different lengths* (the compare
+  > hashes to fixed length first, so short probes behave identically).
 
 ### 6. No SSRF — never dial a URL taken from an event payload
 
@@ -274,6 +351,13 @@ packages and Definition-of-Done that turn each rule into CI-blocking code).
   `docs/analysis/development-plan.md` restates it: "SSRF test proves no payload-URL
   dial-out." `WP-A10`'s alerts negative-test corpus keeps this proven on every future
   change to the alerting surface, not just at first ship.
+
+  > **As built:** the webhook dispatcher (`WP-A4`) is **not built** — alerting is
+  > post-1.0, entered only via KC-5. Today the server code makes no outbound network
+  > request of any kind, so the SSRF surface this rule guards does not exist yet; the
+  > rule is satisfied by absence. The `WP-F5` static gate is live now, so the moment
+  > an outbound dial is ever introduced it lands under a build-failing scanner, and
+  > the `WP-A4`/`WP-A10` negative tests remain the Done-when for that future work.
 
 ### 7. Remote access via tunnel only
 
@@ -312,6 +396,10 @@ packages and Definition-of-Done that turn each rule into CI-blocking code).
   track ever returns, it must re-satisfy "no core package imports it" as an assertable,
   tested condition with its coverage explicitly scoped.
 
+  > **As built:** holds. The string `ANTHROPIC_API_KEY` appears nowhere in `apps/`,
+  > `packages/`, `hooks/`, or `scripts/` — no code path reads it (verified by search
+  > against the implemented tree, 2026-07).
+
 ### 9. SQLite in WAL mode, with a backup routine that is actually exercised
 
 - **Rule.** The single persisted store runs in WAL journaling mode, and a backup
@@ -329,6 +417,22 @@ packages and Definition-of-Done that turn each rule into CI-blocking code).
   Retention and payload redaction (never storing raw tool payloads unredacted, unlike
   `simple10`) are the adjacent hardening step, owned by `WP-D10` and covered in depth
   in [backup & restore](../operations/backup-restore.md).
+
+  > **As built:** `WP-D2` shipped as specified — `apps/server/src/db/connection.ts`
+  > sets `journal_mode = WAL` and `foreign_keys = ON` and then **reads the pragmas
+  > back and throws** if either did not take, on every connection open. `WP-F8`
+  > shipped as `apps/server/src/db/backup.ts`: backup uses better-sqlite3's online
+  > backup API (safe under WAL, no lock of the live database), and the restore path
+  > copies the backup into place, reopens it through the same pragma-asserting
+  > `openDatabase`, and **refuses to return a database that fails
+  > `PRAGMA integrity_check`**. The restore path is exercised by
+  > `apps/server/test/backup.test.ts` on every test run — though note the honest
+  > distinction: that is a *test-exercised* restore; an operator-level restore drill
+  > against real data is a release-checklist item (`WP-X9`), not something CI can
+  > prove. Of the adjacent hardening: hook-payload **redaction** is built
+  > (`WP-IN14`, applied before the idempotency key is computed, so raw secrets never
+  > reach the stored envelope or its hash), while the **retention TTL** (`WP-D10`) is
+  > not built yet.
 
 ## CI gates enforcing this
 
@@ -350,6 +454,19 @@ CI-observable condition:
 | License/provenance for any borrowed pattern | `WP-F6` | Non-allowlisted dependency license → CI red | 1 |
 | Coverage floor for all of the above | `WP-F3`, `WP-X5` | Merge-blocking **>90%** coverage gate, live from Phase 1 | 1 |
 
+> **As built (what is verifiably wired today).** `.github/workflows/ci.yml` runs, in
+> order: typecheck, lint, format check, tests (the >90% floor is enforced as
+> `thresholds: { lines/branches/functions/statements: 90 }` in the per-package Vitest
+> configs, so the test step itself fails under 90%), the no-spawner/no-wide-bind/
+> no-eval gate (`gate:spawner`), and the license gate (`gate:licenses`). The rule 1/2/4/5
+> contract tests exist (`security-contract.test.ts`) and run inside the test step. Rows
+> 6's negative test is moot until the dispatcher exists (see rule 6), and row 9's
+> "restore exercised" is test-level (see rule 9). One honest caveat the workflow file
+> itself states: making CI **merge-blocking** requires a GitHub branch-protection rule,
+> which is an owner action on github.com and cannot be verified from the repository —
+> so "CI runs these gates" is proven, "a red gate blocks merge" is configuration this
+> page cannot attest.
+
 The canonical decision tying all of this together is **CD-7** in
 `docs/analysis/concept-analysis-v2.md`: "Security + the coverage gate are boundary
 conditions from commit one, CI-blocking… >90% coverage blocks merges," explicitly
@@ -366,17 +483,38 @@ One sequencing detail worth stating plainly because it looks alarming out of con
 is by design — `docs/analysis/development-plan.md` §7 flags explicitly "do not merge
 `WP-F7` as 'passing'; its DoD is jointly owned with `WP-U0`." A red security test at
 that specific, short-lived point in the build is the gate working as intended, not a
-regression.
+regression. *(That window has since closed: the contract tests now boot the real
+composition root and pass green.)*
 
 ## Current state
 
-As of this writing, agenthropic is **pre-Phase-0** (see the [roadmap](../guide/roadmap.md)):
-the design and build plan above are finished, but no application code is scaffolded
-yet, and CD-8's hard stop means none of it can start until the Phase-0 feasibility
-spike returns a GO or CONDITIONAL-GO verdict. Every control on this page is therefore
-a **binding design commitment**, verifiable against `docs/analysis/development-plan.md`
-today, and something to hold Phase 1's actual pull requests to — not a description of
-code that already runs.
+This page was written **pre-Phase-0**, when every control above was a binding design
+commitment and nothing more. That is no longer the situation. The Phase-0 feasibility
+spike returned **CONDITIONAL GO**, and implementation began **2026-07-11 by explicit
+owner override of CD-8** — an override that changed the schedule, **not the security
+bar**: none of the nine rules was relaxed, and the KC kill-checkpoint calendar in
+`docs/analysis/roadmap-v1-v2-2026-07-06.md` still governs.
+
+As built today:
+
+- **Running and test-proven:** loopback-or-fail bind, mandatory-token-or-fail-startup,
+  the global timing-safe token gate on every route, same-origin-before-auth on
+  `/api/stream` (SSE per CD-5), WAL + `foreign_keys` asserted on every connection,
+  online backup with an integrity-checked restore path, hook-payload redaction before
+  the idempotency key, and the no-spawner/no-wide-bind/no-eval and license static
+  gates running in CI.
+- **Satisfied by absence:** no subprocess surface, no outbound dial of any kind (the
+  webhook dispatcher does not exist yet), no `ANTHROPIC_API_KEY` anywhere in the tree.
+- **Still design, not code:** the webhook sink and Telegram relay (post-1.0, KC-5),
+  the retention TTL (`WP-D10`), and the operator-level restore drill (`WP-X9`,
+  release checklist). Whether CI is *merge-blocking* is a GitHub branch-protection
+  setting this repository cannot attest.
+- **Operational rules unchanged:** tunnel-only remote access (rule 7) remains a
+  procedure, not a unit test — see [remote access](remote-access.md).
+
+The controls on this page are therefore no longer only something to hold Phase 1's
+pull requests to — most of them are a description of code that already runs, with the
+exceptions named honestly above.
 
 ## See also
 

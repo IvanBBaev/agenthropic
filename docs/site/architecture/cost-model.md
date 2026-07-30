@@ -13,6 +13,32 @@ re-verified (the "cost-trust chain," concept-analysis-v2 §3, `H-COST`). Cost co
 is treated as one of the four real testable units of this project, alongside ingest,
 tree, and live-flow correctness (concept-analysis-v2 §4.3).
 
+> **Update — 2026-07 (as built).** The cost engine is real: pure functions in
+> `packages/core/src/cost` (`compute-cost.ts`, `compaction-repricing.ts`,
+> `delegation-savings.ts`), the pricing table in migration 7, and a served read surface
+> (`GET /api/sessions/:id/cost-analysis`, `GET /api/cost/summary`). The equation held —
+> every dollar is tokens × a dated price — but four details landed differently than
+> this page sketches:
+>
+> - **The buckets are token buckets, not routing dimensions.** Real JSONL does not
+>   carry `speed`/`inference_geo`/`service_tier`; `token_usage` buckets by what the
+>   transcripts actually record — `input`, `output`, `cache_read`, `cache_write_5m`,
+>   `cache_write_1h` — one row per `(message_id, bucket)`.
+> - **`model_pricing` is dated but has no `verified_on` column**: primary key
+>   `(model, bucket, effective_from)`, rates in USD per Mtok. The seed is
+>   **PROVISIONAL** — approximate list prices, floor-dated — not a verified feed.
+> - **Staleness is a runtime halt, not (yet) a CI gate.** A model or bucket with
+>   nonzero tokens and no resolvable price raises `PricingError`: at ingest this halts
+>   **before any row is written**, and at the API it surfaces as a `422` — never a
+>   silent `$0`. Read-side aggregates additionally surface tokens that resolve to no
+>   dated rate as `unpricedTokens` (contributing `$0`, visibly). Whether the `WP-C6`
+>   staleness-fails-CI gate is wired as a merge-blocking CI job has **not been
+>   verified** — treat the CI-gate claims below as design intent.
+> - **Compaction (G0.2b) resolved toward JSONL**: boundaries are parsed from the
+>   transcript substrate itself; the `PreCompact` hook contributes liveness only.
+>   Delegation savings shipped with its honesty labels: a literal `isEstimate: true`
+>   and `skippedAgentIds` for agents it refuses to guess a model for.
+
 ## In one picture
 
 ```
@@ -46,6 +72,11 @@ tree, and live-flow correctness (concept-analysis-v2 §4.3).
 This is the same `hook-ingest → SQLite (WAL) → read API` shape described in the
 [architecture overview](../architecture/overview.md); the cost model is the pricing
 layer bolted onto the `token_usage` projection, not a separate pipeline.
+
+*(As built, the picture's shape holds with two label changes: the bucketing column
+reads `input / output / cache_read / cache_write_5m / cache_write_1h` rather than
+speed/geo/tier, and `model_pricing` carries `effective_from` only — no `verified_on`.
+`agent_id` is attributed in the parser before the write, not backfilled.)*
 
 ## 1. Ground truth in, dollars out
 
@@ -91,6 +122,34 @@ specifically because its bucketing is production-grade (DESIGN §4):
 | `inference_geo` | Regional routing of the inference call — carries its own rate. |
 | `service_tier` | The API service tier the call was served under — carries its own rate. |
 
+> **As built, the table above is design history.** The real corpus's `usage` blocks do
+> not carry `speed`/`inference_geo`/`service_tier` at all — the dimensions that
+> actually change the rate in the transcripts are the **token buckets** themselves:
+> `input`, `output`, `cache_read`, `cache_write_5m`, `cache_write_1h`. Migration 6
+> (`apps/server/src/db/migrations.ts`) stores one row per `(message_id, bucket)` —
+> long format, `UNIQUE (message_id, bucket)`, because naive row summation over-counts
+> roughly 2.4× (parser-spec §5.2):
+>
+> ```sql
+> CREATE TABLE token_usage (
+>   id                      INTEGER PRIMARY KEY,
+>   session_id              TEXT NOT NULL,
+>   agent_id                TEXT,
+>   message_id              TEXT NOT NULL,
+>   model                   TEXT NOT NULL,
+>   bucket                  TEXT NOT NULL CHECK (bucket IN ('input','output','cache_read','cache_write_5m','cache_write_1h')),
+>   tokens                  INTEGER NOT NULL,
+>   is_compaction_baseline  INTEGER NOT NULL DEFAULT 0,
+>   occurred_at             TEXT,
+>   UNIQUE (message_id, bucket)
+> );
+> ```
+>
+> `tokens` is copied verbatim from JSONL — the never-inferred rule shipped intact.
+> `agent_id` is nullable, but there is no post-write backfill pass: attribution happens
+> **inside the parser** via the hard join (parser-spec §5.1), before any row is
+> written, and a `NULL` means genuinely unattributable.
+
 The source docs name these three dimensions as rate-changing without enumerating their
 literal values or exact column types — that detail is schema work not yet written
 (owned by `WP-D8` in the development plan, Track D, wave 10). Two further properties
@@ -104,32 +163,15 @@ are load-bearing and *are* specified:
 - **A compaction baseline is preserved**, not overwritten, when a session hits
   `PreCompact` (DESIGN §4) — see [§6](#6-compaction-baseline-repricing) below.
 
-An illustrative sketch of the shape these constraints imply (this is **not** an
-authoritative DDL — the concrete table is `WP-D8`'s deliverable, not yet built):
+The authoritative DDL is migration 6, quoted in the as-built note above — the
+illustrative wide-format sketch this page originally carried (per-dimension columns,
+`compaction_baseline_id`, an FK to `agents`) never became the real table.
 
-```sql
--- Illustrative only — exact columns/types are undecided (WP-D8).
-CREATE TABLE token_usage (
-  id                TEXT PRIMARY KEY,
-  session_id        TEXT NOT NULL,
-  agent_id          TEXT,              -- nullable at first write, backfilled (CD-3)
-  model_id          TEXT NOT NULL,
-  speed             TEXT NOT NULL,
-  inference_geo     TEXT NOT NULL,
-  service_tier      TEXT NOT NULL,
-  input_tokens      INTEGER NOT NULL,  -- copied verbatim from JSONL, never inferred
-  output_tokens     INTEGER NOT NULL,  -- copied verbatim from JSONL, never inferred
-  compaction_baseline_id TEXT,         -- preserves the pre-PreCompact totals
-  recorded_at       TEXT NOT NULL,
-  FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE SET NULL
-);
-```
-
-The Phase-2/3 ingest work that populates this table is `WP-IN5` (JSONL tail-follow,
-"tokens copied **verbatim** — no inference") feeding `WP-IN7` (`events` → sessions/
-agents/`token_usage` projection, precedence-aware; "Σ `token_usage` per session ==
-JSONL exact" is one of the three P0 release-blocker tests, development-plan Phase 3
-exit gate).
+The ingest work that populates this table shipped as the parser writing projections
+directly (see [ingest & reconciliation](../architecture/ingest-reconciliation.md)):
+tokens copied **verbatim** — no inference — and "Σ `token_usage` per session ==
+JSONL exact" is one of the three P0 release-blocker tests, built and green in the
+server suite.
 
 ## 3. `model_pricing`: a dated table, not a hardcoded constant
 
@@ -156,26 +198,30 @@ CD-4's canonical schema rule is the fix:
 
 > **versioned** `model_pricing` (`effective_from`, `verified_on`).
 
-An illustrative sketch (again, not an authoritative DDL — `WP-C1` owns the real one):
+The real table is migration 7 (`model-pricing-with-seed`):
 
 ```sql
--- Illustrative only — exact columns/rate values are undecided (WP-C1).
 CREATE TABLE model_pricing (
-  id                TEXT PRIMARY KEY,
-  model_id          TEXT NOT NULL,
-  speed             TEXT NOT NULL,
-  inference_geo     TEXT NOT NULL,
-  service_tier      TEXT NOT NULL,
-  price_per_input_token  REAL NOT NULL,   -- placeholder — real rates from WP-C1's seed
-  price_per_output_token REAL NOT NULL,   -- placeholder — real rates from WP-C1's seed
-  effective_from    TEXT NOT NULL,        -- ISO timestamp: rate applies at/after this
-  verified_on       TEXT NOT NULL         -- last human re-verification date
+  model          TEXT NOT NULL,
+  bucket         TEXT NOT NULL CHECK (bucket IN ('input','output','cache_read','cache_write_5m','cache_write_1h')),
+  usd_per_mtok   REAL NOT NULL,
+  effective_from TEXT NOT NULL,
+  PRIMARY KEY (model, bucket, effective_from)
 );
 ```
 
-Multiple `effective_from` rows can exist for the same `(model_id, speed,
-inference_geo, service_tier)` bucket without conflict — that is the whole point of
-dating the table (development-plan `WP-C1` Done-when).
+Multiple `effective_from` rows can exist for the same `(model, bucket)` without
+conflict — that is the whole point of dating the table, and the composite primary key
+enforces it. Two honest departures from the CD-4 sketch:
+
+- **`verified_on` was not built.** The re-verification stamp lives in the seed's
+  source comment and its PROVISIONAL label, not in a column.
+- **The seed rates are approximate list prices, floor-dated** (a single
+  `effective_from` for all seeded rows), with cache buckets derived from the input
+  rate (`cache_read` = 0.1×, `cache_write_5m` = 1.25×, `cache_write_1h` = 2.0×) and a
+  `'<synthetic>'` model priced at zero so synthetic rows never halt pricing. The seed
+  is **PROVISIONAL** — the model IDs were checked against the real corpus, the dollar
+  figures were not independently verified.
 
 **What is genuinely undecided:** the *authoritative dated source* for these rates and
 the *refresh cadence* that keeps the staleness-fails-CI test honest as the model lineup
@@ -212,6 +258,14 @@ This is why a rate change (a new `model_pricing` row with a later `effective_fro
 never rewrites the cost of events that already happened — the dated resolver picks the
 row that was live at the time, per bucket.
 
+> **As built:** exactly this lookup shipped, twice. `resolveRate` in
+> `packages/core/src/cost/compute-cost.ts` picks the latest `effective_from` at or
+> before the usage row's `occurred_at` for the exact `(model, bucket)`; the read-side
+> SQL in `apps/server/src/api/queries.ts` performs the same dated join. A bucket with
+> **zero** tokens needs no price row; a bucket with nonzero tokens and no resolvable
+> rate raises `PricingError` in the engine — and in the read aggregates is surfaced as
+> `unpricedTokens` rather than silently priced.
+
 ## 5. `CostEngine`: every dollar = tokens × dated price
 
 `CostEngine` (CD-6) is the pure computation that combines `token_usage` with
@@ -236,10 +290,18 @@ restates the same guarantee from the consumer side: "every displayed dollar trac
 ground-truth tokens × dated price" (development plan §3, Phase 4 exit gate), and
 `WP-U4`'s Done-when is explicit that this must hold with **no API-side inference**.
 
+> **As built:** `computeCostUsd` is a pure function (no DB imports) in
+> `packages/core/src/cost/compute-cost.ts`, and it doubles as the ingest **halt gate**:
+> `apps/server/src/ingest/ingest-session.ts` prices the parsed session *before* opening
+> the write transaction, so a `PricingError` means **no row of any kind is written** —
+> a session is never persisted with silently unpriceable tokens. The same error
+> surfaces as a `422` from `GET /api/sessions/:id/cost-analysis`.
+
 ## 6. Compaction-baseline repricing
 
 `PreCompact` is one of the twelve (nine confirmed, per the hook-catalog caveat — see
-[hook ingestion](../architecture/hooks.md)) Claude Code lifecycle events this system
+[hook ingestion](../architecture/hooks.md); as built it is one of the **four** hooks
+the installer actually registers) Claude Code lifecycle events this system
 ingests (DESIGN §5). When a session's context is compacted, a naive costing scheme that
 only tracks a running total risks silently corrupting history — this is exactly the
 "compaction sleeper" the source analysis flags: getting the compaction-baseline graft
@@ -268,6 +330,16 @@ or whether the baseline must be **snapshotted at hook time** instead, is an open
 Phase-0 question (`G0.2b`, concept-analysis-v2 §7, question 4). Until that probe runs,
 treat "compaction reprices correctly" as the target contract, not a confirmed
 implementation mechanism.
+
+> **Resolved as built: the JSONL branch won.** Compaction boundaries are detected in
+> the parsed transcript substrate itself — no hook-time snapshot exists, and the
+> `PreCompact` hook contributes a liveness timestamp only. Baseline rows are flagged
+> with `token_usage.is_compaction_baseline = 1`, and the repricer
+> (`packages/core/src/cost/compaction-repricing.ts`) prices segments against preserved
+> baselines with a tested invariant that segmenting introduces no drift (the delta
+> against the unsegmented total is ~0). One genuinely open sub-question is documented
+> in the code rather than hidden: whether a usage row landing exactly *at* a boundary
+> belongs to the closing or opening segment.
 
 ## 7. Delegation-savings: quantifying Haiku/Sonnet routing
 
@@ -311,6 +383,14 @@ sequencing lands the whole cost engine — including delegation-savings (`WP-C5`
 in **Phase 3** (Track C, development-plan §3), which supersedes DESIGN §9's earlier
 draft placement of "delegation-savings tile" as a standalone Phase 4 item; treat
 `development-plan.md` as the canonical phase numbering per its own provenance note.
+
+> **As built:** shipped in `packages/core/src/cost/delegation-savings.ts` with the
+> conservative formula intact — savings = Σ `max(0, hypothetical − actual)` per agent —
+> and served through `GET /api/sessions/:id/cost-analysis`. The honesty labels are
+> structural, not cosmetic: the result carries a literal `isEstimate: true` type (it can
+> never be reported as a measured number), agents whose model cannot be established are
+> listed in `skippedAgentIds` rather than priced against a guess, and `'<synthetic>'`
+> rows keep their own (zero-rate) model instead of being re-priced at top tier.
 
 **A named risk, and its mitigation.** concept-analysis-v2 flags this metric directly as
 a vanity-metric risk: "delegation-savings risks being a vanity metric unless the
@@ -359,10 +439,22 @@ corpus must resolve to a priced row, or the merge is blocked (Phase 3 exit gate,
 development-plan §3: "no priceless model" is one of the named, merge-blocking release
 criteria alongside the three P0 reconciliation tests).
 
-## 10. Read surface (roadmap, not yet built)
+> **As built — an honest status split.** The *runtime* half of this rule is built and
+> test-proven: a priceless model with nonzero tokens raises `PricingError`, which halts
+> ingest before any write and returns `422` from the cost API — strictly stronger than
+> a runtime "estimated" label. The *CI* half — a dedicated staleness gate that turns a
+> priceless fixture model into a red build (`WP-C6`) — has **not been verified as wired
+> into CI** at the time of this update; until that is confirmed, treat "staleness fails
+> CI" as design intent backed by the runtime halt, not as an observed CI behavior.
+
+## 10. Read surface (as built: shipped)
 
 The cost figures this page describes are computed server-side; nothing here is a
-client-side estimate. The planned read surface (all Phase 3–4, not yet built):
+client-side estimate. The read surface is now real: `GET /api/cost/summary`
+(per-model and per-session dollar totals, with `unpricedTokens` surfaced) and
+`GET /api/sessions/:id/cost-analysis` (compaction-aware repricing plus
+delegation savings, `isEstimate` visible), both in `apps/server/src/api/routes.ts`,
+plus the SPA cost view built over them. The work packages as planned:
 
 | Work package | Track | What it exposes |
 |---|---|---|
@@ -387,28 +479,35 @@ track, which is off the critical path per the roadmap).
 
 ## What's undecided
 
-This is a design-basis page, not a shipped-system page. Stated explicitly rather than
-glossed over:
+This was a design-basis page; the list below records what was open when it was
+written, with the as-built resolution appended to each item:
 
 - **The authoritative pricing source and refresh cadence** are unresolved
   (concept-analysis-v2 §7, question 7) — `WP-C1` owns the dated seed, but where those
   dated rates come from and how often they are re-verified is not yet decided.
+  *Still open:* the shipped seed is approximate list prices, explicitly PROVISIONAL;
+  no authoritative feed or cadence exists yet.
 - **The compaction-baseline mechanism** (whether JSONL carries usable pre/post markers,
   or the baseline must be snapshotted at hook time) is a Phase-0 probe
   (`G0.2b`), not yet answered — see [§6](#6-compaction-baseline-repricing).
+  *Resolved:* boundaries are parsed from the JSONL substrate; no hook-time snapshot.
 - **The exact `token_usage` and `model_pricing` DDL** (column names, types, indices) is
   not written anywhere in the source docs yet; the sketches in [§2](#2-token_usage-bucketed-by-whatever-changes-the-rate)
   and [§3](#3-model_pricing-a-dated-table-not-a-hardcoded-constant) are illustrative,
   not authoritative — that is `WP-D8` and `WP-C1`'s deliverable.
+  *Resolved:* migrations 6 and 7 are written and quoted on this page.
 - **The decision delegation-savings is meant to inform** is named as a risk
   ("vanity metric unless the decision it informs is named," concept-analysis-v2 §5) with
   a stated mitigation (tie it to `WP-C5`'s routing decision, best-path-decision.md §6)
-  but not yet a concrete, shipped decision rule.
+  but not yet a concrete, shipped decision rule. *Still open:* the metric ships with
+  `isEstimate`/`skippedAgentIds` honesty labels, but no automated routing decision
+  consumes it yet.
 - **Phase numbering has drifted between documents.** DESIGN §9's original roadmap table
   places the delegation-savings tile at a standalone Phase 4; the reconciled
   `development-plan.md` folds the entire cost engine into Phase 3. Treat the
   development plan as canonical (its own provenance note records it as the
-  adversarially-verified, post-reconciliation source).
+  adversarially-verified, post-reconciliation source). *Moot as built:* the 2026-07
+  implementation wave landed the cost engine and its read surface together.
 
 ## See also
 

@@ -16,6 +16,47 @@ high-coverage tests of synthetic happy-paths (**false safety**)" (concept-analys
 and the quantified acceptance criteria in
 [`concept-analysis-v2.md`](../../analysis/concept-analysis-v2.md) §6.
 
+> **Update — 2026-07 (as built).** This page was written before any test existed, so it
+> speaks in the future tense about gates that have since either been built or been
+> blocked. The verified state of the suite as of 2026-07-30:
+>
+> - **The three P0 release-blocker tests are GREEN and merge-blocking.** They live in
+>   `apps/server/test/p0/` — `p0-token-reconciliation.test.ts`, `p0-double-replay.test.ts`,
+>   `p0-dag-rebuild.test.ts`, sharing a `harness.ts`. One detail matters more than the
+>   pass/fail: the token-reconciliation proof does **not** compare the parser against
+>   itself. It reads the JSONL with an **independent reader written inside the test**, so a
+>   parser bug cannot make its own proof pass. The double-replay proof compares two
+>   `VACUUM INTO` snapshots with `Buffer.equals` under a fixed clock — byte-identical, not
+>   "equivalent". The DAG-rebuild proof additionally demonstrates the hooks-are-liveness-only
+>   rule: appending hook events leaves the DAG dump unchanged.
+> - **The 12-scenario negative catalogue is green** (`apps/server/test/negative/`),
+>   including byte-identical `401` bodies across four different wrong-token shapes (no
+>   token echo, no length oracle) and a `403` on a foreign `Origin` **both with and
+>   without** a valid token, so there is no auth oracle either. One half of scenario #2
+>   ("normalized anomaly flagged") proved untestable as specified and is recorded as such
+>   rather than quietly dropped.
+> - **Totals: 72 test files / 879 tests passing.** The >90% coverage gate is enforced in
+>   every shipped package — `packages/shared`, `packages/core`, `apps/server`,
+>   `apps/web`. **Honest note:** until 2026-07-30 `apps/web` ran `vitest run` *without*
+>   `--coverage`, so its configured thresholds silently never executed. That was found and
+>   fixed; §6 below is the design intent, and it is now actually true.
+>   `packages/test-fixtures` is a deliberate, documented exclusion from the gate scope.
+> - **§2's golden real-session corpus is NOT what shipped.** The three-tier
+>   raw/redacted/manifested promotion of ≥3 captured real sessions was not built. What
+>   exists is `packages/test-fixtures` with **six** typed fixtures — `flat-tool-use`,
+>   `nested-workflow`, `queue-operation`, `task-notification-recovery`, `depth-2-sync`,
+>   `usage-dedup` — plus per-suite corpora written into temp directories. Tests **never**
+>   touch the real `~/.claude/projects`: every corpus is built under `mkdtempSync` with
+>   explicitly injected env. The package location that §"What's undecided" calls "a named
+>   leaning" is now settled — it is `packages/test-fixtures`.
+> - **§3 (`WP-X2`, labeled ground truth) is NOT built, and cannot be built by an agent.**
+>   The five `spike/corpus/sessions/<short>/LABEL-ME.md` trees exist but are **unfilled** —
+>   they are Ivan's hand-labeling act. **Consequence, stated plainly: the ≥95% hierarchy
+>   correctness gate in §2/§4 has never been scored**, because the answer key it would be
+>   scored against does not exist yet. Every spike-derived accuracy number in this corpus
+>   stays **PROVISIONAL** until that ratification happens. No test result on this page
+>   should be read as satisfying that bar.
+
 ## 1. Four units, not "the dashboard"
 
 The QA lens's starting move is refusing to treat "test the dashboard" as one problem.

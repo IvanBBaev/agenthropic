@@ -15,6 +15,106 @@ code is scaffolded. A read-only desktop probe of the real `~/.claude/projects/` 
 CONDITIONAL-GO → build (confidence 85)**; the formal spike confirms that on the
 paired-capture corpus. See [the Phase-0 corpus probe](../../analysis/phase0-probe.md).
 
+> **Update — 2026-07 (as built). This is the page that was most wrong, so read this box
+> before anything below it.**
+>
+> **The paragraph above is stale, and the phase model it introduces has been superseded.**
+> Phases 0–4 are built. More importantly, the schedule that governs this project is no
+> longer a phase sequence at all — it is a **kill-checkpoint calendar with default-death
+> semantics**, and **two of its checkpoints have already been passed unmet**. Both facts
+> are set out in the new section
+> [Update — the real schedule: kill checkpoints, and two that were missed](#update--the-real-schedule-kill-checkpoints-and-two-that-were-missed)
+> immediately below. Everything after that section is preserved as the design record, with
+> `*(As built: … )*` notes on the claims that resolved differently.
+>
+> Short version of what is true today: implementation began **2026-07-11**, by explicit
+> owner override of the CD-8 no-code-before-GO gate — **not** because the gate opened.
+> Running now: the loopback-bound, token-gated server; SQLite/WAL with migrations; JSONL
+> ingest with replay-on-startup; the persisted subagent DAG; the cost engine; the hook
+> receiver; the SSE hub; the read API; and all four dashboard views. **72 test files / 879
+> tests pass**, coverage gated >90% in every shipped package. The three P0 correctness
+> proofs are green and merge-blocking. **Phases 5–6 (alerting) are not started, are v2.0,
+> are entered only via KC-5, and may never start** — the operator-alerts API and UI were
+> cut outright. The Phase-0 numbers quoted above and below remain **PROVISIONAL** until
+> ratified against a hand-labeled corpus.
+
+## Update — the real schedule: kill checkpoints, and two that were missed
+
+The phase sequence in the rest of this page describes *what* gets built and in what
+dependency order. It was never a calendar. The calendar is a set of six **kill
+checkpoints**, KC-0 through KC-5, adopted on 2026-07-10 and governed by **default-death**:
+at each checkpoint the project's default branch is *archive*, and it continues only if the
+checkpoint's condition is affirmatively met by its date. A deferral is not a third state —
+a deferral *is* the failure.
+
+| Checkpoint | Date | Condition to continue | Failure branch | Outcome |
+|---|---|---|---|---|
+| **KC-0** | 2026-07-13 | Gate A signed **and** the friction log opened **and** ≥1 rival dashboard installed for a two-week trial | Archive the repo; salvage the security posture and probe method as a write-up | **PASSED UNMET** — Gate A was signed 2026-07-10, but the friction log was never opened and no rival was ever installed. 2 of 5 boxes open at the deadline. |
+| **KC-1** | 2026-07-27 | The WP-S7 verdict written (GO or CONDITIONAL-GO) **and** the throwaway DAG-with-dollars render exists **and** the 14-day friction log does **not** show a rival answering ≥4 of the 5 daily questions acceptably | Archive | **PASSED UNMET** — see below. |
+| **KC-2** | 2026-09-14 | Phases 1–2 exit gates green (security spine live, >90% gate blocking, ingest idempotent, kill+restart zero-loss) | Descope per the ladder if the P0 chain is intact; otherwise archive | Not yet reached |
+| **KC-3** | 2026-10-12 | The three P0 release blockers green and merge-blocking | Archive — "the moat proof *is* the project" | Not yet reached; the three proofs are already green |
+| **KC-4** | **2026-12-01** | v1.0 tagged: five daily questions answerable, <30s time-to-understand, tree/DAG served from `orchestration_edges`, every dollar traceable. **This date does not move.** | Archive + a public write-up of what was learned. No third rebase exists. | Not yet reached |
+| **KC-5** | earned, never dated | v2.0 entry: **14 consecutive days of real daily use of v1.0 by its own author**, plus ≥3 dated friction-log entries asking for alerts | v2 cancelled; maintenance mode | Not entered; may never be |
+
+### Why "passed unmet" and not "passed"
+
+**KC-0** required three things. One was done (Gate A signed, 2026-07-10). Two were not:
+the friction log was never opened, and no rival dashboard was ever installed. The deadline
+arrived with those boxes open, which under default-death means archive.
+
+**KC-1 is the sharper case, and worth stating precisely.** Two of its three clauses were
+satisfied well ahead of time — the WP-S7 verdict is written, and the throwaway
+DAG-with-dollars render exists. The third clause reads: *the 14-day friction log does not
+show a rival answering ≥4 of the 5 daily questions acceptably.* That clause was
+**unsatisfiable by construction**, because the friction log was never opened. An unopened
+log cannot report a reading — so the condition could not be evaluated at all, in either
+direction. **A checkpoint whose condition cannot be evaluated has not been passed; it was
+skipped.** Calling KC-1 "met" would mean treating an absence of evidence as evidence, which
+is exactly the failure mode the checkpoint existed to prevent.
+
+The specific thing that was never tested, and still has not been: **whether an existing
+free dashboard would have answered the daily questions well enough that agenthropic did not
+need to exist.** That was designed to be the cheapest experiment available. It was never
+run.
+
+### What actually kept the project alive
+
+Three explicit owner overrides, recorded in the repository's own tracker:
+
+| Date | Scope | What it did |
+|---|---|---|
+| **2026-07-11** | Implementation start | Overrode CD-8 (no production code before a GO verdict) after being told that CD-8's remaining conditions — LABEL-ME ratification of the CONDITIONAL GO, and KC-0's two physical boxes — were the block. Scaffolding began that day. |
+| **2026-07-18** | Dispatching only | KC-0's date had passed with its two physical boxes unchecked; the default branch was archive. Work was instructed to continue. |
+| **2026-07-29** | Dispatching only | KC-1's date had passed unmet for the reason above; the default branch was archive. Work was instructed to continue. |
+
+None of the three overrides relaxed anything else. The security invariants, the KC calendar
+itself, the LABEL-ME ratification (the spike numbers stay **PROVISIONAL**), and the
+no-commit-without-an-explicit-ask rule all remain in force, and the two physical acts — open
+the friction log, install a rival — remain open and remain the owner's.
+
+**Say it plainly: work continues by owner decision, not because the gates were satisfied.**
+KC-4 (2026-12-01) is the next hard date, and that one does not move.
+
+### Where the phases below actually stand
+
+| Phase | Status |
+|---|---|
+| 0 — Feasibility spike | Probe done (`CONDITIONAL GO`, confidence 85). The formal spike's paired-capture corpus and human tree sign-off were **not** completed before code started; the numbers stay **PROVISIONAL** pending hand-labeled ratification. |
+| 1 — Foundation, security spine, storage | **Built.** Loopback bind, mandatory token, WAL, migrations, append-only `events_raw` with triggers, coverage and static gates in CI. |
+| 1.5 — Animated-room view | **Not built.** Still optional, still unscheduled. |
+| 2 — Ingest substrate | **Built, with a recorded divergence** — see the note on that section. There is no single merged cross-source event log. |
+| 3 — Projection, DAG moat, reconciliation, cost | **Built, with a recorded divergence** — no separate Normalizer/Projection stage, and the DAG is derived from JSONL alone rather than "two independent paths." All three P0 proofs are green. |
+| 4 — Read API + dashboard | **Built** — all four views. The "<30s to understand a session" exit criterion is **unmeasured**; nobody has timed it. |
+| 5 — Alerting core | **Not started.** v2.0, behind KC-5, may never start. |
+| 6 — Operator alerts UI + release hardening | Alerts API + UI **cut outright**. Release hardening is tracked separately. |
+| Experimental — context-layer feed | **Not built**; the placeholder was deleted rather than left as a stub. |
+| Deferred — fleet aggregation | Only the schema key exists, and only on `orchestration_edges`. No second host. |
+
+Also still open, and worth naming rather than burying: the repository's own `LICENSE` is
+not yet tracked in git, the GitHub Pages site is not yet enabled (the workflow is
+committed, and its deploy job fails by design rather than pretending to succeed), and
+**retention is not implemented** — redaction is live, but nothing prunes the database.
+
 ## How to read this roadmap
 
 Two documents sit behind this page, and they describe the plan at two different
@@ -101,6 +201,23 @@ rendered subagent tree, and this hard stop stands until it does: no production c
 early. See [the Phase-0 corpus probe](../../analysis/phase0-probe.md) for the numbers
 behind the pre-answer.
 
+> **As built: the hard stop did not hold, and it was overridden knowingly.**
+>
+> Code started **2026-07-11**, before the formal spike's paired-capture corpus was
+> captured and before the human sign-off on a rendered tree. That was an explicit owner
+> override of CD-8, made after being told in so many words that those were the remaining
+> conditions. It was a decision, not an oversight, and it is recorded as one.
+>
+> The consequence is still live: **the Phase-0 numbers on this page — the ≥95% figure, the
+> confidence-85 verdict, every percentage quoted from the probe — remain PROVISIONAL.**
+> They come from a desktop probe against an unlabeled corpus, not from a spike measured
+> against a hand-labeled answer key. Ratification against a hand-labeled corpus is still
+> outstanding. Read them as strong indications, not as measurements.
+>
+> What *is* settled by test rather than by probe: the three P0 correctness checks in Phase
+> 3 below are green and merge-blocking. Those are proofs. The Phase-0 accuracy percentages
+> are not yet.
+
 ## Phase 1 — Foundation, security spine, storage
 
 **Goal:** stand up the real project, but make security and automated quality gates live
@@ -129,6 +246,20 @@ below the threshold; the security/license static checks genuinely turn red on a
 deliberately introduced violation; `events_raw` is proven append-only under test; WAL
 mode is on and a restore has been exercised for real; the public documentation site is
 building and publishing.
+
+> **As built: this phase shipped, with one clause of the exit gate still open.**
+>
+> Live and tested: the loopback bind, the mandatory token (hashed, compared in constant
+> time), WAL, the migration runner, `events_raw` immutability enforced by SQLite triggers
+> and proven by test, the >90% coverage gate blocking merges in every shipped package
+> (`packages/test-fixtures` is a deliberate, documented exclusion), and the static guards —
+> which do turn the build red on a deliberately introduced spawner, SSRF sink, or
+> disallowed license.
+>
+> Still open: **the documentation site is not publishing.** The workflow is committed, but
+> GitHub Pages has not been enabled for the repository — an owner action nobody else can
+> take. The deploy job fails rather than reporting a success it did not achieve. The page
+> you are reading is in the repository; it is not yet served from a Pages URL.
 
 ## Phase 1.5 — Animated-room view *(optional, cosmetic, deferred)*
 
@@ -162,6 +293,11 @@ under a copyleft license that would contaminate the rest of the codebase. Both c
 ruled out the two richer-looking alternatives that were evaluated alongside the
 adopted approach.
 
+> **As built: not built, and still not scheduled.** No renderer was adopted, no room
+> route exists, no candidate was even shortlisted beyond the original evaluation. The
+> gating logic held — the moat came first — so this section is a plan that was correctly
+> deferred, not a plan that failed.
+
 ## Phase 2 — Ingest substrate
 
 **Goal:** get both real-world data sources — the live lifecycle hooks and the JSONL
@@ -185,6 +321,37 @@ exactly one `events_raw` row; killing and restarting the ingest process resumes 
 where the transcript reader left off; an unrecognized event type is stored, never
 fatal; sensitive payload data is redacted at write time; the pricing table is seeded.
 
+> **As built: shipped, but the first clause of that exit gate describes a design that was
+> deliberately abandoned. It was never met, because it stopped being the goal.**
+>
+> There is **no single merged cross-source event log**, and no shared envelope that
+> collapses a hook event and a transcript line into one row. The two sources were separated
+> instead, on purpose:
+>
+> - **`events_raw` holds hook events only.** It is append-only, deduplicated by an
+>   idempotency key within its own source, and redacted at write time. Each hook append and
+>   its projected `events` row land in one transaction, so the two can never disagree.
+> - **JSONL is parsed straight into the projections** — sessions, agents, token usage,
+>   `orchestration_edges` — one transaction per session file. It does not pass through
+>   `events_raw` at all.
+>
+> Why the change is an improvement rather than a shortcut: cross-source collapse would have
+> required a synthetic identity for "the same real-world fact" observed two different ways,
+> and getting that key wrong silently double-counts tokens — the one error the whole
+> project exists to avoid. Keeping the sources separate makes hooks structurally incapable
+> of contributing to the numbers. **Hooks are liveness only, never structure.** That is
+> what makes the Phase 3 outage proof possible at all.
+>
+> The rest of the gate holds as written: the tail reader resumes from a persisted offset
+> with zero loss and zero duplication (and replays the corpus on startup), an unknown event
+> type is stored rather than fatal, redaction runs at write time, and the pricing table is
+> seeded and versioned.
+>
+> One more correction to the bullets above: **four** hooks are installed and real —
+> `UserPromptSubmit`, `Stop`, `SubagentStop`, `PreCompact`. Earlier drafts of this corpus
+> spoke of a dozen. In particular there is **no `SubagentStart` hook**; it does not exist
+> in Claude Code, which is precisely why the tree is derived from JSONL.
+
 ## Phase 3 — Projection, the DAG moat, reconciliation, cost
 
 **Goal:** turn the raw event log into the actual product — the persisted subagent
@@ -195,9 +362,21 @@ dollar costs — and prove all three survive a crash, a restart, or a missing ev
 
 - A deterministic transform from raw events into normalized events, and from there into
   sessions, agents, and token usage.
+  *(As built: deterministic, yes — proven by the byte-identical double-replay test — but
+  there is no intermediate "normalized events" stage. The planned Normalizer and Projection
+  steps were both dropped; JSONL parses directly into sessions, agents, token usage and
+  edges in a single transaction per session.)*
 - The persisted, per-instance `orchestration_edges` table — the actual moat artifact —
   built via **two independent paths**, so the subagent tree survives even if one signal
   (say, the dedicated subagent-start hook) never fires for a given session.
+  *(As built: the table is real and is the moat artifact, but the redundancy works
+  differently. It is not "hooks or JSONL" — it is **JSONL alone**, via four structural join
+  paths inside the transcript: the `tool_use` link, the working directory, the
+  task-notification recovery path, and the queue-operation path. The signal this was hedging
+  against — a dedicated subagent-start hook — does not exist in Claude Code at all, so the
+  hedge would have had nothing to fall back on. Deriving structure from the transcript alone
+  turned out to be the stronger design, and it is the reason the outage proof below can be
+  green.)*
 - A reconciliation pass that assigns every `token_usage` record to exactly one agent,
   and a full rebuild-on-startup that must produce a byte-identical database if run
   twice in a row.
@@ -216,6 +395,31 @@ outage. On top of that, the reconstructed hierarchy has to match a hand-labeled 
 session at ≥95% accuracy even without the dedicated subagent-start signal, a
 compaction has to reprice correctly, and no cost can ever silently compute to zero for
 a model with no price on file — that's a hard failure, not a quiet default.
+
+> **As built: this is the phase that delivered, and the exit gate is the one part of this
+> page you can take literally.**
+>
+> **The three release-blocking proofs are green and merge-blocking today:**
+>
+> 1. **Σ `token_usage` equals the JSONL, exactly.** The check is deliberately hostile to
+>    itself: the expected total is computed by an independent reader written inside the
+>    test, not by the production parser, so a parser bug cannot quietly produce its own
+>    passing evidence.
+> 2. **A double replay produces a byte-identical database.**
+> 3. **The DAG rebuilds from the transcript files alone after a simulated outage** — with
+>    hooks separately proven to carry liveness only, never structure.
+>
+> A 12-scenario negative catalogue passes alongside them. The watchdog is real: an agent
+> that never reports completion is marked `unknown`, a fifth status value alongside
+> `working`, `waiting`, `completed` and `error`. Compaction repricing against the
+> pre-compaction baseline is implemented, the delegation-savings metric is implemented, and
+> a model with no price on file is a hard failure rather than a silent zero.
+>
+> **Do not read more into that than it says.** Three specific properties are proven. The
+> ≥95% hand-labeled-accuracy clause in the same exit gate is **not** among them — that
+> still rests on the PROVISIONAL probe numbers, and ratification against a hand-labeled
+> corpus remains outstanding. "Exact, deterministic, and rebuildable" is proven. "95%
+> accurate against a human's answer key" is not yet.
 
 See [the DAG moat](../architecture/dag-moat.md) and [the cost model](../architecture/cost-model.md)
 for the mechanics behind this phase.
@@ -238,6 +442,24 @@ global DAG views are proven to come from a **query over the persisted
 events; and every dollar figure shown traces back to ground-truth tokens multiplied by
 a dated, versioned price.
 
+> **As built: shipped, with one clause of the exit gate never measured.**
+>
+> The read API is authenticated and loopback-only, the live stream is SSE with a
+> same-origin check and no wildcard cross-origin access, and **all four views exist**:
+> live status, the session-scoped subagent tree, the global cross-session DAG, and the
+> cost-flow view. `apps/web` carries 127 tests and — since 2026-07-30 — actually runs
+> them under a coverage gate.
+>
+> Two of the exit-gate clauses hold literally. The tree and global DAG are served by
+> SQL over the persisted `orchestration_edges` table (`apps/server/src/db/edges.ts` →
+> `apps/server/src/api/queries.ts`), not rebuilt in the browser; and every dollar
+> figure is ground-truth tokens times a dated, versioned price, with anything unpriced
+> surfacing as `unpricedTokens` rather than a silent `$0`.
+>
+> **The "understandable in under 30 seconds" clause has never been measured.** Nobody
+> has sat down with a stopwatch and a session they didn't already know. It is not
+> claimed as met — it is simply untested, and it needs a human, not an agent.
+
 ## Phase 5 — Alerting core *(post-1.0)*
 
 **Goal:** turn the dashboard from something you have to look at into something that
@@ -258,6 +480,13 @@ throttled notification; a dedicated test proves the dispatcher never dials a URL
 from event data; and the secret token never appears in the database, the live stream,
 or the logs.
 
+> **As built: not started, and it may never be.** There is no `alert_rules` table, no
+> `webhook_targets` table, no dispatcher and no Telegram adapter anywhere in the
+> repository — the grep is empty, not thin. This phase is v2.0 work, and v2.0 is
+> entered only through **KC-5**, the one checkpoint with no date on it: it is earned by
+> the dashboard surviving real daily use, or it is never entered at all. Read this
+> section as a design that is on file, not a queue position.
+
 ## Phase 6 — Operator alerts UI + release hardening
 
 **Goal:** let you actually manage alert rules and targets from the UI, and formally
@@ -274,6 +503,14 @@ restore.
 or view ever exposes a raw secret; the alerting code is covered at the same >90% bar as
 everything else; the release checklist is complete.
 
+> **As built: split in two — the alerts half is cut, the release half is done.** The
+> operator-alerts API and UI follow Phase 5 into v2.0 behind KC-5 and were cut outright
+> from v1.0. The release-hardening half, which never depended on alerting, exists:
+> [`RELEASE.md`](https://github.com/IvanBBaev/agenthropic/blob/main/RELEASE.md)
+> enumerates every build-failing gate and the backup-restore drill. Its remaining
+> unticked boxes are human acts — tracking the `LICENSE` file, enabling Pages and
+> branch protection, ratifying the labeled corpus — not missing code.
+
 ## Experimental, off the critical path — context-layer feed
 
 Alongside the six numbered phases, the plan keeps a strictly **experimental**, clearly
@@ -283,6 +520,10 @@ basis). It is deliberately isolated so nothing in the core dashboard imports it,
 coverage is excluded from the >90% gate while it stays experimental, and the API key
 that would drive it is kept out of the dashboard's own runtime environment entirely —
 a security boundary, not a convenience.
+
+> **As built: nothing here exists.** No feed, no adapter, no API key, no excluded
+> coverage directory — the track stayed experimental in the sense of never having been
+> started. It remains on file as an idea, which is exactly the status it was given.
 
 ## What's deliberately *not* scheduled yet
 
@@ -332,6 +573,19 @@ schedule without ever touching alerting. Alerting turns out to be the **longest 
 the whole graph** — by design, it's Phase 5-6, post-1.0 work — so its lowest-risk pieces (the
 alert port design and schema) are started early, in parallel with unrelated tracks, so
 alerting doesn't end up being the very last thing blocking a release.
+
+> **As built: the wave model survived; the numbers did not.** The build did run as
+> concurrent waves of independently owned units — but as **four** waves of agent lanes
+> over roughly three weeks, not 17 waves across 9 tracks, and the units were lanes
+> owning disjoint file paths rather than the 75 catalogued work packages. Wave 1 built
+> the ingest loop, the cost engine, the read API and SSE hub, the hook receiver and the
+> SPA shell in parallel; Wave 2 added the three P0 proofs, the negative catalogue and
+> the cost-analysis API; Wave 3 the release scaffolding; Wave 4 the four real views and
+> the events projection. The critical path described above never ran to its end,
+> because its tail is alerting and alerting was cut — what actually landed is the
+> **moat spine**: substrate → ingest → projection → dual-path DAG → reconciliation →
+> replay-on-startup → the three release-blocking tests. The sub-chain that was designed
+> to peel off from the main line turned out to be the whole build.
 
 ## See also
 

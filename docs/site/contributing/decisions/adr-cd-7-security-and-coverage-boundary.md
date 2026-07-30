@@ -1,10 +1,66 @@
 # ADR-0009: CD-7 — Security + the coverage gate are boundary conditions from commit one
 
-- **Status:** accepted
+- **Status:** accepted — **built and enforced** as of 2026-07-30; every criterion below is a failing build or a hard process exit, with one criterion (no-SSRF) currently vacuous (see the as-built update below)
 - **Date:** 2026-07-03
 - **Deciders:** Ivan Baev (project owner), via the six-lens concept-analysis-v2 workflow
 - **Source:** [`concept-analysis-v2.md` §3, row CD-7](../../../analysis/concept-analysis-v2.md#3-canonical-decision-register-v2)
   (consolidates AD7, SD8, QA-D3/D4, G-D3, H-SEQ); `docs/ai/DESIGN.md` §8
+
+## As-built update — 2026-07-30
+
+**Verdict: holds, and it is the part of this project that was built exactly as
+decided.** Every acceptance criterion below is enforced by something that fails a
+build or kills a process — not by a policy sentence.
+
+- **Loopback-or-fail, with a post-listen re-check.** The server binds `127.0.0.1`,
+  and then *re-verifies every actually-bound address after listening*: any
+  non-loopback address logs a secret-free FATAL and hard-exits the process. That
+  second check exists because a config-level bind constant is only a claim about
+  intent; the socket is the fact.
+- **Token-or-refuse-to-start**, never "auth disabled," compared with a **timing-safe**
+  comparison. All `/api/` routes are gated.
+- **No auth oracle.** The negative catalogue asserts **byte-identical 401 bodies**
+  across four wrong-token shapes, and a **403 on a foreign `Origin` both with and
+  without a valid token** — so neither response distinguishes "wrong token" from
+  "no token," nor "bad origin" from "bad credential."
+- **`gate:spawner`** (`scripts/check-no-spawner.mjs`) scans `apps`, `packages`,
+  `scripts`, `hooks` and the repo-root config files for subprocess spawners, wide
+  binds (`0.0.0.0`, `host: true`, `host: ''`), WebSocket servers, and dynamic
+  evaluation including indirect `eval` — and exits 1 with the offenders listed. It
+  runs in CI on every push. Its allowlist contains exactly one file: the gate itself,
+  which necessarily contains the patterns it forbids.
+- **`gate:licenses`** runs the CD-9 allowlist scan ([ADR-0011](adr-cd-9-per-artifact-licensing.md)).
+- **WAL is asserted, not assumed** — the connection sets `journal_mode = WAL` and
+  then reads the pragma back, throwing if SQLite did not honour it. Foreign keys are
+  enforced the same way.
+- **Backup restore is exercised in CI**, not documented as a procedure: the test
+  writes, backs up, deletes the original, restores, and asserts `integrity_check =
+  ok`, WAL mode preserved, and the substrate rows readable through the port.
+- **`events_raw` has no UPDATE/DELETE path**, enforced by SQLite triggers rather
+  than by discipline ([ADR-0004](adr-cd-2-immutable-substrate-projection.md)).
+- **The >90% coverage gate is real in every shipped package.** `apps/server`,
+  `apps/web`, `packages/core` and `packages/shared` each run `vitest run --coverage`
+  with 90% thresholds on lines/branches/functions/statements.
+  `packages/test-fixtures` is a deliberate, documented exclusion — it is fixture data
+  consumed by other packages' tests, not shipped logic.
+
+**Two honesty defects found in this area and fixed rather than shipped**, recorded
+here because a security ADR that only lists its successes is not evidence of
+anything:
+
+1. `apps/web` ran its tests **without `--coverage`**. The thresholds were configured,
+   looked enforced in review, and silently never executed — a gate that cannot fail is
+   not a gate. Now `vitest run --coverage`, same as every other package.
+2. The `events` table was created by a migration and never written to — a lie by
+   omission in a shipped schema. Now wired ([ADR-0006](adr-cd-4-schema-events-and-orchestration.md)).
+
+**One criterion is vacuously satisfied, and should be read that way.** There is no
+SSRF test, because there is no outbound network call anywhere in `apps/server` — no
+`fetch`, no `http.request`, no HTTP client dependency. Webhook targets do not exist
+yet ([ADR-0008](adr-cd-6-ports-and-adapters.md): `AlertSink` has no adapter; alerts
+are post-1.0). "No outbound dial to a payload-supplied URL" is currently true because
+there is no outbound dial at all. When alerting is built, this criterion needs a real
+test; today it has nothing to test.
 
 ## Context
 

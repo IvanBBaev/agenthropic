@@ -1,10 +1,52 @@
 # ADR-0008: CD-6 — Ports & adapters: the named port set
 
-- **Status:** accepted
+- **Status:** accepted, **amended in practice 2026-07-30** — the ports/adapters principle holds (pure core, no DB imports, fakes everywhere); the named port set shipped as four seams, not ten (see the as-built update below)
 - **Date:** 2026-07-03
 - **Deciders:** Ivan Baev (project owner), via the six-lens concept-analysis-v2 workflow
 - **Source:** [`concept-analysis-v2.md` §3, row CD-6](../../../analysis/concept-analysis-v2.md#3-canonical-decision-register-v2)
   (consolidates AD6, SD1); §4.2 (Senior Developer)
+
+## As-built update — 2026-07-30
+
+**Verdict: the principle holds; the named port set is smaller than drawn.** Ports &
+adapters is the shape of the codebase — the pure parser and cost engine live in
+`packages/core` with **no DB imports**, and the whole ingest path is driven in tests
+by in-memory fakes that never touch the real `~/.claude/projects`. What changed is
+which seams turned out to need naming.
+
+**The seams that exist:**
+
+| Port | Where | Note |
+|---|---|---|
+| `CorpusFs` | `apps/server/src/corpus/fs-port.ts` | The JSONL reader — this ADR's `TokenReader`/`TokenSource`, realized. **Read-only by construction**: it exposes no write, rename, unlink, chmod or open-for-write operation, so the live corpus cannot be perturbed even by a bug. |
+| `EventStorePort` | `packages/shared/src/ports/event-store.ts` | The append-only substrate seam (`append` / `readAll`). The only formal port living in `packages/shared`; it compiles with no DB imports, satisfying `WP-D1`'s stated criterion. |
+| `RealtimeHub` | `apps/server/src/realtime/hub.ts` | SSE fan-out ([ADR-0007](adr-cd-5-transport-sse.md)). |
+| `SubstrateProvider` | `apps/server/src/api/substrate-provider.ts` | Read-only seam letting the cost-analysis endpoint reach the corpus on demand — not in the original set, because the need (compaction repricing and delegation savings want raw substrate, which DB rows cannot answer) only became visible once the cost engine was real. |
+
+**The names in the diagram below that have no adapter:**
+
+- **`Normalizer` / `Projection`** — never built as separate stages; see
+  [ADR-0004](adr-cd-2-immutable-substrate-projection.md)'s as-built update. This
+  matters to *this* ADR because the second acceptance criterion below explicitly
+  leans on them ("requires the Normalizer and Projection to be pure functions
+  reachable through a port"). Replay determinism was achieved anyway — the P0
+  double-replay proof asserts a byte-identical result — but by a different
+  construction than the one this criterion names.
+- **`AlertSink`** — no adapter. Alerts are post-1.0 and gated behind KC-5.
+- **`HookSource`, `StoragePort`, `PricingProvider`, `CostEngine`** — not separate
+  named interfaces. The functionality exists (a hook HTTP route, the DB modules under
+  `apps/server/src/db/`, the seeded `model_pricing` table, `computeCostUsd` in
+  `packages/core`) but as concrete modules, not as ports with fakes behind them.
+- **`simple10`'s strategy-pattern per-runtime agent classes** are not adopted.
+  There is one runtime adapter (Claude Code) and no strategy indirection; a Codex
+  adapter would be added behind `CorpusFs` and the parser, not behind a class
+  hierarchy.
+
+**Honest read:** the "more interfaces and indirection for a solo owner to maintain"
+cost named below was paid down by not building the interfaces that had exactly one
+implementation and no test seam to gain. The four ports that survived are the four
+that a fake actually plugs into. The second-runtime portability claim is therefore
+**unproven** — plausible from the parser's purity, but nothing has been ported.
 
 ## Context
 

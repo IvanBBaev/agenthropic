@@ -18,6 +18,22 @@ Completed milestones move to [`DONE.md`](DONE.md). Context-free session? Read
 > The override does NOT touch: the security invariants, the KC calendar (KC-0's two open
 > boxes below are still Ivan's, deadline 2026-07-13), the LABEL-ME ratification (numbers
 > stay PROVISIONAL), or the no-commit-without-explicit-ask rule.
+> **⚠️ OWNER OVERRIDE 2026-07-18:** KC-0's date (2026-07-13) passed with its two physical
+> boxes still unchecked — the default branch is archive. Ivan explicitly instructed in chat
+> ("пускай Fable агенти и довършвай роудмапа") that implementation work continue; per the
+> instruction-precedence rules that explicit current-chat instruction outranks the default.
+> The override covers DISPATCHING ONLY: the two physical acts (open the friction log;
+> install ≥1 rival dashboard) remain Ivan's and remain open, KC-1 (2026-07-27) still turns
+> on the friction log, nothing is archived, and all other invariants stay intact.
+> **⚠️ OWNER OVERRIDE 2026-07-29:** KC-1's date (2026-07-27) also passed unmet. Two of its
+> three clauses were satisfied long ago (the WP-S7 verdict is written; the THROWAWAY
+> DAG-with-dollars render exists), but the third — "the friction log has not crowned a
+> rival" — was never *satisfiable*, because the log was never opened; an unopened log
+> cannot report a reading. The default branch is therefore archive. Ivan again instructed
+> in chat ("пускай агенти и довършвай роудмапа") that work continue. Same scope as the
+> two overrides above: **dispatching only.** Nothing is archived, nothing is committed,
+> the physical acts stay open and stay Ivan's, the numbers stay PROVISIONAL, and the
+> security invariants are untouched.
 > **Schedule of record:** [`roadmap-v1-v2-2026-07-06.md`](docs/analysis/roadmap-v1-v2-2026-07-06.md)
 > — kill checkpoints **KC-0…KC-5 with default-death**. Gate A signs by **2026-07-13**
 > (KC-0) or the project archives by default; **v1.0 hard date 2026-12-01** (KC-4).
@@ -87,8 +103,8 @@ Binding once Step 0 is signed; dates from roadmap §4. Every failure branch is t
 
 | Checkpoint | Date | Stay-alive condition | On failure (the default) |
 |---|---|---|---|
-| **KC-0** | **2026-07-13** | All Step-0 boxes above checked | Archive |
-| **KC-1** | **2026-07-27** | WP-S7 verdict written **+** the THROWAWAY DAG-with-dollars render exists **+** the friction log has not crowned a rival (≥4/5 questions) | Archive |
+| **KC-0** | **2026-07-13** | All Step-0 boxes above checked | Archive — **DATE PASSED UNMET (2 of 5 boxes open); default overridden by owner instruction, see above** |
+| **KC-1** | **2026-07-27** | WP-S7 verdict written **+** the THROWAWAY DAG-with-dollars render exists **+** the friction log has not crowned a rival (≥4/5 questions) | Archive — **DATE PASSED UNMET: clauses 1 and 2 green, clause 3 unsatisfiable (log never opened); default overridden by owner instruction, see above** |
 | **KC-2** | **2026-09-14** | Phase 1–2 exit gates green; at most **one** velocity rebase applied | Descope ladder (roadmap §5) or archive |
 | **KC-3** | **2026-10-12** | The three P0 moat proofs green & merge-blocking | Archive |
 | **KC-4** | **2026-12-01** | **v1.0 tagged. The date does not move.** | Archive + public write-up |
@@ -171,66 +187,158 @@ finding IDs. Recorded in [`DONE.md`](DONE.md) (2026-07-10 entry).
 
 ---
 
-## Blocked — released by the WP-S7 GO verdict
+## Implementation board _(released by the WP-S7 GO verdict; running under the owner overrides)_
 
 Authored and dependency-ordered in the development plan (§4 waves, §5 catalog), as
-amended by best-path §6. Unlocks wave-by-wave after GO.
+amended by best-path §6. Status as of **2026-07-29**: **Phases 1–2 are substantially
+complete, Phase 3 is complete except its proof suites, Phase 4 is complete on the
+server side and in progress on the SPA.** Everything below is **UNCOMMITTED** — the
+working tree holds it; committing is Ivan's explicit call.
 
-### Phase 1 · Foundation, security spine, storage, ports _(security + coverage go LIVE; KC-2 window — Phases 1–2 complete by **2026-09-14**)_
-- [ ] **Foundation/CI (F):** WP-F1 scaffold — pnpm monorepo `apps/server` · `apps/web` ·
+> **Recorded architectural divergence (deliberate, not a defect to refactor):** JSONL is
+> parsed and ingested straight into the projections (`sessions` · `agents` ·
+> `orchestration_edges` · `token_usage`) inside a single transaction per session.
+> `events_raw` therefore holds **hook events only**, and the WP-IN6→IN7 normalizer /
+> projection pair was never built as separate stages. This keeps CD-1 (JSONL-primary)
+> intact — hooks contribute **liveness only, never structure** — and keeps replay
+> idempotent, but the WP rows below are marked accordingly rather than silently ticked.
+
+### Phase 1 · Foundation, security spine, storage, ports _(security + coverage LIVE; KC-2 window — Phases 1–2 complete by **2026-09-14**)_
+- [x] **Foundation/CI (F):** WP-F1 scaffold — pnpm monorepo `apps/server` · `apps/web` ·
   `packages/shared` · `packages/core` (server/web-import-free moat IP, best-path §6.7) ·
-  `packages/test-fixtures` · `hooks/`, Node 22 _(← WP-S7)_ · F2 lint · F3 coverage-harness ·
-  F4 CI · F5 no-spawner/no-SSRF gate · F6 license scan · F7 security contract tests
-  (**RED until WP-U0**) · F8 backup/tested-restore.
-- [ ] **Data (D):** WP-D1 ports+shared types · D2 SQLite/WAL — **better-sqlite3 only,
-  single driver (best-path §6.3)** · D3 migration runner · D4 `events_raw` append-only
-  substrate · D5 `events` · D6 sessions+agents · D7 `orchestration_edges` · D8
-  `token_usage` · D10 retention+redaction **(OPEN-1/2/3 must be resolved first — see
-  Lane DOC-D)**. _(D9 merged into C1.)_
-- [ ] **WP-U0** _(backend)_ — **Fastify server bootstrap**: loopback-or-fail +
-  timing-safe token + same-origin + TypeBox + config; **turns WP-F7 green.**
-  _Dep: WP-F1, WP-F7, WP-D2._
-- [ ] **Delivery/QA (X):** WP-X1 golden fixture corpus · X2 labeled annotations+loader ·
-  X5 blocking >90% coverage gate · X6 README green badges+donation · X7 GitHub Pages
-  build. **WP-A1** alert port. _(WP-X11 vector-DB stub **deleted** per best-path §6.3.)_
-- **Exit gate:** coverage (>90%) green & blocking · security/license gates red on
-  violation · WP-F7 green via WP-U0 · `events_raw` append-only proven · WAL + tested
-  restore · badges green · Pages builds.
+  `packages/test-fixtures` · `hooks/`, Node 22 · F2 lint (eslint + prettier `format:check`) ·
+  F3 coverage-harness (v8) · F4 CI (`.github/workflows/ci.yml`) · F5 no-spawner gate
+  (`scripts/check-no-spawner.mjs`) · F6 license scan (`scripts/check-licenses.mjs`) ·
+  F7 security contract tests (`apps/server/test/security-contract.test.ts` — **GREEN**,
+  turned by WP-U0) · F8 backup/tested-restore (`db/backup.ts` + `test/backup.test.ts`).
+- [x] **Data (D):** WP-D1 ports+shared types (`packages/shared/src/ports`, `types/rows.ts`) ·
+  D2 SQLite/WAL — **better-sqlite3 only**, pragmas asserted at open · D3 migration runner ·
+  D4 `events_raw` append-only substrate (proven in `test/events-raw.test.ts`) ·
+  D6 sessions+agents · D7 `orchestration_edges` · D8 `token_usage`.
+- [x] **WP-D5 `events`** — **wired**, not retired. `SqliteEventStore.append` now writes the
+  raw row and its normalized projection in **one transaction** (proven by a rollback test);
+  a duplicate idempotency key produces zero rows in both tables. Only identifiers are
+  projected — never payload content. `occurred_at` is **receipt time**, because the WP-IN1
+  envelope carries no event-originated timestamp, and every DTO row says so via
+  `occurredAtSource: 'receipt'` rather than letting a consumer mistake one for the other.
+  Id extraction is total and defensive (the receiver accepts any shape: non-object payloads
+  and non-string ids yield NULL, no silent coercion). Read side: `GET /api/sessions/:id/events`
+  — Bearer-gated, 404 unknown session vs **200 + empty array** for a session with no hook
+  events (different facts, not conflated), oldest-first with an `id` tiebreak, paginated
+  with `total` so truncation stays visible. Hooks remain **liveness only, never structure**:
+  P0 proof 3 still shows the DAG dump unchanged by hook appends. _(Honest residue:
+  `jsonl`-source envelopes are stored raw but deliberately not projected; rows whose
+  `session_id` could not be extracted belong to no session timeline and are reachable only
+  via `events_raw`; the shared `InMemoryEventStore` fake does not mirror the projection.)_
+- [ ] **WP-D10 retention+redaction** — redaction is live (`hooks/redact.ts`, applied at the
+  hook ingest boundary); **retention is not implemented** and stays blocked on OPEN-1/2/3
+  (Lane DOC-D) — Ivan's decision, not an agent's.
+- [x] **WP-U0** _(backend)_ — Fastify bootstrap: loopback-or-fail (plus post-listen address
+  re-verification that hard-exits), timing-safe token compare, same-origin SSE check,
+  TypeBox, config. _(D9 merged into C1; WP-X11 vector-DB stub **deleted** per best-path §6.3.)_
+- [x] **Delivery/QA (X):** WP-X1 golden fixture corpus (`packages/test-fixtures` — 6
+  fixtures: flat tool_use · nested workflow · queue-operation · task-notification recovery ·
+  depth-2 sync · usage dedup) · X5 blocking >90% coverage gate (enforced per package in CI).
+- [ ] **WP-X2** labeled annotations + loader — **blocked on Ivan's LABEL-ME act** (it is the
+  human ground truth the loader would load).
+- [x] **WP-X6** README badges + donation — CI (real workflow status) · Node (from
+  `engines.node`) · MIT (linked to `LICENSE`). Coverage/npm/CodeQL badges deliberately
+  **not** added: nothing real backs them today. Support section added.
+- [~] **WP-X7** GitHub Pages build — `.github/workflows/pages.yml` exists (official
+  `configure-pages` → `jekyll-build-pages` → `upload-pages-artifact` → `deploy-pages`
+  flow, zero new dependencies). Publishes **`docs/`, not `docs/site/`** — 129 relative
+  links point outward to `../analysis`, so a site-only publish would break them;
+  `docs/ai/` is git-excluded and absent from the CI checkout. **Blocked on Ivan:** Pages
+  is not enabled (Settings → Pages → Source: "GitHub Actions"); until then the deploy job
+  fails by design rather than pretending to succeed.
+- [ ] **WP-A1** alert port (v2-facing; not on the v1.0 critical path).
+- **Exit gate:** coverage >90% green & blocking ✅ (now genuinely including `apps/web` —
+  its script ran without `--coverage` until 2026-07-30, so the thresholds silently never
+  executed) · security/license gates red on violation ✅ · WP-F7 green via WP-U0 ✅ ·
+  `events_raw` append-only proven ✅ · WAL + tested restore ✅ · badges green ✅ — the CI
+  badge reads `success`, but honestly: the newest run on `main` is `eded0b3`
+  (2026-07-12), so the badge attests to the Phase-1 foundation, **not** to Waves 1–4,
+  which are still uncommitted · Pages builds ❌ (blocked on Ivan enabling Pages).
 
 ### Phase 2 · Ingest substrate
-- [ ] **WP-IN1** envelope+idempotency-key · **IN2** EventStore append-only · **IN3**
-  HookSource authed loopback receiver (accept-any-event) · **IN5** JSONL tail-follow +
-  durable offsets · **IN11** contingent outbox _(**deferrable per the probe** — JSONL
-  self-reconciles; add only on a sub-second-liveness or hooks-only-data trigger)_ · **IN14**
-  redaction at ingest boundary. **WP-C1** pricing table+seed · **C2** PricingProvider.
-  Hooks installer **WP-X8** _(absorbs IN4)_.
-- **Exit gate:** hook + JSONL for one fact → one `events_raw` row · kill/restart resumes at
-  offset, zero loss/dup · unknown event_type stored not crashed · redaction live.
+- [x] **WP-IN1** envelope + idempotency-key (`hooks/envelope.ts`) · **IN2** EventStore
+  append-only (`db/event-store.ts`) · **IN3** HookSource authed loopback receiver,
+  accept-any-event (`hooks/routes.ts`) · **IN5** JSONL follow + durable resume
+  (`corpus/` — enumeration, containment-safe reads, `fingerprint.ts` as the durable
+  per-session offset/identity) · **IN14** redaction at the ingest boundary
+  (`hooks/redact.ts`). **WP-C1** pricing table + seed (`db/pricing.ts`) · **C2**
+  PricingProvider (`loadPricing`). Hooks installer **WP-X8** (`hooks/install.mjs`,
+  _absorbs IN4_).
+- [ ] **WP-IN11** contingent outbox — **deliberately deferred** per the probe (JSONL
+  self-reconciles). Add only on a sub-second-liveness or hooks-only-data trigger.
+- **Exit gate:** one fact → one `events_raw` row ✅ · kill/restart resumes, zero loss/dup ✅
+  (fingerprint replay) · unknown `event_type` stored not crashed ✅ · redaction live ✅.
 
 ### Phase 3 · Projection, the DAG moat, reconciliation, cost _(P0 blockers — exit = **KC-3, by 2026-10-12**)_
-- [ ] **WP-IN6** pure Normalizer · **IN7** projection · **IN8** dual-path
-  `orchestration_edges` **(moat core — must satisfy the 14-item parser gate of
-  [`parser-spec.md`](docs/analysis/parser-spec.md): `Agent`/`Workflow` not `Task`, both
-  layouts, all four join paths, self-referential parent index)** · **IN9** reconciliation+backfill
-  **(load-bearing — child-transcript token summation is the ledger)** · **IN10**
-  replay-on-startup · **IN12** missing-Stop→unknown watchdog · **IN13** P0 suite.
-  **Cost:** WP-C3 CostEngine · C4 compaction repricing · C5 delegation-savings · C6
-  priceless-fails-CI · C7 cost API. **QA:** WP-X3 three release-blocker tests · X4
-  12-scenario negative catalogue.
-- **Exit gate:** **three P0 tests green & merge-blocking** (Σtokens==JSONL exact ·
-  double-replay byte-identical DB · DAG rebuilt from JSONL alone) · hierarchy ≥95% without
-  `SubagentStart` · PreCompact reprices vs baseline · no priceless model.
+- [x] **WP-IN8** dual-path `orchestration_edges` **(moat core — satisfies the 14-item
+  parser gate of [`parser-spec.md`](docs/analysis/parser-spec.md): `Agent`/`Workflow` not
+  `Task`, both layouts, all four join paths, self-referential parent index)** · **IN9**
+  reconciliation + backfill **(load-bearing — child-transcript token summation is the
+  ledger; `message.id` dedup applied)** · **IN10** replay-on-startup (the watcher's first
+  tick; a `ContainmentError` is a stop-everything exit) · **IN12** missing-Stop→`unknown`
+  watchdog (`ingest/watchdog.ts`).
+- [~] **WP-IN6** pure Normalizer · **IN7** projection — **folded into
+  `ingest/ingest-session.ts`** by the divergence above (pure parse in
+  `packages/core/src/parser`, single-transaction write in the server). The behaviour is
+  covered; the two-stage decomposition is not built.
+- [x] **Cost:** WP-C3 CostEngine (`core/cost/compute-cost.ts`) · C4 compaction repricing ·
+  C5 delegation-savings (`isEstimate: true` carried in the DTO) · C6 priceless-fails —
+  `PricingError` HALTS the session ingest **before any row is written** (no partial
+  session, never a silent $0); read-side gaps surface as `unpricedTokens`.
+- [x] **WP-C7** cost API — `/api/cost/summary` plus `GET /api/sessions/:id/cost-analysis`
+  (C4/C5 over a read-only substrate seam; 503 unconfigured · 404 unknown · 422 on
+  `PricingError` **and** on a poisoned transcript · detail-free 500 on a crafted corpus;
+  `isEstimate` is `Type.Literal(true)` so it cannot serialise as `false`).
+- [x] **WP-X3** three release-blocker tests · **IN13** P0 suite — `apps/server/test/p0/`.
+  Σ token_usage == JSONL proven against an **independent reader written inside the test**
+  (not the production parser); double-replay proven **byte-identical** via `VACUUM INTO`
+  snapshots under a fixed clock, cross-checked by a full ordered logical dump; DAG-from-
+  JSONL-alone proven equal to the reference DB **and** hooks proven liveness-only (the DAG
+  dump is unchanged by appending them), plus a kill/reopen outage replay.
+- [x] **WP-X4** 12-scenario negative catalogue — `apps/server/test/negative/` +
+  `packages/core/test/negative/`, all 12 green, each citing its scenario number and mapped
+  criterion. _(Scenario #2's "anomaly flagged" half is documented against the current
+  honest posture — raw stored + WP-IN12 `unknown` — because no hook normalizer seam
+  exists; if one is ever built, that test must be extended.)_
+- **Exit gate:** three P0 tests green & merge-blocking ⏳ · hierarchy ≥95% without
+  `SubagentStart` — **blocked on LABEL-ME** (the ≥95% is measured against Ivan's hand-labeled
+  corpus; machine-vs-machine cannot sign it) · PreCompact reprices vs baseline ✅ (core) ·
+  no priceless model ✅.
 
 ### Phase 4 · Read API + SPA + the five daily questions — **v1.0 ships at this exit gate** _(KC-4 hard date: **2026-12-01** — it does not move)_
-- [ ] **WP-U1** SSE RealtimeHub · **U2** read API foundation · **U3** session/tree endpoints ·
-  **U4** cost/global-DAG endpoints · **U5** SPA shell+auth+SSE client _(consider Lane DOC-C /
-  WP-UX0 output before starting U5)_ · **U6** live status view (<30s) · **U7** session tree
-  view · **U8** global persistent DAG view · **U9** cost/Sankey view · **X9** release
-  checklist (**pulled into the v1.0 tail per roadmap §5** — the plan filed it post-1.0 by
-  defect; v1.0 does not ship without its own `RELEASE.md`).
-- **Exit gate (= the v1.0 definition, best-path §6.1):** all 5 daily questions answerable ·
-  <30s to understand a session · tree & global DAG served by a query over persisted edges ·
-  every dollar traces to tokens×price.
+- [x] **WP-U1** SSE RealtimeHub (CD-5: SSE, same-origin checked, one hub shared by the
+  ingest loop and the stream route) · **U2** read API foundation (Bearer-gated, TypeBox
+  response schemas, uniform `{error}`) · **U3** session/tree endpoints (served by a query
+  over the **persisted** edges) · **U4** cost/global-DAG endpoints · **U5** SPA shell +
+  token gate (sessionStorage only) + SSE client + hash router.
+- [x] **WP-U6** live status view (`GET /api/sessions?limit=50` + SSE; an
+  `agent-status-changed` moves an agent between buckets in place, anything else refetches
+  the **persisted** truth — never a client-side invention) · **U7** session tree view (SVG
+  tree drawn **only** from persisted edges) · **U8** global persistent DAG view · **U9**
+  cost/Sankey view (model → cost hub → top sessions + an explicit "other sessions"
+  remainder; **no invented model×session split**). Honesty carried into the UI: `unknown`
+  is a first-class always-rendered bucket and is **not** merged with a `null` "unrecorded"
+  status; observed (`tool_use`) edges are solid, inferred (`directory` /
+  `task_notification` / `queue_operation`) are dashed with a permanent legend; edges to
+  missing nodes are counted and declared, not drawn; `counts.truncated` surfaces a banner
+  with real numbers; `unpricedTokens` gets its own KPI and a `~n` column, and a
+  $0-priced model with usage is listed in text rather than drawn as a $0 flow.
+- [x] **WP-X9** release checklist — [`RELEASE.md`](RELEASE.md): every CD-7 gate, every CD-9
+  check, the backup→restore drill (**actually executed** against `data/agenthropic.db`:
+  readonly open → online backup → `integrity_check` = ok), and an explicit **blockers**
+  section that names what is still open instead of hiding it (LICENSE untracked so GitHub
+  reports `license: null`; `main` not branch-protected; Pages not enabled; `apps/web`
+  coverage not enforced).
+- **Exit gate (= the v1.0 definition, best-path §6.1):** all 5 daily questions answerable ✅
+  (server + UI) · <30s to understand a session — **unmeasured**: nobody has yet sat in front
+  of it with a real corpus and timed it, and until Ivan does, this stays ⏳ (an agent cannot
+  sign a usability claim) · tree & global DAG served by a query over persisted edges ✅ ·
+  every dollar traces to tokens×price ✅.
 
 ### Post-1.0 / v2.0 · Alerting core _(off the v1.0 critical path — best-path §6.1; **entered only via KC-5**: 14 consecutive days of real daily v1.0 use + ≥3 friction-log entries wanting alerts — roadmap §6. If that evidence never materializes, v2.0 never starts, and that is a success of the roadmap, not a failure.)_
 - [ ] **WP-A2** alert/webhook schema · **A3** secret `token_ref` resolver · **A4** no-SSRF

@@ -44,8 +44,8 @@ Per session, from `~/.claude/projects/<slug>/` (**read-only, always**):
 |---|---|
 | top-level `<session-uuid>.jsonl` | the main-agent transcript; carries parent-side `Agent`/`Workflow` `tool_use` spawn blocks, `usage` rows for the main agent's own turns, and `compact_boundary` records |
 | `subagents/.../agent-<hex>.jsonl` | one per subagent; carries that agent's `usage` rows (inline `agentId == <hex>`) and, for nested layouts, its child spawns |
-| `*.meta.json` | per-agent metadata (`promptId`, layout, model) |
-| `journal.jsonl` (workflow/`wf_*` dirs) | per-workflow dispatch journal; `started` line-order + content-hash `key` |
+| `agent-<hex>.meta.json` | per-agent sidecar, a **single-line JSON object**, one beside each subagent transcript. **Flat** subagents: `{agentType, description, toolUseId, spawnDepth}` — its **`toolUseId` is the primary child→parent join anchor** (§4). **Workflow** subagents: `{agentType, spawnDepth}` (and, in worktree-isolation mode, `worktreePath`) — **no `toolUseId`**, so they join by directory instead. Measured on real data (1855 sidecars): `spawnDepth` ∈ {1: 1842, 2: 11}; `toolUseId` present on 282, absent on 1573; `worktreePath` on 19. *(The earlier "`promptId`, layout, model" description was wrong — those keys do not exist; retracted.)* |
+| `journal.jsonl` (`subagents/workflows/wf_*` dirs) | per-workflow dispatch journal; `started` line-order + content-hash `key` |
 
 **Two on-disk layouts exist and the parser branches on directory shape, not version
 string** (gate item #2, #10):
@@ -70,7 +70,7 @@ normative MUSTs for the production parser.
 |---|---|---|---|---|
 | 1 | Spawn edges key on `Agent`/`Workflow` tools, **never** `Task` (0 `Task` blocks corpus-wide) | ✅ green | S2 | `WP-IN8` |
 | 2 | Walk **both** layouts (flat + nested `wf_*`); branch on directory shape | ✅ green | S2 | `WP-IN8` |
-| 3 | Support the structural join schemas (see §4) | ✅ green (now **4 paths**) | S2, S3 | `WP-IN8` |
+| 3 | Support the structural join schemas (see §4) | ✅ green — **sidecar-anchored**, branched on layout; real-data **1855/1855 = 100%** (§4.2, PROVISIONAL) | S2, S3 + real-data | `WP-IN8` |
 | 4 | Index subagents as **self-referential candidate parents** (depth-2 parents live inside depth-1 agent transcripts, not ROOT) | ✅ green | S2, S5 | `WP-IN8`, data-model |
 | 5 | Match block ids by **structural equality**, never substring (a `toolu_`/hex id also appears in prose — substring join forges false edges) | ✅ green | S3 | `WP-IN8` |
 | 6 | Sum tokens from **child transcripts**; parent rollup is ≈0% (measured **0.00%**, disjoint `message.id` sets) | ✅ green | S6 | `WP-IN7`, `WP-IN9` |
@@ -79,41 +79,90 @@ normative MUSTs for the production parser.
 | 9 | Concurrency-safe: key on **`session-uuid`**, never slug (two same-slug concurrent sessions must stay two roots) | ✅ green | S2, S5 | `WP-IN8` |
 | 10 | Version-detect / branch-on-shape (not on a version string) | ✅ green | S2 | `WP-IN8` |
 | 11 | Intra-workflow sibling ordering (EMP-1) | ✅ **amended** — see §6.3; original "total order via journal+promptId" is **false**, order is wave-partial only | S5 | dag-moat, UX |
-| **N1** | **`<task-notification>` as a first-class flat join path** — recovers a spawn edge when a `PreCompact` evicted the parent-side `tool_use` block | ✅ **new MUST** | S2 | `WP-IN8` |
-| **N2** | **`queue-operation` as a hard join schema** for `run_in_background` (queued) `Agent` spawns whose parent `tool_use` block is never materialized | ✅ **new MUST** | S3 | `WP-IN8` |
-| **N3** | **Dedup `usage` rows by `message.id`** before summing, and price **per-bucket/per-model** | ✅ **new MUST** | S6 | `WP-IN7`, cost |
+| **N1** | **`<task-notification>` as a flat join path** — a legacy child-side re-anchor when the parent-side `tool_use` block was evicted | ⚠️ **absent on real data** — **0/1855** edges; retained as a defensive legacy fallback only (its spike "load-bearing" role was fixture-only) | S2; real-data | `WP-IN8` (defensive) |
+| **N2** | **`queue-operation` as a hard join schema** for `run_in_background` (queued) `Agent` spawns whose parent `tool_use` block is never materialized | ✅ green — but **marginal: 3/1855** on real data | S3; real-data | `WP-IN8` |
+| **N3** | **Dedup `usage` rows by `message.id`** before summing, and price **per-bucket/per-model** | ✅ **green (reconciled, PROVISIONAL)** — the §5.2 byte-identical premise was false (lines sharing a `message.id` are streaming partials whose `output` grows **and** whose first row may carry a transient fast-mode `model` label), so dedup collapses to the **per-bucket maximum** and settles the `model` to the greatest-`output` row; `UsageConflictError` is reserved for a genuine collision — two distinct models tied at the same max `output`, or any `agentId` clash (§5.2, §8) | S6; real-data | `WP-IN7`, cost |
 
-Corpus-wide, gate coverage is **12 green, 1 amended (#11), 1 absent (#7)**.
+> **Real-data note (PROVISIONAL — LABEL-ME).** The "green" marks above were originally
+> self-scored against 5 synthetic spike fixtures. Re-measured read-only over all
+> `~/.claude/projects/*` (141 sessions), edge reconstruction is **1855/1855 = 100%** (§4.2),
+> but two premises did **not** survive contact with real data: N1 `<task-notification>`
+> fires **0** times, and N3's identical-`usage`-per-`message.id` assumption is false on **two**
+> axes — `output` grows **and** the first partial can carry a transient fast-mode `model` label
+> (§8) — N3 is now **reconciled** to per-bucket-max collapse **plus** greatest-`output` model
+> settle (§5.2). With both reconciled, a full read-only re-measurement with `usage` **intact**
+> parses **all 141 sessions** end-to-end (**0** `UsageConflictError`, **0** `SubstrateError`,
+> **0** orphan subagents). Corpus-wide gate coverage is now: **11 green (N3 reconciled), 1
+> amended (#11), 2 absent (#7, N1)**.
 
 ---
 
-## 4. Join schemas — the four structural edge sources
+## 4. Join schemas — sidecar-anchored resolution, branched on layout
 
-Spawn-edge resolution reached **224/224 (100%)** only with all four paths below. With just
-the two base paths it was 221/224 (98.66%); the three misses were all `run_in_background`
-spawns in f28af3fd, closed by N2. **Substring matching is never a fifth path** — item #5.
+> **RETRACTED — "224/224 (100%)".** The prior version of this section claimed spawn-edge
+> resolution reached 224/224 across four co-equal paths, with `<task-notification>` (N1) as
+> the load-bearing compaction-recovery path and a fictional `meta.toolUseId`↔`queue`
+> handshake. **That number was self-scored against 5 synthetic spike fixtures that encoded
+> anchors which do not match real on-disk shapes; it is withdrawn.** Measured against real
+> data (§4.2) the distribution is entirely different: the flat anchor is the **sidecar
+> `toolUseId`**, `<task-notification>` **never fires (0/1855)**, and `queue-operation` is
+> marginal (3/1855). The real numbers below are **PROVISIONAL — pending owner (Ivan)
+> ratification (LABEL-ME)**.
 
-**Base paths (both layouts):**
-1. **Parent `tool_use` block** (flat) — the main transcript's `Agent`/`Workflow`
-   `tool_use` block; its `id` is the structural anchor. Strictly monotonic in timestamp
-   (a clean total order for flat siblings — see §6.3).
-2. **Nested-directory anchor** (nested) — the `workflows/wf_*/…` path locates the parent;
-   no `tool_use` block is needed.
+### 4.1 The resolution model (as implemented)
+Resolution **branches on layout** (gate #2), keying edges on structural id *position*,
+never a substring (item #5):
 
-**Recovery paths the spike added (both are hard, structural, not heuristic):**
-3. **`<task-notification>`** (N1) — child-side. When compaction evicted the parent-side
-   `tool_use` block, the child's `<task-notification>` message carries `<task-id>` /
-   `<tool-use-id>` that re-anchor the edge. This is what makes compaction survivable
-   (f28af3fd: 3 edges recovered; tool_use-only alone gets 15/18, this backfills to 18/18).
-4. **`queue-operation`** (N2) — a `type:"queue-operation"` record carrying `<task-id>` and
-   `<tool-use-id>` tags, joined to the child's inline `agentId` and `meta.toolUseId`.
-   Required for `run_in_background` `Agent` spawns; without it every backgrounded subagent
-   silently vanishes from the DAG.
+- **Workflow subagent** (`subagents/workflows/wf_<id>/agent-<hex>.jsonl`) — joined by
+  **directory** alone. Parent is the `Workflow` dispatcher when a `workflow_id` links the
+  `wf_<id>` dir to a spawning block, else the **main session id**. On real data **no real
+  `Workflow` `tool_use` block carries `workflow_id` in its `input`**, so the dispatcher map
+  is empty and every workflow subagent joins to main by directory. Edge `source =
+  'directory'`.
 
-The join key is **intentionally cross-file** (a `tool_use.id` in the parent file matches an
-inline id in a child file) — which is exactly why matching must be on structural id
-*position*, never a substring grep (the same id also appears in prose in 7/7/31/0/0 places
-per session).
+- **Flat subagent** (`subagents/agent-<hex>.jsonl`) — anchor the child hex to a parent
+  spawn-block id from the strongest available source, in priority order:
+  1. the **`agent-<hex>.meta.json` sidecar's `toolUseId`** — the primary anchor, present on
+     essentially every flat subagent (§2);
+  2. else a **parent-side async `type:'user'` record** whose `toolUseResult.agentId ==
+     childHex`, taking that record's sibling `tool_result.tool_use_id` as the anchor;
+  3. else a **`queue-operation` record** whose `<task-id> == childHex`, taking its
+     `<tool-use-id>` as the anchor (`run_in_background` spawns).
+
+  The resolved anchor is then classified by what it names:
+  - a **materialized `Agent`/`Workflow` `tool_use` block** → `source = 'tool_use'`; parent
+    is that block's owning transcript (a depth-2 parent block lives **inside a depth-1 agent
+    transcript**, not ROOT — gate #4);
+  - a **`queue-operation` record** → `source = 'queue_operation'`; parent is that record's
+    owning transcript;
+  - an anchor whose block is gone (compaction-evicted) → re-anchored to main, `source =
+    'task_notification'`.
+
+  A **legacy child-side `<task-notification>`** in the child's first record is a final
+  fallback (also → main, `source = 'task_notification'`). No path → **orphan, no edge**
+  (a parent is never fabricated).
+
+### 4.2 Real-data measurement (PROVISIONAL — LABEL-ME)
+Measured read-only over **all `~/.claude/projects/*` (20 slugs, 141 sessions, 54 with
+subagents, 1855 subagent transcripts)** — *not* the 5-session spike corpus. Because the
+end-to-end parser currently **throws `UsageConflictError` on every subagent-bearing session**
+(§8, real-data violation of the §5.2 identical-usage assumption), the edge pipeline was
+exercised with `usage` blocks neutralized to isolate reconstruction from the unrelated usage
+gate; edge resolution reads no `usage` field, so this does not perturb it.
+
+| Metric | Value |
+|---|---|
+| Edge reconstruction rate | **1855 / 1855 = 100.00%**, 0 orphans |
+| `directory` (workflow subagents) | 1571 (84.7%) |
+| `tool_use` (flat, via sidecar `toolUseId`) | 281 (15.1%) |
+| `queue_operation` (`run_in_background` flat) | 3 (0.16%) |
+| `task_notification` | **0 (0.00%)** |
+| parent = main / parent = another agent (depth-2) | 1844 / 11 |
+
+Flat total 284 = 281 `tool_use` + 3 `queue_operation` + 0 `task_notification` + 0 orphan;
+nested total 1571 = all `directory`. The join key is **intentionally cross-file** (a
+`tool_use.id` / sidecar `toolUseId` matching an inline hex in a child file) — which is
+exactly why matching must be on structural id *position*, never a substring grep.
 
 ---
 
@@ -126,11 +175,43 @@ This makes CD-3's backfill a **hard join, not a confidence-scored inference** �
 UI-surfaced uncertainty is required for attribution.
 
 ### 5.2 Dedup by `message.id` is a correctness gate (N3)
-Claude Code writes **one JSONL line per content block**, and every line sharing a
-`message.id` carries the **identical** `usage` block. Naive row-summation over-counts by
-**~2.4–2.7×** (this corpus: 8,540 raw usage rows → **3,339 deduped messages**). Summing
-without dedup produces ~$900 of phantom spend where the true figure is ~$346. **The parser
-MUST dedup `usage` by `message.id` before summing.** This is correctness, not optimization.
+Claude Code writes **one JSONL line per content block**, and lines sharing a `message.id`
+are **streamed partials of one message**: the `input` and cache buckets are **constant**
+across them while `output_tokens` **grows** toward the final total (verified raw, e.g.
+`output_tokens` 7→7→309 on one message). Dedup therefore collapses each `message.id` to its
+**per-bucket maximum** — equivalently the final streamed state — **never a sum**. Naive
+row-summation over-counts by **~2.4–2.7×** (this corpus: 8,540 raw usage rows → **3,339
+deduped messages**); summing without dedup produces ~$900 of phantom spend where the true
+figure is ~$346. **The parser MUST collapse `usage` to the per-`message.id` per-bucket
+maximum before summing.** This is correctness, not optimization.
+
+> **PROVISIONAL (LABEL-ME).** This supersedes the original §5.2/N3 premise that the partials
+> were **byte-identical** and that ANY `usage`, `model`, or `agentId` divergence was a loud
+> `UsageConflictError`. Real transcripts (the full `~/.claude/projects` corpus, 141 sessions)
+> disprove the premise on **two** axes, both reconciled by the same rule — *the final streamed
+> row is ground truth*:
+>
+> 1. **Usage** — only `output` grows across the partials, so `usage` collapses to the
+>    **per-bucket maximum** (the final total) instead of asserting equality.
+> 2. **Model** — the **first** partial can carry a **transient fast-mode routing label**
+>    (observed: `claude-fable-5` on the first row, then `claude-opus-4-8` on every later row
+>    and the final row, sharing one `message.id` **and** one `requestId`; `output` 2→…→6747 /
+>    9→…→360). Fast mode *runs Opus* (it does not downgrade), so the settled label is the true
+>    model. The parser therefore settles the model to the **greatest-`output` row**. This is
+>    pricing-relevant, not cosmetic: naively taking the first partial's `fable-5` would price
+>    the message at the fable rate (`$10/$50` per MTok) instead of the true opus rate
+>    (`$5/$25`) — a ~2× over-charge. Measured impact: **2 of 141 sessions** (both in
+>    `servicenow-preflight`) previously threw here; with the settle, **0/141 throw** and the
+>    edge rate holds at **100%**.
+>
+> What stays loud (genuine corruption streaming cannot produce): two **distinct** models tied
+> at the **same maximum** `output`, or any **`agentId`** disagreement on a shared `message.id`
+> (§5.3 makes message ids per-agent-disjoint). Selecting the final-row model/usage is
+> *choosing* ground truth, not inferring it, so it is defensible under the ground-truth
+> invariant — but both loud-failure relaxations (usage-max **and** model-settle) are flagged
+> for Ivan's ratification and the corpus numbers stay PROVISIONAL. The §5.4 "**halt loudly on
+> an unknown model id**" pricing MUST is **unchanged** — the settle only chooses *between two
+> known models*, and a genuinely unknown settled id still halts.
 
 ### 5.3 Parent-rollup is 0.00% (gate #6)
 Parent `usage` rows are the main agent's own turns (`agentId=null`, `isSidechain=false`);
@@ -219,11 +300,34 @@ implements them, and the verdict they rest on is still `CONDITIONAL` pending hum
 ## 8. What still gates production code
 
 1. **CD-8** — no `package.json`/`src/` until Gate A signed *and* WP-S7 GO **ratified**.
-2. **WP-S7 is CONDITIONAL GO** — every number here is self-check. The five
-   `spike/corpus/sessions/*/LABEL-ME.md` (224 per-edge blanks) must be filled by Ivan to
-   upgrade `edge_accuracy` from *self-check 100%* to *human-verified 100%*. **If Ivan
-   re-parents any edge, these numbers — and possibly the join schemas — move.**
-3. **KC-0 (2026-07-13)** — Gate A's two physical Step-0 acts (friction log; rival-dashboard
+   *(Code exists as of 2026-07-11 by explicit owner override of CD-8; this spec remains the
+   contract, and its numbers are still PROVISIONAL pending the LABEL-ME sign-off below.)*
+2. **The "224/224 (100%)" self-score is WITHDRAWN.** It was scored against 5 synthetic spike
+   fixtures encoding anchors that do not match real on-disk shapes; it never measured real
+   data. It is replaced by a **real, read-only measurement over all `~/.claude/projects/*`
+   (141 sessions, 54 with subagents, 1855 subagent transcripts): edge reconstruction =
+   1855/1855 = 100%, 0 orphans** — breakdown `directory` 1571 / `tool_use` 281 /
+   `queue_operation` 3 / `task_notification` 0 (§4.2). **This number is PROVISIONAL — pending
+   owner (Ivan) ratification (LABEL-ME).** If Ivan re-parents any edge by hand, it moves.
+3. **Two real-data caveats the edge number rests on (do not overstate).**
+   - The end-to-end parser **previously threw `UsageConflictError` on real subagent-bearing
+     sessions** on **two** streaming axes, both now **RECONCILED** by "the final streamed row
+     is ground truth" (§5.2): **(a) usage** — lines sharing one `message.id` carry **growing**
+     `output` (e.g. 7→309), which the old identical-usage assertion rejected; dedup now
+     collapses each `message.id` to its per-bucket maximum. **(b) model** — the first partial
+     can carry a transient fast-mode label (`claude-fable-5`) that settles to the real model
+     (`claude-opus-4-8`) on the same `message.id`/`requestId`; dedup now settles the model to
+     the greatest-`output` row (2 of 141 sessions, both `servicenow-preflight`, threw here).
+     A genuine collision still throws (two distinct models tied at the same max `output`, or an
+     `agentId` clash). A read-only re-measurement with `usage` **intact** now parses **all 141
+     sessions** (0 `UsageConflictError`, 0 `SubstrateError`, edge rate 100%, 0 orphans). **Both
+     reconciliations and the corpus cost numbers stay PROVISIONAL pending Ivan's ratification
+     (LABEL-ME).**
+   - The pure parser correctly **throws `SubstrateError` on any non-JSONL file**, so the
+     WP-IN5 disk adapter **MUST** feed only the four §2 artifact types; handing it the whole
+     session directory (`tool-results/*.txt`, `workflows/scripts/*.js`, `*.pdf`) throws on 32
+     sessions.
+4. **KC-0** — Gate A's two physical Step-0 acts (friction log; rival-dashboard
    trial) are Ivan's, not machine-closable, and are unrelated to the technical evidence
    above. The spike de-risks the *build*; it does not satisfy the *governance* checkpoint.
 
