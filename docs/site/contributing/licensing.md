@@ -50,15 +50,15 @@ important limit of what that CI gate can and cannot prove
 > the mechanism has to be chosen; until then this is an open decision with no
 > outstanding debt behind it.
 >
-> **One real licensing defect is open, and it is about this repository's own
-> license, not anyone else's.** A root `LICENSE` file exists (MIT, © 2026 Ivan
-> Baev), but it is **untracked** — `git ls-files LICENSE` returns nothing. The
-> repository is public with no license grant visible to anyone who clones it, and
-> GitHub's API reports `license: null`. Under exactly the Berne reasoning §2 applies
-> to `cast` and `disler`, an unpublished `LICENSE` file grants nothing;
-> `agenthropic` currently presents to the world as all-rights-reserved. Tracking
-> that file is a release blocker owned by Ivan, listed in
-> [`RELEASE.md`](https://github.com/IvanBBaev/agenthropic/blob/main/RELEASE.md).
+> **The one real licensing defect — this repository's own license — was open for a
+> day and is now closed.** From 2026-07-29 a root `LICENSE` file existed (MIT, © 2026
+> Ivan Baev) but was **untracked**: the repository was public with no license grant
+> visible to anyone who cloned it, and GitHub's API reported `license: null`. Under
+> exactly the Berne reasoning §2 applies to `cast` and `disler`, an unpublished
+> `LICENSE` file grants nothing — `agenthropic` was presenting to the world as
+> all-rights-reserved while its own README advertised MIT. It was tracked on
+> **2026-07-30** in commit `9b6c6b3`, and
+> `gh api repos/IvanBBaev/agenthropic --jq .license.spdx_id` now returns `MIT`.
 
 ## 1. The rule, in one table
 

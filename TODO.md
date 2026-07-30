@@ -192,8 +192,9 @@ finding IDs. Recorded in [`DONE.md`](DONE.md) (2026-07-10 entry).
 Authored and dependency-ordered in the development plan (§4 waves, §5 catalog), as
 amended by best-path §6. Status as of **2026-07-29**: **Phases 1–2 are substantially
 complete, Phase 3 is complete except its proof suites, Phase 4 is complete on the
-server side and in progress on the SPA.** Everything below is **UNCOMMITTED** — the
-working tree holds it; committing is Ivan's explicit call.
+server side and in progress on the SPA.** _(Updated **2026-07-30**: the SPA landed too —
+all four views ship. Everything below is now **committed and pushed** — `9b6c6b3` on
+`main`, on Ivan's explicit "пушвай"; further commits still need their own explicit ask.)_
 
 > **Recorded architectural divergence (deliberate, not a defect to refactor):** JSONL is
 > parsed and ingested straight into the projections (`sessions` · `agents` ·
@@ -255,10 +256,13 @@ working tree holds it; committing is Ivan's explicit call.
 - **Exit gate:** coverage >90% green & blocking ✅ (now genuinely including `apps/web` —
   its script ran without `--coverage` until 2026-07-30, so the thresholds silently never
   executed) · security/license gates red on violation ✅ · WP-F7 green via WP-U0 ✅ ·
-  `events_raw` append-only proven ✅ · WAL + tested restore ✅ · badges green ✅ — the CI
-  badge reads `success`, but honestly: the newest run on `main` is `eded0b3`
-  (2026-07-12), so the badge attests to the Phase-1 foundation, **not** to Waves 1–4,
-  which are still uncommitted · Pages builds ❌ (blocked on Ivan enabling Pages).
+  `events_raw` append-only proven ✅ · WAL + tested restore ✅ · badges green ✅ — and as
+  of 2026-07-30 the badge finally means what it says: CI is `success` on `9b6c6b3`, the
+  first pushed commit containing Waves 1–4 (until then the newest run on `main` was
+  `eded0b3` from 2026-07-12, so the badge attested only to the Phase-1 foundation) ·
+  Pages builds ❌ — run `30528892265` failed in `configure-pages` with
+  `Get Pages site failed … Not Found`, exactly as designed while Pages is off; blocked
+  on Ivan enabling Settings → Pages → Source: "GitHub Actions".
 
 ### Phase 2 · Ingest substrate
 - [x] **WP-IN1** envelope + idempotency-key (`hooks/envelope.ts`) · **IN2** EventStore
@@ -331,9 +335,10 @@ working tree holds it; committing is Ivan's explicit call.
 - [x] **WP-X9** release checklist — [`RELEASE.md`](RELEASE.md): every CD-7 gate, every CD-9
   check, the backup→restore drill (**actually executed** against `data/agenthropic.db`:
   readonly open → online backup → `integrity_check` = ok), and an explicit **blockers**
-  section that names what is still open instead of hiding it (LICENSE untracked so GitHub
-  reports `license: null`; `main` not branch-protected; Pages not enabled; `apps/web`
-  coverage not enforced).
+  section that names what is still open instead of hiding it. Two of those four blockers
+  are now closed: `apps/web` coverage is enforced (2026-07-30) and `LICENSE` is tracked
+  (`9b6c6b3`, GitHub reports `MIT`). Still open: `main` is not branch-protected, and
+  Pages is not enabled.
 - **Exit gate (= the v1.0 definition, best-path §6.1):** all 5 daily questions answerable ✅
   (server + UI) · <30s to understand a session — **unmeasured**: nobody has yet sat in front
   of it with a real corpus and timed it, and until Ivan does, this stays ⏳ (an agent cannot

@@ -177,10 +177,11 @@ scan."**
       Confirm none of them ships in v1.0 (nothing to attribute / attest yet):
       `grep -rniE "telegram|controlGate|nirdiamant" apps/ packages/ --include='*.ts' -l`
       — expected empty.
-- [ ] **`LICENSE` (MIT) committed and pushed.** **[BLOCKER — not true today]** as of
-      2026-07-29 `LICENSE` exists locally but is untracked; GitHub reports
-      `license: null`. Verify after push:
-      `gh api repos/IvanBBaev/agenthropic --jq .license.spdx_id` → `MIT`.
+- [ ] **`LICENSE` (MIT) committed and pushed.** **Resolved 2026-07-30** — tracked in
+      commit `9b6c6b3`; `gh api repos/IvanBBaev/agenthropic --jq .license.spdx_id`
+      now returns `MIT`, not `null`. Re-verify with that same command at tag time.
+      *(It was an open blocker from 2026-07-29 until that push: the file existed
+      locally but was untracked, so the public repository carried no grant.)*
 
 ## 5. Backup → restore drill (CD-7 "WAL + tested restore", WP-F8)
 
@@ -232,14 +233,22 @@ scan."**
 - [ ] **Every displayed dollar traces to ground-truth tokens × a dated price** — proven
       by P0-1 (§3) plus `apps/server/test/api-cost.test.ts` / `db-pricing` suites; no
       silent zero-cost default (CD-3/CD-4 cost-trust chain).
-- [ ] **README truth pass.** **[BLOCKER — not true today]** `README.md`'s Status
-      section still says "Pre-code… no application code yet"; the release commit must
-      rewrite it to describe what v1.0 actually is. Badges must render green (§7).
+- [ ] **README truth pass.** **Resolved 2026-07-30** — the "Pre-code… no application
+      code yet" Status section was replaced with what actually runs, and the CI badge
+      now attests to the full build: CI is `success` on `9b6c6b3`, the first pushed
+      commit that contains Waves 1–4 (before it, the badge described only the Phase-1
+      foundation). Re-read the section at tag time; it must describe v1.0, not this
+      pre-tag state.
 - [ ] **Docs site deployed** — the `Docs site (GitHub Pages)` workflow
       ([`.github/workflows/pages.yml`](.github/workflows/pages.yml)) is green on the
       release commit. **[HUMAN]** one-time: Pages enabled in Settings → Pages →
       Source: "GitHub Actions" (repo reports `has_pages: false` as of 2026-07-29).
       Verify: `gh api repos/IvanBBaev/agenthropic --jq .has_pages` → `true`.
+      **Confirmed failing for exactly this reason on 2026-07-30:** run
+      `30528892265` on `9b6c6b3` died in `configure-pages` with
+      `Get Pages site failed … Not Found`, before reaching the build. The workflow
+      keeps `enablement: false` deliberately, so it cannot switch Pages on by
+      itself — it fails honestly instead. After enabling, re-run it.
 
 ## 7. Version, tag, release notes
 

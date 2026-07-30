@@ -79,12 +79,17 @@ PROVISIONAL), Ivan's two physical KC acts, or no-commit-without-an-explicit-ask.
   test-fixtures 23 (a documented, deliberate coverage-gate exclusion).
 
 ### Still open, and owned by Ivan — not by any agent
-- **Everything above is UNCOMMITTED.** Committing and pushing is his explicit call.
+- ~~**Everything above is UNCOMMITTED.**~~ **Closed 2026-07-30** — committed and pushed
+  as `9b6c6b3` on Ivan's explicit instruction (198 files, +27 133 / −1 113). CI is
+  `success` on that commit, so the README badge now attests to Waves 1–4 rather than
+  to the Phase-1 foundation alone. Further commits still require their own explicit ask.
 - The two physical KC acts: open the friction log, install ≥1 rival dashboard.
 - **LABEL-ME ratification** — until the hand-labeled corpus exists, the Phase-0 numbers
   stay PROVISIONAL and the hierarchy ≥95% gate cannot be signed by machine.
-- LICENSE tracking (GitHub still reports `license: null`), enabling GitHub Pages, and
-  branch protection on `main`.
+- ~~LICENSE tracking~~ **closed 2026-07-30** — tracked in `9b6c6b3`; GitHub now reports
+  `MIT` instead of `license: null`. Still open: enabling GitHub Pages (the Pages workflow
+  fails in `configure-pages` by design until it is switched on) and branch protection on
+  `main`, without which CD-7's "coverage blocks merges" is not physically enforced.
 - **"<30s to understand a session" is unmeasured.** Nobody has sat in front of it with
   a real corpus and timed it; an agent cannot sign a usability claim.
 
