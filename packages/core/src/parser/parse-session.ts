@@ -344,15 +344,19 @@ function buildIndices(transcripts: readonly Transcript[]): SpawnIndices {
           }
         }
       } else if (type === 'queue-operation') {
+        // Guard the string content ONCE so both tag scans below read a narrowed
+        // `content` — a re-check per scan would be an unreachable dead branch.
         const content = asString(record?.['content']);
-        const toolUseId = content === undefined ? undefined : TOOL_USE_ID_RE.exec(content)?.[1];
-        if (toolUseId !== undefined) {
-          queueOps.set(toolUseId, transcript.owner);
-          // The record's `<task-id>` is the queued child's hex — the join key a
-          // run_in_background child needs to reach this parent tool-use-id.
-          const childHex = content === undefined ? undefined : TASK_ID_RE.exec(content)?.[1];
-          if (childHex !== undefined) {
-            queueChildToToolUse.set(childHex, toolUseId);
+        if (content !== undefined) {
+          const toolUseId = TOOL_USE_ID_RE.exec(content)?.[1];
+          if (toolUseId !== undefined) {
+            queueOps.set(toolUseId, transcript.owner);
+            // The record's `<task-id>` is the queued child's hex — the join key a
+            // run_in_background child needs to reach this parent tool-use-id.
+            const childHex = TASK_ID_RE.exec(content)?.[1];
+            if (childHex !== undefined) {
+              queueChildToToolUse.set(childHex, toolUseId);
+            }
           }
         }
       } else if (type === 'user') {

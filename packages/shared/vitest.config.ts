@@ -1,5 +1,8 @@
 import { defineConfig } from 'vitest/config';
 
+// Thresholds are set at the level this package actually holds rather than at
+// the workspace floor of 90: a 90% bar on a package sitting at 100% licenses a
+// ten-point regression to pass in silence, which is the opposite of a gate.
 export default defineConfig({
   test: {
     coverage: {
@@ -7,10 +10,10 @@ export default defineConfig({
       reporter: ['text', 'lcov', 'json-summary'],
       include: ['src/**'],
       thresholds: {
-        lines: 90,
-        branches: 90,
-        functions: 90,
-        statements: 90,
+        lines: 100,
+        branches: 100,
+        functions: 100,
+        statements: 100,
       },
     },
   },

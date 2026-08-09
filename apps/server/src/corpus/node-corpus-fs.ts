@@ -55,11 +55,11 @@ export function nodeCorpusFs(): CorpusFs {
         if (!st.isFile()) {
           // TOCTOU: the lstat'd regular file became a dir/fifo/socket before open.
           const err = new Error(`not a regular file: ${absPath}`) as NodeError;
-          // A directory opened O_RDONLY|O_NOFOLLOW fstats as a dir (reachable in
-          // tests → EISDIR). Any other non-regular kind (fifo/socket/device)
-          // blocks or errors on the open itself, so fstat never runs on it — the
-          // ENOTREG arm is unreachable via real fs and is covered by the fake.
-          /* v8 ignore next */
+          // A directory opened O_RDONLY|O_NOFOLLOW fstats as a dir → EISDIR. A
+          // fifo or socket never reaches here (the open itself blocks or
+          // errors), but a character device does: it opens cleanly and fstats as
+          // neither file nor directory → ENOTREG. Both arms are integration
+          // tested against real syscalls.
           err.code = st.isDirectory() ? 'EISDIR' : 'ENOTREG';
           throw err;
         }

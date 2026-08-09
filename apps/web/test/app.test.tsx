@@ -10,6 +10,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import App from '../src/App';
 import {
   costSummary,
+  deferred,
   globalDag,
   jsonResponse,
   sessionList,
@@ -209,6 +210,30 @@ describe('shell with a stored token', () => {
     expect(screen.getByLabelText('Dashboard token')).toBeDefined();
     expect(sessionStorage.getItem(TOKEN_KEY)).toBeNull();
     expect(MockEventSource.instances.every((source) => source.closed)).toBe(true);
+  });
+
+  it('ignores a health result that lands after unmount instead of dropping the token', async () => {
+    const health = deferred<Response>();
+    fetchMock.mockImplementation((url: string) => {
+      if (url.startsWith('/api/health')) return health.promise;
+      if (url.startsWith('/api/sessions')) return Promise.resolve(jsonResponse(200, sessionList()));
+      return Promise.reject(new Error(`unrouted fetch in test: ${url}`));
+    });
+    const { unmount } = render(<App />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('connection-chip').textContent).toBe('checking…'),
+    );
+    unmount();
+
+    await act(async () => {
+      health.resolve(healthResponse(401, { error: 'Unauthorized.' }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    // The probe belonged to a shell that no longer exists; a 401 answer to an
+    // aborted request must not log the (possibly still valid) session out.
+    expect(sessionStorage.getItem(TOKEN_KEY)).toBe('secret-token');
   });
 
   it('closes the EventSource on unmount', async () => {

@@ -178,8 +178,12 @@ export const migrations: readonly Migration[] = [
       // WP-D8: ground-truth token usage. UNIQUE(message_id, bucket) is the
       // N3 dedup guarantee at the storage level - one usage row per message
       // per bucket (parser-spec 5.2: naive row summation over-counts ~2.4x).
-      // agent_id is nullable by design: backfilled later by the hard join
-      // (parser-spec 5.1).
+      // It is also the conflict target of the convergence upsert in
+      // db/token-usage.ts, which corrects a mid-stream partial in place.
+      // agent_id is nullable by design: the writer resolves a main-transcript
+      // turn to the session id (the main agent's node id), so a NULL here means
+      // a row whose owner genuinely could not be joined - surfaced as
+      // `unattributed`, never hidden (parser-spec 5.1).
       db.exec(`
         CREATE TABLE token_usage (
           id                      INTEGER PRIMARY KEY,
@@ -228,6 +232,89 @@ export const migrations: readonly Migration[] = [
           insert.run(model, bucket, rates[bucket], PRICING_SEED_EFFECTIVE_FROM);
         }
       }
+    },
+  },
+  {
+    id: 8,
+    name: 'token-usage-main-agent-attribution',
+    up(db) {
+      // Repairs databases written before db/token-usage.ts attributed
+      // main-transcript turns at insert time: those rows carry agent_id NULL,
+      // so the session root reported a permanent $0 while its spend showed up
+      // as `unattributed`. This is the hard join the original schema comment
+      // promised - session_id onto the main agent node that already exists in
+      // `agents` - and it invents nothing: rows with no such node stay NULL and
+      // stay visible as unattributed, and no token value is touched.
+      //
+      // A live corpus also self-heals without this (the next re-ingest of a
+      // session rewrites its attribution); the migration covers the sessions
+      // whose transcripts are no longer on disk to be re-read.
+      db.exec(`
+        UPDATE token_usage
+           SET agent_id = session_id
+         WHERE agent_id IS NULL
+           AND EXISTS (
+             SELECT 1 FROM agents a
+             WHERE a.id = token_usage.session_id AND a.type = 'main'
+           );
+      `);
+    },
+  },
+  {
+    id: 9,
+    name: 'ingest-checkpoints',
+    up(db) {
+      // WP-IN10 replay checkpoint: the persisted memory that lets a restart
+      // skip the sessions whose bytes have not moved since the last run. Rows
+      // are a CACHE of work already done, never a source of dashboard truth -
+      // dropping the whole table costs one full replay and changes no result.
+      //
+      // `scope` is a sha-256 of the resolved corpus root, not the root itself:
+      // an absolute path on this machine encodes the user's home directory, and
+      // the same hygiene that makes `sanitizeFailureReason` strip paths out of
+      // failure reports applies to anything the database persists. A different
+      // corpus root is a different scope and therefore a full replay.
+      //
+      // `ingest_revision` is the code-side semantics stamp (see
+      // REPLAY_CHECKPOINT_REVISION): bumping it invalidates every checkpoint at
+      // once, which is how a parser / cost-engine / schema change forces the
+      // corpus to be re-read instead of silently keeping stale projections.
+      //
+      // WITHOUT ROWID: every access is a point lookup or a scan on the primary
+      // key, and there is no surrogate id worth storing.
+      db.exec(`
+        CREATE TABLE ingest_checkpoints (
+          scope           TEXT NOT NULL,
+          session_id      TEXT NOT NULL,
+          fingerprint     TEXT NOT NULL,
+          ingest_revision INTEGER NOT NULL,
+          recorded_at     TEXT NOT NULL,
+          PRIMARY KEY (scope, session_id)
+        ) WITHOUT ROWID;
+      `);
+    },
+  },
+  {
+    id: 10,
+    name: 'retention-scan-indexes',
+    up(db) {
+      // WP-D10 retention: pruning selects by age, in id order, in bounded
+      // batches (`MAX_ROWS_PER_RUN`). Without these the delete pass is a full
+      // table scan of the two tables that grow without bound - exactly the
+      // tables retention exists to bound - so the maintenance job gets slower
+      // precisely as the database gets bigger.
+      //
+      // `(occurred_at, id)` and not `(occurred_at)` alone: the batch cursor is
+      // (age, id), so the trailing id makes the scan a covering range read and
+      // keeps the batch boundary stable across runs rather than depending on
+      // whatever order the engine happens to return for equal timestamps.
+      //
+      // These are pure read-path accelerators. They change no result, only the
+      // time it takes to reach it - a dropped index costs speed, never truth.
+      db.exec(`
+        CREATE INDEX idx_events_occurred_at_id ON events(occurred_at, id);
+        CREATE INDEX idx_token_usage_occurred_at_id ON token_usage(occurred_at, id);
+      `);
     },
   },
 ];

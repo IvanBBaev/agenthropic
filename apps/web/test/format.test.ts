@@ -26,6 +26,20 @@ describe('formatUsd', () => {
     expect(formatUsd(0.0042)).toBe('$0.0042');
   });
 
+  it('marks a positive amount below the four-decimal floor as <$0.0001, never $0.0000', () => {
+    // 0.00005.toFixed(4) is '0.0000' - the same string as the honest zero.
+    // A real-but-tiny cost must stay visibly non-zero.
+    expect(formatUsd(0.00005)).toBe('<$0.0001');
+  });
+
+  it('renders the floor boundary itself with its real digits', () => {
+    expect(formatUsd(0.0001)).toBe('$0.0001');
+  });
+
+  it('never claims a negative delta is a tiny positive cost', () => {
+    expect(formatUsd(-0.0042)).toBe('$-0.0042');
+  });
+
   it('uses cents precision otherwise', () => {
     expect(formatUsd(1.239)).toBe('$1.24');
   });

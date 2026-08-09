@@ -195,6 +195,12 @@ complete, Phase 3 is complete except its proof suites, Phase 4 is complete on th
 server side and in progress on the SPA.** _(Updated **2026-07-30**: the SPA landed too —
 all four views ship. Everything below is now **committed and pushed** — `9b6c6b3` on
 `main`, on Ivan's explicit "пушвай"; further commits still need their own explicit ask.)_
+_(Updated **2026-08-09**: the 2026-07-31 → 2026-08-09 hardening waves are committed and
+pushed on a second explicit «пушвай» — coverage pinned at **100/100/100/100 in all five
+packages** with zero pragmas and guard tests, the status lifecycle + WP-IN12 watchdog
+live, the corpus-scale benchmark + read-path fixes, the WP-D10 retention mechanism
+(values still OPEN-1/2/3), the web/API honesty audits, and the six approved audit
+fixes — **1318 tests**. See DONE.md Milestone 1 for the full record.)_
 
 > **Recorded architectural divergence (deliberate, not a defect to refactor):** JSONL is
 > parsed and ingested straight into the projections (`sessions` · `agents` ·
@@ -231,27 +237,62 @@ all four views ship. Everything below is now **committed and pushed** — `9b6c6
   `jsonl`-source envelopes are stored raw but deliberately not projected; rows whose
   `session_id` could not be extracted belong to no session timeline and are reachable only
   via `events_raw`; the shared `InMemoryEventStore` fake does not mirror the projection.)_
-- [ ] **WP-D10 retention+redaction** — redaction is live (`hooks/redact.ts`, applied at the
-  hook ingest boundary); **retention is not implemented** and stays blocked on OPEN-1/2/3
-  (Lane DOC-D) — Ivan's decision, not an agent's.
+- [~] **WP-D10 retention+redaction** — redaction is live (**`apps/server/src/hooks/redact.ts`**
+  — the old `hooks/redact.ts` path recorded here was stale; the repo-root `hooks/` holds only
+  the installer, and `hooks/README.md:146` already cited the correct path). It runs at the hook
+  ingest boundary **before** the envelope, so the idempotency key is computed over the redacted
+  payload and persistence never sees the raw body; `redactTokenInUrl` is separately wired into
+  the Fastify log serializer. The corpus path needs none — it persists no raw payload.
+  **Retention mechanism now implemented** (2026-08-07, `apps/server/src/retention/`): bounded,
+  transactional prune over the `events`/`token_usage` projections with a dry-run mode, an
+  fsync'd JSONL cost receipt written inside the delete transaction, a `keepMinimum`-floored
+  backup-file expiry, and a static source guard proving no DML ever targets `events_raw`,
+  `sessions`, `agents`, `orchestration_edges`, `model_pricing` or `schema_version`. Default
+  (`NO_RETENTION`) is a byte-identical no-op that opens no transaction; pruning `token_usage`
+  is refused outright without an explicit `acknowledgeCostLoss`. 80 tests, 100% coverage.
+  **Still `[~]`, NOT done:** the policy VALUES stay blocked on OPEN-1/2/3 — Ivan's decision,
+  not an agent's — and nothing invokes the runner on a timer or over HTTP, deliberately, until
+  the policy is signed. The two additive prune indexes are now **built** (migration 10
+  `retention-scan-indexes`: `idx_events_occurred_at_id`, `idx_token_usage_occurred_at_id` —
+  keyed `(occurred_at, id)` because the batch cursor is (age, id), not age alone). They are
+  pure read-path accelerators — a dropped index costs speed, never truth — so nothing else in
+  the suite would have noticed their absence; `migrations.test.ts` asserts them over
+  `sqlite_master` for exactly that reason. Known residue: a pruned `token_usage` row whose source JSONL still exists returns on
+  the next replay — totals self-heal upward, never silently down, but space is not durably
+  reclaimed until segment archival exists (an argument for pruning `events` only, for now).
 - [x] **WP-U0** _(backend)_ — Fastify bootstrap: loopback-or-fail (plus post-listen address
   re-verification that hard-exits), timing-safe token compare, same-origin SSE check,
   TypeBox, config. _(D9 merged into C1; WP-X11 vector-DB stub **deleted** per best-path §6.3.)_
 - [x] **Delivery/QA (X):** WP-X1 golden fixture corpus (`packages/test-fixtures` — 6
   fixtures: flat tool_use · nested workflow · queue-operation · task-notification recovery ·
   depth-2 sync · usage dedup) · X5 blocking >90% coverage gate (enforced per package in CI).
-- [ ] **WP-X2** labeled annotations + loader — **blocked on Ivan's LABEL-ME act** (it is the
-  human ground truth the loader would load).
+- [~] **WP-X2** labeled annotations + loader — the **loader half is built** (2026-08-07):
+  `packages/test-fixtures/annotations/` holds the schema, the loader, blank templates for
+  60 claims, and `packages/core/test/hierarchy-gate.test.ts`, which computes the one-sided
+  Wilson lower bound and fails the gate unless it clears 0.95. The arithmetic is pinned:
+  n ≥ 0.95 · 1.6449² / 0.05 → **n ≥ 52 with zero errors**, ~n ≥ 90 to survive a single one.
+  With no filled annotations present the gate reports **"substrate unavailable"** rather
+  than passing vacuously. **Still blocked on Ivan's LABEL-ME act** — the human ground truth
+  itself: fill the `__________` blanks in `annotations/templates/`, save into
+  `annotations/human/`, then run
+  `pnpm --filter @agenthropic/core exec vitest run test/hierarchy-gate.test.ts`.
+  ⚠️ Caveat to weigh before committing filled templates: `spike/` is git-excluded, so the
+  annotations would land without the substrate they were labelled against, degrading the
+  gate back to "substrate unavailable" for anyone else checking out the repo.
 - [x] **WP-X6** README badges + donation — CI (real workflow status) · Node (from
   `engines.node`) · MIT (linked to `LICENSE`). Coverage/npm/CodeQL badges deliberately
   **not** added: nothing real backs them today. Support section added.
-- [~] **WP-X7** GitHub Pages build — `.github/workflows/pages.yml` exists (official
+- [x] **WP-X7** GitHub Pages build — `.github/workflows/pages.yml` (official
   `configure-pages` → `jekyll-build-pages` → `upload-pages-artifact` → `deploy-pages`
   flow, zero new dependencies). Publishes **`docs/`, not `docs/site/`** — 129 relative
   links point outward to `../analysis`, so a site-only publish would break them;
-  `docs/ai/` is git-excluded and absent from the CI checkout. **Blocked on Ivan:** Pages
-  is not enabled (Settings → Pages → Source: "GitHub Actions"); until then the deploy job
-  fails by design rather than pretending to succeed.
+  `docs/ai/` is git-excluded and absent from the CI checkout. **No longer blocked on
+  Ivan** (2026-08-07): `configure-pages` runs with `enablement: true`, which turns Pages on
+  via the API under the `pages: write` permission the workflow already holds, so the
+  one-time Settings → Pages click is gone. Idempotent on every later run, and **not** a
+  silent success path — a denied token still fails the step loudly rather than deploying
+  nowhere. _(Nothing is deployed until the workflow actually reaches `main`, which needs a
+  push, which needs an explicit ask.)_
 - [ ] **WP-A1** alert port (v2-facing; not on the v1.0 critical path).
 - **Exit gate:** coverage >90% green & blocking ✅ (now genuinely including `apps/web` —
   its script ran without `--coverage` until 2026-07-30, so the thresholds silently never
@@ -260,9 +301,11 @@ all four views ship. Everything below is now **committed and pushed** — `9b6c6
   of 2026-07-30 the badge finally means what it says: CI is `success` on `9b6c6b3`, the
   first pushed commit containing Waves 1–4 (until then the newest run on `main` was
   `eded0b3` from 2026-07-12, so the badge attested only to the Phase-1 foundation) ·
-  Pages builds ❌ — run `30528892265` failed in `configure-pages` with
-  `Get Pages site failed … Not Found`, exactly as designed while Pages is off; blocked
-  on Ivan enabling Settings → Pages → Source: "GitHub Actions".
+  Pages builds ❌→🔄 — run `30528892265` failed in `configure-pages` with
+  `Get Pages site failed … Not Found` while Pages was off; since **2026-08-07** the
+  workflow runs `actions/configure-pages` with `enablement: true`, so the next push to
+  `main` should switch Pages on and deploy by itself — tick this only after a green
+  `pages.yml` run, not by assumption.
 
 ### Phase 2 · Ingest substrate
 - [x] **WP-IN1** envelope + idempotency-key (`hooks/envelope.ts`) · **IN2** EventStore
@@ -297,7 +340,17 @@ all four views ship. Everything below is now **committed and pushed** — `9b6c6
 - [x] **WP-C7** cost API — `/api/cost/summary` plus `GET /api/sessions/:id/cost-analysis`
   (C4/C5 over a read-only substrate seam; 503 unconfigured · 404 unknown · 422 on
   `PricingError` **and** on a poisoned transcript · detail-free 500 on a crafted corpus;
-  `isEstimate` is `Type.Literal(true)` so it cannot serialise as `false`).
+  `isEstimate` is `Type.Literal(true)` so it cannot serialise as `false`). **UI consumer
+  added 2026-08-07** (`apps/web/src/views/SessionCostAnalysis.tsx`, opt-in per session from
+  the CostView top-sessions table — the route reads transcripts off disk, so it is never
+  fetched for every row). Until then the endpoint had no reader, which is what made the
+  Phase-4 exit-gate claim true of the server and false of the dashboard. The panel carries
+  the honesty contracts visibly: `isEstimate` surfaces as a badge, a `~` on every modelled
+  figure and the named hypothetical model; `skippedAgentIds` is reported as an explicit
+  exclusion ("a guess would be worse than a gap"); and `deltaUsd` is labelled a **mispricing
+  signal, not a saving** — called out at ≥ $0.01, silent below (rounding must not cry wolf).
+  The four failures (503/404/422/other) render as four distinct sentences, which is the
+  whole reason `ApiResult` carries a status.
 - [x] **WP-X3** three release-blocker tests · **IN13** P0 suite — `apps/server/test/p0/`.
   Σ token_usage == JSONL proven against an **independent reader written inside the test**
   (not the production parser); double-replay proven **byte-identical** via `VACUUM INTO`
@@ -337,10 +390,14 @@ all four views ship. Everything below is now **committed and pushed** — `9b6c6
   readonly open → online backup → `integrity_check` = ok), and an explicit **blockers**
   section that names what is still open instead of hiding it. Two of those four blockers
   are now closed: `apps/web` coverage is enforced (2026-07-30) and `LICENSE` is tracked
-  (`9b6c6b3`, GitHub reports `MIT`). Still open: `main` is not branch-protected, and
-  Pages is not enabled.
+  (`9b6c6b3`, GitHub reports `MIT`). Pages enablement is closed in the workflow itself
+  (WP-X7, `enablement: true`). **Still open, and Ivan's alone:** `main` is not
+  branch-protected.
 - **Exit gate (= the v1.0 definition, best-path §6.1):** all 5 daily questions answerable ✅
-  (server + UI) · <30s to understand a session — **unmeasured**: nobody has yet sat in front
+  (server + UI — the "+ UI" half was **overstated until 2026-08-07**: `/api/sessions/:id/
+  cost-analysis` had no reader in the dashboard, so the compaction/delegation question was
+  answerable only by curl. `SessionCostAnalysis.tsx` is what closed it) · <30s to understand
+  a session — **unmeasured**: nobody has yet sat in front
   of it with a real corpus and timed it, and until Ivan does, this stays ⏳ (an agent cannot
   sign a usability claim) · tree & global DAG served by a query over persisted edges ✅ ·
   every dollar traces to tokens×price ✅.

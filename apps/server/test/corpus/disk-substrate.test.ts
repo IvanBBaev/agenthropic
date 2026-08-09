@@ -8,19 +8,23 @@
  *    walk continues, while a traversal-shaped name is a hard {@link ContainmentError}.
  *  - {@link buildSessionSubstrate}: the four parser-spec section-2 artifact types
  *    survive, every other hazard lands in `skipped` with an exact {@link SkipReason},
- *    and the build collapses to `null` only when neither a main nor an agent
- *    transcript was produced.
+ *    and the build reports `no-substrate` - never losing those reasons - when
+ *    neither a main nor an agent transcript was produced.
  */
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { buildSessionSubstrate, enumerateSessions } from '../../src/corpus/disk-substrate';
 import { ContainmentError, DEFAULT_READ_LIMITS } from '../../src/corpus/fs-port';
 import type {
+  BuiltSubstrate,
   CorpusFs,
   LstatInfo,
+  NoSubstrate,
   ReadLimits,
+  SessionEnumeration,
   SessionRef,
   SkippedFile,
+  SubstrateBuild,
 } from '../../src/corpus/fs-port';
 import { dir, fifo, file, makeFakeCorpusFs, symlink } from './fake-corpus-fs';
 import type { NodeSpec, TreeSpec } from './fake-corpus-fs';
@@ -64,35 +68,91 @@ function relPaths(files: readonly { relativePath: string }[]): string[] {
   return files.map((f) => f.relativePath);
 }
 
+/**
+ * Assert the `built` arm and narrow to it.
+ *
+ * Replaces a bare `built!.substrate`. The `!` only silenced a nullable type; it
+ * asserted nothing, so a fixture that quietly stopped producing a substrate
+ * failed on a property access instead of on the claim the test exists to make.
+ */
+function builtOf(build: SubstrateBuild): BuiltSubstrate {
+  if (build.kind !== 'built') {
+    expect.unreachable(`expected a built substrate, got ${build.kind}`);
+  }
+  return build;
+}
+
+/** Assert the `no-substrate` arm and narrow to it (so `skipped` is assertable). */
+function noSubstrateOf(build: SubstrateBuild): NoSubstrate {
+  if (build.kind !== 'no-substrate') {
+    expect.unreachable(`expected no substrate, got ${build.kind}`);
+  }
+  return build;
+}
+
+/** Assert the `sessions` arm of an enumeration and return its refs. */
+function refsOf(enumeration: SessionEnumeration): readonly SessionRef[] {
+  if (enumeration.kind !== 'sessions') {
+    expect.unreachable(`expected enumerated sessions, got ${enumeration.kind}`);
+  }
+  return enumeration.refs;
+}
+
 describe('enumerateSessions', () => {
   it('discovers a <uuid>.jsonl main transcript in a project slug dir', () => {
     const fs = fakeFs({ [SLUG]: dir({ [MAIN]: file('{"a":1}\n') }) });
 
-    expect(enumerateSessions(fs, ROOT)).toEqual([
-      {
-        sessionId: SESSION_ID,
-        projectSlug: SLUG,
-        mainAbsPath: join(ROOT, SLUG, MAIN),
-        sessionDirAbs: join(ROOT, SLUG, SESSION_ID),
-      },
-    ]);
+    expect(enumerateSessions(fs, ROOT)).toEqual({
+      kind: 'sessions',
+      refs: [
+        {
+          sessionId: SESSION_ID,
+          projectSlug: SLUG,
+          mainAbsPath: join(ROOT, SLUG, MAIN),
+          sessionDirAbs: join(ROOT, SLUG, SESSION_ID),
+        },
+      ],
+    });
   });
 
   it('derives projectSlug from the slug directory basename verbatim', () => {
     const weird = '-Users-x-My.Project_v2';
     const fs = fakeFs({ [weird]: dir({ [MAIN]: file('{}\n') }) });
 
-    expect(enumerateSessions(fs, ROOT)[0]!.projectSlug).toBe(weird);
+    expect(refsOf(enumerateSessions(fs, ROOT))[0]!.projectSlug).toBe(weird);
   });
 
-  it('returns no sessions when the corpus root itself is unreadable', () => {
+  // The two root-failure arms are DIFFERENT facts and must never collapse: a
+  // root that vanished (ENOENT) genuinely holds no sessions, while a root that
+  // exists but cannot be read proves nothing about what it holds. Both used to
+  // return the same `[]`, indistinguishable from a real empty corpus.
+  it('reports unreadable-root with the errno code when the root readdir fails', () => {
     const fs = fakeFs({ [SLUG]: dir({ [MAIN]: file('{}\n') }) }, { rootReaddirCode: 'EACCES' });
 
-    expect(enumerateSessions(fs, ROOT)).toEqual([]);
+    expect(enumerateSessions(fs, ROOT)).toEqual({ kind: 'unreadable-root', code: 'EACCES' });
+  });
+
+  it('reports unreadable-root without a code when the failure carries no errno', () => {
+    const base = fakeFs({ [SLUG]: dir({ [MAIN]: file('{}\n') }) });
+    const hostile: CorpusFs = {
+      ...base,
+      readDirNames(absDir: string): string[] {
+        if (absDir === ROOT) throw new Error('boom without a code');
+        return base.readDirNames(absDir);
+      },
+    };
+
+    expect(enumerateSessions(hostile, ROOT)).toEqual({ kind: 'unreadable-root', code: undefined });
+  });
+
+  it('treats a root that vanished (ENOENT) as genuinely holding no sessions', () => {
+    const fs = fakeFs({ [SLUG]: dir({ [MAIN]: file('{}\n') }) }, { rootReaddirCode: 'ENOENT' });
+
+    expect(enumerateSessions(fs, ROOT)).toEqual({ kind: 'sessions', refs: [] });
   });
 
   it('returns no sessions for an empty corpus root', () => {
-    expect(enumerateSessions(fakeFs({}), ROOT)).toEqual([]);
+    expect(refsOf(enumerateSessions(fakeFs({}), ROOT))).toEqual([]);
   });
 
   it('throws ContainmentError for a traversal-shaped slug name (a hard stop, not a skip)', () => {
@@ -104,13 +164,13 @@ describe('enumerateSessions', () => {
   it('skips a slug entry that is a stray file rather than a directory', () => {
     const fs = fakeFs({ '.DS_Store': file('junk') });
 
-    expect(enumerateSessions(fs, ROOT)).toEqual([]);
+    expect(refsOf(enumerateSessions(fs, ROOT))).toEqual([]);
   });
 
   it('skips a slug entry that is a symlink', () => {
     const fs = fakeFs({ [SLUG]: symlink('/elsewhere') });
 
-    expect(enumerateSessions(fs, ROOT)).toEqual([]);
+    expect(refsOf(enumerateSessions(fs, ROOT))).toEqual([]);
   });
 
   it('never follows a symlinked slug directory even when it lstats as a directory', () => {
@@ -134,7 +194,7 @@ describe('enumerateSessions', () => {
       },
     };
 
-    expect(enumerateSessions(hostile, ROOT)).toEqual([]);
+    expect(refsOf(enumerateSessions(hostile, ROOT))).toEqual([]);
   });
 
   it('skips a slug whose readdir throws but keeps walking the remaining slugs', () => {
@@ -143,7 +203,7 @@ describe('enumerateSessions', () => {
       [SLUG]: dir({ [MAIN]: file('{}\n') }),
     });
 
-    expect(enumerateSessions(fs, ROOT).map((r) => r.projectSlug)).toEqual([SLUG]);
+    expect(refsOf(enumerateSessions(fs, ROOT)).map((r) => r.projectSlug)).toEqual([SLUG]);
   });
 
   it('ignores slug entries that are not *.jsonl files', () => {
@@ -151,7 +211,7 @@ describe('enumerateSessions', () => {
       [SLUG]: dir({ 'notes.txt': file('x'), 'config.json': file('{}'), '.DS_Store': file('') }),
     });
 
-    expect(enumerateSessions(fs, ROOT)).toEqual([]);
+    expect(refsOf(enumerateSessions(fs, ROOT))).toEqual([]);
   });
 
   it.each([
@@ -163,7 +223,7 @@ describe('enumerateSessions', () => {
   ])('ignores %s (%s)', (entry) => {
     const fs = fakeFs({ [SLUG]: dir({ [entry]: file('{}\n') }) });
 
-    expect(enumerateSessions(fs, ROOT)).toEqual([]);
+    expect(refsOf(enumerateSessions(fs, ROOT))).toEqual([]);
   });
 
   it('never enumerates the <uuid>/ session directory itself as a session', () => {
@@ -175,13 +235,13 @@ describe('enumerateSessions', () => {
       }),
     });
 
-    expect(enumerateSessions(fs, ROOT)).toEqual([]);
+    expect(refsOf(enumerateSessions(fs, ROOT))).toEqual([]);
   });
 
   it('yields exactly one session when both <uuid>.jsonl and <uuid>/ are present', () => {
     const fs = fakeFs(treeWith({ subagents: dir({ 'agent-aaaa1111.jsonl': file('{"a":1}\n') }) }));
 
-    const refs = enumerateSessions(fs, ROOT);
+    const refs = refsOf(enumerateSessions(fs, ROOT));
     expect(refs).toHaveLength(1);
     expect(refs[0]!.sessionId).toBe(SESSION_ID);
   });
@@ -189,25 +249,25 @@ describe('enumerateSessions', () => {
   it('skips a <uuid>.jsonl that is a symlink', () => {
     const fs = fakeFs({ [SLUG]: dir({ [MAIN]: symlink('/etc/passwd') }) });
 
-    expect(enumerateSessions(fs, ROOT)).toEqual([]);
+    expect(refsOf(enumerateSessions(fs, ROOT))).toEqual([]);
   });
 
   it('skips a <uuid>.jsonl that is not a regular file', () => {
     const fs = fakeFs({ [SLUG]: dir({ [MAIN]: fifo() }) });
 
-    expect(enumerateSessions(fs, ROOT)).toEqual([]);
+    expect(refsOf(enumerateSessions(fs, ROOT))).toEqual([]);
   });
 
   it('skips a <uuid>.jsonl that is actually a directory', () => {
     const fs = fakeFs({ [SLUG]: dir({ [MAIN]: dir({}) }) });
 
-    expect(enumerateSessions(fs, ROOT)).toEqual([]);
+    expect(refsOf(enumerateSessions(fs, ROOT))).toEqual([]);
   });
 
   it('skips a <uuid>.jsonl that vanishes between readdir and lstat (TOCTOU)', () => {
     const fs = fakeFs({ [SLUG]: dir({}, { phantoms: [MAIN] }) });
 
-    expect(enumerateSessions(fs, ROOT)).toEqual([]);
+    expect(refsOf(enumerateSessions(fs, ROOT))).toEqual([]);
   });
 
   it('discovers every session across multiple slugs', () => {
@@ -217,7 +277,7 @@ describe('enumerateSessions', () => {
     });
 
     expect(
-      enumerateSessions(fs, ROOT)
+      refsOf(enumerateSessions(fs, ROOT))
         .map((r) => `${r.projectSlug}/${r.sessionId}`)
         .sort(),
     ).toEqual(
@@ -234,20 +294,19 @@ describe('buildSessionSubstrate — main transcript', () => {
   it('builds a main-only session with a bare, slash-free relative path', () => {
     const fs = fakeFs({ [SLUG]: dir({ [MAIN]: file('{"a":1}\n{"b":2}\n') }) });
 
-    const built = buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS);
+    const built = builtOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
 
-    expect(built).not.toBeNull();
-    expect(built!.projectSlug).toBe(SLUG);
-    expect(built!.skipped).toEqual([]);
-    expect(built!.substrate.files).toEqual([{ relativePath: MAIN, lines: ['{"a":1}', '{"b":2}'] }]);
-    expect(built!.substrate.files[0]!.relativePath).not.toContain('/');
+    expect(built.projectSlug).toBe(SLUG);
+    expect(built.skipped).toEqual([]);
+    expect(built.substrate.files).toEqual([{ relativePath: MAIN, lines: ['{"a":1}', '{"b":2}'] }]);
+    expect(built.substrate.files[0]!.relativePath).not.toContain('/');
   });
 
   it('returns the projectSlug from the ref verbatim', () => {
     const fs = fakeFs({ [SLUG]: dir({ [MAIN]: file('{}\n') }) });
     const ref = { ...refFor(), projectSlug: 'literally-anything' };
 
-    expect(buildSessionSubstrate(fs, ref, DEFAULT_READ_LIMITS)!.projectSlug).toBe(
+    expect(builtOf(buildSessionSubstrate(fs, ref, DEFAULT_READ_LIMITS)).projectSlug).toBe(
       'literally-anything',
     );
   });
@@ -260,16 +319,15 @@ describe('buildSessionSubstrate — main transcript', () => {
       ),
     );
 
-    const built = buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS);
+    const built = builtOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
 
-    expect(built).not.toBeNull();
-    expect(skipFor(built!.skipped, MAIN)).toEqual({
+    expect(skipFor(built.skipped, MAIN)).toEqual({
       relativePath: MAIN,
       reason: 'unreadable',
       code: 'EACCES',
     });
     // The main is absent from files, but the agent transcript still made it.
-    expect(relPaths(built!.substrate.files)).toEqual(['subagents/agent-aaaa1111.jsonl']);
+    expect(relPaths(built.substrate.files)).toEqual(['subagents/agent-aaaa1111.jsonl']);
   });
 
   it('records an oversize main as oversize with no fs code', () => {
@@ -281,9 +339,9 @@ describe('buildSessionSubstrate — main transcript', () => {
       ),
     );
 
-    const built = buildSessionSubstrate(fs, refFor(), limits);
+    const built = builtOf(buildSessionSubstrate(fs, refFor(), limits));
 
-    const skip = skipFor(built!.skipped, MAIN);
+    const skip = skipFor(built.skipped, MAIN);
     expect(skip?.reason).toBe('oversize');
     expect(skip?.code).toBeUndefined();
   });
@@ -296,9 +354,9 @@ describe('buildSessionSubstrate — main transcript', () => {
       ),
     );
 
-    const built = buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS);
+    const built = builtOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
 
-    expect(skipFor(built!.skipped, MAIN)).toEqual({
+    expect(skipFor(built.skipped, MAIN)).toEqual({
       relativePath: MAIN,
       reason: 'symlink',
       code: 'ELOOP',
@@ -308,26 +366,38 @@ describe('buildSessionSubstrate — main transcript', () => {
   it('drops an unterminated final record of a live-appended main', () => {
     const fs = fakeFs({ [SLUG]: dir({ [MAIN]: file('{"a":1}\n{"b":2') }) });
 
-    const built = buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS);
+    const built = builtOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
 
-    expect(built!.substrate.files[0]!.lines).toEqual(['{"a":1}']);
+    expect(built.substrate.files[0]!.lines).toEqual(['{"a":1}']);
   });
 });
 
-describe('buildSessionSubstrate — null collapse', () => {
-  it('returns null when the main is unreadable and no agent file exists', () => {
+/**
+ * The total-loss path. Each of these used to return a bare `null`, which threw
+ * away the `skipped` list the builder had just finished computing — so the
+ * operator was told LESS about a session that died completely than about one
+ * that merely lost a file. Every test here therefore asserts the verdict AND
+ * the surviving reason; the reason is the point.
+ */
+describe('buildSessionSubstrate — no substrate', () => {
+  it('keeps the EACCES reason when the main is unreadable and no agent file exists', () => {
     const fs = fakeFs({ [SLUG]: dir({ [MAIN]: file('', { throwCode: 'EACCES' }) }) });
 
-    expect(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS)).toBeNull();
+    const build = noSubstrateOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
+
+    expect(build.projectSlug).toBe(SLUG);
+    expect(build.skipped).toEqual([{ relativePath: MAIN, reason: 'unreadable', code: 'EACCES' }]);
   });
 
-  it('returns null when the main is missing entirely (ENOENT)', () => {
+  it('keeps the ENOENT reason when the main is missing entirely', () => {
     const fs = fakeFs({ [SLUG]: dir({}) });
 
-    expect(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS)).toBeNull();
+    const build = noSubstrateOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
+
+    expect(build.skipped).toEqual([{ relativePath: MAIN, reason: 'unreadable', code: 'ENOENT' }]);
   });
 
-  it('returns null for a meta/journal-only remnant with no main and no agent', () => {
+  it('keeps the reason for a meta/journal-only remnant with no main and no agent', () => {
     const fs = fakeFs(
       treeWith(
         {
@@ -340,7 +410,11 @@ describe('buildSessionSubstrate — null collapse', () => {
       ),
     );
 
-    expect(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS)).toBeNull();
+    const build = noSubstrateOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
+
+    // The meta + journal WERE read, but neither is a transcript, so the session
+    // still yields nothing analysable. What survives is why the main was lost.
+    expect(build.skipped).toEqual([{ relativePath: MAIN, reason: 'unreadable', code: 'EACCES' }]);
   });
 
   it('still builds a session that has no main but does have an agent transcript', () => {
@@ -351,10 +425,9 @@ describe('buildSessionSubstrate — null collapse', () => {
       ),
     );
 
-    const built = buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS);
+    const built = builtOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
 
-    expect(built).not.toBeNull();
-    expect(relPaths(built!.substrate.files)).toEqual(['subagents/agent-aaaa1111.jsonl']);
+    expect(relPaths(built.substrate.files)).toEqual(['subagents/agent-aaaa1111.jsonl']);
   });
 });
 
@@ -371,9 +444,9 @@ describe('buildSessionSubstrate — artifact walk', () => {
       }),
     );
 
-    const built = buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS);
+    const built = builtOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
 
-    expect(relPaths(built!.substrate.files).sort()).toEqual(
+    expect(relPaths(built.substrate.files).sort()).toEqual(
       [
         MAIN,
         'subagents/agent-aaaa1111.jsonl',
@@ -381,7 +454,7 @@ describe('buildSessionSubstrate — artifact walk', () => {
         'subagents/journal.jsonl',
       ].sort(),
     );
-    expect(skipFor(built!.skipped, 'subagents/notes.txt')).toEqual({
+    expect(skipFor(built.skipped, 'subagents/notes.txt')).toEqual({
       relativePath: 'subagents/notes.txt',
       reason: 'non-artifact',
     });
@@ -395,10 +468,10 @@ describe('buildSessionSubstrate — artifact walk', () => {
       }),
     );
 
-    const built = buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS);
+    const built = builtOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
 
-    expect(relPaths(built!.substrate.files)).toEqual([MAIN]);
-    expect(built!.skipped).toEqual([]);
+    expect(relPaths(built.substrate.files)).toEqual([MAIN]);
+    expect(built.skipped).toEqual([]);
   });
 
   it('finds an agent transcript nested under subagents/workflows/wf_<id>/', () => {
@@ -410,13 +483,13 @@ describe('buildSessionSubstrate — artifact walk', () => {
       }),
     );
 
-    const built = buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS);
+    const built = builtOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
 
-    expect(relPaths(built!.substrate.files)).toContain(
+    expect(relPaths(built.substrate.files)).toContain(
       'subagents/workflows/wf_42/agent-bbbb2222.jsonl',
     );
     // Traversed directories are recursed, never recorded as skipped files.
-    expect(built!.skipped).toEqual([]);
+    expect(built.skipped).toEqual([]);
   });
 
   it('emits POSIX-separated paths relative to the session dir', () => {
@@ -428,9 +501,9 @@ describe('buildSessionSubstrate — artifact walk', () => {
       }),
     );
 
-    const built = buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS);
+    const built = builtOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
 
-    for (const f of built!.substrate.files) {
+    for (const f of built.substrate.files) {
       expect(f.relativePath).not.toContain('\\');
       expect(f.relativePath.startsWith('/')).toBe(false);
       expect(f.relativePath).not.toContain(SESSION_ID + '/');
@@ -448,39 +521,41 @@ describe('buildSessionSubstrate — artifact walk', () => {
       }),
     );
 
-    const built = buildSessionSubstrate(fs, refFor(), limits);
+    const built = builtOf(buildSessionSubstrate(fs, refFor(), limits));
 
     // Depth 1 (directly under subagents/) survives; the deeper one is never
     // visited — not ingested and not even recorded as skipped.
-    expect(relPaths(built!.substrate.files).sort()).toEqual(
+    expect(relPaths(built.substrate.files).sort()).toEqual(
       [MAIN, 'subagents/agent-aaaa1111.jsonl'].sort(),
     );
-    expect(built!.skipped).toEqual([]);
+    expect(built.skipped).toEqual([]);
   });
 
   it('does not walk when subagents is a file rather than a directory', () => {
     const fs = fakeFs(treeWith({ subagents: file('not a directory') }));
 
-    const built = buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS);
+    const built = builtOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
 
-    expect(relPaths(built!.substrate.files)).toEqual([MAIN]);
-    expect(built!.skipped).toEqual([]);
+    expect(relPaths(built.substrate.files)).toEqual([MAIN]);
+    expect(built.skipped).toEqual([]);
   });
 
   it('does not walk when subagents is a symlink', () => {
     const fs = fakeFs(treeWith({ subagents: symlink('/elsewhere') }));
 
-    expect(relPaths(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS)!.substrate.files)) //
+    expect(
+      relPaths(builtOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS)).substrate.files),
+    ) //
       .toEqual([MAIN]);
   });
 
   it('survives a subagents dir whose readdir throws mid-walk', () => {
     const fs = fakeFs(treeWith({ subagents: dir({}, { throwReaddir: 'EACCES' }) }));
 
-    const built = buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS);
+    const built = builtOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
 
-    expect(relPaths(built!.substrate.files)).toEqual([MAIN]);
-    expect(built!.skipped).toEqual([]);
+    expect(relPaths(built.substrate.files)).toEqual([MAIN]);
+    expect(built.skipped).toEqual([]);
   });
 
   it('throws ContainmentError for a traversal-shaped entry name inside the walk', () => {
@@ -494,10 +569,10 @@ describe('buildSessionSubstrate — artifact walk', () => {
   it('silently skips an entry that vanishes between readdir and lstat', () => {
     const fs = fakeFs(treeWith({ subagents: dir({}, { phantoms: ['agent-aaaa1111.jsonl'] }) }));
 
-    const built = buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS);
+    const built = builtOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
 
-    expect(relPaths(built!.substrate.files)).toEqual([MAIN]);
-    expect(built!.skipped).toEqual([]);
+    expect(relPaths(built.substrate.files)).toEqual([MAIN]);
+    expect(built.skipped).toEqual([]);
   });
 });
 
@@ -507,9 +582,9 @@ describe('buildSessionSubstrate — skip reasons in the walk', () => {
       treeWith({ subagents: dir({ 'agent-aaaa1111.jsonl': symlink('/etc/passwd') }) }),
     );
 
-    const built = buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS);
+    const built = builtOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
 
-    expect(skipFor(built!.skipped, 'subagents/agent-aaaa1111.jsonl')).toEqual({
+    expect(skipFor(built.skipped, 'subagents/agent-aaaa1111.jsonl')).toEqual({
       relativePath: 'subagents/agent-aaaa1111.jsonl',
       reason: 'symlink',
     });
@@ -518,9 +593,9 @@ describe('buildSessionSubstrate — skip reasons in the walk', () => {
   it('records a non-regular artifact (fifo) as not-regular-file', () => {
     const fs = fakeFs(treeWith({ subagents: dir({ 'agent-aaaa1111.jsonl': fifo() }) }));
 
-    const built = buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS);
+    const built = builtOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
 
-    expect(skipFor(built!.skipped, 'subagents/agent-aaaa1111.jsonl')).toEqual({
+    expect(skipFor(built.skipped, 'subagents/agent-aaaa1111.jsonl')).toEqual({
       relativePath: 'subagents/agent-aaaa1111.jsonl',
       reason: 'not-regular-file',
     });
@@ -532,9 +607,9 @@ describe('buildSessionSubstrate — skip reasons in the walk', () => {
       treeWith({ subagents: dir({ 'agent-aaaa1111.jsonl': file('{"a":1}\n', { size: 999 }) }) }),
     );
 
-    const built = buildSessionSubstrate(fs, refFor(), limits);
+    const built = builtOf(buildSessionSubstrate(fs, refFor(), limits));
 
-    const skip = skipFor(built!.skipped, 'subagents/agent-aaaa1111.jsonl');
+    const skip = skipFor(built.skipped, 'subagents/agent-aaaa1111.jsonl');
     expect(skip?.reason).toBe('oversize');
     expect(skip?.code).toBeUndefined();
   });
@@ -546,9 +621,9 @@ describe('buildSessionSubstrate — skip reasons in the walk', () => {
       }),
     );
 
-    const built = buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS);
+    const built = builtOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
 
-    expect(skipFor(built!.skipped, 'subagents/agent-aaaa1111.jsonl')).toEqual({
+    expect(skipFor(built.skipped, 'subagents/agent-aaaa1111.jsonl')).toEqual({
       relativePath: 'subagents/agent-aaaa1111.jsonl',
       reason: 'unreadable',
       code: 'EACCES',
@@ -562,9 +637,9 @@ describe('buildSessionSubstrate — skip reasons in the walk', () => {
       }),
     );
 
-    const built = buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS);
+    const built = builtOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
 
-    expect(skipFor(built!.skipped, 'subagents/agent-aaaa1111.jsonl')).toEqual({
+    expect(skipFor(built.skipped, 'subagents/agent-aaaa1111.jsonl')).toEqual({
       relativePath: 'subagents/agent-aaaa1111.jsonl',
       reason: 'symlink',
       code: 'ELOOP',
@@ -578,13 +653,13 @@ describe('buildSessionSubstrate — skip reasons in the walk', () => {
   ])('records an agent transcript of %j as empty-agent (%s)', (content) => {
     const fs = fakeFs(treeWith({ subagents: dir({ 'agent-aaaa1111.jsonl': file(content) }) }));
 
-    const built = buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS);
+    const built = builtOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
 
-    expect(skipFor(built!.skipped, 'subagents/agent-aaaa1111.jsonl')).toEqual({
+    expect(skipFor(built.skipped, 'subagents/agent-aaaa1111.jsonl')).toEqual({
       relativePath: 'subagents/agent-aaaa1111.jsonl',
       reason: 'empty-agent',
     });
-    expect(relPaths(built!.substrate.files)).toEqual([MAIN]);
+    expect(relPaths(built.substrate.files)).toEqual([MAIN]);
   });
 
   it('does not apply the empty-agent rule to an empty journal or meta sidecar', () => {
@@ -594,10 +669,10 @@ describe('buildSessionSubstrate — skip reasons in the walk', () => {
       }),
     );
 
-    const built = buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS);
+    const built = builtOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
 
-    expect(built!.skipped).toEqual([]);
-    expect(relPaths(built!.substrate.files).sort()).toEqual(
+    expect(built.skipped).toEqual([]);
+    expect(relPaths(built.substrate.files).sort()).toEqual(
       [MAIN, 'subagents/journal.jsonl', 'subagents/agent-aaaa1111.meta.json'].sort(),
     );
   });
@@ -609,13 +684,13 @@ describe('buildSessionSubstrate — skip reasons in the walk', () => {
   it('records a single unterminated agent record (a live append) as empty-agent', () => {
     const fs = fakeFs(treeWith({ subagents: dir({ 'agent-aaaa1111.jsonl': file('{"a":1}') }) }));
 
-    const built = buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS);
+    const built = builtOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
 
-    expect(skipFor(built!.skipped, 'subagents/agent-aaaa1111.jsonl')).toEqual({
+    expect(skipFor(built.skipped, 'subagents/agent-aaaa1111.jsonl')).toEqual({
       relativePath: 'subagents/agent-aaaa1111.jsonl',
       reason: 'empty-agent',
     });
-    expect(relPaths(built!.substrate.files)).toEqual([MAIN]);
+    expect(relPaths(built.substrate.files)).toEqual([MAIN]);
   });
 
   it.each([
@@ -628,17 +703,21 @@ describe('buildSessionSubstrate — skip reasons in the walk', () => {
       treeWith({ subagents: dir({ 'agent-aaaa1111.jsonl': file('{"a":1}\n') }) }, file(content)),
     );
 
-    const built = buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS);
+    const built = builtOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
 
-    expect(skipFor(built!.skipped, MAIN)).toEqual({ relativePath: MAIN, reason: 'empty-main' });
+    expect(skipFor(built.skipped, MAIN)).toEqual({ relativePath: MAIN, reason: 'empty-main' });
     // The main is dropped, but the live subagent still ingests.
-    expect(relPaths(built!.substrate.files)).toEqual(['subagents/agent-aaaa1111.jsonl']);
+    expect(relPaths(built.substrate.files)).toEqual(['subagents/agent-aaaa1111.jsonl']);
   });
 
-  it('collapses to null when the main is empty and no agent transcript survives', () => {
+  it('reports no-substrate — still naming empty-main — when no agent transcript survives', () => {
     const fs = fakeFs(treeWith({}, file('')));
 
-    expect(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS)).toBeNull();
+    const build = noSubstrateOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
+
+    // Same reason the sibling test above sees on the surviving path. It used to
+    // be reported there and swallowed here.
+    expect(build.skipped).toEqual([{ relativePath: MAIN, reason: 'empty-main' }]);
   });
 
   it.each([
@@ -651,9 +730,9 @@ describe('buildSessionSubstrate — skip reasons in the walk', () => {
   ])('records %s as non-artifact (%s)', (name) => {
     const fs = fakeFs(treeWith({ subagents: dir({ [name]: file('whatever\n') }) }));
 
-    const built = buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS);
+    const built = builtOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
 
-    expect(skipFor(built!.skipped, `subagents/${name}`)).toEqual({
+    expect(skipFor(built.skipped, `subagents/${name}`)).toEqual({
       relativePath: `subagents/${name}`,
       reason: 'non-artifact',
     });
@@ -666,11 +745,10 @@ describe('buildSessionSubstrate — line splitting through the adapter', () => {
       treeWith({ subagents: dir({ 'agent-aaaa1111.jsonl': file('{"a":1}\n{"b":2}\n') }) }),
     );
 
-    const built = buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS);
+    const built = builtOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
 
     expect(
-      built!.substrate.files.find((f) => f.relativePath === 'subagents/agent-aaaa1111.jsonl')!
-        .lines,
+      built.substrate.files.find((f) => f.relativePath === 'subagents/agent-aaaa1111.jsonl')!.lines,
     ).toEqual(['{"a":1}', '{"b":2}']);
   });
 
@@ -679,11 +757,10 @@ describe('buildSessionSubstrate — line splitting through the adapter', () => {
       treeWith({ subagents: dir({ 'agent-aaaa1111.jsonl': file('{"a":1}\n{"b":2') }) }),
     );
 
-    const built = buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS);
+    const built = builtOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
 
     expect(
-      built!.substrate.files.find((f) => f.relativePath === 'subagents/agent-aaaa1111.jsonl')!
-        .lines,
+      built.substrate.files.find((f) => f.relativePath === 'subagents/agent-aaaa1111.jsonl')!.lines,
     ).toEqual(['{"a":1}']);
   });
 
@@ -692,10 +769,10 @@ describe('buildSessionSubstrate — line splitting through the adapter', () => {
       treeWith({ subagents: dir({ 'agent-aaaa1111.meta.json': file('{"toolUseId":"t1"}') }) }),
     );
 
-    const built = buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS);
+    const built = builtOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
 
     expect(
-      built!.substrate.files.find((f) => f.relativePath === 'subagents/agent-aaaa1111.meta.json')!
+      built.substrate.files.find((f) => f.relativePath === 'subagents/agent-aaaa1111.meta.json')!
         .lines,
     ).toEqual(['{"toolUseId":"t1"}']);
   });
@@ -703,10 +780,10 @@ describe('buildSessionSubstrate — line splitting through the adapter', () => {
   it('tail-trims a journal like the JSONL it is', () => {
     const fs = fakeFs(treeWith({ subagents: dir({ 'journal.jsonl': file('{"j":1}\n{"j":2') }) }));
 
-    const built = buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS);
+    const built = builtOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
 
     expect(
-      built!.substrate.files.find((f) => f.relativePath === 'subagents/journal.jsonl')!.lines,
+      built.substrate.files.find((f) => f.relativePath === 'subagents/journal.jsonl')!.lines,
     ).toEqual(['{"j":1}']);
   });
 });
@@ -726,13 +803,12 @@ describe('enumerateSessions + buildSessionSubstrate', () => {
       [OTHER_SLUG]: dir({ [`${OTHER_SESSION_ID}.jsonl`]: file('{"b":1}\n') }),
     });
 
-    const built = enumerateSessions(fs, ROOT).map((ref) =>
-      buildSessionSubstrate(fs, ref, DEFAULT_READ_LIMITS),
+    const built = refsOf(enumerateSessions(fs, ROOT)).map((ref) =>
+      builtOf(buildSessionSubstrate(fs, ref, DEFAULT_READ_LIMITS)),
     );
 
-    expect(built.every((b) => b !== null)).toBe(true);
-    expect(built.map((b) => b!.projectSlug).sort()).toEqual([OTHER_SLUG, SLUG].sort());
-    expect(built.flatMap((b) => relPaths(b!.substrate.files)).sort()).toEqual(
+    expect(built.map((b) => b.projectSlug).sort()).toEqual([OTHER_SLUG, SLUG].sort());
+    expect(built.flatMap((b) => relPaths(b.substrate.files)).sort()).toEqual(
       [
         MAIN,
         'subagents/agent-aaaa1111.jsonl',

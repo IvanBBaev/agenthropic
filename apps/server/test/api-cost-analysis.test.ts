@@ -24,6 +24,7 @@ import { buildServer } from '../src/server';
 import { createSubstrateProvider, type SubstrateProvider } from '../src/api/substrate-provider';
 import type { CorpusFs } from '../src/corpus/index';
 import type { SqliteDatabase } from '../src/db/connection';
+import { makeFakeCorpusFs } from './corpus/fake-corpus-fs';
 import { createMigratedTempDb, TEST_TOKEN } from './helpers';
 
 const AUTH = { authorization: `Bearer ${TEST_TOKEN}` };
@@ -141,11 +142,46 @@ describe('/api/sessions/:id/cost-analysis (WP-C4 + WP-C5)', () => {
     expect(response.json()).toEqual({ error: 'corpus access is not configured' });
   });
 
-  it('replies 404 when the corpus root does not exist', async () => {
+  /**
+   * The four ways to have no substrate get four different answers. Three of
+   * them used to be `404 Session not found.`, which was false twice over - and
+   * these tests asserted the falsehood, one of them under the name "replies 404
+   * when the corpus root does not exist". A missing corpus tells this server
+   * nothing about whether the session exists, and an empty remnant WAS found.
+   */
+  it('replies 503 - not 404 - when no corpus root exists at all', async () => {
     const { app } = await startApp(providerFor(newCorpusRoot()));
     const response = await app.inject({ method: 'GET', url: URL, headers: AUTH });
-    expect(response.statusCode).toBe(404);
-    expect(response.json()).toEqual({ error: 'Session not found.' });
+    // 503 because the root is re-resolved per call: a corpus that appears later
+    // fixes this without a restart, which is exactly what 503 promises and what
+    // 404 ("this id does not exist") would deny.
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({
+      error: 'no corpus root is present on this machine, so nothing can be analysed',
+    });
+    // And it must not be confused with the switched-off-feature 503 either.
+    expect(response.json().error).not.toBe('corpus access is not configured');
+  });
+
+  it('replies 503 with a THIRD sentence when the root exists but cannot be read', async () => {
+    // Realpath succeeds, the root listing throws - a real temp dir cannot
+    // stage that reliably, so the fs port is injected.
+    const provider = createSubstrateProvider({
+      env: { CLAUDE_PROJECTS_DIR: '/fake/corpus' },
+      fs: makeFakeCorpusFs('/fake/corpus', {}, { rootReaddirCode: 'EACCES' }),
+    });
+    const { app } = await startApp(provider);
+    const response = await app.inject({ method: 'GET', url: URL, headers: AUTH });
+    // Retryable like the missing-root 503, but the sentence must not claim the
+    // root is absent when this very request proved it is there.
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({
+      error: 'the corpus root exists but could not be read; retry shortly',
+    });
+    expect(response.json().error).not.toBe('corpus access is not configured');
+    expect(response.json().error).not.toBe(
+      'no corpus root is present on this machine, so nothing can be analysed',
+    );
   });
 
   it('replies 404 for a session id no enumerated session matches', async () => {
@@ -155,11 +191,13 @@ describe('/api/sessions/:id/cost-analysis (WP-C4 + WP-C5)', () => {
       url: '/api/sessions/eeeeeeee-0000-4000-8000-000000000000/cost-analysis',
       headers: AUTH,
     });
+    // The one case where "not found" is a true statement: the corpus WAS
+    // enumerated and holds no such session.
     expect(response.statusCode).toBe(404);
     expect(response.json()).toEqual({ error: 'Session not found.' });
   });
 
-  it('replies 404 for a session whose substrate yields nothing parseable', async () => {
+  it('replies 422 - not 404 - for a session found but holding nothing analysable', async () => {
     const corpusRoot = newCorpusRoot();
     const emptyId = 'eeeeeeee-0000-4000-8000-000000000000';
     mkdirSync(join(corpusRoot, SLUG), { recursive: true });
@@ -170,8 +208,33 @@ describe('/api/sessions/:id/cost-analysis (WP-C4 + WP-C5)', () => {
       url: `/api/sessions/${emptyId}/cost-analysis`,
       headers: AUTH,
     });
-    expect(response.statusCode).toBe(404);
-    expect(response.json()).toEqual({ error: 'Session not found.' });
+    // The file was enumerated one line earlier in the provider; denying its
+    // existence would contradict a fact this very request established.
+    expect(response.statusCode).toBe(422);
+    expect(response.json()).toEqual({
+      error: 'the session transcript holds no analysable records',
+    });
+  });
+
+  it('gives the four no-substrate outcomes four DISTINCT answers', () => {
+    const provider = createSubstrateProvider({ env: { CLAUDE_PROJECTS_DIR: newCorpusRoot() } });
+    expect(provider.loadSession(SESSION_ID)).toEqual({ kind: 'no-corpus-root' });
+
+    const populated = newCorpusRoot();
+    const emptyId = 'eeeeeeee-0000-4000-8000-000000000000';
+    mkdirSync(join(populated, SLUG), { recursive: true });
+    writeFileSync(join(populated, SLUG, `${emptyId}.jsonl`), '');
+    const over = createSubstrateProvider({ env: { CLAUDE_PROJECTS_DIR: populated } });
+    expect(over.loadSession(emptyId)).toEqual({ kind: 'no-substrate' });
+    expect(over.loadSession(SESSION_ID)).toEqual({ kind: 'session-not-found' });
+
+    // A listing that failed proves nothing about the session, so the provider
+    // must say "unreadable", never "not found".
+    const unreadable = createSubstrateProvider({
+      env: { CLAUDE_PROJECTS_DIR: '/fake/corpus' },
+      fs: makeFakeCorpusFs('/fake/corpus', {}, { rootReaddirCode: 'EACCES' }),
+    });
+    expect(unreadable.loadSession(SESSION_ID)).toEqual({ kind: 'unreadable-root' });
   });
 
   it('reprices across the compaction boundary with the delta ~0 invariant intact', async () => {

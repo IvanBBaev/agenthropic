@@ -7,6 +7,7 @@
 export declare const HOOK_EVENTS: readonly string[];
 export declare const DEFAULT_PORT: number;
 export declare const DEFAULT_TOKEN_ENV: string;
+export declare const DELIVERY_ID_HEADER: string;
 
 export interface HookCommandOptions {
   port?: number;

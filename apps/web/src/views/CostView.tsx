@@ -9,12 +9,21 @@
 import { useEffect, useState } from 'react';
 import { fetchCostSummary } from '../api';
 import type { CostSummaryDto } from '../dto';
-import { formatTokens, formatUsd, shortId } from '../format';
+import { formatTokens, formatUsd, projectLabel, shortId } from '../format';
+import { describeCostFlow } from './chart-summary';
 import { computeCostFlow, type FlowNode } from './layout/cost-flow';
+import { SessionCostAnalysis } from './SessionCostAnalysis';
 import type { ViewProps } from './types';
 
 /** Top-N sessions requested from the summary endpoint. */
 export const COST_TOP_N = 5;
+
+/**
+ * Id of the prose text alternative for the sankey. role="img" hides the SVG
+ * subtree (its <title> elements included) from assistive tech, so the same
+ * facts are published as visible prose and referenced with aria-describedby.
+ */
+const FLOW_SUMMARY_ID = 'cost-flow-summary';
 
 type CostState =
   | { readonly kind: 'loading' }
@@ -33,6 +42,9 @@ function UnpricedCell({ tokens }: { readonly tokens: number }) {
 
 export function CostView({ token, onAuthRejected }: ViewProps) {
   const [state, setState] = useState<CostState>({ kind: 'loading' });
+  // Per-session analysis (WP-C4/C5) reads transcripts off disk, so it is opt-in
+  // per session rather than fetched for every row of the summary.
+  const [analysedSessionId, setAnalysedSessionId] = useState<string | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -69,6 +81,10 @@ export function CostView({ token, onAuthRejected }: ViewProps) {
   const { summary } = state;
   const flow = computeCostFlow(summary);
   const maxDailyCost = Math.max(0, ...summary.perDay.map((day) => day.costUsd));
+  // No tokens at all - priced or not - means nothing was ever recorded. That
+  // is a different fact from "usage exists but none of it is priced", and the
+  // copy must not let a $0.00 headline be read as the second.
+  const nothingRecorded = summary.totals.tokens === 0 && summary.totals.unpricedTokens === 0;
 
   return (
     <section aria-label="cost summary">
@@ -76,6 +92,9 @@ export function CostView({ token, onAuthRejected }: ViewProps) {
         <div className="kpi">
           <span className="kpi-label">Total cost</span>
           <span className="kpi-value">{formatUsd(summary.totals.costUsd)}</span>
+          {summary.totals.unpricedTokens > 0 && (
+            <span className="muted kpi-note">priced tokens only</span>
+          )}
         </div>
         <div className="kpi">
           <span className="kpi-label">Total tokens</span>
@@ -90,6 +109,11 @@ export function CostView({ token, onAuthRejected }: ViewProps) {
             <span className="muted kpi-note">no price row matched - not counted in $</span>
           )}
         </div>
+        {nothingRecorded && (
+          <p className="empty-state" data-testid="no-usage-note">
+            No usage recorded yet - these zeros are an empty database, not a measured $0.00.
+          </p>
+        )}
       </div>
 
       <h2>Cost flow</h2>
@@ -99,6 +123,7 @@ export function CostView({ token, onAuthRejected }: ViewProps) {
             <svg
               role="img"
               aria-label="cost flow from models to sessions"
+              aria-describedby={FLOW_SUMMARY_ID}
               width={flow.width}
               height={flow.height}
               viewBox={`0 0 ${String(flow.width)} ${String(flow.height)}`}
@@ -141,12 +166,15 @@ export function CostView({ token, onAuthRejected }: ViewProps) {
                       node.kind === 'model' || node.kind === 'other-models' ? 'start' : 'end'
                     }
                   >
-                    {node.kind === 'session' ? shortId(node.label) : node.label}
+                    {node.label}
                   </text>
                 </g>
               ))}
             </svg>
           </div>
+          <p className="chart-summary" id={FLOW_SUMMARY_ID}>
+            {describeCostFlow(flow, summary.totals.unpricedTokens)}
+          </p>
           <ul className="chart-legend" aria-label="model legend">
             {flow.nodes
               .filter((node) => node.kind === 'model' || node.kind === 'other-models')
@@ -250,12 +278,24 @@ export function CostView({ token, onAuthRejected }: ViewProps) {
           </thead>
           <tbody>
             {summary.topSessions.map((session) => (
-              <tr key={session.sessionId}>
+              <tr
+                key={session.sessionId}
+                aria-selected={session.sessionId === analysedSessionId}
+                className={session.sessionId === analysedSessionId ? 'row-selected' : undefined}
+              >
                 <td>
-                  <code>{shortId(session.sessionId)}</code>
+                  <button
+                    type="button"
+                    className="link-button"
+                    onClick={() => {
+                      setAnalysedSessionId(session.sessionId);
+                    }}
+                  >
+                    <code>{shortId(session.sessionId)}</code>
+                  </button>
                 </td>
                 <td className={session.projectSlug === null ? 'muted' : undefined}>
-                  {session.projectSlug ?? 'no project'}
+                  {projectLabel(session.projectSlug)}
                 </td>
                 <td className="num">{formatTokens(session.tokens)}</td>
                 <td className="num">{formatUsd(session.costUsd)}</td>
@@ -264,6 +304,20 @@ export function CostView({ token, onAuthRejected }: ViewProps) {
             ))}
           </tbody>
         </table>
+      )}
+
+      <h2>Session analysis</h2>
+      {analysedSessionId === null ? (
+        <p className="empty-state" data-testid="analysis-prompt">
+          Pick a session above to reprice it across its compaction boundaries and estimate what it
+          would have cost without delegation.
+        </p>
+      ) : (
+        <SessionCostAnalysis
+          token={token}
+          sessionId={analysedSessionId}
+          onAuthRejected={onAuthRejected}
+        />
       )}
     </section>
   );

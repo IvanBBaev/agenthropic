@@ -25,6 +25,7 @@ import {
   DEFAULT_READ_LIMITS,
   type BuiltSubstrate,
   type CorpusFs,
+  type SessionEnumeration,
   type SessionRef,
 } from '../../src/corpus/fs-port';
 import { nodeCorpusFs } from '../../src/corpus/node-corpus-fs';
@@ -111,6 +112,14 @@ function realRoot(): string {
   return root!;
 }
 
+/** Assert the `sessions` arm of an enumeration and return its refs. */
+function refsOf(enumeration: SessionEnumeration): readonly SessionRef[] {
+  if (enumeration.kind !== 'sessions') {
+    expect.unreachable(`expected enumerated sessions, got ${enumeration.kind}`);
+  }
+  return enumeration.refs;
+}
+
 function refFor(refs: readonly SessionRef[], sessionId: string): SessionRef {
   const found = refs.find((ref) => ref.sessionId === sessionId);
   expect(found, `no SessionRef for ${sessionId}`).toBeDefined();
@@ -133,7 +142,7 @@ describe('resolveCorpusRoot on real disk', () => {
     expect(root.endsWith('corpus')).toBe(true);
     // Enumeration keys off the CANONICAL root, so every later abs path is
     // symlink-free — on macOS the mkdtemp path itself is behind /var → /private/var.
-    expect(enumerateSessions(fs, root).length).toBeGreaterThan(0);
+    expect(refsOf(enumerateSessions(fs, root)).length).toBeGreaterThan(0);
   });
 
   it('returns null for a root that does not exist (fresh machine, no corpus)', () => {
@@ -144,14 +153,14 @@ describe('resolveCorpusRoot on real disk', () => {
 describe('enumerateSessions on real disk', () => {
   it('finds exactly the two `<uuid>.jsonl` main transcripts across both slugs', () => {
     const root = realRoot();
-    const refs = enumerateSessions(fs, root);
+    const refs = refsOf(enumerateSessions(fs, root));
 
     expect(refs.map((r) => r.sessionId).sort()).toEqual([SESSION_A, SESSION_B].sort());
   });
 
   it('reports the slug basename verbatim with the main and session-dir abs paths', () => {
     const root = realRoot();
-    const refs = enumerateSessions(fs, root);
+    const refs = refsOf(enumerateSessions(fs, root));
 
     expect(refFor(refs, SESSION_A)).toEqual({
       sessionId: SESSION_A,
@@ -170,7 +179,7 @@ describe('enumerateSessions on real disk', () => {
 
   it('never enumerates a `<uuid>/` directory as a session (only the bare `<uuid>.jsonl` file)', () => {
     const root = realRoot();
-    const refs = enumerateSessions(fs, root);
+    const refs = refsOf(enumerateSessions(fs, root));
 
     // SESSION_ORPHAN exists on disk as a real `<uuid>/` dir holding a real agent
     // transcript, but has no root `<uuid>.jsonl` — the core spec rule says that
@@ -182,7 +191,7 @@ describe('enumerateSessions on real disk', () => {
 
   it('ignores a slug-root `.jsonl` whose stem is not a canonical session uuid', () => {
     const root = realRoot();
-    const refs = enumerateSessions(fs, root);
+    const refs = refsOf(enumerateSessions(fs, root));
 
     expect(refs.map((r) => r.sessionId)).not.toContain('not-a-uuid');
   });
@@ -193,11 +202,13 @@ describe('buildSessionSubstrate on real disk', () => {
     const root = realRoot();
     const built = buildSessionSubstrate(
       fs,
-      refFor(enumerateSessions(fs, root), SESSION_A),
+      refFor(refsOf(enumerateSessions(fs, root)), SESSION_A),
       DEFAULT_READ_LIMITS,
     );
-    expect(built).not.toBeNull();
-    return built!;
+    if (built.kind !== 'built') {
+      expect.unreachable(`expected a built substrate, got ${built.kind}`);
+    }
+    return built;
   }
 
   it('feeds the main transcript plus every section-2 artifact, at POSIX relative paths', () => {
@@ -268,13 +279,15 @@ describe('buildSessionSubstrate on real disk', () => {
     const root = realRoot();
     const built = buildSessionSubstrate(
       fs,
-      refFor(enumerateSessions(fs, root), SESSION_B),
+      refFor(refsOf(enumerateSessions(fs, root)), SESSION_B),
       DEFAULT_READ_LIMITS,
     );
 
-    expect(built).not.toBeNull();
-    expect(sortedRelativePaths(built!)).toEqual([`${SESSION_B}.jsonl`]);
-    expect(built!.skipped).toEqual([]);
-    expect(built!.projectSlug).toBe(SLUG_B);
+    if (built.kind !== 'built') {
+      expect.unreachable(`expected a built substrate, got ${built.kind}`);
+    }
+    expect(sortedRelativePaths(built)).toEqual([`${SESSION_B}.jsonl`]);
+    expect(built.skipped).toEqual([]);
+    expect(built.projectSlug).toBe(SLUG_B);
   });
 });

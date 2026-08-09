@@ -23,8 +23,21 @@ export interface ParsedAgent {
   parentAgentId: string | null;
   /** First record timestamp of this agent's transcript. */
   startedAt: string;
-  /** Last record timestamp of this agent's transcript. */
-  endedAt: string | null;
+  /**
+   * Last record timestamp of this agent's transcript — ALWAYS present.
+   *
+   * Not nullable, and deliberately so: a transcript with no timestamped record
+   * raises `SubstrateError` in `transcriptTimespan` rather than yielding an
+   * agent with an open end, so the parser has no path that produces null here.
+   * Declaring it `string | null` invented a state the parser cannot reach and
+   * pushed a dead `?? startedAt` fallback onto every consumer.
+   *
+   * NOTE THIS IS NOT AN ENDING. It is the most recent activity observed in the
+   * transcript; a file that stopped growing is indistinguishable from one whose
+   * next line has not been flushed. Terminal status comes from hooks or the
+   * watchdog — see `LIVENESS_STATUS` in the server's normalizer.
+   */
+  endedAt: string;
 }
 
 /**

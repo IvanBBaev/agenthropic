@@ -149,6 +149,49 @@ describe('security contract (WP-F7)', () => {
     expect(encodedStream.status).toBe(403);
   });
 
+  it('(6e) a stream query string that carries no `token` is not a credential', async () => {
+    // The `?token=` escape hatch exists only because EventSource cannot set
+    // headers. A query string with any OTHER parameter must leave the request
+    // exactly as unauthenticated as no query string at all.
+    const noToken = await fetch(`${baseUrl}/api/stream?lastEventId=42&foo=bar`, {
+      headers: { origin: `http://127.0.0.1:${port}` },
+    });
+    expect(noToken.status).toBe(401);
+
+    // ...while the same unrelated parameter must not disturb header auth.
+    const controller = new AbortController();
+    const withHeader = await fetch(`${baseUrl}/api/stream?lastEventId=42&foo=bar`, {
+      headers: { origin: `http://127.0.0.1:${port}`, authorization: `Bearer ${TEST_TOKEN}` },
+      signal: controller.signal,
+    });
+    expect(withHeader.status).toBe(200);
+    controller.abort();
+  });
+
+  it('(6f) the origin check fails closed when the local port cannot be determined', async () => {
+    // `app.inject` hands the hook a mock socket with no `localPort`, the same
+    // shape a non-TCP (unix-socket) bind would produce. The same-origin check
+    // then has no port to compare against and must REJECT, not wave through -
+    // even for the origin that is genuinely this server's own.
+    const foreign = await server.app.inject({
+      method: 'GET',
+      url: '/api/stream',
+      headers: { origin: `http://127.0.0.1:${port}`, authorization: `Bearer ${TEST_TOKEN}` },
+    });
+    expect(foreign.statusCode).toBe(403);
+    expect(foreign.json()).toEqual({
+      error: 'Cross-origin access to the event stream is forbidden.',
+    });
+
+    // A non-stream route is unaffected: it never consults the local port.
+    const health = await server.app.inject({
+      method: 'GET',
+      url: '/api/health',
+      headers: { origin: `http://127.0.0.1:${port}`, authorization: `Bearer ${TEST_TOKEN}` },
+    });
+    expect(health.statusCode).toBe(200);
+  });
+
   it('(7) constructing config without DASHBOARD_TOKEN throws - the server cannot start', () => {
     expect(() => loadConfig({})).toThrow(/DASHBOARD_TOKEN/);
     expect(() => loadConfig({ DASHBOARD_TOKEN: undefined })).toThrow(/DASHBOARD_TOKEN/);

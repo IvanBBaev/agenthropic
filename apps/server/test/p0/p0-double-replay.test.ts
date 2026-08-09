@@ -22,6 +22,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   createCorpusWatcher,
   loadPricing,
+  tickSummary,
   type CorpusIngestSummary,
   type SqliteDatabase,
 } from '../../src/index';
@@ -68,7 +69,7 @@ describe('P0 proof 2 - double replay yields zero new rows and a byte-identical d
 
     // Pass 1: a fresh watcher's first tick IS the WP-IN10 replay.
     const watcherPass1 = createCorpusWatcher(watcherDeps);
-    summaryPass1 = watcherPass1.tick();
+    summaryPass1 = tickSummary(watcherPass1.tick());
     watcherPass1.stop();
     snapshotPass1 = join(dir, 'snapshot-pass1.db');
     db.prepare('VACUUM INTO ?').run(snapshotPass1);
@@ -77,7 +78,7 @@ describe('P0 proof 2 - double replay yields zero new rows and a byte-identical d
     // Pass 2: a NEW watcher over the SAME database — its fingerprint map is
     // empty again, exactly the simulated-restart replay the proof demands.
     const watcherPass2 = createCorpusWatcher(watcherDeps);
-    summaryPass2 = watcherPass2.tick();
+    summaryPass2 = tickSummary(watcherPass2.tick());
     watcherPass2.stop();
     snapshotPass2 = join(dir, 'snapshot-pass2.db');
     db.prepare('VACUUM INTO ?').run(snapshotPass2);

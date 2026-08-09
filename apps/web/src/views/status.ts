@@ -46,6 +46,33 @@ export const NULL_STATUS_META: StatusMeta = {
   className: 'status-null',
 };
 
-export function statusMeta(status: AgentStatus | null): StatusMeta {
-  return status === null ? NULL_STATUS_META : STATUS_META[status];
+/** Word used for a status value outside the known vocabulary. */
+export const UNRECOGNISED_STATUS_LABEL = 'unrecognised';
+
+/** Symbol for that state - a question mark, never a known status glyph. */
+export const UNRECOGNISED_STATUS_SYMBOL = '?';
+
+/**
+ * A status string this build does not know (server ahead of the UI, or data
+ * written by an older schema). It is shown, with its raw value, rather than
+ * being coerced into a friendlier known state or dropped from the picture.
+ */
+export function unrecognisedStatusMeta(raw: string): StatusMeta {
+  return {
+    symbol: UNRECOGNISED_STATUS_SYMBOL,
+    label: `${UNRECOGNISED_STATUS_LABEL} (${raw})`,
+    className: 'status-unrecognised',
+  };
+}
+
+/**
+ * Display metadata for a persisted status. The parameter is `string` and not
+ * `AgentStatus` on purpose: the wire type for a session status is a plain
+ * string, and a server one version ahead can persist a word this build has
+ * never heard of. Such a value is surfaced as `unrecognised (<raw>)` - it is
+ * never folded into a known status, never dropped, and never a crash.
+ */
+export function statusMeta(status: string | null): StatusMeta {
+  if (status === null) return NULL_STATUS_META;
+  return isAgentStatus(status) ? STATUS_META[status] : unrecognisedStatusMeta(status);
 }

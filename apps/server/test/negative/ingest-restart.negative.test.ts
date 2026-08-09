@@ -393,8 +393,13 @@ describe('WP-X4 ingest/restart negative catalogue', () => {
       // Raw events intact across the restart — nothing lost, nothing added.
       expect(countRows(second.db, 'events_raw')).toBe(hookRowCount);
 
-      // The silent agent surfaced as the HONEST 'unknown' on the replay
-      // tick's watchdog sweep; the terminal fixture agent was left alone.
+      // The silent agent surfaced as the HONEST 'unknown' on the replay tick's
+      // watchdog sweep. So did the fixture's subagent, and that is the correct
+      // answer rather than a regression: nothing ever OBSERVED it stop. Its
+      // transcript ends in January 2026, so on any realistic watchdog window it
+      // is long stale, and no `SubagentStop` hook was ever delivered for it.
+      // Claiming 'completed' here would be the inference this lifecycle
+      // deliberately refuses to make.
       const stale = second.db.prepare('SELECT status FROM agents WHERE id = ?').get('deadbea7') as {
         status: string;
       };
@@ -402,7 +407,7 @@ describe('WP-X4 ingest/restart negative catalogue', () => {
       const fixtureChild = second.db
         .prepare('SELECT status FROM agents WHERE id = ?')
         .get('3fa9c2d1') as { status: string };
-      expect(fixtureChild.status).toBe('completed');
+      expect(fixtureChild.status).toBe('unknown');
 
       // CD-4 / CD-7: events_raw has NO update or delete path — the schema
       // triggers abort both, so "intact" is physics, not convention.

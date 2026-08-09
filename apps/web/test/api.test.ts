@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   checkHealth,
+  fetchCostAnalysis,
   fetchCostSummary,
   fetchGlobalDag,
   fetchSessions,
   fetchSessionTree,
 } from '../src/api';
 import {
+  costAnalysis,
   costSummary,
   globalDag,
   jsonResponse,
@@ -138,6 +140,7 @@ describe('fetchSessions', () => {
     expect(await fetchSessions('secret-token')).toEqual({
       kind: 'error',
       message: 'Internal server error.',
+      status: 500,
     });
   });
 
@@ -146,6 +149,7 @@ describe('fetchSessions', () => {
     expect(await fetchSessions('secret-token')).toEqual({
       kind: 'error',
       message: 'request failed (HTTP 502)',
+      status: 502,
     });
   });
 
@@ -161,6 +165,8 @@ describe('fetchSessions', () => {
     expect(await fetchSessions('secret-token')).toEqual({
       kind: 'error',
       message: 'network error',
+      // No HTTP response ever existed - a different fact from any status.
+      status: null,
     });
   });
 
@@ -169,12 +175,16 @@ describe('fetchSessions', () => {
     expect(await fetchSessions('secret-token')).toEqual({
       kind: 'error',
       message: 'malformed response body',
+      // The transport succeeded; it is the payload that is wrong, so the
+      // status stays 200 rather than being laundered into a fake 5xx.
+      status: 200,
     });
 
     fetchMock.mockResolvedValue(textResponse(200));
     expect(await fetchSessions('secret-token')).toEqual({
       kind: 'error',
       message: 'malformed response body',
+      status: 200,
     });
   });
 
@@ -199,6 +209,7 @@ describe('fetchSessionTree', () => {
     expect(await fetchSessionTree('secret-token', 'missing')).toEqual({
       kind: 'error',
       message: 'Session not found.',
+      status: 404,
     });
   });
 });
@@ -222,5 +233,77 @@ describe('fetchCostSummary', () => {
 
     await fetchCostSummary('secret-token', 5);
     expect(lastRequest().url).toBe('/api/cost/summary?topN=5');
+  });
+});
+
+describe('fetchCostAnalysis', () => {
+  it('URL-encodes the session id', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, costAnalysis()));
+    const result = await fetchCostAnalysis('secret-token', 'weird/id?x');
+    expect(lastRequest().url).toBe('/api/sessions/weird%2Fid%3Fx/cost-analysis');
+    expect(result.kind).toBe('ok');
+  });
+
+  it('returns the analysis body unchanged, estimate label included', async () => {
+    const body = costAnalysis({
+      delegationSavings: {
+        actualUsd: 1.5,
+        hypotheticalUsd: 4,
+        savingsUsd: 2.5,
+        perAgent: [],
+        skippedAgentIds: ['agent-with-no-top-tier-model'],
+        isEstimate: true,
+      },
+    });
+    fetchMock.mockResolvedValue(jsonResponse(200, body));
+
+    const result = await fetchCostAnalysis('secret-token', 'session-1');
+
+    // The client is a transport, not an interpreter: it must not drop
+    // `isEstimate` or fold `skippedAgentIds` away, because both are how the UI
+    // is able to avoid presenting a counterfactual as a measured amount.
+    expect(result).toEqual({ kind: 'ok', data: body });
+  });
+
+  it('keeps this route`s four failure modes distinguishable', async () => {
+    // The whole reason `status` exists on the error arm. 503 (corpus not
+    // configured), 404 (no such transcript), 422 (unparseable/unpriceable) and
+    // 500 (detail-free fault) are different facts and the UI reacts to each
+    // differently; collapsing them into one "could not load" would be the same
+    // class of lie as a silent $0.
+    for (const status of [503, 404, 422, 500]) {
+      fetchMock.mockResolvedValue(jsonResponse(status, { error: `failed with ${status}` }));
+      expect(await fetchCostAnalysis('secret-token', 'session-1')).toEqual({
+        kind: 'error',
+        message: `failed with ${status}`,
+        status,
+      });
+    }
+  });
+
+  it('maps 401 to unauthorized rather than to an error', async () => {
+    // The shell drops the token on this arm; an `error` would leave a dead
+    // token in sessionStorage and a view stuck on a message.
+    fetchMock.mockResolvedValue(jsonResponse(401, { error: 'Unauthorized.' }));
+    expect(await fetchCostAnalysis('secret-token', 'session-1')).toEqual({
+      kind: 'unauthorized',
+    });
+  });
+
+  it('passes the abort signal through to fetch', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, costAnalysis()));
+    const controller = new AbortController();
+    await fetchCostAnalysis('secret-token', 'session-1', controller.signal);
+    expect(lastRequest().init.signal).toBe(controller.signal);
+  });
+
+  it('never puts the token in a failure message', async () => {
+    fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
+    const result = await fetchCostAnalysis('secret-token', 'session-1');
+    expect(result.kind).toBe('error');
+    if (result.kind === 'error') {
+      expect(result.message).not.toContain('secret-token');
+      expect(result.status).toBeNull();
+    }
   });
 });

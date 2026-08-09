@@ -13,7 +13,26 @@ import {
   type SseClient,
   type SseConnectionState,
 } from './sse';
+import {
+  AGENT_STATUSES,
+  NULL_STATUS_META,
+  STATUS_META,
+  UNRECOGNISED_STATUS_LABEL,
+  UNRECOGNISED_STATUS_SYMBOL,
+} from './views/status';
 import { VIEWS } from './views/index';
+
+/**
+ * The legend is generated from the status vocabulary itself, so every symbol
+ * the app can paint - including `unrecorded` and the `unrecognised` fallback
+ * for a status this build does not know - is explained. A symbol that could
+ * appear but is missing here would be uncertainty conveyed by glyph alone.
+ */
+const LEGEND_STATUSES = [
+  ...AGENT_STATUSES.map((status) => `${STATUS_META[status].symbol} ${STATUS_META[status].label}`),
+  `${NULL_STATUS_META.symbol} ${NULL_STATUS_META.label}`,
+  `${UNRECOGNISED_STATUS_SYMBOL} ${UNRECOGNISED_STATUS_LABEL}`,
+].join(' ');
 
 type HealthState =
   | { readonly kind: 'checking' }
@@ -115,8 +134,8 @@ export function Shell({ token, onLock, onAuthRejected }: ShellProps) {
             </a>
           ))}
           <p className="legend" aria-label="uncertainty legend">
-            ● working ▲ unknown ✓ done ✕ error
-            <br />— observed ┄ inferred ~ est.
+            {LEGEND_STATUSES}
+            <br />— observed ┄ inferred ~ unpriced
           </p>
         </nav>
         <main className="view">

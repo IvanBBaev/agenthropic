@@ -121,6 +121,22 @@ describe('createSseClient', () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
+  it('silently drops frames whose data is not a string at all', () => {
+    const client = createSseClient('t');
+    const handler = vi.fn();
+    const any = vi.fn();
+    client.subscribe('typed', handler);
+    client.onAnyEvent(any);
+
+    // A conforming server always sends text; a structured-clone payload is not
+    // parsed into an event, it is dropped.
+    MockEventSource.latest().emitRaw('typed', { id: 7 });
+    MockEventSource.latest().emitRaw('typed', null);
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(any).not.toHaveBeenCalled();
+  });
+
   it('supports unsubscribing onAnyEvent and onStateChange', () => {
     const client = createSseClient('t');
     const any = vi.fn();

@@ -9,13 +9,21 @@
 import { useEffect, useState } from 'react';
 import { fetchGlobalDag } from '../api';
 import type { GlobalDagDto } from '../dto';
-import { formatTokens, formatUsd, shortId } from '../format';
+import { agentTypeLabel, formatTokens, formatUsd, shortId } from '../format';
+import { describeAgentGraph } from './chart-summary';
 import { computeLayeredLayout } from './layout/layered';
 import { statusMeta } from './status';
 import type { ViewProps } from './types';
 
 /** Node cap requested from the server (its own max is higher). */
 export const DAG_NODE_LIMIT = 1000;
+
+/**
+ * Id of the prose text alternative. role="img" hides the SVG subtree (its
+ * <title> elements included) from assistive tech, so the same facts are
+ * published as visible prose and referenced with aria-describedby.
+ */
+const DAG_SUMMARY_ID = 'dag-chart-summary';
 
 type DagState =
   | { readonly kind: 'loading' }
@@ -107,6 +115,7 @@ export function DagView({ token, onAuthRejected }: ViewProps) {
         <svg
           role="img"
           aria-label="global orchestration dag"
+          aria-describedby={DAG_SUMMARY_ID}
           width={layout.width}
           height={layout.height}
           viewBox={`0 0 ${String(layout.width)} ${String(layout.height)}`}
@@ -135,7 +144,7 @@ export function DagView({ token, onAuthRejected }: ViewProps) {
             return (
               <g key={agent.id} className={meta.className} data-testid={`dag-node-${agent.id}`}>
                 <title>
-                  {`${agent.subagentType ?? agent.type ?? 'agent'} ${shortId(agent.id)} - session ${shortId(agent.sessionId)} - ${meta.label} - ${formatTokens(agent.totalTokens)} tokens, ${formatUsd(agent.costUsd)}${agent.unpricedTokens > 0 ? `, ~${formatTokens(agent.unpricedTokens)} unpriced` : ''}`}
+                  {`${agentTypeLabel(agent.subagentType, agent.type)} ${shortId(agent.id)} - session ${shortId(agent.sessionId)} - ${meta.label} - ${formatTokens(agent.totalTokens)} tokens, ${formatUsd(agent.costUsd)}${agent.unpricedTokens > 0 ? `, ~${formatTokens(agent.unpricedTokens)} unpriced` : ''}`}
                 </title>
                 <circle cx={placed.x} cy={placed.y} r={7} fill="currentColor" />
                 <text className="node-symbol" x={placed.x} y={placed.y + 3.5} textAnchor="middle">
@@ -149,6 +158,9 @@ export function DagView({ token, onAuthRejected }: ViewProps) {
           })}
         </svg>
       </div>
+      <p className="chart-summary" id={DAG_SUMMARY_ID}>
+        {describeAgentGraph(dag.nodes, dag.edges)}
+      </p>
       <p className="legend-inline muted" aria-label="edge provenance legend">
         — observed (tool_use) ┄ inferred (directory, task_notification, queue_operation)
       </p>

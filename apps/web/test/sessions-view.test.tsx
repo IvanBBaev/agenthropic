@@ -5,11 +5,12 @@
  * is shown even at zero. fetch is mocked - no real server, no ~/.claude tree.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { SessionsView, SESSION_LIST_LIMIT } from '../src/views/SessionsView';
 import { createSseClient, type SseClient } from '../src/sse';
 import {
   agentNode,
+  deferred,
   jsonResponse,
   orchestrationEdge,
   sessionList,
@@ -159,6 +160,156 @@ describe('SessionsView', () => {
     await screen.findByText(/1 edge reference agents outside this payload and are not drawn\./);
   });
 
+  it('labels a typeless agent as unrecorded and never prices its tokens away as $0', async () => {
+    routeFetch({
+      tree: jsonResponse(
+        200,
+        sessionTree({
+          agents: [
+            agentNode({
+              id: 'agent-x',
+              type: null,
+              subagentType: null,
+              status: 'unknown',
+              totalTokens: 640,
+              costUsd: 0,
+              unpricedTokens: 640,
+            }),
+          ],
+          edges: [],
+        }),
+      ),
+    });
+    renderView();
+    await screen.findByRole('list', { name: 'session list' });
+    fireEvent.click(screen.getByRole('button', { name: /agenthropic/ }));
+
+    await screen.findByText('1 agent, 0 edges (persisted).');
+    const node = screen.getByTestId('tree-node-agent-x');
+    // No subagentType and no type: the identity says the type was never
+    // recorded, and the $0 is immediately qualified by the unpriced tokens.
+    expect(node.querySelector('title')?.textContent).toBe(
+      'type unrecorded agent-x - unknown - 640 tokens, $0.00, ~640 unpriced',
+    );
+    expect(node.querySelector('.node-label')?.textContent).toBe('type unrecorded');
+    expect(node.getAttribute('class')).toBe('status-unknown');
+  });
+
+  it('pluralises the dropped-edge notice and invents no node for the missing ends', async () => {
+    routeFetch({
+      tree: jsonResponse(
+        200,
+        sessionTree({
+          edges: [
+            orchestrationEdge({ childAgentId: 'agent-ghost-1' }),
+            orchestrationEdge({ id: 2, childAgentId: 'agent-ghost-2' }),
+          ],
+        }),
+      ),
+    });
+    const { container } = renderView();
+    await screen.findByRole('list', { name: 'session list' });
+    fireEvent.click(screen.getByRole('button', { name: /agenthropic/ }));
+
+    await screen.findByText('2 edges reference agents outside this payload and are not drawn.');
+    expect(container.querySelectorAll('line.edge')).toHaveLength(0);
+    expect(container.querySelectorAll('[data-testid^="tree-node-"]')).toHaveLength(2);
+  });
+
+  it('parks a self-referencing agent on a fallback layer and says so', async () => {
+    routeFetch({
+      tree: jsonResponse(
+        200,
+        sessionTree({
+          agents: [agentNode()],
+          edges: [orchestrationEdge({ childAgentId: 'agent-main' })],
+        }),
+      ),
+    });
+    const { container } = renderView();
+    await screen.findByRole('list', { name: 'session list' });
+    fireEvent.click(screen.getByRole('button', { name: /agenthropic/ }));
+
+    await screen.findByText('1 agent sit in a cycle and are placed on a fallback layer.');
+    // The cycle is disclosed, not dropped: node and edge are still drawn.
+    expect(screen.getByTestId('tree-node-agent-main')).toBeDefined();
+    expect(container.querySelectorAll('line.edge')).toHaveLength(1);
+  });
+
+  it('counts both members of a two-agent cycle in the fallback notice', async () => {
+    routeFetch({
+      tree: jsonResponse(
+        200,
+        sessionTree({
+          agents: [
+            agentNode(),
+            agentNode({ id: 'agent-child', type: 'subagent', subagentType: 'Explore' }),
+          ],
+          edges: [
+            orchestrationEdge(),
+            orchestrationEdge({
+              id: 2,
+              parentAgentId: 'agent-child',
+              childAgentId: 'agent-main',
+            }),
+          ],
+        }),
+      ),
+    });
+    renderView();
+    await screen.findByRole('list', { name: 'session list' });
+    fireEvent.click(screen.getByRole('button', { name: /agenthropic/ }));
+
+    await screen.findByText('2 agents sit in a cycle and are placed on a fallback layer.');
+    expect(screen.getByTestId('tree-node-agent-main')).toBeDefined();
+    expect(screen.getByTestId('tree-node-agent-child')).toBeDefined();
+  });
+
+  it('writes a one-agent session row in the singular', async () => {
+    routeFetch({ list: jsonResponse(200, sessionList([sessionSummary({ agentCount: 1 })])) });
+    renderView();
+    await screen.findByRole('list', { name: 'session list' });
+
+    expect(screen.getByRole('button', { name: /agenthropic/ }).textContent).toContain(
+      '1 agent · $0.42',
+    );
+  });
+
+  it('drops a tree response that lands after the user selected another session', async () => {
+    const sessionA = sessionSummary();
+    const sessionB = sessionSummary({
+      id: 'bbbbbbbb-5555-6666-7777-888888888888',
+      projectSlug: 'kiko',
+    });
+    const pendingA = deferred<Response>();
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes(`${sessionA.id}/tree`)) return pendingA.promise;
+      if (url.includes(`${sessionB.id}/tree`)) {
+        return Promise.resolve(jsonResponse(200, sessionTree({ sessionId: sessionB.id })));
+      }
+      return Promise.resolve(jsonResponse(200, sessionList([sessionA, sessionB])));
+    });
+    renderView();
+    await screen.findByRole('list', { name: 'session list' });
+
+    fireEvent.click(screen.getByRole('button', { name: /agenthropic/ }));
+    expect(screen.getByText('Loading tree…')).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: /kiko/ }));
+    await screen.findByRole('img', { name: `agent tree for session ${sessionB.id}` });
+
+    // The first request is now stale; answering late must not swap the tree
+    // out from under the selection the user is looking at.
+    await act(async () => {
+      pendingA.resolve(jsonResponse(200, sessionTree({ sessionId: sessionA.id })));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(
+      screen.getByRole('img', { name: `agent tree for session ${sessionB.id}` }),
+    ).toBeDefined();
+    expect(screen.queryByRole('img', { name: `agent tree for session ${sessionA.id}` })).toBeNull();
+  });
+
   it('surfaces a tree fetch failure without dropping the list', async () => {
     routeFetch({ tree: jsonResponse(404, { error: 'Session not found.' }) });
     renderView();
@@ -207,6 +358,6 @@ describe('SessionsView', () => {
     });
     renderView();
     await screen.findByRole('list', { name: 'session list' });
-    expect(screen.getByText('no project')).toBeDefined();
+    expect(screen.getByText('project unknown')).toBeDefined();
   });
 });

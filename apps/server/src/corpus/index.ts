@@ -37,9 +37,14 @@ export {
 export type {
   BuiltSubstrate,
   CorpusFs,
+  EnumeratedSessions,
   LstatInfo,
+  NoSubstrate,
   ReadLimits,
+  SessionEnumeration,
   SessionRef,
   SkippedFile,
   SkipReason,
+  SubstrateBuild,
+  UnreadableRoot,
 } from './fs-port';

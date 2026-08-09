@@ -127,3 +127,71 @@ describe('buildHookEnvelope + computeIdempotencyKey (WP-IN1)', () => {
     expect(computeIdempotencyKey(shifted)).toBe(computeIdempotencyKey(envelope));
   });
 });
+
+/**
+ * RECURRENCE vs REDELIVERY. Claude Code's `Stop` hook stdin is byte-identical
+ * on every turn of a session (session_id, transcript_path, cwd,
+ * hook_event_name, stop_hook_active - nothing turn-specific). Content hashing
+ * alone therefore cannot tell "this event happened again" from "this event was
+ * delivered twice": turn 2 hashes to turn 1's key and the liveness timeline
+ * silently collapses to a single row.
+ *
+ * Only the SENDER knows which of the two it is doing, so the sender identifies
+ * its delivery (the WP-X8 hook command mints a fresh id per firing and curl
+ * reuses it across its own retries). The delivery id is KEY MATERIAL ONLY - it
+ * is never persisted, never logged, never echoed. CD-1 is untouched: this
+ * changes how many liveness rows land, never the agent/edge topology.
+ */
+describe('delivery identity (WP-IN1 recurrence vs redelivery)', () => {
+  /** Verbatim shape of Claude Code `Stop` hook stdin - identical every turn. */
+  const stopBody = {
+    session_id: 'session-1',
+    transcript_path: '/tmp/session-1.jsonl',
+    cwd: '/tmp/project',
+    hook_event_name: 'Stop',
+    stop_hook_active: false,
+  };
+
+  it('two genuine firings of a byte-identical body get DIFFERENT keys', () => {
+    const turnOne = buildHookEnvelope(stopBody, RECEIVED_AT, 'delivery-1');
+    const turnTwo = buildHookEnvelope(stopBody, '2026-07-18T10:05:00.000Z', 'delivery-2');
+    expect(turnTwo.idempotencyKey).not.toBe(turnOne.idempotencyKey);
+  });
+
+  it('a retry that REUSES its delivery id keeps the same key (redelivery still dedupes)', () => {
+    const sent = buildHookEnvelope(stopBody, RECEIVED_AT, 'delivery-1');
+    const retried = buildHookEnvelope(stopBody, '2026-07-18T10:00:02.000Z', 'delivery-1');
+    expect(retried.idempotencyKey).toBe(sent.idempotencyKey);
+  });
+
+  it('carries the delivery id on the envelope and stays schema-valid', () => {
+    const { envelope } = buildHookEnvelope(stopBody, RECEIVED_AT, 'delivery-1');
+    expect(envelope).toEqual({
+      source: 'hook',
+      hookName: 'Stop',
+      sessionId: 'session-1',
+      receivedAt: RECEIVED_AT,
+      deliveryId: 'delivery-1',
+      payload: stopBody,
+    });
+    expect(Value.Check(HookEnvelopeSchema, envelope)).toBe(true);
+  });
+
+  it('an UNIDENTIFIED delivery keeps the conservative collapse (trade-off, stated)', () => {
+    // A client that supplies no delivery id cannot be told apart from itself:
+    // identical payloads still hash to one key, exactly as before this change.
+    const first = buildHookEnvelope(stopBody, RECEIVED_AT);
+    const second = buildHookEnvelope(stopBody, '2026-07-18T10:05:00.000Z');
+    expect(second.idempotencyKey).toBe(first.idempotencyKey);
+    expect(first.envelope.deliveryId).toBeUndefined();
+  });
+
+  it('keys of unidentified deliveries are UNCHANGED by this feature (stable across upgrade)', () => {
+    // The material omits the field entirely when absent, so keys already in a
+    // production events_raw keep matching after the upgrade.
+    const { envelope } = buildHookEnvelope(stopBody, RECEIVED_AT);
+    expect(computeIdempotencyKey(envelope)).toBe(
+      computeIdempotencyKey({ ...envelope, deliveryId: undefined }),
+    );
+  });
+});

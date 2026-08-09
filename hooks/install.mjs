@@ -21,6 +21,10 @@
  *   only variable part.
  * - Hook failures never block Claude Code: the command is fail-silent
  *   (`--silent --fail`, a hard `--max-time`, and a trailing `|| true`).
+ * - The command stamps each firing with a delivery id expanded by the shell at
+ *   fire time (see DELIVERY_ID_HEADER). It carries no user data - a pid, an
+ *   epoch second and `$RANDOM` - and the server uses it as idempotency-key
+ *   material only; it is never stored or echoed.
  *
  * MERGE / ROLLBACK:
  * - Updates are non-destructive: unrelated settings keys and unrelated hook
@@ -55,6 +59,25 @@ export const DEFAULT_TOKEN_ENV = 'DASHBOARD_TOKEN';
 
 /** Hard timeout (seconds) Claude Code applies to the hook command. */
 const HOOK_TIMEOUT_SECONDS = 5;
+
+/**
+ * Header carrying a per-FIRING delivery id (WP-IN1). A `Stop` hook body is
+ * byte-identical on every turn of a session, so the server cannot tell "this
+ * happened again" from "this was delivered twice" by content alone - only the
+ * sender can. Must match apps/server/src/hooks/routes.ts.
+ */
+export const DELIVERY_ID_HEADER = 'X-Agenthropic-Delivery-Id';
+
+/**
+ * Shell expression that mints the delivery id AT FIRE TIME - one value per
+ * hook invocation, and one value for that invocation's own curl retries.
+ * `$$` (the hook shell's pid) plus the epoch second plus `$RANDOM`; on a shell
+ * without `$RANDOM` (dash) the expression degrades to pid+second, which is
+ * still per-invocation because each firing runs in its own shell. The
+ * installer never computes a value itself, so no id is ever baked into the
+ * settings file.
+ */
+const DELIVERY_ID_EXPRESSION = '$$-$(date +%s)-$RANDOM';
 
 /** Loopback marker + path marker that identify a command as ours. */
 const LOOPBACK_MARKER = '127.0.0.1';
@@ -99,7 +122,8 @@ export function buildHookCommand({ port = DEFAULT_PORT, tokenEnv = DEFAULT_TOKEN
   return (
     `curl --silent --fail --max-time 3 --output /dev/null ` +
     `--request POST --header 'Content-Type: application/json' ` +
-    `--header "Authorization: Bearer \${${tokenEnv}}" --data-binary @- ` +
+    `--header "Authorization: Bearer \${${tokenEnv}}" ` +
+    `--header "${DELIVERY_ID_HEADER}: ${DELIVERY_ID_EXPRESSION}" --data-binary @- ` +
     `'http://${LOOPBACK_MARKER}:${String(port)}${ENDPOINT_MARKER}' || true`
   );
 }

@@ -55,11 +55,13 @@ remote access via SSH/Tailscale tunnel only · SQLite WAL with tested backups.
 
 ## Delivery bar
 
->90% test coverage, CI-gated in every shipped package (`packages/shared`,
-`packages/core`, `apps/server`, `apps/web`; `packages/test-fixtures` is a deliberate,
-documented exclusion) · README badges backed by real signals only · GitHub Pages docs
-site — the workflow is committed, but Pages is not yet enabled on the repository, so
-that job fails by design rather than pretending to succeed.
+**100% test coverage — statements, branches, functions and lines — pinned and
+CI-gated in all five packages** (`packages/shared`, `packages/core`,
+`packages/test-fixtures`, `apps/server`, `apps/web`), with zero coverage-ignore
+pragmas anywhere under `src/` and guard tests that fail the build if one appears ·
+README badges backed by real signals only · GitHub Pages docs site — the workflow
+self-enables Pages on deploy (`enablement: true`), so the site goes live with the
+first green run on `main` rather than pretending to succeed before that.
 
 ## Support
 

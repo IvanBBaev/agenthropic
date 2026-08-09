@@ -19,11 +19,20 @@
 #   - jekyll-readme-index: docs/site/README.md becomes /site/index.html
 #   - jekyll-titles-from-headings + the default Primer theme
 #
-# OWNER ACTION REQUIRED (one-time, cannot be done from this file): enable Pages
-# in Settings -> Pages -> Source: "GitHub Actions". As of 2026-07-29 the repo
-# reports has_pages: false; until the owner flips that switch, the deploy job
-# will fail with "Pages not enabled". The application itself stays bound to
-# 127.0.0.1 - the docs site is the only public surface (ADR-0013).
+# Pages enablement: the `enablement: true` input below makes configure-pages
+# turn Pages on via the API (build type "workflow") on the first run, using the
+# `pages: write` permission this workflow already holds - so the one-time
+# Settings -> Pages click is no longer required. It is idempotent: on every
+# later run Pages is already enabled and the step is a no-op. It is NOT a
+# silent success path - if the token is ever denied the call, the step still
+# fails loudly rather than deploying nowhere.
+#
+# What this changes for the repository: the FIRST push of this workflow to main
+# flips the repo's has_pages to true and publishes docs/ at the project's
+# github.io URL. That is a deliberate, owner-sanctioned public surface, and the
+# only one: the application itself stays bound to 127.0.0.1 (ADR-0013).
+# docs/ai/ is git-excluded and never present in the CI checkout, so no local-only
+# harness file can reach the published site.
 name: Docs site (GitHub Pages)
 
 on:
@@ -52,6 +61,10 @@ jobs:
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
+        with:
+          # Enables Pages on first run instead of failing with "Get Pages site
+          # failed ... Not Found" (run 30528892265). Idempotent thereafter.
+          enablement: true
 
       - name: Add build-time site scaffolding (runner workspace only, never committed)
         run: |

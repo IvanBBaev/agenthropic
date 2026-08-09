@@ -36,7 +36,7 @@ import {
 } from '@agenthropic/core';
 import type { SqliteDatabase } from '../db/connection';
 import { loadPricing } from '../db/pricing';
-import type { ResolvedSessionSubstrate, SubstrateProvider } from './substrate-provider';
+import type { SubstrateLookup, SubstrateProvider } from './substrate-provider';
 import {
   countSessions,
   getCostSummary,
@@ -241,9 +241,9 @@ export const apiRoutes: FastifyPluginAsync<ApiRoutesOptions> = async (app, optio
         return reply.code(503).send({ error: 'corpus access is not configured' });
       }
 
-      let resolved: ResolvedSessionSubstrate | null;
+      let lookup: SubstrateLookup;
       try {
-        resolved = substrateProvider.loadSession(request.params.id);
+        lookup = substrateProvider.loadSession(request.params.id);
       } catch (error) {
         if (error instanceof SubstrateError) {
           // A poisoned transcript is a data problem, not a server bug; corpus
@@ -252,9 +252,35 @@ export const apiRoutes: FastifyPluginAsync<ApiRoutesOptions> = async (app, optio
         }
         throw error; // e.g. ContainmentError → uniform detail-free 500
       }
-      if (resolved === null) {
+      // Four ways to have no substrate, four different answers. They used to
+      // share one `404 Session not found.`, which was untrue in most cases:
+      // with no corpus root (or one that cannot be read) nothing here knows
+      // whether the session exists, and an empty remnant was found — it simply
+      // holds nothing to analyse.
+      if (lookup.kind === 'no-corpus-root') {
+        // 503, not 404: the root is re-resolved per call, so a corpus that
+        // appears later fixes this without a restart. That is a server
+        // capability gap, exactly like the absent provider above.
+        return reply
+          .code(503)
+          .send({ error: 'no corpus root is present on this machine, so nothing can be analysed' });
+      }
+      if (lookup.kind === 'unreadable-root') {
+        // Also 503 and also retryable — but a DIFFERENT sentence: the root is
+        // there, this process just could not read it on this attempt.
+        return reply
+          .code(503)
+          .send({ error: 'the corpus root exists but could not be read; retry shortly' });
+      }
+      if (lookup.kind === 'session-not-found') {
         return reply.code(404).send({ error: 'Session not found.' });
       }
+      if (lookup.kind === 'no-substrate') {
+        return reply
+          .code(422)
+          .send({ error: 'the session transcript holds no analysable records' });
+      }
+      const resolved = lookup.substrate;
 
       const pricing = loadPricing(db);
       const { topTierModel } = request.query;

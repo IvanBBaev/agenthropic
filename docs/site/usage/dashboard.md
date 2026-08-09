@@ -169,6 +169,17 @@ place.
 > Heartbeats are SSE *comment* frames and never surface to the client. Where a
 > session has tokens that could not be priced, the row shows `~ n unpriced`
 > alongside its dollar figure rather than absorbing them into it.
+>
+> **Who writes each state — and what you see with no hooks installed.** Reading a
+> transcript proves *activity*, never *termination*, so ingest only ever writes
+> `working`. `completed` comes from the `SubagentStop` hook, `waiting` from the `Stop`
+> hook (which fires at the end of every **turn**, so it means "idle right now", not
+> "finished"), and `unknown` from the watchdog after `DASHBOARD_WATCHDOG_MINUTES` of
+> silence. **If you have not installed the hooks (`hooks/install.mjs`), nothing on this
+> board will ever read `done`** — agents move `working` → `unknown` and sit there. That
+> is not a bug in the board; it is the board declining to claim an ending nobody
+> observed. See
+> [the status lifecycle](../architecture/ingest-reconciliation.md#81-the-status-lifecycle-as-built).
 
 ## (b) Session-scoped subagent tree
 

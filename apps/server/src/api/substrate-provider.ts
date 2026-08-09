@@ -40,17 +40,39 @@ export interface ResolvedSessionSubstrate {
   readonly boundaries: readonly CompactionBoundary[];
 }
 
+/**
+ * The result of one lookup. Four of the five arms carry no substrate — and
+ * they are four DIFFERENT facts that the route answers with DIFFERENT HTTP
+ * statuses. This used to be `ResolvedSessionSubstrate | null`, and every
+ * `null` became `404 Session not found.`, which was a false statement in most
+ * of the cases: with no corpus root the server has no standing to say whether
+ * the session exists, a root it could not READ proves nothing either way, and
+ * an empty remnant IS found — it just holds nothing to analyse. Same collapse
+ * the dashboard forbids for agent status ('unknown' is never `null`), except
+ * this one reached the reader as a sentence.
+ */
+export type SubstrateLookup =
+  /** Built and parsed; the analysis can run. */
+  | { readonly kind: 'resolved'; readonly substrate: ResolvedSessionSubstrate }
+  /** No corpus root on this machine — nothing can be said about any session. */
+  | { readonly kind: 'no-corpus-root' }
+  /** The root exists but could not be read right now — retryable, not a 404. */
+  | { readonly kind: 'unreadable-root' }
+  /** The corpus was enumerated and holds no session with that id. */
+  | { readonly kind: 'session-not-found' }
+  /** The session file exists but yields nothing parseable (an empty remnant). */
+  | { readonly kind: 'no-substrate' };
+
 /** The seam the cost-analysis route depends on (absent → the route replies 503). */
 export interface SubstrateProvider {
   /**
-   * Resolve, build and parse one session's substrate. Returns `null` when the
-   * corpus root does not exist, no enumerated session matches `sessionId`, or
-   * the session yields nothing parseable (an empty remnant).
+   * Resolve, build and parse one session's substrate. Always reports WHY a
+   * lookup produced no substrate — see {@link SubstrateLookup}.
    *
    * @throws {SubstrateError} (from the parser) on a poisoned transcript.
    * @throws {ContainmentError} on a crafted corpus — never swallowed.
    */
-  loadSession(sessionId: string): ResolvedSessionSubstrate | null;
+  loadSession(sessionId: string): SubstrateLookup;
 }
 
 export interface SubstrateProviderDeps {
@@ -70,29 +92,42 @@ export function createSubstrateProvider(deps: SubstrateProviderDeps): SubstrateP
   const limits: ReadLimits = { ...DEFAULT_READ_LIMITS, ...deps.limits };
 
   return {
-    loadSession(sessionId: string): ResolvedSessionSubstrate | null {
+    loadSession(sessionId: string): SubstrateLookup {
       // Re-resolved per call (mirrors runCorpusIngest): a corpus that appears
       // after boot becomes visible without a restart.
       const corpusRoot = resolveCorpusRoot(deps.env, fs, deps.homedir);
       if (corpusRoot === null) {
-        return null; // no corpus on this machine → the session cannot exist
+        // NOT "not found": with no corpus to enumerate, this provider has no
+        // standing to say whether the session exists. It may well exist on the
+        // machine whose corpus is missing here.
+        return { kind: 'no-corpus-root' };
       }
 
-      const ref = enumerateSessions(fs, corpusRoot).find(
-        (candidate) => candidate.sessionId === sessionId,
-      );
+      const enumeration = enumerateSessions(fs, corpusRoot);
+      if (enumeration.kind === 'unreadable-root') {
+        // A listing that failed proves nothing about the session — answering
+        // "not found" here would deny a session nobody looked at.
+        return { kind: 'unreadable-root' };
+      }
+      const ref = enumeration.refs.find((candidate) => candidate.sessionId === sessionId);
       if (ref === undefined) {
-        return null;
+        return { kind: 'session-not-found' };
       }
 
       const built = buildSessionSubstrate(fs, ref, limits);
-      if (built === null) {
-        return null; // nothing parseable survived (e.g. an empty main, no agents)
+      if (built.kind === 'no-substrate') {
+        // The file IS there (it was enumerated a line ago); it just holds
+        // nothing parseable — an empty main, no agents. Reporting that as
+        // "not found" would deny a file this very call has seen.
+        return { kind: 'no-substrate' };
       }
 
       return {
-        session: parseSession(built.substrate),
-        boundaries: extractCompactionBoundaries(built.substrate),
+        kind: 'resolved',
+        substrate: {
+          session: parseSession(built.substrate),
+          boundaries: extractCompactionBoundaries(built.substrate),
+        },
       };
     },
   };

@@ -13,13 +13,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchSessions } from '../api';
 import type { SessionSummaryDto } from '../dto';
-import { formatRelativeTime, formatTokens, formatUsd, shortId } from '../format';
+import { formatRelativeTime, formatTokens, formatUsd, projectLabel, shortId } from '../format';
 import {
   applyAgentStatusChange,
+  bucketCount,
   isAgentStatusChangedEvent,
   sortSessionsByRecency,
 } from './live-model';
-import { AGENT_STATUSES, STATUS_META } from './status';
+import { AGENT_STATUSES, STATUS_META, statusMeta } from './status';
 import type { ViewProps } from './types';
 
 /** Page size for the board snapshot (server max is far above this). */
@@ -66,7 +67,13 @@ export function LiveView({ token, sse, onAuthRejected }: ViewProps) {
       setReload((current) => current + 1);
     });
     const unsubscribeStatus = sse.subscribe('agent-status-changed', (event) => {
-      if (!isAgentStatusChangedEvent(event.data)) return;
+      if (!isAgentStatusChangedEvent(event.data)) {
+        // A frame this build cannot read still announces that something
+        // changed. Dropping it silently would leave a board that looks
+        // current but is not; refetch persisted truth instead.
+        setReload((value) => value + 1);
+        return;
+      }
       const current = boardRef.current;
       if (current.kind !== 'ready') return;
       const result = applyAgentStatusChange(current.sessions, event.data);
@@ -81,6 +88,24 @@ export function LiveView({ token, sse, onAuthRejected }: ViewProps) {
       unsubscribeStatus();
     };
   }, [sse, applyBoard]);
+
+  useEffect(() => {
+    // A dropped stream is a hole in the board's event feed: every transition
+    // that fired while disconnected is simply gone (SSE replays nothing), so
+    // patched-in-place statuses go stale with no visual sign. Refetch persisted
+    // truth once per recovery. The handler runs immediately with the CURRENT
+    // state (see sse.ts), so a mount on an already-open stream sets no flag and
+    // triggers no extra fetch.
+    let wasInterrupted = false;
+    return sse.onStateChange((state) => {
+      if (state === 'reconnecting' || state === 'closed') {
+        wasInterrupted = true;
+      } else if (state === 'open' && wasInterrupted) {
+        wasInterrupted = false;
+        setReload((value) => value + 1);
+      }
+    });
+  }, [sse]);
 
   if (board.kind === 'loading') {
     return (
@@ -122,19 +147,28 @@ export function LiveView({ token, sse, onAuthRejected }: ViewProps) {
           <ul className="board" aria-label="sessions">
             {sessions.map((session) => {
               const recency = formatRelativeTime(session.lastActivityAt, now);
+              const sessionStatus = statusMeta(session.status);
               return (
                 <li key={session.id} className="card">
                   <div className="card-head">
                     <code>{shortId(session.id)}</code>
                     <span className={session.projectSlug === null ? 'muted' : undefined}>
-                      {session.projectSlug ?? 'no project'}
+                      {projectLabel(session.projectSlug)}
+                    </span>
+                    <span
+                      className={`session-status ${sessionStatus.className}`}
+                      data-testid={`session-status-${session.id}`}
+                    >
+                      <span aria-hidden="true">{sessionStatus.symbol}</span> {sessionStatus.label}
                     </span>
                     <span className="muted card-recency">{recency ?? 'no timestamp'}</span>
                   </div>
                   <div className="card-buckets" aria-label={`status counts for ${session.id}`}>
                     {AGENT_STATUSES.map((status) => {
                       const meta = STATUS_META[status];
-                      const count = session.statusCounts[status];
+                      // A bucket the server omitted is a hole in the snapshot,
+                      // not a zero - it renders as `?`, never as "0 waiting".
+                      const count = bucketCount(session.statusCounts, status);
                       return (
                         <span
                           key={status}
@@ -143,7 +177,7 @@ export function LiveView({ token, sse, onAuthRejected }: ViewProps) {
                           <span className={meta.className} aria-hidden="true">
                             {meta.symbol}
                           </span>{' '}
-                          {count} {meta.label}
+                          {count ?? '?'} {meta.label}
                         </span>
                       );
                     })}

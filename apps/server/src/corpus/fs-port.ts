@@ -119,6 +119,30 @@ export interface SessionRef {
   readonly sessionDirAbs: string;
 }
 
+/** A readable corpus root and every session discovered under it. */
+export interface EnumeratedSessions {
+  readonly kind: 'sessions';
+  readonly refs: readonly SessionRef[];
+}
+
+/**
+ * The corpus root exists but its directory listing failed (EACCES, EIO, …).
+ * A DIFFERENT fact from "no sessions": an unreadable root says nothing about
+ * what it holds, so no caller may treat it as an empty corpus — pruning
+ * fingerprints, answering "session not found" or reporting a quiet pass on
+ * this arm would all be the confident-lie collapse the dashboard forbids.
+ * ENOENT is NOT this arm: a root that vanished genuinely holds no sessions
+ * (the next root resolution will see it gone and reset).
+ */
+export interface UnreadableRoot {
+  readonly kind: 'unreadable-root';
+  /** The fs error code, when one was surfaced (`EACCES`, `EIO`, …). */
+  readonly code?: string;
+}
+
+/** The product of {@link ./disk-substrate.enumerateSessions}. */
+export type SessionEnumeration = EnumeratedSessions | UnreadableRoot;
+
 /** Per-file read bounds. PROVISIONAL (LABEL-ME) — not yet ratified. */
 export interface ReadLimits {
   readonly maxFileBytes: number;
@@ -135,9 +159,30 @@ export const DEFAULT_READ_LIMITS: ReadLimits = {
   maxDepth: DEFAULT_MAX_DEPTH,
 };
 
-/** The product of {@link ./disk-substrate.buildSessionSubstrate} for one session. */
+/** A session that yielded something parseable: a main transcript, an agent, or both. */
 export interface BuiltSubstrate {
+  readonly kind: 'built';
   readonly substrate: SessionSubstrate;
   readonly projectSlug: string;
   readonly skipped: readonly SkippedFile[];
 }
+
+/**
+ * A session that yielded NOTHING parseable — a meta/journal-only remnant, or one
+ * whose every transcript was skipped.
+ *
+ * It still carries `skipped`, and that is the whole point of this arm. The
+ * builder always knew WHY each file was dropped (errno and all); the previous
+ * `BuiltSubstrate | null` return threw that list away on exactly this path, so
+ * an EACCES main got reported as a warning when a subagent happened to survive
+ * alongside it and vanished into a bare "1 session skipped" when it did not.
+ * The worse the failure, the less the operator was told - precisely inverted.
+ */
+export interface NoSubstrate {
+  readonly kind: 'no-substrate';
+  readonly projectSlug: string;
+  readonly skipped: readonly SkippedFile[];
+}
+
+/** The product of {@link ./disk-substrate.buildSessionSubstrate} for one session. */
+export type SubstrateBuild = BuiltSubstrate | NoSubstrate;

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { Value } from '@sinclair/typebox/value';
+import { RealtimeEventSchema } from '@agenthropic/shared';
 import type { AgentStatusChangedEvent, SessionIngestedEvent } from '../src/ingest/ingest-events';
-import { toRealtimeEvent } from '../src/realtime/bridge';
+import type { IngestFailureReport } from '../src/ingest/corpus-watcher';
+import { toIngestFailureEvent, toRealtimeEvent } from '../src/realtime/bridge';
 
 const STAMP = '2026-07-20T10:00:00.000Z';
 
@@ -67,5 +70,49 @@ describe('toRealtimeEvent (ingest -> shared realtime seam)', () => {
       newStatus: 'unknown',
     };
     expect(toRealtimeEvent(ingest, STAMP)).toMatchObject({ previousStatus: null });
+  });
+});
+
+/**
+ * WP-IN5 failure visibility. A session that fails to ingest used to be
+ * discarded, so the dashboard silently showed nothing. The failure now travels
+ * the same SSE transport as every other truth (CD-5), on the shared union's
+ * generic arm - no shared-schema change, and the dashboard can render it.
+ */
+describe('toIngestFailureEvent (ingest failure -> SSE)', () => {
+  const report: IngestFailureReport = {
+    sessionId: 'dddddddd-4444-4444-8444-444444444444',
+    reason: 'refusing to price at $0: unknown model id "unpriced-model-z"',
+    attempt: 2,
+    willRetry: true,
+  };
+
+  it('maps a failure report onto the generic arm, stamp inside the payload', () => {
+    const event = toIngestFailureEvent(report, STAMP);
+    expect(event).toEqual({
+      type: 'ingest-failed',
+      payload: {
+        sessionId: report.sessionId,
+        reason: report.reason,
+        attempt: 2,
+        willRetry: true,
+        occurredAt: STAMP,
+      },
+    });
+    // The generic arm forbids top-level extras, so `occurredAt` must live in
+    // the payload - assert the real shared schema accepts what we publish.
+    expect(Value.Check(RealtimeEventSchema, event)).toBe(true);
+  });
+
+  it('carries the quarantine verdict and nothing about the substrate', () => {
+    const event = toIngestFailureEvent({ ...report, attempt: 3, willRetry: false }, STAMP);
+    expect(event.payload).toMatchObject({ attempt: 3, willRetry: false });
+    expect(Object.keys(event.payload).sort()).toEqual([
+      'attempt',
+      'occurredAt',
+      'reason',
+      'sessionId',
+      'willRetry',
+    ]);
   });
 });

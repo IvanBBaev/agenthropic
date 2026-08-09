@@ -328,7 +328,7 @@ disagree or arrive out of order, which one wins, per field":
 |---|---|---|
 | Token counts (final) | **JSONL, always** | Ground-truth invariant — never inferred, never hook-estimated (DESIGN §3; concept-analysis-v2 §5). |
 | Interim liveness ("working"/"waiting") | Hooks | Only hooks fire sub-second; JSONL is not live. |
-| Final session/agent state | JSONL | The durable record of what actually happened, once available. |
+| Final session/agent state | JSONL | The durable record of what actually happened, once available. *(As built: JSONL proves **activity**, never **termination** — see the status lifecycle below.)* |
 | `token_usage.agent_id` | Deterministic backfill | May be `NULL` at first write (a token row can arrive before the owning agent is known) — resolved once the agent is known, never guessed (CD-3). |
 
 `WP-IN9` implements the backfill side of this: **"Reconciliation precedence + deterministic
@@ -359,6 +359,44 @@ can never appear falsely alive forever; it can only ever fail toward visible unc
 > is answered in practice by the re-ingest path: a later whole-session re-ingest upserts the
 > status the JSONL evidence supports, so a stale `unknown` yields to the durable record
 > instead of sticking forever.
+
+### 8.1 The status lifecycle, as built
+
+The precedence table's "final session/agent state → JSONL" row needed one correction the
+design did not anticipate. **A transcript proves that activity happened; it never proves that
+it stopped.** `ParsedAgent.endedAt` is the timestamp of the *last record seen so far* — a file
+that has stopped growing is indistinguishable from one whose next line has not been flushed
+yet. Deriving `completed` from it marked every agent finished the first time its transcript
+was read, while the agent was still running. Ingest therefore asserts exactly one status:
+
+| Status | Written by | On what evidence |
+|---|---|---|
+| `working` | ingest (`ingest-session.ts`) | A transcript was read — activity, and nothing more. |
+| `waiting` | `Stop` hook | The main agent finished a turn and is idle. `Stop` fires **per turn**, not at session end (see `hooks/README.md`), so it can never mean `completed`. |
+| `completed` | `SubagentStop` hook | An identified subagent terminated. The only observation of an ending the system has. |
+| `error` | — | Reserved. v1 never guesses it. |
+| `unknown` | the watchdog | No activity for `DASHBOARD_WATCHDOG_MINUTES`. |
+
+**Consequence, stated rather than hidden: with no hooks installed, nothing ever reports
+`completed`.** Agents go `working` → `unknown`. That is the honest reading of the evidence
+available, and `unknown` is displayed as `unknown` — never softened into something friendlier.
+
+Precedence between the three writers is one rule, enforced in SQL inside the upsert
+(`db/agents.ts`, mirrored in `db/sessions.ts`):
+
+1. **Observed terminals are sticky.** Once `completed` or `error`, no later ingest downgrades it.
+2. **Inferred states yield to fresh evidence.** `working`/`waiting`/`unknown` are replaced only
+   when the incoming activity anchor (`last_seen_at` / `last_activity_at`) **strictly advances** —
+   this is the concrete answer to OPEN-2's "unknown → revert" blank.
+3. **An unchanged replay changes nothing.** Rule 2 makes re-reading an untouched transcript a
+   no-op on `status`, which is what keeps the P0 byte-identical double-replay proof green while
+   status itself is time-sensitive. All wall-clock dependence lives behind the watchdog's
+   injected clock; the ingest path stays clock-free.
+
+Hooks stay within CD-1: the status applier is UPDATE-only by construction (`applyAgentStatus`),
+so a hook can move the `status` column of a row the parser already created and nothing else —
+it can never create, delete or re-parent an agent, and a hook naming an unknown agent is stored
+as raw liveness and changes no row.
 
 ## 9. The contingent outbox — hooks-primary fallback only
 

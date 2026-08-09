@@ -21,6 +21,47 @@ export {
 } from './fixtures/index.js';
 export type { Fixture, FixtureFile, FixtureName } from './fixtures/index.js';
 
+export {
+  ANNOTATION_SUFFIX,
+  AnnotationError,
+  EXIT_GATE_THRESHOLD,
+  ORPHAN_TOKEN,
+  PROVENANCES,
+  ROOT_TOKEN,
+  ScoringError,
+  UNKNOWN_TOKEN,
+  WILSON_Z_95_ONE_SIDED,
+  certifyExitGate,
+  formatPercent,
+  minimumClaimsForThreshold,
+  parseAnnotation,
+  readAnnotationDir,
+  readSessionTree,
+  renderClaim,
+  renderCorpusReport,
+  scoreCorpus,
+  scoreSession,
+  wilsonLowerBound,
+} from './annotations/index.js';
+export type {
+  AnnotatedEdge,
+  AnnotationIssue,
+  CaseOutcome,
+  CorpusScore,
+  ExitGateVerdict,
+  HierarchyCase,
+  ObservedAgent,
+  ObservedHierarchy,
+  ParentClaim,
+  Provenance,
+  ScoringEntry,
+  SessionAnnotation,
+  SessionScore,
+  SessionSubstrateLike,
+  SubstrateFileLike,
+  SubstrateRef,
+} from './annotations/index.js';
+
 /** A minimal valid raw-event envelope for tests that just need one. */
 export function makeRawEventEnvelope(overrides: Partial<RawEventEnvelope> = {}): RawEventEnvelope {
   return {

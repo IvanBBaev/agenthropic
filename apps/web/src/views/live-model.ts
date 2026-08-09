@@ -6,8 +6,26 @@
  * honestly (an unknown session, a fresh ingest) makes the caller refetch
  * persisted truth instead of guessing.
  */
-import type { AgentStatusChangedEvent, SessionSummaryDto } from '../dto';
+import type {
+  AgentStatus,
+  AgentStatusChangedEvent,
+  SessionStatusCountsDto,
+  SessionSummaryDto,
+} from '../dto';
 import { isAgentStatus } from './status';
+
+/**
+ * Read one status bucket, tolerating a bucket the server did not send. The
+ * schema promises all five, so `undefined` means the snapshot is not the
+ * shape this build expects - callers must show/handle that gap rather than
+ * treat it as a zero.
+ */
+export function bucketCount(
+  counts: SessionStatusCountsDto,
+  status: AgentStatus,
+): number | undefined {
+  return (counts as Partial<Record<AgentStatus, number>>)[status];
+}
 
 /**
  * Structural guard for the SSE payload - the stream delivers parsed-but-
@@ -37,11 +55,14 @@ export interface StatusChangeResult {
 }
 
 /**
- * Move one agent between status buckets of its session. The new status
- * bucket always increments; the previous bucket decrements only when the
- * event names one and the bucket is non-empty (a null previousStatus means
- * the agent had no persisted status, so it sat in no bucket). Counts other
- * than the two touched buckets - and every other session - stay untouched;
+ * Move one agent between status buckets of its session. The move is applied
+ * only when the snapshot can absorb it honestly: the target bucket must be
+ * present, and the bucket the agent leaves must be present and non-empty (a
+ * null previousStatus means the agent had no persisted status, so it sat in
+ * no bucket). Anything else means this snapshot disagrees with the server -
+ * incrementing anyway would invent an agent that was never counted, so the
+ * caller is told to refetch persisted truth instead. Counts other than the
+ * two touched buckets - and every other session - stay untouched;
  * `lastActivityAt` advances to the event's occurredAt (a real observation).
  */
 export function applyAgentStatusChange(
@@ -51,11 +72,15 @@ export function applyAgentStatusChange(
   const index = sessions.findIndex((session) => session.id === event.sessionId);
   if (index === -1) return { sessions, matched: false };
   const session = sessions[index]!;
-  const counts = { ...session.statusCounts };
-  counts[event.status] += 1;
-  if (event.previousStatus !== null && counts[event.previousStatus] > 0) {
-    counts[event.previousStatus] -= 1;
+  const target = bucketCount(session.statusCounts, event.status);
+  const leaving =
+    event.previousStatus === null ? null : bucketCount(session.statusCounts, event.previousStatus);
+  if (target === undefined || leaving === undefined || leaving === 0) {
+    return { sessions, matched: false };
   }
+  const counts = { ...session.statusCounts };
+  counts[event.status] = target + 1;
+  if (event.previousStatus !== null) counts[event.previousStatus] -= 1;
   const next = [...sessions];
   next[index] = { ...session, statusCounts: counts, lastActivityAt: event.occurredAt };
   return { sessions: next, matched: true };

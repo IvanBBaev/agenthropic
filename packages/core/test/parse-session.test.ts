@@ -1155,6 +1155,570 @@ describe('parseSession — sidecar anchor whose parent block was evicted (re-anc
   });
 });
 
+describe('parseSession — non-object lines before the first record of a transcript', () => {
+  const SESSION = 'f0f00000-1111-4222-8333-444444444444';
+  const CHILD = 'f0f0f0f0';
+  const RECOVERED_TOOL_USE_ID = 'toolu_legacy_notify';
+
+  const result = parseSession(
+    substrate([
+      {
+        path: `${SESSION}.jsonl`,
+        lines: [
+          jline({
+            sessionId: SESSION,
+            type: 'user',
+            timestamp: '2026-08-05T00:00:00.000Z',
+            message: { role: 'user', content: 'go' },
+          }),
+        ],
+      },
+      {
+        path: `subagents/agent-${CHILD}.jsonl`,
+        lines: [
+          // JSONL noise ahead of the real first record: a bare null and a bare
+          // array are valid JSON but carry no fields, so the legacy
+          // <task-notification> scan must look past them, not give up on line 1.
+          'null',
+          '[1, 2]',
+          jline({
+            sessionId: SESSION,
+            agentId: CHILD,
+            type: 'user',
+            timestamp: '2026-08-05T00:00:01.000Z',
+            message: {
+              role: 'user',
+              content:
+                '<task-notification>' +
+                `<tool-use-id>${RECOVERED_TOOL_USE_ID}</tool-use-id>` +
+                '</task-notification>',
+            },
+          }),
+          jline({
+            sessionId: SESSION,
+            agentId: CHILD,
+            type: 'assistant',
+            timestamp: '2026-08-05T00:00:02.000Z',
+            message: {
+              id: 'm_leading_noise_child',
+              model: 'm',
+              usage: { input_tokens: 7 },
+              content: [{ type: 'text', text: 'x' }],
+            },
+          }),
+        ],
+      },
+    ]),
+  );
+
+  it('skips leading non-object lines and still recovers the legacy task_notification edge', () => {
+    expect(agentById(result, CHILD)?.parentAgentId).toBe(SESSION);
+    expect(edgeForChild(result, CHILD)).toEqual({
+      sessionId: SESSION,
+      parentAgentId: SESSION,
+      childAgentId: CHILD,
+      source: 'task_notification',
+      toolUseId: RECOVERED_TOOL_USE_ID,
+    });
+  });
+
+  it('keeps the timespan and the usage row of the noisy transcript intact', () => {
+    expect(agentById(result, CHILD)).toMatchObject({
+      startedAt: '2026-08-05T00:00:01.000Z',
+      endedAt: '2026-08-05T00:00:02.000Z',
+    });
+    expect(usageFor(result, 'm_leading_noise_child')).toMatchObject({
+      agentId: CHILD,
+      usage: { input: 7, output: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 },
+    });
+  });
+});
+
+describe('parseSession — malformed queue-operation records build no queue index', () => {
+  const SESSION = 'c9c90000-1111-4222-8333-444444444444';
+  const CHILD = 'c9c9c9c9';
+
+  const result = parseSession(
+    substrate([
+      {
+        path: `${SESSION}.jsonl`,
+        lines: [
+          jline({
+            sessionId: SESSION,
+            type: 'user',
+            timestamp: '2026-08-06T00:00:00.000Z',
+            message: { role: 'user', content: 'go' },
+          }),
+          // `content` is not a string at all -> nothing to scan for tags.
+          jline({
+            sessionId: SESSION,
+            type: 'queue-operation',
+            operation: 'enqueue',
+            timestamp: '2026-08-06T00:00:01.000Z',
+            content: { taskId: CHILD, toolUseId: 'toolu_never_indexed' },
+          }),
+          // A string, but with no <tool-use-id> tag: the record names a task but
+          // no parent block, so it must not enter the queue index either.
+          jline({
+            sessionId: SESSION,
+            type: 'queue-operation',
+            operation: 'enqueue',
+            timestamp: '2026-08-06T00:00:02.000Z',
+            content: `<task-notification><task-id>${CHILD}</task-id></task-notification>`,
+          }),
+        ],
+      },
+      {
+        path: `subagents/agent-${CHILD}.jsonl`,
+        lines: [
+          jline({
+            sessionId: SESSION,
+            agentId: CHILD,
+            type: 'user',
+            timestamp: '2026-08-06T00:00:03.000Z',
+            message: { role: 'user', content: 'backgrounded task with no usable queue record' },
+          }),
+          jline({
+            sessionId: SESSION,
+            agentId: CHILD,
+            type: 'assistant',
+            timestamp: '2026-08-06T00:00:04.000Z',
+            message: {
+              id: 'm_bad_queue_child',
+              model: 'm',
+              usage: { input_tokens: 3, output_tokens: 4 },
+              content: [{ type: 'text', text: 'x' }],
+            },
+          }),
+        ],
+      },
+    ]),
+  );
+
+  it('leaves the backgrounded child an orphan rather than fabricating a parent', () => {
+    expect(agentById(result, CHILD)?.parentAgentId).toBeNull();
+    expect(agentById(result, CHILD)?.subagentType).toBeNull();
+    expect(result.edges).toHaveLength(0);
+  });
+
+  it('still emits the child agent and its ground-truth usage (no data is dropped)', () => {
+    expect(result.agents.map((a) => a.id).sort()).toEqual([SESSION, CHILD].sort());
+    expect(usageFor(result, 'm_bad_queue_child')).toMatchObject({
+      agentId: CHILD,
+      usage: { input: 3, output: 4, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 },
+    });
+  });
+});
+
+describe('parseSession — queue-operation with a tool-use-id but no task-id', () => {
+  const SESSION = 'b8b80000-1111-4222-8333-444444444444';
+  const CHILD = 'b8b8b8b8';
+  const QUEUED_ID = 'toolu_bg_no_task_id';
+
+  const result = parseSession(
+    substrate([
+      {
+        path: `${SESSION}.jsonl`,
+        lines: [
+          jline({
+            sessionId: SESSION,
+            type: 'user',
+            timestamp: '2026-08-07T00:00:00.000Z',
+            message: { role: 'user', content: 'go' },
+          }),
+          // The record names the parent spawn block but not the queued child, so
+          // it can own an anchor supplied from elsewhere (here: the sidecar) yet
+          // contributes no child-hex -> tool-use-id join of its own.
+          jline({
+            sessionId: SESSION,
+            type: 'queue-operation',
+            operation: 'enqueue',
+            timestamp: '2026-08-07T00:00:01.000Z',
+            content: `<task-notification><tool-use-id>${QUEUED_ID}</tool-use-id></task-notification>`,
+          }),
+        ],
+      },
+      {
+        path: `subagents/agent-${CHILD}.jsonl`,
+        lines: [
+          jline({
+            sessionId: SESSION,
+            agentId: CHILD,
+            type: 'user',
+            timestamp: '2026-08-07T00:00:02.000Z',
+            message: { role: 'user', content: 'backgrounded task' },
+          }),
+          jline({
+            sessionId: SESSION,
+            agentId: CHILD,
+            type: 'assistant',
+            timestamp: '2026-08-07T00:00:03.000Z',
+            message: {
+              id: 'm_queue_no_task_id',
+              model: 'm',
+              usage: { input_tokens: 2 },
+              content: [{ type: 'text', text: 'x' }],
+            },
+          }),
+        ],
+      },
+      // Sidecar supplies the anchor but knows no agentType.
+      {
+        path: `subagents/agent-${CHILD}.meta.json`,
+        lines: [JSON.stringify({ toolUseId: QUEUED_ID, spawnDepth: 1 })],
+      },
+    ]),
+  );
+
+  it('resolves the sidecar anchor through the queue-operation owner', () => {
+    expect(agentById(result, CHILD)?.parentAgentId).toBe(SESSION);
+    expect(edgeForChild(result, CHILD)).toEqual({
+      sessionId: SESSION,
+      parentAgentId: SESSION,
+      childAgentId: CHILD,
+      source: 'queue_operation',
+      toolUseId: QUEUED_ID,
+    });
+  });
+
+  it('leaves the subagent type null instead of guessing one', () => {
+    expect(agentById(result, CHILD)?.subagentType).toBeNull();
+  });
+});
+
+describe('parseSession — async toolUseResult whose message content is not a block array', () => {
+  const SESSION = 'dada0000-1111-4222-8333-444444444444';
+  const CHILD = 'dadadada';
+
+  const result = parseSession(
+    substrate([
+      {
+        path: `${SESSION}.jsonl`,
+        lines: [
+          jline({
+            sessionId: SESSION,
+            type: 'user',
+            timestamp: '2026-08-08T00:00:00.000Z',
+            message: { role: 'user', content: 'go' },
+          }),
+          jline({
+            sessionId: SESSION,
+            type: 'assistant',
+            timestamp: '2026-08-08T00:00:01.000Z',
+            message: {
+              id: 'm_async_str_main',
+              model: 'm',
+              usage: { input_tokens: 1 },
+              content: [
+                {
+                  type: 'tool_use',
+                  id: 'toolu_async_str',
+                  name: 'Agent',
+                  input: { subagent_type: 'async-worker', prompt: 'p' },
+                },
+              ],
+            },
+          }),
+          // `toolUseResult.agentId` names the child, but the record's content is
+          // a plain string: there is no tool_result block to read a parent block
+          // id from, so this record must forge nothing.
+          jline({
+            sessionId: SESSION,
+            type: 'user',
+            timestamp: '2026-08-08T00:00:02.000Z',
+            toolUseResult: { agentId: CHILD },
+            message: { role: 'user', content: 'agent finished' },
+          }),
+        ],
+      },
+      {
+        path: `subagents/agent-${CHILD}.jsonl`,
+        lines: [
+          jline({
+            sessionId: SESSION,
+            agentId: CHILD,
+            type: 'user',
+            timestamp: '2026-08-08T00:00:03.000Z',
+            message: { role: 'user', content: 'async task' },
+          }),
+          jline({
+            sessionId: SESSION,
+            agentId: CHILD,
+            type: 'assistant',
+            timestamp: '2026-08-08T00:00:04.000Z',
+            message: {
+              id: 'm_async_str_child',
+              model: 'm',
+              usage: { input_tokens: 1 },
+              content: [{ type: 'text', text: 'x' }],
+            },
+          }),
+        ],
+      },
+    ]),
+  );
+
+  it('does not anchor the child from a toolUseResult carrying no tool_result block', () => {
+    expect(agentById(result, CHILD)?.parentAgentId).toBeNull();
+    expect(result.edges).toHaveLength(0);
+  });
+
+  it('keeps the unjoined subagent and its usage visible', () => {
+    expect(agentById(result, CHILD)?.type).toBe('subagent');
+    expect(usageFor(result, 'm_async_str_child')?.agentId).toBe(CHILD);
+  });
+});
+
+describe('parseSession — async toolUseResult with an id-less tool_result block first', () => {
+  const SESSION = 'ebeb0000-1111-4222-8333-444444444444';
+  const CHILD = 'ebebebeb';
+
+  const result = parseSession(
+    substrate([
+      {
+        path: `${SESSION}.jsonl`,
+        lines: [
+          jline({
+            sessionId: SESSION,
+            type: 'user',
+            timestamp: '2026-08-09T00:00:00.000Z',
+            message: { role: 'user', content: 'go' },
+          }),
+          jline({
+            sessionId: SESSION,
+            type: 'assistant',
+            timestamp: '2026-08-09T00:00:01.000Z',
+            message: {
+              id: 'm_idless_main',
+              model: 'm',
+              usage: { input_tokens: 1 },
+              content: [
+                {
+                  type: 'tool_use',
+                  id: 'toolu_real_block',
+                  name: 'Agent',
+                  input: { subagent_type: 'async-worker', prompt: 'p' },
+                },
+              ],
+            },
+          }),
+          jline({
+            sessionId: SESSION,
+            type: 'user',
+            timestamp: '2026-08-09T00:00:02.000Z',
+            toolUseResult: { agentId: CHILD },
+            message: {
+              role: 'user',
+              content: [
+                // A tool_result with no `tool_use_id` must be skipped, not taken
+                // as "no anchor exists" — the scan continues to the next block.
+                { type: 'tool_result', content: 'malformed, no tool_use_id' },
+                { type: 'tool_result', tool_use_id: 'toolu_real_block', content: 'ok' },
+              ],
+            },
+          }),
+        ],
+      },
+      {
+        path: `subagents/agent-${CHILD}.jsonl`,
+        lines: [
+          jline({
+            sessionId: SESSION,
+            agentId: CHILD,
+            type: 'user',
+            timestamp: '2026-08-09T00:00:03.000Z',
+            message: { role: 'user', content: 'async task' },
+          }),
+          jline({
+            sessionId: SESSION,
+            agentId: CHILD,
+            type: 'assistant',
+            timestamp: '2026-08-09T00:00:04.000Z',
+            message: {
+              id: 'm_idless_child',
+              model: 'm',
+              usage: { input_tokens: 1 },
+              content: [{ type: 'text', text: 'x' }],
+            },
+          }),
+        ],
+      },
+    ]),
+  );
+
+  it('skips the id-less tool_result and anchors on the next well-formed one', () => {
+    expect(agentById(result, CHILD)?.parentAgentId).toBe(SESSION);
+    expect(edgeForChild(result, CHILD)).toEqual({
+      sessionId: SESSION,
+      parentAgentId: SESSION,
+      childAgentId: CHILD,
+      source: 'tool_use',
+      toolUseId: 'toolu_real_block',
+    });
+    expect(agentById(result, CHILD)?.subagentType).toBe('async-worker');
+  });
+});
+
+describe('parseSession — spawn block without a subagent_type', () => {
+  const SESSION = 'f6f60000-1111-4222-8333-444444444444';
+  const CHILD_A = 'f6f6aaaa';
+  const CHILD_B = 'f6f6bbbb';
+
+  const childTranscript = (hex: string, second: number, messageId: string) => ({
+    path: `subagents/agent-${hex}.jsonl`,
+    lines: [
+      jline({
+        sessionId: SESSION,
+        agentId: hex,
+        type: 'user',
+        timestamp: `2026-08-10T00:00:0${second}.000Z`,
+        message: { role: 'user', content: 'task' },
+      }),
+      jline({
+        sessionId: SESSION,
+        agentId: hex,
+        type: 'assistant',
+        timestamp: `2026-08-10T00:00:0${second + 1}.000Z`,
+        message: {
+          id: messageId,
+          model: 'm',
+          usage: { input_tokens: 1 },
+          content: [{ type: 'text', text: 'x' }],
+        },
+      }),
+    ],
+  });
+
+  const result = parseSession(
+    substrate([
+      {
+        path: `${SESSION}.jsonl`,
+        lines: [
+          jline({
+            sessionId: SESSION,
+            type: 'user',
+            timestamp: '2026-08-10T00:00:00.000Z',
+            message: { role: 'user', content: 'go' },
+          }),
+          jline({
+            sessionId: SESSION,
+            type: 'assistant',
+            timestamp: '2026-08-10T00:00:01.000Z',
+            message: {
+              id: 'm_no_type_main',
+              model: 'm',
+              usage: { input_tokens: 1 },
+              content: [
+                // Neither spawn block declares `subagent_type` in its input.
+                { type: 'tool_use', id: 'toolu_no_type_a', name: 'Agent', input: { prompt: 'p' } },
+                { type: 'tool_use', id: 'toolu_no_type_b', name: 'Agent', input: { prompt: 'p' } },
+              ],
+            },
+          }),
+        ],
+      },
+      childTranscript(CHILD_A, 2, 'm_no_type_child_a'),
+      {
+        path: `subagents/agent-${CHILD_A}.meta.json`,
+        lines: [
+          JSON.stringify({ toolUseId: 'toolu_no_type_a', agentType: 'Explore', spawnDepth: 1 }),
+        ],
+      },
+      childTranscript(CHILD_B, 4, 'm_no_type_child_b'),
+      // No `agentType` anywhere for B: neither the block nor the sidecar knows it.
+      {
+        path: `subagents/agent-${CHILD_B}.meta.json`,
+        lines: [JSON.stringify({ toolUseId: 'toolu_no_type_b', spawnDepth: 1 })],
+      },
+    ]),
+  );
+
+  it('recovers the subagent type from the sidecar when the spawn block omits it', () => {
+    expect(agentById(result, CHILD_A)?.subagentType).toBe('Explore');
+    expect(edgeForChild(result, CHILD_A)).toEqual({
+      sessionId: SESSION,
+      parentAgentId: SESSION,
+      childAgentId: CHILD_A,
+      source: 'tool_use',
+      toolUseId: 'toolu_no_type_a',
+    });
+  });
+
+  it('leaves the subagent type null when neither the block nor the sidecar knows it', () => {
+    expect(agentById(result, CHILD_B)?.subagentType).toBeNull();
+    // The edge itself is unaffected — an unknown type never costs a real edge.
+    expect(edgeForChild(result, CHILD_B)).toEqual({
+      sessionId: SESSION,
+      parentAgentId: SESSION,
+      childAgentId: CHILD_B,
+      source: 'tool_use',
+      toolUseId: 'toolu_no_type_b',
+    });
+  });
+});
+
+describe('parseSession — evicted anchor with a type-less sidecar', () => {
+  const SESSION = 'a7a70000-1111-4222-8333-444444444444';
+  const CHILD = 'a7a7a7a7';
+
+  const result = parseSession(
+    substrate([
+      {
+        path: `${SESSION}.jsonl`,
+        lines: [
+          jline({
+            sessionId: SESSION,
+            type: 'user',
+            timestamp: '2026-08-11T00:00:00.000Z',
+            message: { role: 'user', content: 'go' },
+          }),
+        ],
+      },
+      {
+        path: `subagents/agent-${CHILD}.jsonl`,
+        lines: [
+          jline({
+            sessionId: SESSION,
+            agentId: CHILD,
+            type: 'user',
+            timestamp: '2026-08-11T00:00:01.000Z',
+            message: { role: 'user', content: 'task with an evicted parent block' },
+          }),
+          jline({
+            sessionId: SESSION,
+            agentId: CHILD,
+            type: 'assistant',
+            timestamp: '2026-08-11T00:00:02.000Z',
+            message: {
+              id: 'm_evicted_typeless',
+              model: 'm',
+              usage: { input_tokens: 1 },
+              content: [{ type: 'text', text: 'x' }],
+            },
+          }),
+        ],
+      },
+      // The anchor is known but its block is gone, and the sidecar records no
+      // agentType — the edge is still recoverable, the type honestly is not.
+      {
+        path: `subagents/agent-${CHILD}.meta.json`,
+        lines: [JSON.stringify({ toolUseId: 'toolu_evicted_typeless', spawnDepth: 1 })],
+      },
+    ]),
+  );
+
+  it('re-anchors to main via task_notification while keeping the type unknown', () => {
+    expect(agentById(result, CHILD)?.subagentType).toBeNull();
+    expect(edgeForChild(result, CHILD)).toEqual({
+      sessionId: SESSION,
+      parentAgentId: SESSION,
+      childAgentId: CHILD,
+      source: 'task_notification',
+      toolUseId: 'toolu_evicted_typeless',
+    });
+  });
+});
+
 describe('parseSession — tolerates an empty .meta.json sidecar', () => {
   const SESSION = 'e5e50000-1111-4222-8333-444444444444';
   const CHILD = 'e5e5e5e5';

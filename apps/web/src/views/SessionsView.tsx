@@ -10,7 +10,8 @@
 import { useEffect, useState } from 'react';
 import { fetchSessions, fetchSessionTree } from '../api';
 import type { AgentNodeDto, OrchestrationEdgeDto, SessionSummaryDto, SessionTreeDto } from '../dto';
-import { formatTokens, formatUsd, shortId } from '../format';
+import { agentTypeLabel, formatTokens, formatUsd, projectLabel, shortId } from '../format';
+import { describeAgentGraph } from './chart-summary';
 import { computeLayeredLayout } from './layout/layered';
 import { statusMeta } from './status';
 import type { ViewProps } from './types';
@@ -34,7 +35,7 @@ type TreeState =
   | { readonly kind: 'ready'; readonly tree: SessionTreeDto };
 
 function agentLabel(agent: AgentNodeDto): string {
-  return agent.subagentType ?? agent.type ?? 'agent';
+  return agentTypeLabel(agent.subagentType, agent.type);
 }
 
 function edgeTitle(edge: OrchestrationEdgeDto): string {
@@ -52,6 +53,10 @@ function TreePanel({ tree }: { readonly tree: SessionTreeDto }) {
       payload: edge,
     })),
   );
+  // role="img" hides the SVG subtree (its <title> elements included) from
+  // assistive tech, so the same facts are published as prose next to it and
+  // pointed at with aria-describedby.
+  const summaryId = `tree-chart-summary-${tree.sessionId}`;
   return (
     <div>
       <p className="muted">
@@ -74,6 +79,7 @@ function TreePanel({ tree }: { readonly tree: SessionTreeDto }) {
         <svg
           role="img"
           aria-label={`agent tree for session ${tree.sessionId}`}
+          aria-describedby={summaryId}
           width={layout.width}
           height={layout.height}
           viewBox={`0 0 ${String(layout.width)} ${String(layout.height)}`}
@@ -112,6 +118,9 @@ function TreePanel({ tree }: { readonly tree: SessionTreeDto }) {
           })}
         </svg>
       </div>
+      <p className="chart-summary" id={summaryId}>
+        {describeAgentGraph(tree.agents, tree.edges)}
+      </p>
       <p className="legend-inline muted" aria-label="edge provenance legend">
         — observed (tool_use) ┄ inferred (directory, task_notification, queue_operation)
       </p>
@@ -207,27 +216,39 @@ export function SessionsView({ token, onAuthRejected }: ViewProps) {
             </p>
           )}
           <ul className="session-list" aria-label="session list">
-            {list.sessions.map((session) => (
-              <li key={session.id}>
-                <button
-                  type="button"
-                  className={
-                    session.id === selectedId ? 'session-row session-active' : 'session-row'
-                  }
-                  aria-pressed={session.id === selectedId}
-                  onClick={() => setSelectedId(session.id)}
-                >
-                  <code>{shortId(session.id)}</code>{' '}
-                  <span className={session.projectSlug === null ? 'muted' : undefined}>
-                    {session.projectSlug ?? 'no project'}
-                  </span>{' '}
-                  <span className="muted">
-                    {session.agentCount} agent{session.agentCount === 1 ? '' : 's'} ·{' '}
-                    {formatUsd(session.totalCostUsd)}
-                  </span>
-                </button>
-              </li>
-            ))}
+            {list.sessions.map((session) => {
+              const meta = statusMeta(session.status);
+              return (
+                <li key={session.id}>
+                  <button
+                    type="button"
+                    className={
+                      session.id === selectedId ? 'session-row session-active' : 'session-row'
+                    }
+                    aria-pressed={session.id === selectedId}
+                    onClick={() => setSelectedId(session.id)}
+                  >
+                    <code>{shortId(session.id)}</code>{' '}
+                    <span className={session.projectSlug === null ? 'muted' : undefined}>
+                      {projectLabel(session.projectSlug)}
+                    </span>{' '}
+                    <span className={`session-status ${meta.className}`}>
+                      <span aria-hidden="true">{meta.symbol}</span> {meta.label}
+                    </span>{' '}
+                    <span className="muted">
+                      {session.agentCount} agent{session.agentCount === 1 ? '' : 's'} ·{' '}
+                      {formatUsd(session.totalCostUsd)}
+                    </span>
+                    {session.unpricedTokens > 0 && (
+                      <span className="unpriced">
+                        {' '}
+                        · ~ {formatTokens(session.unpricedTokens)} unpriced
+                      </span>
+                    )}
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         </div>
         <div>

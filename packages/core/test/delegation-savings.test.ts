@@ -58,7 +58,7 @@ function agent(id: string, overrides: Partial<ParsedAgent> = {}): ParsedAgent {
     subagentType: 'general-purpose',
     parentAgentId: SESSION,
     startedAt: TS,
-    endedAt: null,
+    endedAt: TS,
     ...overrides,
   };
 }
@@ -260,6 +260,34 @@ describe('computeDelegationSavings — top-tier model resolution', () => {
       pricing(),
     );
     expect(result.perAgent[0]!.hypotheticalModel).toBe('top');
+  });
+
+  it('keeps the greatest-output model even when a smaller row follows it', () => {
+    const rows = [
+      usage('m1', null, 'top', { output: 5_000 }), // greatest output, seen FIRST
+      usage('m2', null, 'cheap', { output: 100 }), // must not override it
+      usage('c1', 'beef0001', 'cheap', { input: 1_000_000 }),
+    ];
+    const result = computeDelegationSavings(
+      session([mainAgent(), agent('beef0001')], rows),
+      pricing(),
+    );
+    expect(result.perAgent[0]!.hypotheticalModel).toBe('top');
+    expect(result.savingsUsd).toBeCloseTo(4, 10); // $1 actual vs $5 at `top`
+  });
+
+  it('settles a tie on output to the first-seen row (deterministic, order-stable)', () => {
+    const rows = [
+      usage('m1', null, 'cheap', { output: 1_000 }),
+      usage('m2', null, 'top', { output: 1_000 }), // equal output never displaces
+      usage('c1', 'beef0001', 'cheap', { input: 1_000_000 }),
+    ];
+    const result = computeDelegationSavings(
+      session([mainAgent(), agent('beef0001')], rows),
+      pricing(),
+    );
+    expect(result.perAgent[0]!.hypotheticalModel).toBe('cheap');
+    expect(result.savingsUsd).toBe(0); // same model as the child: nothing saved
   });
 
   it('skips an orphan (parentAgentId null) when no topTierModel is given', () => {

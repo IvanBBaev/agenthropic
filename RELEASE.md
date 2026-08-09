@@ -137,9 +137,12 @@ The canonical P0 set ([`docs/site/contributing/testing.md`](docs/site/contributi
 §4; `WP-X3`/`WP-IN13`): release-blocking, and no other feature work substitutes for
 them. Test bodies live under `apps/server/test/p0/`.
 
-> **Status honesty (2026-07-29):** the P0 test bodies are being written right now
-> (in-flight work), and CI is not yet merge-blocking (§0 branch protection). These
-> boxes are **blockers to tick**, not records of something already done.
+> **Status honesty (updated 2026-08-07):** the three P0 test bodies now exist and pass
+> (`apps/server/test/p0/`, 3 files / 13 tests green). What is still missing is the half
+> that makes them *blockers*: CI is **not merge-blocking**, because `main` is not
+> branch-protected (§0). A passing test that nothing gates on is a test, not a gate — so
+> these boxes stay **unticked**, and they are ticked on the release commit, against that
+> commit's CI run, not by pointing at a local run.
 
 - [ ] **P0-1 — Σ `token_usage` == JSONL exact, per session** — the ground-truth-tokens
       invariant holds in the projected data; zero drift, no silent rounding, no double
@@ -241,14 +244,15 @@ scan."**
       pre-tag state.
 - [ ] **Docs site deployed** — the `Docs site (GitHub Pages)` workflow
       ([`.github/workflows/pages.yml`](.github/workflows/pages.yml)) is green on the
-      release commit. **[HUMAN]** one-time: Pages enabled in Settings → Pages →
-      Source: "GitHub Actions" (repo reports `has_pages: false` as of 2026-07-29).
+      release commit. **No longer a [HUMAN] step as of 2026-08-07:** the workflow now
+      passes `enablement: true` to `configure-pages`, which turns Pages on through the
+      API using the `pages: write` permission it already holds, and is a no-op on every
+      run after the first. _(History: run `30528892265` on `9b6c6b3` died in
+      `configure-pages` with `Get Pages site failed … Not Found` because Pages was off
+      and the input was then `false`.)_ This is still not a silent success path — if the
+      token is ever denied the call, the step fails loudly rather than deploying nowhere,
+      so this box is ticked by a green run, never by assumption.
       Verify: `gh api repos/IvanBBaev/agenthropic --jq .has_pages` → `true`.
-      **Confirmed failing for exactly this reason on 2026-07-30:** run
-      `30528892265` on `9b6c6b3` died in `configure-pages` with
-      `Get Pages site failed … Not Found`, before reaching the build. The workflow
-      keeps `enablement: false` deliberately, so it cannot switch Pages on by
-      itself — it fails honestly instead. After enabling, re-run it.
 
 ## 7. Version, tag, release notes
 

@@ -146,7 +146,60 @@ describe('upsertAgent (WP-D6)', () => {
 
     const root = readAgent(ROOT_ID);
     expect(root?.session_id).toBe(SESSION_ID);
-    expect(root?.status).toBe('completed');
+    // Incidental to this test's subject, but worth pinning: the second upsert
+    // did NOT advance last_seen_at, so it carries no new evidence and the
+    // status CASE leaves the row alone. The status rule itself is covered in
+    // test/status-lifecycle.test.ts.
+    expect(root?.status).toBe('working');
+  });
+
+  it('applies a status only when last_seen_at strictly advances', () => {
+    const seed = {
+      id: ROOT_ID,
+      sessionId: SESSION_ID,
+      type: 'main',
+      subagentType: null,
+      parentAgentId: null,
+      firstSeenAt: TS,
+    } as const;
+    upsertAgent(temp.db, { ...seed, status: 'working', lastSeenAt: TS });
+
+    // Same anchor: nothing new happened, so nothing moves.
+    upsertAgent(temp.db, { ...seed, status: 'waiting', lastSeenAt: TS });
+    expect(readAgent(ROOT_ID)?.status).toBe('working');
+
+    // Anchor moved backwards (a truncated / rewritten tail): still no advance.
+    upsertAgent(temp.db, { ...seed, status: 'waiting', lastSeenAt: '2026-07-10T00:00:00Z' });
+    expect(readAgent(ROOT_ID)?.status).toBe('working');
+
+    // A NULL anchor cannot prove an advance either.
+    upsertAgent(temp.db, { ...seed, status: 'waiting', lastSeenAt: null });
+    expect(readAgent(ROOT_ID)?.status).toBe('working');
+  });
+
+  it('adopts the incoming status when the existing status is NULL', () => {
+    // The column is nullable, and rows predating the lifecycle can hold NULL;
+    // any evidence beats none.
+    temp.db
+      .prepare(
+        `INSERT INTO agents (id, session_id, type, subagent_type, status, parent_agent_id,
+                             first_seen_at, last_seen_at)
+         VALUES (?, ?, 'main', NULL, NULL, NULL, ?, ?)`,
+      )
+      .run(ROOT_ID, SESSION_ID, TS, TS);
+
+    upsertAgent(temp.db, {
+      id: ROOT_ID,
+      sessionId: SESSION_ID,
+      type: 'main',
+      subagentType: null,
+      status: 'working',
+      parentAgentId: null,
+      firstSeenAt: TS,
+      lastSeenAt: TS,
+    });
+
+    expect(readAgent(ROOT_ID)?.status).toBe('working');
   });
 
   it("throws when parent_agent_id references a non-existent agent (FK - ordering is the caller's job)", () => {

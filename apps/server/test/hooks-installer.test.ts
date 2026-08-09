@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   DEFAULT_PORT,
   DEFAULT_TOKEN_ENV,
+  DELIVERY_ID_HEADER,
   HOOK_EVENTS,
   buildHookCommand,
   buildHooksConfig,
@@ -41,6 +42,20 @@ describe('buildHookCommand (WP-X8)', () => {
     // Fail-silent: never blocks the Claude Code session.
     expect(command).toContain('--max-time 3');
     expect(command).toMatch(/\|\| true$/);
+  });
+
+  it('stamps every firing with a fire-time delivery id (recurrence vs redelivery)', () => {
+    const command = buildHookCommand();
+    // A `Stop` payload is byte-identical every turn, so the SENDER must say
+    // which firing this is. The value is shell-expanded at fire time (one id
+    // per hook invocation, reused by that invocation's own retries) - the
+    // installer never computes or embeds a value itself.
+    expect(command).toContain(`--header "${DELIVERY_ID_HEADER}: `);
+    expect(command).toContain('$$');
+    expect(command).toContain('$(date +%s)');
+    expect(command).toContain('$RANDOM');
+    // Still recognized as ours, so re-install replaces rather than duplicates.
+    expect(isAgenthropicHookCommand(command)).toBe(true);
   });
 
   it('supports a custom token env var and validates its name', () => {

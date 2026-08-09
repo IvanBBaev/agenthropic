@@ -7,15 +7,16 @@
  * reported instead of hidden: zero-cost models (unpriced-only usage), the
  * "other sessions" remainder outside topN, and the unpriced token total.
  */
-import { sankey, sankeyLinkHorizontal, type SankeyGraph } from 'd3-sankey';
+import { sankey, sankeyLinkHorizontal, type SankeyGraph, type SankeyLink } from 'd3-sankey';
 import type { CostSummaryDto } from '../../dto';
+import { shortId } from '../../format';
 
 /** Categorical slots are fixed, never cycled; extra models fold into Other. */
 export const MAX_MODEL_NODES = 7;
 
 export type FlowNodeKind = 'model' | 'hub' | 'session' | 'other-sessions' | 'other-models';
 
-interface FlowNodeSeed {
+export interface FlowNodeSeed {
   readonly id: string;
   readonly label: string;
   readonly kind: FlowNodeKind;
@@ -28,6 +29,74 @@ interface FlowLinkSeed {
   source: string;
   target: string;
   value: number;
+}
+
+/**
+ * A seed node as d3-sankey hands it back. The geometry is optional in
+ * @types/d3-sankey because it only exists after layout, so the converters
+ * below give every field an explicit fallback instead of asserting.
+ */
+export type LaidOutNode = FlowNodeSeed & {
+  readonly value?: number | undefined;
+  readonly x0?: number | undefined;
+  readonly x1?: number | undefined;
+  readonly y0?: number | undefined;
+  readonly y1?: number | undefined;
+};
+
+/** A laid-out link: endpoints resolved to node objects, geometry optional. */
+export interface LaidOutLink {
+  readonly source: LaidOutNode;
+  readonly target: LaidOutNode;
+  readonly value: number;
+  readonly width?: number | undefined;
+  readonly y0?: number | undefined;
+  readonly y1?: number | undefined;
+}
+
+/** Path generator seam - injectable so both outcomes are directly testable. */
+export type LinkPathFn = (link: LaidOutLink) => string | null;
+
+const LINK_PATH = sankeyLinkHorizontal<FlowNodeSeed, FlowLinkSeed>();
+
+const defaultLinkPath: LinkPathFn = (link) =>
+  LINK_PATH(link as unknown as SankeyLink<FlowNodeSeed, FlowLinkSeed>);
+
+/** Layout node -> render node; missing geometry becomes 0, never NaN. */
+export function toFlowNode(node: LaidOutNode): FlowNode {
+  return {
+    id: node.id,
+    label: node.label,
+    kind: node.kind,
+    colorIndex: node.colorIndex,
+    unpricedTokens: node.unpricedTokens,
+    value: node.value ?? 0,
+    x0: node.x0 ?? 0,
+    x1: node.x1 ?? 0,
+    y0: node.y0 ?? 0,
+    y1: node.y1 ?? 0,
+  };
+}
+
+/**
+ * Layout link -> render link. A flow wears its model's hue on either side of
+ * the hub; hub->session remainder links are neutral. A missing path or width
+ * degrades to an empty path / a one-pixel ribbon rather than to NaN geometry.
+ */
+export function toFlowLink(
+  link: LaidOutLink,
+  colorByNodeId: ReadonlyMap<string, number | null>,
+  pathFor: LinkPathFn = defaultLinkPath,
+): FlowLink {
+  const sourceId = link.source.id;
+  return {
+    path: pathFor(link) ?? '',
+    width: Math.max(1, link.width ?? 1),
+    value: link.value,
+    sourceId,
+    targetId: link.target.id,
+    colorIndex: colorByNodeId.get(sourceId) ?? null,
+  };
 }
 
 export interface FlowNode {
@@ -140,7 +209,10 @@ export function computeCostFlow(
     const id = `session:${session.sessionId}`;
     nodes.push({
       id,
-      label: session.projectSlug ?? session.sessionId,
+      // The label is what the chart paints verbatim: a real project slug in
+      // full (never truncated into something that reads like an id), or the
+      // shortened session id when no slug was recorded.
+      label: session.projectSlug ?? shortId(session.sessionId),
       kind: 'session',
       colorIndex: null,
       unpricedTokens: session.unpricedTokens,
@@ -174,36 +246,13 @@ export function computeCostFlow(
   });
 
   const colorByNodeId = new Map(nodes.map((node) => [node.id, node.colorIndex]));
-  const pathFor = sankeyLinkHorizontal<FlowNodeSeed, FlowLinkSeed>();
 
   return {
     hasFlow: true,
-    nodes: graph.nodes.map((node) => ({
-      id: node.id,
-      label: node.label,
-      kind: node.kind,
-      colorIndex: node.colorIndex,
-      unpricedTokens: node.unpricedTokens,
-      value: node.value ?? 0,
-      x0: node.x0 ?? 0,
-      x1: node.x1 ?? 0,
-      y0: node.y0 ?? 0,
-      y1: node.y1 ?? 0,
-    })),
-    links: graph.links.map((link) => {
-      const sourceId = (link.source as FlowNodeSeed).id;
-      const targetId = (link.target as FlowNodeSeed).id;
-      return {
-        path: pathFor(link) ?? '',
-        width: Math.max(1, link.width ?? 1),
-        value: link.value,
-        sourceId,
-        targetId,
-        // A flow wears its model's hue on either side of the hub; hub->session
-        // remainder links are neutral.
-        colorIndex: colorByNodeId.get(sourceId) ?? null,
-      };
-    }),
+    nodes: graph.nodes.map((node) => toFlowNode(node)),
+    // sankey() has replaced the string endpoints with node objects by now;
+    // the cast names that fact once instead of asserting on every field.
+    links: graph.links.map((link) => toFlowLink(link as unknown as LaidOutLink, colorByNodeId)),
     zeroCostModels,
     otherSessionsCost: otherSessionsCost > REMAINDER_EPSILON ? otherSessionsCost : 0,
     width,

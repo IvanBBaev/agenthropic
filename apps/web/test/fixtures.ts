@@ -5,7 +5,10 @@
  * or the real ~/.claude tree.
  */
 import type {
+  AgentDelegationSavingsDto,
   AgentNodeDto,
+  CompactionSegmentDto,
+  CostAnalysisDto,
   CostSummaryDto,
   GlobalDagDto,
   OrchestrationEdgeDto,
@@ -137,6 +140,68 @@ export function costSummary(overrides: Partial<CostSummaryDto> = {}): CostSummar
   };
 }
 
+/**
+ * `GET /api/sessions/:id/cost-analysis` (WP-C4 + WP-C5). `isEstimate` is a
+ * literal `true` in the schema, not a flag a fixture may flip: the delegation
+ * counterfactual is not observable, so no builder is allowed to produce a
+ * shape that presents it as a measured dollar amount.
+ */
+export function costAnalysis(overrides: Partial<CostAnalysisDto> = {}): CostAnalysisDto {
+  return {
+    compaction: {
+      naiveUsd: 0,
+      repricedUsd: 0,
+      deltaUsd: 0,
+      compactionCount: 0,
+      segments: [],
+    },
+    delegationSavings: {
+      actualUsd: 0,
+      hypotheticalUsd: 0,
+      savingsUsd: 0,
+      perAgent: [],
+      skippedAgentIds: [],
+      isEstimate: true,
+    },
+    ...overrides,
+  };
+}
+
+/**
+ * One compaction-delimited slice of a transcript. `boundary` defaults to null -
+ * the segment that opens a transcript is opened by nothing, and that is a fact
+ * about the stream rather than a missing field a fixture should paper over.
+ */
+export function compactionSegment(
+  overrides: Partial<CompactionSegmentDto> = {},
+): CompactionSegmentDto {
+  return {
+    agentId: null,
+    index: 0,
+    boundary: null,
+    usd: 0.5,
+    messageCount: 12,
+    tokens: { input: 100, output: 200, cacheRead: 300, cacheWrite5m: 40, cacheWrite1h: 5 },
+    ...overrides,
+  };
+}
+
+/** One subagent's delegation counterfactual; `isEstimate` is not overridable. */
+export function agentSavings(
+  overrides: Partial<Omit<AgentDelegationSavingsDto, 'isEstimate'>> = {},
+): AgentDelegationSavingsDto {
+  return {
+    agentId: 'cafebabe-0000-1111-2222-333333333333',
+    parentAgentId: 'aaaaaaaa-1111-2222-3333-444444444444',
+    actualUsd: 0.2,
+    hypotheticalUsd: 0.9,
+    savingsUsd: 0.7,
+    hypotheticalModel: 'claude-opus-5',
+    ...overrides,
+    isEstimate: true,
+  };
+}
+
 /** Minimal Response stand-in covering exactly what the api helpers touch. */
 export function jsonResponse(status: number, body: unknown): Response {
   return {
@@ -144,6 +209,15 @@ export function jsonResponse(status: number, body: unknown): Response {
     status,
     json: () => Promise.resolve(body),
   } as Response;
+}
+
+/** A promise plus its resolver, so a test can hold a fetch in flight on purpose. */
+export function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
 }
 
 /** A response whose body is not JSON (json() rejects). */

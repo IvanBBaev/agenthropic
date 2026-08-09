@@ -17,7 +17,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseSession, type PricingEntry, type SessionSubstrate } from '@agenthropic/core';
 import { getFixture, type Fixture } from '@agenthropic/test-fixtures';
-import { ContainmentError, type SkippedFile } from '../../src/corpus/fs-port';
+import { ContainmentError, type CorpusFs, type SkippedFile } from '../../src/corpus/fs-port';
 import {
   runCorpusIngest,
   type CorpusIngestDeps,
@@ -242,7 +242,7 @@ describe('runCorpusIngest (WP-IN5)', () => {
     });
 
     it('skips a session whose substrate cannot be built, and still ingests the others', () => {
-      // An unreadable main with no agent files → buildSessionSubstrate returns null.
+      // An unreadable main with no agent files → the build reports no-substrate.
       const fs = makeFakeCorpusFs(ROOT, {
         [SLUG]: dir({
           [`${SESSION_A}.jsonl`]: file(MAIN, { throwCode: 'EACCES' }),
@@ -250,14 +250,24 @@ describe('runCorpusIngest (WP-IN5)', () => {
         }),
       });
       const calls: StubCall[] = [];
+      const warnings: SkippedFile[] = [];
 
-      const summary = runCorpusIngest(makeDeps({ fs, ingest: recorder(calls) }));
+      const summary = runCorpusIngest(
+        makeDeps({ fs, ingest: recorder(calls), onWarning: (skipped) => warnings.push(skipped) }),
+      );
 
       expect(summary.sessionsDiscovered).toBe(2);
       expect(summary.sessionsSkipped).toBe(1);
       expect(summary.sessionsOk).toBe(1);
-      // A null build is dropped whole: its per-file diagnostics never reach the summary.
-      expect(summary.filesSkipped).toBe(0);
+      // The session is dropped whole, but WHY it was dropped still reaches the
+      // operator. This used to report `filesSkipped: 0` and warn about nothing:
+      // the same EACCES that IS announced when a sibling agent transcript
+      // survives alongside it was swallowed precisely when it was the only
+      // thing there was to say. The total loss reported less than the partial.
+      expect(summary.filesSkipped).toBe(1);
+      expect(warnings).toEqual([
+        { relativePath: `${SESSION_A}.jsonl`, reason: 'unreadable', code: 'EACCES' },
+      ]);
       expect(calls.map(mainPathOf)).toEqual([`${SESSION_B}.jsonl`]);
     });
 
@@ -552,6 +562,53 @@ describe('runCorpusIngest (WP-IN5)', () => {
       // The build-time ContainmentError is NOT swallowed by the per-session catch:
       // no summary is ever returned, even though a session had already ingested.
       expect(calls).toHaveLength(1);
+    });
+  });
+
+  describe('an unreadable corpus root aborts the run', () => {
+    // The all-zero summary is reserved for facts ("the root is absent", "the
+    // corpus is empty"). A root that EXISTS but could not be read is neither —
+    // reporting zeros would claim an empty corpus nobody has actually seen.
+    it('throws with the errno instead of reporting an all-zero summary', () => {
+      const fs = makeFakeCorpusFs(
+        ROOT,
+        { [SLUG]: dir(soleSession(SESSION_A)) },
+        { rootReaddirCode: 'EACCES' },
+      );
+      const calls: StubCall[] = [];
+
+      expect(() => runCorpusIngest(makeDeps({ fs, ingest: recorder(calls) }))).toThrow(
+        'corpus root unreadable (EACCES)',
+      );
+      expect(calls).toHaveLength(0);
+    });
+
+    it('names the code `unknown` when the root failure carries no errno', () => {
+      const base = makeFakeCorpusFs(ROOT, { [SLUG]: dir(soleSession(SESSION_A)) });
+      const hostile: CorpusFs = {
+        ...base,
+        readDirNames(absDir: string): string[] {
+          if (absDir === ROOT) throw new Error('boom without a code');
+          return base.readDirNames(absDir);
+        },
+      };
+
+      expect(() => runCorpusIngest(makeDeps({ fs: hostile, ingest: recorder([]) }))).toThrow(
+        'corpus root unreadable (unknown)',
+      );
+    });
+
+    it('treats a root that vanished mid-run (ENOENT) as an empty corpus, not an error', () => {
+      const fs = makeFakeCorpusFs(
+        ROOT,
+        { [SLUG]: dir(soleSession(SESSION_A)) },
+        { rootReaddirCode: 'ENOENT' },
+      );
+
+      const summary = runCorpusIngest(makeDeps({ fs, ingest: recorder([]) }));
+
+      expect(summary.sessionsDiscovered).toBe(0);
+      expect(summary.failures).toEqual([]);
     });
   });
 

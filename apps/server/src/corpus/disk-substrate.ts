@@ -25,13 +25,14 @@ import {
   ContainmentError,
   OversizeError,
   errnoCodeOf,
-  type BuiltSubstrate,
   type CorpusFs,
   type LstatInfo,
   type ReadLimits,
+  type SessionEnumeration,
   type SessionRef,
   type SkipReason,
   type SkippedFile,
+  type SubstrateBuild,
 } from './fs-port';
 import {
   assertWithinRoot,
@@ -81,15 +82,24 @@ function isRealDir(fs: CorpusFs, absPath: string): boolean {
  * Never throws on a per-entry hazard (a vanished / unreadable slug or entry is
  * simply skipped). Propagates {@link ContainmentError} for a traversal-shaped
  * name — the one non-recoverable signal.
+ *
+ * The ROOT read is the one hazard that is not per-entry, and it gets its own
+ * verdict: a root that VANISHED (ENOENT) reports zero sessions — that is true,
+ * and the caller's next root resolution will see it gone — but any other
+ * failure reports {@link UnreadableRoot}, because "I could not look" must
+ * never be spelled "there is nothing there".
  */
-export function enumerateSessions(fs: CorpusFs, corpusRoot: string): SessionRef[] {
+export function enumerateSessions(fs: CorpusFs, corpusRoot: string): SessionEnumeration {
   const refs: SessionRef[] = [];
 
   let slugNames: string[];
   try {
     slugNames = fs.readDirNames(corpusRoot);
-  } catch {
-    return refs; // unreadable / missing root → no sessions
+  } catch (err) {
+    if (errnoCodeOf(err) === 'ENOENT') {
+      return { kind: 'sessions', refs }; // vanished root → genuinely no sessions
+    }
+    return { kind: 'unreadable-root', code: errnoCodeOf(err) };
   }
 
   for (const slug of slugNames) {
@@ -135,7 +145,7 @@ export function enumerateSessions(fs: CorpusFs, corpusRoot: string): SessionRef[
     }
   }
 
-  return refs;
+  return { kind: 'sessions', refs };
 }
 
 /** Mutable accumulator threaded through the artifact walk. */
@@ -245,15 +255,18 @@ function walkArtifacts(
 /**
  * Build the substrate for one enumerated session. Producer 1 reads the main
  * `<uuid>.jsonl`; Producer 2 walks `<uuid>/subagents/**` for the three nested
- * artifact types. Returns `null` when NEITHER a main transcript NOR any agent
- * transcript survived (a meta/journal-only remnant cannot parse), so the runner
- * can skip it cleanly. Never throws except {@link ContainmentError}.
+ * artifact types. Never throws except {@link ContainmentError}.
+ *
+ * Reports `kind: 'no-substrate'` — WITH the skip reasons — when neither a main
+ * transcript nor any agent transcript survived, so the runner can skip the
+ * session cleanly without the operator losing the explanation. See
+ * {@link NoSubstrate} for why the reasons must survive that path.
  */
 export function buildSessionSubstrate(
   fs: CorpusFs,
   ref: SessionRef,
   limits: ReadLimits,
-): BuiltSubstrate | null {
+): SubstrateBuild {
   const state: BuildState = { files: [], skipped: [], hasAgent: false };
 
   // Producer 1 — the project-root main transcript (bare `<uuid>.jsonl`).
@@ -266,8 +279,8 @@ export function buildSessionSubstrate(
     // just-created session whose first record is not flushed yet, or a live
     // append caught mid-record) would make parseSession throw for the whole
     // session. Dropping it lets any live subagents still ingest, and a session
-    // with nothing else falls through to the `null` return below — reported as
-    // skipped, not as a failure.
+    // with nothing else falls through to the `no-substrate` return below —
+    // reported as skipped (with this reason attached), not as a failure.
     const lines = splitTranscriptLines(content, true);
     if (lines.every((line) => line.trim() === '')) {
       state.skipped.push({ relativePath: mainRel, reason: 'empty-main' });
@@ -286,9 +299,12 @@ export function buildSessionSubstrate(
   }
 
   if (!hasMain && !state.hasAgent) {
-    return null;
+    // `skipped` travels with the verdict: this is the case where it is the ONLY
+    // account of what happened to the session.
+    return { kind: 'no-substrate', projectSlug: ref.projectSlug, skipped: state.skipped };
   }
   return {
+    kind: 'built',
     substrate: { files: state.files },
     projectSlug: ref.projectSlug,
     skipped: state.skipped,

@@ -29,7 +29,56 @@ authenticating with `Authorization: Bearer ${DASHBOARD_TOKEN}` — the env var i
 expanded **by the shell at fire time**. The server accepts any JSON event
 (unknown hook names and extra fields are stored, never rejected), redacts
 secret-shaped material at the ingest boundary, and appends idempotently to the
-append-only `events_raw` substrate — a duplicate delivery inserts zero rows.
+append-only `events_raw` substrate.
+
+### Why installing these matters: they are the ONLY terminal signal
+
+Reading a transcript proves that activity *happened*; it never proves that it
+*stopped* (a file that stopped growing is indistinguishable from one whose next
+line has not been flushed). So ingest only ever writes `working`, and the two
+stop hooks carry the entire ending signal the dashboard has:
+
+| Hook | Status it applies | To which agent |
+|---|---|---|
+| `SubagentStop` | `completed` | the subagent named by `agent_id`, else the one derived from an `agent-<hex>.jsonl` `transcript_path` |
+| `Stop` | `waiting` | the session's main agent — **not** `completed`, because `Stop` fires at the end of every *turn* (see below), so it means "idle right now" |
+
+**If you do not install these hooks, nothing in the dashboard will ever say
+`completed`.** Agents go `working` → `unknown` once the watchdog window
+(`DASHBOARD_WATCHDOG_MINUTES`, default 10) elapses. That is intentional: the
+dashboard declines to claim an ending nobody observed.
+
+Applying a status is still **liveness, never structure** (CD-1). The applier is
+UPDATE-only by construction: it can move the `status` column of an agent the
+JSONL parser already created, and nothing else — it cannot create, delete or
+re-parent an agent. A hook naming an agent this server has never parsed is
+stored as raw liveness and changes no row.
+
+### Recurrence vs redelivery (`X-Agenthropic-Delivery-Id`)
+
+A `Stop` body is **byte-identical on every turn** of a session (`session_id`,
+`transcript_path`, `cwd`, `hook_event_name`, `stop_hook_active` — nothing
+turn-specific), so hashing content alone cannot tell *"this happened again"*
+from *"this was delivered twice"*. Only the sender knows. The generated command
+therefore stamps each firing with a delivery id that the **shell expands at fire
+time** (`$$-$(date +%s)-$RANDOM`) and sends as `X-Agenthropic-Delivery-Id`; the
+server folds it into the idempotency key.
+
+Consequences:
+
+- Two genuine firings of an identical body → two rows (the liveness timeline
+  shows every turn).
+- A retry of the *same* firing reuses its id → zero new rows, `stored: false`.
+- A client that sends **no** id keeps the older, conservative behaviour: a
+  genuine recurrence collapses into the first delivery. Absent ids are omitted
+  from the key material, so keys already in `events_raw` stay valid.
+- A client that mints a *new* id per network attempt would double-count that
+  retry — mint the id once per firing, not once per attempt.
+
+The header is **key material only**: never persisted, never logged, never echoed
+back, and it never influences the agent/edge topology (CD-1 — hooks are liveness,
+never structure). Values longer than 200 characters are rejected with a 400 that
+does not echo the value.
 
 ## Usage
 

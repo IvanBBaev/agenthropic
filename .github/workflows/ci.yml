@@ -1,5 +1,6 @@
-# CI quality gate: typecheck, lint, format, tests (with >90% coverage thresholds
-# enforced by the per-package Vitest configs), no-spawner gate, license gate.
+# CI quality gate: no-spawner gate, typecheck, lint, format, tests (with the
+# per-package Vitest coverage thresholds), license gate. The security gate runs
+# first so a broken invariant fails in seconds rather than after the suite.
 #
 # NOTE: making this workflow merge-blocking requires a GitHub branch-protection
 # rule (Settings -> Branches -> require status checks to pass). That is an owner
@@ -31,6 +32,13 @@ jobs:
       - name: Install (frozen lockfile)
         run: pnpm install --frozen-lockfile
 
+      # The security gate runs first, before the slow steps. It is the cheapest
+      # check in the workflow and the only one guarding an invariant the project
+      # cannot walk back: no subprocess spawner, no wide bind, no eval. A change
+      # that breaks it should be told so in seconds, not after a full test run.
+      - name: Security gate - no spawner / no wide bind / no eval
+        run: pnpm run gate:spawner
+
       - name: Typecheck
         run: pnpm run typecheck
 
@@ -40,11 +48,8 @@ jobs:
       - name: Format check
         run: pnpm run format:check
 
-      - name: Test (coverage thresholds enforce the >90% gate)
+      - name: Test (coverage thresholds enforce the coverage gate)
         run: pnpm run test
-
-      - name: Security gate - no spawner / no wide bind / no eval
-        run: pnpm run gate:spawner
 
       - name: License gate (CD-9 allowlist)
         run: pnpm run gate:licenses

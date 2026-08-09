@@ -10,7 +10,7 @@
     }
   },
   "scripts": {
-    "test": "vitest run"
+    "test": "vitest run --coverage"
   },
   "dependencies": {
     "@agenthropic/shared": "workspace:*"

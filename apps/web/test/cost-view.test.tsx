@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { CostView, COST_TOP_N } from '../src/views/CostView';
 import { createSseClient, type SseClient } from '../src/sse';
-import { costSummary, jsonResponse } from './fixtures';
+import { costAnalysis, costSummary, jsonResponse } from './fixtures';
 import { MockEventSource } from './mock-event-source';
 
 const fetchMock = vi.fn();
@@ -127,7 +127,7 @@ describe('CostView', () => {
 
     const sessionsTable = screen.getByRole('table', { name: 'top sessions by cost' });
     expect(sessionsTable.textContent).toContain('aaaaaaaa…');
-    expect(sessionsTable.textContent).toContain('no project');
+    expect(sessionsTable.textContent).toContain('project unknown');
     expect(sessionsTable.textContent).toContain('~ 4,000');
   });
 
@@ -146,6 +146,33 @@ describe('CostView', () => {
     expect(bars).toHaveLength(3);
     expect(bars[1]?.style.width).toBe('100%');
     expect(bars[2]?.style.width).toBe('0%');
+  });
+
+  it('draws no daily bar when every day costs $0, and still shows the unpriced tokens', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        200,
+        costSummary({
+          totals: { tokens: 9000, costUsd: 0, unpricedTokens: 9000 },
+          perDay: [
+            { day: '2026-07-28', tokens: 4000, costUsd: 0, unpricedTokens: 4000 },
+            { day: '2026-07-29', tokens: 5000, costUsd: 0, unpricedTokens: 5000 },
+          ],
+        }),
+      ),
+    );
+    const { container } = renderView();
+    await screen.findByLabelText('totals');
+
+    // No priced day exists, so no bar may claim a share of a zero maximum.
+    const bars = [...container.querySelectorAll('.bar-fill')] as HTMLElement[];
+    expect(bars.map((bar) => bar.style.width)).toEqual(['0%', '0%']);
+
+    // The $0 is never the whole story: the unpriced tokens stay on the row.
+    const dayTable = screen.getByRole('table', { name: 'cost per day' });
+    expect(dayTable.textContent).toContain('~ 4,000');
+    expect(dayTable.textContent).toContain('~ 5,000');
+    expect(dayTable.querySelectorAll('td.unpriced')).toHaveLength(2);
   });
 
   it('says honestly when nothing is priced instead of drawing an empty sankey', async () => {
@@ -186,5 +213,50 @@ describe('CostView', () => {
     renderView();
     await waitFor(() => expect(onAuthRejected).toHaveBeenCalledTimes(1));
     expect(screen.queryByText(/Could not load cost summary/)).toBeNull();
+  });
+
+  /**
+   * Per-session analysis reads transcripts off disk, so it is opt-in per
+   * session rather than fetched for every row. These two tests pin that: no
+   * analysis request may leave before a row is picked, and picking one must
+   * request exactly that session.
+   */
+  it('fetches no per-session analysis until a session is picked', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, richSummary()));
+    renderView();
+    await screen.findByLabelText('totals');
+
+    expect(screen.getByTestId('analysis-prompt').textContent).toContain('Pick a session above');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls.every(([url]) => !String(url).includes('cost-analysis'))).toBe(
+      true,
+    );
+  });
+
+  it('analyses the picked session and marks its row as selected', async () => {
+    fetchMock.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.includes('cost-analysis')
+          ? jsonResponse(200, costAnalysis())
+          : jsonResponse(200, richSummary()),
+      ),
+    );
+    renderView();
+    await screen.findByLabelText('totals');
+
+    const sessionsTable = screen.getByRole('table', { name: 'top sessions by cost' });
+    const [firstRow, secondRow] = [...sessionsTable.querySelectorAll('tbody tr')];
+    secondRow?.querySelector('button')?.click();
+
+    await screen.findByTestId('session-analysis');
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/sessions/bbbbbbbb-5555-6666-7777-888888888888/cost-analysis',
+      expect.anything(),
+    );
+    expect(screen.queryByTestId('analysis-prompt')).toBeNull();
+    expect(secondRow?.getAttribute('aria-selected')).toBe('true');
+    expect(secondRow?.getAttribute('class')).toBe('row-selected');
+    expect(firstRow?.getAttribute('aria-selected')).toBe('false');
+    expect(firstRow?.getAttribute('class')).toBeNull();
   });
 });

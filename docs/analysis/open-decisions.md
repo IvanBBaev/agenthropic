@@ -56,6 +56,17 @@ i.e. how an agent leaves `'unknown'` once a late signal arrives.
 runtime; the status enum is a Track-D schema object, so this blocks Track D alongside
 OPEN-1.
 
+**Implemented, awaiting ratification (not a tick).** The CHECK now allows all five values,
+and the status lifecycle ships with this revert rule, enforced in SQL inside the upsert
+(`apps/server/src/db/agents.ts`, mirrored in `db/sessions.ts`): (1) observed terminals
+(`completed`, `error`) are **sticky** — no later ingest downgrades them; (2) inferred states
+(`working`, `waiting`, `unknown`) are replaced only when the incoming activity anchor
+(`last_seen_at` / `last_activity_at`) **strictly advances**, so a late signal or fresh
+transcript activity lifts an agent out of `'unknown'`; (3) an unchanged replay therefore
+changes nothing, which is what keeps the P0 byte-identical double-replay proof green. See
+`docs/site/architecture/ingest-reconciliation.md` §8.1. Ticking the box below remains the
+owner's call.
+
 - [ ] Accept: add `'unknown'` to the CHECK **and** define the revert rule below.
       Revert rule: ______________________________________________________________
 - [ ] Choose another resolution: ________________________________________________

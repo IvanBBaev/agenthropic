@@ -285,6 +285,18 @@ button:disabled {
   color: #9aa2ad;
 }
 
+/* A status word this build does not know: shown as a hazard, never quietly
+   folded into a known state. The `?` symbol carries it without color. */
+.status-unrecognised {
+  color: #e66767;
+}
+
+/* Session-level status chip: symbol + word, so the color is decoration. */
+.session-status {
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
 /* Categorical series slots - the validated dark-mode order, fixed, never
    cycled (extra series fold into "other"). SVG marks use currentColor. */
 
@@ -447,6 +459,15 @@ button:disabled {
   font-size: 0.78rem;
 }
 
+/* Prose text alternative for a chart. role="img" hides the SVG subtree from
+   assistive tech, so this paragraph carries the same facts - visibly, for
+   everyone who cannot hover a <title> either. */
+.chart-summary {
+  margin: 0.4rem 0 0;
+  font-size: 0.8rem;
+  color: #b6bcc4;
+}
+
 .unattributed {
   padding: 0.5rem 0.7rem;
   background: #1a1d22;
@@ -547,5 +568,42 @@ button:disabled {
   height: 0.55rem;
   border-radius: 0 4px 4px 0;
   background: #3987e5;
+  vertical-align: middle;
+}
+
+/* A table cell that acts as a control. Styled as a link rather than as a
+   button so the row still reads as data, but it stays a real <button> so it is
+   keyboard-reachable and announced as a control. */
+.link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #6ab0ff;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.link-button:hover,
+.link-button:focus-visible {
+  text-decoration: underline;
+}
+
+.row-selected {
+  background: #182029;
+}
+
+/* Marks a modelled figure. Never decorative: it is the visible half of the
+   `isEstimate` contract, so it must stay legible rather than subtle. */
+.badge-estimate {
+  margin-left: 0.5rem;
+  padding: 0.1rem 0.4rem;
+  border: 1px solid #c98500;
+  border-radius: 4px;
+  color: #c98500;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
   vertical-align: middle;
 }

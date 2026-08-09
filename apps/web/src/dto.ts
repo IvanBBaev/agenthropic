@@ -10,11 +10,17 @@
  * declaration output. Import DTO types from THIS module everywhere in the app.
  */
 export type {
+  AgentDelegationSavingsDto,
   AgentNodeDto,
   AgentStatus,
   AgentStatusChangedEvent,
+  CompactionAnalysisDto,
+  CompactionBoundaryDto,
+  CompactionSegmentDto,
+  CostAnalysisDto,
   CostSummaryDto,
   DailyCostDto,
+  DelegationSavingsDto,
   GlobalDagDto,
   ModelCostDto,
   OrchestrationEdgeDto,

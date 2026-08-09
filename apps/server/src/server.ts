@@ -103,7 +103,14 @@ function extractToken(request: FastifyRequest, allowQueryToken: boolean): string
     return header.slice('Bearer '.length);
   }
   if (allowQueryToken) {
-    const url = request.raw.url ?? '';
+    // Fastify's `request.url` is a getter over `request.raw.url` - the SAME
+    // string, but typed `string` rather than `string | undefined`, because the
+    // router cannot dispatch a request that carries no URL. Reading it here
+    // instead of reaching through `.raw` removes a `?? ''` arm that no test
+    // could ever drive, so the branch figure stays a measurement rather than an
+    // estimate. (Suppressing it with an ignore pragma would have been the other
+    // option, and the wrong one: it drops BOTH arms from the denominator.)
+    const url = request.url;
     const queryStart = url.indexOf('?');
     if (queryStart !== -1) {
       const queryToken = new URLSearchParams(url.slice(queryStart + 1)).get('token');

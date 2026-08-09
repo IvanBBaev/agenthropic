@@ -10,9 +10,13 @@
  * line, an unpriceable model, a build that yields nothing) is counted and
  * skipped, never allowed to sink the rest of the corpus. ingestSession itself
  * already prices BEFORE its transaction (the halt gate) and never rethrows, so
- * the per-session catch here is belt-and-braces. The ONE thing that does abort
- * the whole run is a {@link ContainmentError} escaping buildSessionSubstrate /
- * enumerateSessions — a crafted corpus is a stop-everything signal.
+ * the per-session catch here is belt-and-braces. TWO things abort the whole
+ * run: a {@link ContainmentError} escaping buildSessionSubstrate /
+ * enumerateSessions (a crafted corpus is a stop-everything signal), and an
+ * UNREADABLE corpus root (a plain Error) — returning the empty summary there
+ * would report a root this runner could not even list as a quiet, fully
+ * ingested corpus. The watcher's tick catch turns that throw into an honest
+ * read-error outcome and retries next poll.
  *
  * The runner writes ZERO bytes to the corpus and is idempotent end-to-end
  * (ingestSession upserts and INSERT-OR-IGNOREs), so a re-run over an unchanged
@@ -111,9 +115,14 @@ export function runCorpusIngest(deps: CorpusIngestDeps): CorpusIngestSummary {
   }
 
   const { instance, hostId } = resolveIdentity(deps.env);
-  const enumerated = enumerateSessions(fs, corpusRoot);
+  const enumeration = enumerateSessions(fs, corpusRoot);
+  if (enumeration.kind === 'unreadable-root') {
+    throw new Error(`corpus root unreadable (${enumeration.code ?? 'unknown'})`);
+  }
   const refs =
-    deps.sessionFilter === undefined ? enumerated : enumerated.filter(deps.sessionFilter);
+    deps.sessionFilter === undefined
+      ? enumeration.refs
+      : enumeration.refs.filter(deps.sessionFilter);
 
   let sessionsOk = 0;
   let sessionsFailed = 0;
@@ -127,14 +136,19 @@ export function runCorpusIngest(deps: CorpusIngestDeps): CorpusIngestSummary {
 
   for (const ref of refs) {
     const built = buildSessionSubstrate(fs, ref, limits);
-    if (built === null) {
-      sessionsSkipped += 1;
-      continue;
-    }
 
+    // Warnings first, and for BOTH outcomes. They used to be reported only when
+    // the session survived, so an unreadable transcript was announced when a
+    // sibling subagent happened to save the session and silently swallowed when
+    // it did not - the total loss reported less than the partial one.
     for (const skipped of built.skipped) {
       filesSkipped += 1;
       deps.onWarning?.(skipped);
+    }
+
+    if (built.kind === 'no-substrate') {
+      sessionsSkipped += 1;
+      continue;
     }
 
     let outcome: IngestOutcome;

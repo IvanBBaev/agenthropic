@@ -65,4 +65,11 @@ export class MockEventSource {
     for (const listener of [...(this.listeners.get(type) ?? [])]) listener(event);
     if (type === 'message') this.onmessage?.(event);
   }
+
+  /** Deliver a frame whose `data` is passed through untouched (e.g. non-string). */
+  emitRaw(type: string, data: unknown): void {
+    const event = new MessageEvent(type, { data });
+    for (const listener of [...(this.listeners.get(type) ?? [])]) listener(event);
+    if (type === 'message') this.onmessage?.(event);
+  }
 }

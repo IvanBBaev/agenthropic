@@ -2,8 +2,14 @@
  * WP-IN12 missing-Stop watchdog. An agent whose transcript shows no terminal
  * state and no new activity for the configured window is honestly marked
  * 'unknown' — NEVER guessed as 'completed' (the design honesty rule; the
- * migration-4 comment and parser-spec OPEN-2 both reserve 'unknown' for
- * exactly this sweep).
+ * migration-4 comment and OPEN-2 in docs/analysis/open-decisions.md both
+ * reserve 'unknown' for exactly this sweep).
+ *
+ * This is the ONLY producer of 'unknown', and it is live code on every poll
+ * tick: ingest asserts 'working' (activity, never termination), hooks supply
+ * the observed terminals, and staleness — measured against the injected clock
+ * with the DASHBOARD_WATCHDOG_MINUTES window — resolves everything neither one
+ * has spoken for.
  *
  * Split for testability: {@link decideWatchdogVerdict} is a pure function
  * (timestamps in, verdict out); {@link runWatchdogSweep} applies it over the
@@ -13,6 +19,7 @@
 import type { AgentStatus } from '@agenthropic/shared';
 import { listWatchdogCandidates, setAgentStatus, type WatchdogCandidate } from '../db/agents';
 import type { SqliteDatabase } from '../db/connection';
+import { mirrorMainAgentStatus } from '../db/sessions';
 import type { AgentStatusChangedEvent } from './ingest-events';
 
 /** 'completed' / 'error' / 'unknown' need no watchdog; the rest (and NULL) do. */
@@ -64,7 +71,14 @@ export function runWatchdogSweep(
     if (decideWatchdogVerdict(candidate, nowEpochMs, thresholdMs) === null) {
       continue;
     }
-    setAgentStatus(db, candidate.id, 'unknown');
+    // One transaction per candidate: the agent row and its session mirror must
+    // never diverge across a crash between the two UPDATEs. (A stale MAIN
+    // agent means a stale session; a stale subagent says nothing about its
+    // parent, and the guarded mirror UPDATE is a no-op for it.)
+    db.transaction(() => {
+      setAgentStatus(db, candidate.id, 'unknown');
+      mirrorMainAgentStatus(db, candidate.id, 'unknown');
+    })();
     transitions.push({
       type: 'agent-status-changed',
       agentId: candidate.id,

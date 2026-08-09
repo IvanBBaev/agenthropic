@@ -5,7 +5,13 @@
  * see sse.ts). The token is never logged and never appears in any error
  * message.
  */
-import type { CostSummaryDto, GlobalDagDto, SessionListDto, SessionTreeDto } from './dto';
+import type {
+  CostAnalysisDto,
+  CostSummaryDto,
+  GlobalDagDto,
+  SessionListDto,
+  SessionTreeDto,
+} from './dto';
 
 export type HealthResult =
   | { readonly kind: 'ok'; readonly schemaVersion: number }
@@ -60,11 +66,19 @@ export async function checkHealth(token: string, signal?: AbortSignal): Promise<
  * distinct arm because the shell reacts to it by dropping the token and
  * returning to the entry screen; every other failure is a view-local,
  * token-free error message.
+ *
+ * The `error` arm carries the HTTP `status` alongside the message because the
+ * failures are NOT interchangeable and must not be collapsed into one "could
+ * not load" sentence: 503 means the feature is switched off on this server,
+ * 404 means the corpus has no such session, 422 means the data itself cannot
+ * be priced or parsed, and 500 is a deliberately detail-free server fault.
+ * `status` is `null` only when no HTTP response existed at all (network or
+ * abort failure), which is again a different fact from any of the above.
  */
 export type ApiResult<T> =
   | { readonly kind: 'ok'; readonly data: T }
   | { readonly kind: 'unauthorized' }
-  | { readonly kind: 'error'; readonly message: string };
+  | { readonly kind: 'error'; readonly message: string; readonly status: number | null };
 
 /**
  * One GET against the same origin. 401 -> `unauthorized`; other non-2xx ->
@@ -84,7 +98,11 @@ async function getJson<T>(
       signal: signal ?? null,
     });
   } catch (error) {
-    return { kind: 'error', message: error instanceof Error ? error.message : 'network error' };
+    return {
+      kind: 'error',
+      message: error instanceof Error ? error.message : 'network error',
+      status: null,
+    };
   }
   if (response.status === 401) {
     return { kind: 'unauthorized' };
@@ -98,16 +116,16 @@ async function getJson<T>(
     } catch {
       // Keep the status-only message; the body is not required to be JSON.
     }
-    return { kind: 'error', message };
+    return { kind: 'error', message, status: response.status };
   }
   let body: unknown;
   try {
     body = await response.json();
   } catch {
-    return { kind: 'error', message: 'malformed response body' };
+    return { kind: 'error', message: 'malformed response body', status: response.status };
   }
   if (typeof body !== 'object' || body === null) {
-    return { kind: 'error', message: 'malformed response body' };
+    return { kind: 'error', message: 'malformed response body', status: response.status };
   }
   return { kind: 'ok', data: body as T };
 }
@@ -156,4 +174,26 @@ export function fetchCostSummary(
 ): Promise<ApiResult<CostSummaryDto>> {
   const query = topN !== undefined ? `?topN=${String(topN)}` : '';
   return getJson<CostSummaryDto>(`/api/cost/summary${query}`, token, signal);
+}
+
+/**
+ * GET /api/sessions/:id/cost-analysis (WP-C4 + WP-C5) - compaction repricing
+ * and the delegation-savings counterfactual for ONE session.
+ *
+ * This route reads the raw transcripts, so it has a wider failure surface than
+ * the database-backed reads: 503 when the server has no corpus configured, 404
+ * when the corpus holds no transcript for the id, 422 when the transcript
+ * cannot be parsed or a model cannot be priced, 500 (detail-free) otherwise.
+ * The caller must tell those apart - see `ApiResult`'s `status`.
+ */
+export function fetchCostAnalysis(
+  token: string,
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<ApiResult<CostAnalysisDto>> {
+  return getJson<CostAnalysisDto>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/cost-analysis`,
+    token,
+    signal,
+  );
 }

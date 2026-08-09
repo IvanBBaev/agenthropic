@@ -78,20 +78,89 @@ PROVISIONAL), Ivan's two physical KC acts, or no-commit-without-an-explicit-ask.
   core 168 (100% / 95.62%), shared 72 (100% / 100%), web 127 (99.07% / 91.50%),
   test-fixtures 23 (a documented, deliberate coverage-gate exclusion).
 
+### 2026-07-31 → 2026-08-09 · Hardening waves — coverage truth, corpus-scale performance, the status lifecycle, and every `null` made to speak
+- **The coverage number was made true, then pinned.** `packages/test-fixtures` ran
+  `vitest run` with no `--coverage`, so its thresholds had never once executed; fixed
+  and brought into the gate. Thresholds were then raised from the workspace floor of 90
+  to the level each package actually holds, verified by a deliberate failing run at 101.
+  Every `/* v8 ignore */` under any `src/` was **deleted and replaced with a real test**
+  (one was hiding genuinely reachable cycle-cutting code), and per-package guard tests
+  now sweep the source **as text, never imports** and fail the build if a pragma —
+  or a threshold below 100, or an `exclude` — ever returns. All five packages sit at
+  **100% statements / branches / functions / lines, enforced**.
+- **Five audited correctness defects; four fixed, the fifth became a feature.**
+  `INSERT OR IGNORE` froze the first mid-stream read of a streaming turn forever
+  (permanent under-count) → convergence upsert with per-bucket MAX whose `WHERE` guard
+  keeps the byte-identical replay proof green; hook idempotency conflated recurrence
+  with redelivery (a 50-turn session stored ONE `Stop` row) → sender-minted per-firing
+  `deliveryId`; ingest failures were swallowed while `/api/health` said `ok` → bounded
+  fingerprint-keyed retry + an SSE failure event; main-agent tokens sat unattributed so
+  every root node read $0 → storage-layer fix + backfill migration 8. The fifth —
+  everything was written `'completed'` — became the **status lifecycle**: `working`
+  (ingest) / `waiting` (`Stop`) / `completed` (`SubagentStop`) / `unknown` (watchdog),
+  observed terminals sticky, inferred states advancing only on a strictly newer anchor.
+  The WP-IN12 watchdog is live code now, not an inert knob.
+- **Corpus-scale benchmark** (`apps/server/bench/`, with an `assertSynthetic()` guard
+  that refuses any path near the real corpus) exposed two read-path defects, both
+  proven at the sqlite3 prompt before fixing: an unfiltered priced CTE made paging
+  price all 752k usage rows (627 ms → 9 ms byte-identical), and the cost summary ran
+  that scan four times → one rollup. The projection it produced — warm tick 3.6% duty
+  cycle, **cold replay ~137 s over the real 1855-session corpus** — is recorded as a
+  product risk feeding OPEN-1/2/3, answered meanwhile by persisted replay checkpoints.
+- **Web honesty audit: 11 violations, each fixed test-first.** Two real crashes (an
+  unrecognised status word took out both D3 views; the live board painted `NaN` from a
+  missing bucket) and nine confident lies in copy — `null` slug as "no project", an
+  absent count as "0 waiting", `$0.00` beside unpriced tokens, the session-level
+  `unknown` not rendered at all. Chart facts became visible prose (`chart-summary.ts`)
+  instead of hover-only `<title>`s hidden by `role="img"`.
+- **Every load-bearing `null` was split into named facts.** `tick()` returns a
+  seven-arm `TickOutcome` union and the boot line says which one happened (a missing
+  corpus root and a healthy quiet one no longer boot identically silent); the
+  cost-analysis route stopped answering three different absences with one false
+  `404 Session not found.` — no-root 503, unreadable-root 503 and true 404 are now
+  three distinct sentences, carried through to the SPA verbatim.
+- **Landed alongside:** the WP-D10 retention mechanism (bounded transactional prune,
+  fsync'd cost receipt inside the delete transaction, a static guard proving no DML
+  ever targets the ground-truth tables; policy VALUES still blocked on OPEN-1/2/3) ·
+  the WP-X2 annotations loader + hierarchy gate (one-sided Wilson bound, n ≥ 52,
+  "substrate unavailable" rather than a vacuous pass) · `SessionCostAnalysis.tsx`,
+  closing the exit-gate claim that was true of the server and false of the dashboard ·
+  the time-to-understand protocol (`docs/measurement/`, runnable by Ivan alone).
+- **A five-lane read-only audit** (security · honesty · concurrency) re-verified all
+  seven security invariants PASS and produced twelve verified findings; the six Ivan
+  approved were fixed — honest compaction KPI labels, the hook `applyStatus` seam
+  surviving crash-retry redelivery, transactional status pairs, LiveView refetching
+  persisted truth on SSE reconnect, unreadable-root in the substrate union, the
+  `formatUsd` `<$0.0001` floor — and the new suite promptly caught a real bug in one
+  fix's own wiring (`deps.onTickOutcome?.(tick())` — an optional call short-circuits
+  its *arguments*, so an unwired watcher never ticked).
+- **Full gate, real numbers (2026-08-09):** typecheck · lint · format:check green ·
+  `gate:spawner` OK (214 files) · `gate:licenses` OK (412 packages) · **1318 tests
+  passing, 100/100/100/100 in all five packages** — server 731, web 232, core 193,
+  test-fixtures 90, shared 72. Test count rose 879 → 1318 across the span.
+
 ### Still open, and owned by Ivan — not by any agent
 - ~~**Everything above is UNCOMMITTED.**~~ **Closed 2026-07-30** — committed and pushed
   as `9b6c6b3` on Ivan's explicit instruction (198 files, +27 133 / −1 113). CI is
   `success` on that commit, so the README badge now attests to Waves 1–4 rather than
-  to the Phase-1 foundation alone. Further commits still require their own explicit ask.
+  to the Phase-1 foundation alone. The 2026-07-31 → 2026-08-09 hardening span was
+  committed and pushed 2026-08-09, again on an explicit ask («пушвай»). Further
+  commits still require their own explicit ask.
 - The two physical KC acts: open the friction log, install ≥1 rival dashboard.
 - **LABEL-ME ratification** — until the hand-labeled corpus exists, the Phase-0 numbers
   stay PROVISIONAL and the hierarchy ≥95% gate cannot be signed by machine.
 - ~~LICENSE tracking~~ **closed 2026-07-30** — tracked in `9b6c6b3`; GitHub now reports
-  `MIT` instead of `license: null`. Still open: enabling GitHub Pages (the Pages workflow
-  fails in `configure-pages` by design until it is switched on) and branch protection on
-  `main`, without which CD-7's "coverage blocks merges" is not physically enforced.
-- **"<30s to understand a session" is unmeasured.** Nobody has sat in front of it with
-  a real corpus and timed it; an agent cannot sign a usability claim.
+  `MIT` instead of `license: null`. ~~Enabling GitHub Pages~~ **closed in the workflow
+  2026-08-07** — `actions/configure-pages` now runs with `enablement: true`, so the
+  first push to `main` switches Pages on itself (verify the run goes green). Still
+  open: **branch protection on `main`**, without which CD-7's "coverage blocks merges"
+  is not physically enforced.
+- **Retention policy VALUES (OPEN-1/2/3).** The WP-D10 mechanism is built and tested;
+  the actual retention windows are a product decision informed by the ~137 s cold-replay
+  projection, and only Ivan sets them. Until then the server runs `NO_RETENTION`.
+- **"<30s to understand a session" is unmeasured.** The protocol and log template now
+  exist (`docs/measurement/time-to-understand-protocol.md`), but only Ivan can sit in
+  front of a real corpus with a stopwatch; an agent cannot sign a usability claim.
 
 ---
 

@@ -8,8 +8,12 @@
  * session - untouched. Foreign keys (session_id -> sessions, parent_agent_id
  * -> agents self) are enforced by the WP-D2 connection pragmas; the CALLER
  * guarantees the session and any referenced parent agent are inserted first.
+ *
+ * `status` is the ONE column the upsert does not simply overwrite - see the
+ * CASE in {@link upsertAgent}.
  */
 import type { AgentStatus, AgentType } from '@agenthropic/shared';
+import type { AgentStatusChangedEvent } from '../ingest/ingest-events';
 import type { SqliteDatabase } from './connection';
 
 export interface AgentUpsert {
@@ -17,6 +21,11 @@ export interface AgentUpsert {
   readonly sessionId: string;
   readonly type: AgentType;
   readonly subagentType: string | null;
+  /**
+   * The status to assert for a FIRST sighting or for genuinely NEW activity.
+   * It is not applied unconditionally: an already-observed terminal verdict is
+   * sticky and an unchanged replay is a no-op (see {@link upsertAgent}).
+   */
   readonly status: AgentStatus;
   readonly parentAgentId: string | null;
   readonly firstSeenAt: string | null;
@@ -68,6 +77,33 @@ export function setAgentStatus(db: SqliteDatabase, id: string, status: AgentStat
   db.prepare('UPDATE agents SET status = ? WHERE id = ?').run(status, id);
 }
 
+/**
+ * The status arm of the upsert, kept here so the rule is readable in one place.
+ *
+ * Three properties this CASE has to hold simultaneously:
+ *
+ *  1. OBSERVED TERMINALS ARE STICKY. Once a hook has observed a subagent stop
+ *     ('completed') or an error was recorded, a later transcript flush of the
+ *     SAME bytes must not resurrect it as 'working'. Reading a transcript
+ *     proves activity happened, never that it is still happening.
+ *  2. INFERRED STATES YIELD TO EVIDENCE. 'unknown' (watchdog guess) and
+ *     'waiting' (idle between turns) revert to 'working' the moment the
+ *     transcript proves NEW activity — this is the OPEN-2 revert rule.
+ *  3. AN UNCHANGED REPLAY IS A NO-OP. The decision reads ONLY JSONL
+ *     timestamps, never the wall clock, and requires `last_seen_at` to
+ *     STRICTLY ADVANCE. Re-ingesting identical bytes therefore writes an
+ *     identical row — which is what the P0 byte-identical double-replay proof
+ *     pins.
+ */
+const AGENT_STATUS_CASE = `CASE
+         WHEN agents.status IN ('completed', 'error') THEN agents.status
+         WHEN agents.status IS NULL THEN excluded.status
+         WHEN excluded.last_seen_at IS NOT NULL
+          AND (agents.last_seen_at IS NULL OR excluded.last_seen_at > agents.last_seen_at)
+           THEN excluded.status
+         ELSE agents.status
+       END`;
+
 export function upsertAgent(db: SqliteDatabase, row: AgentUpsert): void {
   db.prepare(
     `INSERT INTO agents
@@ -76,7 +112,7 @@ export function upsertAgent(db: SqliteDatabase, row: AgentUpsert): void {
      ON CONFLICT(id) DO UPDATE SET
        type            = excluded.type,
        subagent_type   = excluded.subagent_type,
-       status          = excluded.status,
+       status          = ${AGENT_STATUS_CASE},
        parent_agent_id = excluded.parent_agent_id,
        first_seen_at   = excluded.first_seen_at,
        last_seen_at    = excluded.last_seen_at`,
@@ -90,4 +126,39 @@ export function upsertAgent(db: SqliteDatabase, row: AgentUpsert): void {
     row.firstSeenAt,
     row.lastSeenAt,
   );
+}
+
+interface AgentStatusRow {
+  readonly sessionId: string;
+  readonly status: AgentStatus | null;
+}
+
+/**
+ * CD-1 primitive: move ONE existing agent's status and report the transition.
+ *
+ * UPDATE-only by construction — it can never create, delete or re-parent a row,
+ * which is exactly the constraint hooks operate under (liveness only, never
+ * structure). An unknown agent id yields `null` (the hook is still stored as
+ * raw liveness; it simply has no row to move), and a no-op transition yields
+ * `null` too so the realtime stream never emits `working -> working`.
+ */
+export function applyAgentStatus(
+  db: SqliteDatabase,
+  id: string,
+  status: AgentStatus,
+): AgentStatusChangedEvent | null {
+  const row = db
+    .prepare('SELECT session_id AS sessionId, status FROM agents WHERE id = ?')
+    .get(id) as AgentStatusRow | undefined;
+  if (row === undefined || row.status === status) {
+    return null;
+  }
+  setAgentStatus(db, id, status);
+  return {
+    type: 'agent-status-changed',
+    agentId: id,
+    sessionId: row.sessionId,
+    oldStatus: row.status,
+    newStatus: status,
+  };
 }

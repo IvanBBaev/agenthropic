@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -73,5 +73,56 @@ describe('backup + tested restore (WP-F8)', () => {
     // Not a SQLite file at all - opening it must fail loudly.
     writeFileSync(corruptPath, 'this is not a sqlite database, not even close');
     expect(() => restoreDatabase(corruptPath, join(dir, 'restored.db'))).toThrow();
+  });
+
+  it('refuses a restore whose file opens cleanly but fails integrity_check', async () => {
+    // The harder case than "not a SQLite file at all": the image still has a
+    // valid header, so `openDatabase` succeeds and both pragma assertions pass
+    // - only `PRAGMA integrity_check` can tell that the b-tree is damaged.
+    dir = mkdtempSync(join(tmpdir(), 'agenthropic-backup-integrity-'));
+    const backupPath = join(dir, 'backups', 'agent.backup.db');
+    const restorePath = join(dir, 'restored', 'agent.db');
+
+    const db = openDatabase(join(dir, 'live', 'agent.db'));
+    openHandles.push(db);
+    runMigrations(db);
+    const store = new SqliteEventStore(db);
+    for (let i = 0; i < 400; i += 1) {
+      store.append({
+        idempotencyKey: `k${String(i)}`,
+        source: 'hook',
+        eventType: 'Stop',
+        payload: { i },
+        receivedAt: '2026-07-11T00:00:00Z',
+      });
+    }
+    await backupDatabase(db, backupPath);
+    db.close();
+
+    // Wipe the final b-tree page of the backup image. Page 1 (header +
+    // sqlite_schema) is untouched, so the file is still openable.
+    const image = readFileSync(backupPath);
+    const pageSize = image.readUInt16BE(16); // header offset 16: page size
+    expect(image.length).toBeGreaterThan(pageSize * 2);
+    image.fill(0, image.length - pageSize);
+    writeFileSync(backupPath, image);
+
+    expect(() => restoreDatabase(backupPath, restorePath)).toThrow(
+      /Restored database failed integrity_check/,
+    );
+
+    // The copy DID land - the guard rejects after the file is in place, so the
+    // damaged image is still there to inspect...
+    expect(existsSync(restorePath)).toBe(true);
+    // ...and the rejected handle was closed: SQLite keeps the `-shm` sidecar
+    // only for as long as a WAL connection is open.
+    expect(existsSync(`${restorePath}-shm`)).toBe(false);
+
+    // Independently confirm both halves of that: opening it ourselves creates
+    // the sidecar again, and integrity_check really does not say 'ok'.
+    const forensic = openDatabase(restorePath);
+    openHandles.push(forensic);
+    expect(existsSync(`${restorePath}-shm`)).toBe(true);
+    expect(forensic.pragma('integrity_check', { simple: true })).not.toBe('ok');
   });
 });

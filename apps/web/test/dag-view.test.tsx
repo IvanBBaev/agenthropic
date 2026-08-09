@@ -121,6 +121,148 @@ describe('DagView', () => {
     expect(container.querySelectorAll('line.edge')).toHaveLength(0);
   });
 
+  it('draws an inferred edge differently from an observed one, in class and in title', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        200,
+        globalDag({
+          nodes: [
+            agentNode(),
+            agentNode({ id: 'agent-child', type: 'subagent', subagentType: 'Explore' }),
+            agentNode({ id: 'agent-third', type: 'subagent', subagentType: 'Plan' }),
+          ],
+          edges: [
+            orchestrationEdge(),
+            orchestrationEdge({ id: 2, childAgentId: 'agent-third', source: 'directory' }),
+          ],
+          counts: { totalSessions: 1 },
+        }),
+      ),
+    );
+    const { container } = renderView();
+    await screen.findByRole('img', { name: 'global orchestration dag' });
+
+    expect(screen.getByText('3 agents across 1 session, 2 edges.')).toBeDefined();
+
+    const observed = [...container.querySelectorAll('line.edge-observed')];
+    const inferred = [...container.querySelectorAll('line.edge-inferred')];
+    expect(observed).toHaveLength(1);
+    expect(inferred).toHaveLength(1);
+    // Provenance is carried by a distinct class (the dashed CSS hook), never
+    // by the same markup with a different colour only.
+    expect(observed[0]?.getAttribute('class')).toBe('edge edge-observed');
+    expect(inferred[0]?.getAttribute('class')).toBe('edge edge-inferred');
+    // ...and it is spelled out for anyone hovering or using a screen reader.
+    expect(observed[0]?.querySelector('title')?.textContent).toBe('observed (tool_use)');
+    expect(inferred[0]?.querySelector('title')?.textContent).toBe('inferred (directory)');
+  });
+
+  it('keeps an unknown status and unpriced tokens on a node that has no type at all', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        200,
+        globalDag({
+          nodes: [
+            agentNode({
+              id: 'agent-x',
+              type: null,
+              subagentType: null,
+              status: 'unknown',
+              totalTokens: 1500,
+              costUsd: 0,
+              unpricedTokens: 2500,
+            }),
+          ],
+          counts: { totalSessions: 1 },
+        }),
+      ),
+    );
+    renderView();
+    await screen.findByRole('img', { name: 'global orchestration dag' });
+
+    expect(screen.getByText('1 agent across 1 session, 0 edges.')).toBeDefined();
+
+    const node = screen.getByTestId('dag-node-agent-x');
+    // Neither subagentType nor type is recorded: the label says exactly that
+    // rather than claiming the generic word "agent" as a fact; the $0 is
+    // qualified by the unpriced tokens right next to it.
+    expect(node.querySelector('title')?.textContent).toBe(
+      'type unrecorded agent-x - session aaaaaaaa… - unknown - 1,500 tokens, $0.00, ~2,500 unpriced',
+    );
+    // The watchdog's honest 'unknown' is rendered, never filtered away.
+    expect(node.getAttribute('class')).toBe('status-unknown');
+    expect(node.querySelector('.node-symbol')?.textContent).toBe('▲');
+  });
+
+  it('parks a self-referencing agent on a fallback layer instead of looping forever', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        200,
+        globalDag({
+          nodes: [agentNode()],
+          edges: [orchestrationEdge({ childAgentId: 'agent-main' })],
+          counts: { totalSessions: 1 },
+        }),
+      ),
+    );
+    const { container } = renderView();
+
+    await screen.findByText('1 agent sit in a cycle and are placed on a fallback layer.');
+    // The cycle is reported, not hidden: the node and its edge are still drawn.
+    expect(screen.getByTestId('dag-node-agent-main')).toBeDefined();
+    expect(container.querySelectorAll('line.edge')).toHaveLength(1);
+    expect(screen.queryByText(/reference agents outside the returned slice/)).toBeNull();
+  });
+
+  it('counts every member of a two-agent cycle in the fallback-layer notice', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        200,
+        globalDag({
+          nodes: [agentNode(), agentNode({ id: 'agent-child', type: 'subagent' })],
+          edges: [
+            orchestrationEdge(),
+            orchestrationEdge({
+              id: 2,
+              parentAgentId: 'agent-child',
+              childAgentId: 'agent-main',
+            }),
+          ],
+          counts: { totalSessions: 1 },
+        }),
+      ),
+    );
+    renderView();
+
+    await screen.findByText('2 agents sit in a cycle and are placed on a fallback layer.');
+    expect(screen.getByTestId('dag-node-agent-main')).toBeDefined();
+    expect(screen.getByTestId('dag-node-agent-child')).toBeDefined();
+  });
+
+  it('pluralises the dropped-edge notice and draws none of those edges', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        200,
+        globalDag({
+          nodes: [agentNode()],
+          edges: [
+            orchestrationEdge({ childAgentId: 'agent-ghost-1' }),
+            orchestrationEdge({ id: 2, childAgentId: 'agent-ghost-2' }),
+          ],
+          counts: { totalSessions: 1 },
+        }),
+      ),
+    );
+    const { container } = renderView();
+
+    await screen.findByText(
+      '2 edges reference agents outside the returned slice and are not drawn.',
+    );
+    expect(container.querySelectorAll('line.edge')).toHaveLength(0);
+    // No phantom node is invented for the missing endpoints.
+    expect(container.querySelectorAll('[data-testid^="dag-node-"]')).toHaveLength(1);
+  });
+
   it('renders the honest empty state when no agents are persisted', async () => {
     fetchMock.mockResolvedValue(jsonResponse(200, globalDag()));
     renderView();

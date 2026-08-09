@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { LiveView, SESSION_LIMIT } from '../src/views/LiveView';
 import { createSseClient, type SseClient } from '../src/sse';
-import { jsonResponse, sessionList, sessionSummary, statusCounts } from './fixtures';
+import { deferred, jsonResponse, sessionList, sessionSummary, statusCounts } from './fixtures';
 import { MockEventSource } from './mock-event-source';
 
 const fetchMock = vi.fn();
@@ -172,7 +172,7 @@ describe('LiveView', () => {
     await waitFor(() => expect(sessionsCalls()).toHaveLength(2));
   });
 
-  it('ignores a malformed agent-status-changed payload', async () => {
+  it('refetches on a malformed agent-status-changed payload instead of patching it', async () => {
     const session = sessionSummary();
     fetchMock.mockResolvedValue(jsonResponse(200, sessionList([session])));
     renderView();
@@ -180,13 +180,160 @@ describe('LiveView', () => {
 
     act(() => {
       MockEventSource.latest().emit('agent-status-changed', { type: 'agent-status-changed' });
+      // Not JSON at all: dropped by the SSE wrapper, so it never reaches the
+      // board and cannot trigger anything.
       MockEventSource.latest().emit('agent-status-changed', 'not json at all {');
     });
 
-    expect(sessionsCalls()).toHaveLength(1);
+    // The unreadable-but-parsed frame still means something changed, so the
+    // board reloads persisted truth rather than showing a stale snapshot.
+    await waitFor(() => expect(sessionsCalls()).toHaveLength(2));
     expect(screen.getByLabelText(`status counts for ${session.id}`).textContent).toContain(
       '1 working',
     );
+  });
+
+  it('counts the sessions on the board when the page holds them all', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        200,
+        sessionList([
+          sessionSummary(),
+          sessionSummary({ id: 'bbbbbbbb-5555-6666-7777-888888888888', projectSlug: 'kiko' }),
+        ]),
+      ),
+    );
+    renderView();
+
+    await screen.findByText('2 sessions, most recent first.');
+    expect(screen.getAllByRole('listitem')).toHaveLength(2);
+  });
+
+  it('writes a one-agent card in the singular', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, sessionList([sessionSummary({ agentCount: 1 })])),
+    );
+    renderView();
+
+    await screen.findByText('1 agent');
+    expect(screen.getByText('1 session, most recent first.')).toBeDefined();
+  });
+
+  it('ignores a status event that arrives before the first snapshot exists', async () => {
+    const pending = deferred<Response>();
+    fetchMock.mockImplementation(() => pending.promise);
+    const session = sessionSummary();
+    renderView();
+    expect(screen.getByText('Loading sessions…')).toBeDefined();
+
+    act(() => {
+      MockEventSource.latest().emit('agent-status-changed', {
+        type: 'agent-status-changed',
+        sessionId: session.id,
+        agentId: 'agent-main',
+        status: 'completed',
+        previousStatus: 'working',
+        occurredAt: '2026-07-29T10:10:00.000Z',
+      });
+    });
+
+    // There is no snapshot to patch yet, and no reason to refetch one that is
+    // already in flight.
+    expect(screen.getByText('Loading sessions…')).toBeDefined();
+    expect(sessionsCalls()).toHaveLength(1);
+
+    await act(async () => {
+      pending.resolve(jsonResponse(200, sessionList([session])));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    // The snapshot arrives as the server told it - the dropped event was not
+    // replayed on top of it.
+    expect(screen.getByLabelText(`status counts for ${session.id}`).textContent).toContain(
+      '1 working',
+    );
+    expect(sessionsCalls()).toHaveLength(1);
+  });
+
+  it('drops a snapshot that lands after a newer refetch already replaced it', async () => {
+    const stale = sessionSummary({ projectSlug: 'stale-project' });
+    const fresh = sessionSummary({
+      id: 'cccccccc-9999-9999-9999-999999999999',
+      projectSlug: 'fresh-project',
+    });
+    const first = deferred<Response>();
+    let calls = 0;
+    fetchMock.mockImplementation(() => {
+      calls += 1;
+      return calls === 1 ? first.promise : Promise.resolve(jsonResponse(200, sessionList([fresh])));
+    });
+    renderView();
+    expect(screen.getByText('Loading sessions…')).toBeDefined();
+
+    // An ingest lands while the very first snapshot is still in flight.
+    act(() => {
+      MockEventSource.latest().emit('session-ingested', {
+        type: 'session-ingested',
+        sessionId: fresh.id,
+        occurredAt: '2026-07-29T10:10:00.000Z',
+      });
+    });
+    await screen.findByText('fresh-project');
+
+    await act(async () => {
+      first.resolve(jsonResponse(200, sessionList([stale])));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    // The superseded response never replaces the newer persisted truth.
+    expect(screen.getByText('fresh-project')).toBeDefined();
+    expect(screen.queryByText('stale-project')).toBeNull();
+  });
+
+  it('refetches persisted truth once when the stream recovers from an interruption', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, sessionList([sessionSummary()])));
+    renderView();
+    await screen.findByRole('list', { name: 'sessions' });
+
+    // The stream opening for the first time is not a recovery: no refetch.
+    act(() => {
+      MockEventSource.latest().open();
+    });
+    expect(sessionsCalls()).toHaveLength(1);
+
+    // Every transition that fired while disconnected is gone (SSE replays
+    // nothing), so the reopened stream must refetch the snapshot - exactly once.
+    act(() => {
+      MockEventSource.latest().fail();
+      MockEventSource.latest().open();
+    });
+    await waitFor(() => expect(sessionsCalls()).toHaveLength(2));
+  });
+
+  it('a mount on an already-open stream triggers no recovery refetch', async () => {
+    act(() => {
+      MockEventSource.latest().open();
+    });
+    fetchMock.mockResolvedValue(jsonResponse(200, sessionList([sessionSummary()])));
+    renderView();
+    await screen.findByRole('list', { name: 'sessions' });
+
+    // onStateChange runs immediately with the CURRENT state: an already-open
+    // stream was never interrupted, so nothing refetches.
+    expect(sessionsCalls()).toHaveLength(1);
+  });
+
+  it('a deliberately closed stream marks the hole but fires no refetch', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, sessionList([sessionSummary()])));
+    renderView();
+    await screen.findByRole('list', { name: 'sessions' });
+
+    // `closed` is terminal for EventSource: the board keeps its last snapshot
+    // and the shell's connection chip carries the bad news.
+    act(() => {
+      sse.close();
+    });
+    expect(sessionsCalls()).toHaveLength(1);
   });
 
   it('renders a null project slug and a missing timestamp honestly', async () => {
@@ -194,7 +341,7 @@ describe('LiveView', () => {
       jsonResponse(200, sessionList([sessionSummary({ projectSlug: null, lastActivityAt: null })])),
     );
     renderView();
-    await screen.findByText('no project');
+    await screen.findByText('project unknown');
     expect(screen.getByText('no timestamp')).toBeDefined();
   });
 
