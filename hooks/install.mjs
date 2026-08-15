@@ -8,10 +8,23 @@
  *   http://127.0.0.1:<port>/api/hooks/event
  *
  * SECURITY PROPERTIES (non-negotiable):
- * - The generated command references the auth token ONLY as a shell
- *   environment-variable expansion (default `$DASHBOARD_TOKEN`), resolved at
- *   FIRE time by the shell that runs the hook. This script NEVER reads,
- *   embeds, prints or otherwise touches the actual token value.
+ * - The token value appears in NO process's argv - not the hook shell's and
+ *   not curl's own. The generated command names the env var to curl via
+ *   `--variable '%NAME'` and references it in a single-quoted
+ *   `--expand-header` template (`{{NAME}}`), so curl reads the environment
+ *   ITSELF at fire time and the shell never expands the value into an
+ *   argument. The first shipped shape (`--header "... Bearer ${NAME}"`) let
+ *   any process able to read curl's argv harvest the token during the
+ *   up-to-3s POST window (review item M-11) - exactly the local multi-user
+ *   attacker the token exists to stop. Requires curl >= 8.3.0
+ *   (MIN_CURL_VERSION); on an older curl the command errors out at option
+ *   parse and delivers nothing - it degrades to zero telemetry, never to a
+ *   leaked token, and `|| true` keeps it non-blocking either way.
+ * - Reading the env at fire time (rather than baking a header file at install
+ *   time) keeps the env var the single runtime source of truth: rotating the
+ *   token is export-and-done, with no stale file to regenerate.
+ * - This script NEVER reads, embeds, prints or otherwise touches the actual
+ *   token value.
  * - This script never spawns processes and never talks to the network. Its
  *   only side effect is writing the ONE settings file the user explicitly
  *   points it at via `--out` (plus a timestamped backup of that same file).
@@ -56,6 +69,15 @@ export const DEFAULT_PORT = 4317;
 
 /** Env var the generated command reads the token from - at fire time. */
 export const DEFAULT_TOKEN_ENV = 'DASHBOARD_TOKEN';
+
+/**
+ * Oldest curl whose argv-free token mechanism the generated command relies on:
+ * `--variable`/`--expand-header` shipped in curl 8.3.0 (2023-09). This is a
+ * release fact, not a tunable. Older curls reject the unknown option at parse
+ * time and deliver nothing - fail-closed (no request, no token anywhere),
+ * never fail-open into the argv-leaking shape.
+ */
+export const MIN_CURL_VERSION = '8.3.0';
 
 /** Hard timeout (seconds) Claude Code applies to the hook command. */
 const HOOK_TIMEOUT_SECONDS = 5;
@@ -113,8 +135,26 @@ function assertValidTokenEnv(tokenEnv) {
 /**
  * The generated hook command. It runs on the Claude Code side (NOT inside
  * the dashboard server): reads the hook JSON from stdin and POSTs it to the
- * loopback ingest endpoint, authenticating with the token expanded from the
- * environment by the shell at fire time. Fail-silent by construction.
+ * loopback ingest endpoint. Fail-silent by construction.
+ *
+ * Token mechanics (M-11): the Authorization header is built by CURL, not by
+ * the shell. `--variable '%NAME'` imports the env var into curl's own
+ * variable space and the single-quoted `--expand-header` template
+ * (`{{NAME}}`) is expanded inside curl after argv parsing - so every argv
+ * position, in both the hook shell and curl, carries only the variable NAME.
+ * The quoting split is deliberate and load-bearing: the two token arguments
+ * are SINGLE-quoted (the shell must never expand them), while the delivery-id
+ * header stays DOUBLE-quoted (the shell MUST expand `$$`/`$(date)`/`$RANDOM`
+ * - it is per-firing and carries no secret). `--variable` must precede
+ * `--expand-header`: curl resolves variables in command-line order, and the
+ * reverse order would send the literal template as the header value.
+ *
+ * Failure modes, all non-blocking via `|| true` (verified on curl 8.7.1):
+ * - env var unset -> curl errors at option parse ("variable expansion
+ *   failure"), sends nothing. (The pre-M-11 shape sent an empty Bearer and
+ *   collected a 401 - same net effect: no event stored, hook exits 0.)
+ * - curl < MIN_CURL_VERSION -> unknown-option error at parse, sends nothing.
+ * Both print a short, token-free line to stderr and exit 0.
  */
 export function buildHookCommand({ port = DEFAULT_PORT, tokenEnv = DEFAULT_TOKEN_ENV } = {}) {
   assertValidPort(port);
@@ -122,7 +162,8 @@ export function buildHookCommand({ port = DEFAULT_PORT, tokenEnv = DEFAULT_TOKEN
   return (
     `curl --silent --fail --max-time 3 --output /dev/null ` +
     `--request POST --header 'Content-Type: application/json' ` +
-    `--header "Authorization: Bearer \${${tokenEnv}}" ` +
+    `--variable '%${tokenEnv}' ` +
+    `--expand-header 'Authorization: Bearer {{${tokenEnv}}}' ` +
     `--header "${DELIVERY_ID_HEADER}: ${DELIVERY_ID_EXPRESSION}" --data-binary @- ` +
     `'http://${LOOPBACK_MARKER}:${String(port)}${ENDPOINT_MARKER}' || true`
   );

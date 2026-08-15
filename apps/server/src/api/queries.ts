@@ -470,7 +470,108 @@ function byBinary(a: string, b: string): number {
   return a < b ? -1 : 1;
 }
 
-export function getCostSummary(db: SqliteDatabase, topN: number): CostSummaryDto {
+/**
+ * The persisted project slug for one session, or null when the session is
+ * unknown (or was ingested without a slug). The substrate provider takes this
+ * as its `slugOf` LOCATION HINT: the value is re-vetted against corpus
+ * containment before any path is touched, and every miss falls back to full
+ * enumeration — so a stale value can only cost a lookup its speed, never its
+ * answer or its containment.
+ */
+export function getSessionProjectSlug(db: SqliteDatabase, sessionId: string): string | null {
+  const row = db.prepare('SELECT project_slug FROM sessions WHERE id = ?').get(sessionId) as
+    { project_slug: string | null } | undefined;
+  return row === undefined ? null : row.project_slug;
+}
+
+/** The columns whose content the pricing fingerprint must not miss. */
+interface PricingFingerprintRow {
+  readonly model: string;
+  readonly bucket: string;
+  readonly usd_per_mtok: number;
+  readonly effective_from: string;
+}
+
+interface CostSummaryCacheEntry {
+  readonly stateKey: string;
+  readonly topN: number;
+  readonly summary: CostSummaryDto;
+}
+
+/**
+ * One cached summary per live connection handle. A WeakMap so production (one
+ * handle) holds exactly one entry, test suites with many temp databases can
+ * never bleed cached dollars into each other, and entries die with their
+ * connection. One entry — not an LRU over topN values — is a PROVISIONAL
+ * policy: the dashboard issues one topN per view, so a second slot has no
+ * known consumer yet.
+ */
+const costSummaryCache = new WeakMap<SqliteDatabase, CostSummaryCacheEntry>();
+
+/**
+ * Execution-count seam for the cache tests: `onScan` fires exactly when the
+ * token_usage rollup actually runs, so a test can prove a cache hit skipped
+ * the expensive scan by counting — never by timing.
+ */
+export interface CostSummaryProbe {
+  onScan(): void;
+}
+
+/**
+ * Cheap self-validating state key for the cost-summary cache, recomputed on
+ * every request. The cached dollars are a pure function of `token_usage`,
+ * `sessions` (slug lookup) and `model_pricing`, so the key must move whenever
+ * any of them can have changed:
+ *
+ * - `total_changes()` counts every row this CONNECTION has inserted, updated
+ *   or deleted, across all tables — verified empirically against
+ *   better-sqlite3 (2026-08-12): ingest INSERTs, retention DELETEs and even
+ *   an in-place UPDATE rewriting identical values all bump it. That covers
+ *   `token_usage` and `sessions` entirely, because only this server process
+ *   writes them (single-writer by design: ingest and retention run on this
+ *   same handle) — a hypothetical second writer to those tables is out of
+ *   threat scope, and WAL locking makes it a misconfiguration, not a flow.
+ * - `total_changes()` is blind to OTHER connections (also verified), and
+ *   `model_pricing` is the one table with a documented cross-connection write
+ *   path: the operator seeds rates via the sqlite3 CLI while the server runs.
+ *   So the table's full content rides in the key verbatim — ~25 rows
+ *   (PROVISIONAL: the WP-C1 seed's size), a trivial read next to the
+ *   token_usage scan being avoided.
+ *
+ * The fingerprint is serialized in JS over an ORDER BY'd SELECT rather than
+ * SQL group_concat, whose concatenation order SQLite does not guarantee.
+ * False invalidations (e.g. an unrelated `events` INSERT, or a rolled-back
+ * write — total_changes counts those too) merely recompute; the design errs
+ * only in the never-stale direction.
+ */
+function costSummaryStateKey(db: SqliteDatabase): string {
+  const changes = (db.prepare('SELECT total_changes() AS n').get() as { n: number }).n;
+  const pricing = db
+    .prepare(
+      `SELECT model, bucket, usd_per_mtok, effective_from
+       FROM model_pricing
+       ORDER BY model, bucket, effective_from`,
+    )
+    .all() as PricingFingerprintRow[];
+  return `${changes}|${JSON.stringify(pricing)}`;
+}
+
+export function getCostSummary(
+  db: SqliteDatabase,
+  topN: number,
+  probe?: CostSummaryProbe,
+): CostSummaryDto {
+  // One-entry cache behind the self-validating key above: without it, every
+  // /api/cost/summary request re-priced ALL of token_usage — a table whose
+  // retention is deliberately refused (cost history is the product), so the
+  // per-request scan grew linearly with corpus age forever. A hit returns the
+  // SAME DTO object by reference; routes only serialize it, never mutate it.
+  const stateKey = costSummaryStateKey(db);
+  const cached = costSummaryCache.get(db);
+  if (cached !== undefined && cached.stateKey === stateKey && cached.topN === topN) {
+    return cached.summary;
+  }
+  probe?.onScan();
   // ONE scan of `token_usage`, rolled up to (session, model, day) - the
   // coarsest grain from which all four sections below are derivable. The
   // previous shape ran the priced CTE four separate times, so every global cost
@@ -534,7 +635,7 @@ export function getCostSummary(db: SqliteDatabase, topN: number): CostSummaryDto
           .all(...top.map(([id]) => id)) as Array<{ id: string; project_slug: string | null }>);
   const slugs = new Map<string, string | null>(slugRows.map((row) => [row.id, row.project_slug]));
 
-  return {
+  const summary: CostSummaryDto = {
     totals,
     perModel,
     perDay,
@@ -544,6 +645,10 @@ export function getCostSummary(db: SqliteDatabase, topN: number): CostSummaryDto
       ...bucket,
     })),
   };
+  // Stored under the key OBSERVED BEFORE the scan — safe because better-sqlite3
+  // is synchronous: nothing on this connection can write between the two.
+  costSummaryCache.set(db, { stateKey, topN, summary });
+  return summary;
 }
 
 /**
@@ -558,13 +663,50 @@ export function getGlobalDag(db: SqliteDatabase, nodeLimit: number): GlobalDagDt
   const totalSessions = count('sessions');
   const totalAgents = count('agents');
   const totalEdges = count('orchestration_edges');
+  // Resolve WHICH agents make the cap first, then inject the id list into
+  // every scan - the sessionSummarySelect idiom. The previous shape priced
+  // and grouped the WHOLE token_usage table regardless of nodeLimit (SQLite
+  // cannot push the LIMIT through the LEFT JOIN onto the GROUP BY subquery),
+  // making the response scale with corpus size instead of response size
+  // (measured: 432 ms over a 752k-row usage table for the same payload).
+  // The ordering key lives entirely on `agents`, so the selection itself
+  // never touches token_usage. Parameter count is bounded by
+  // MAX_DAG_NODE_LIMIT (5000) bound twice per statement - well under
+  // SQLite's default variable cap (32766).
+  const ids = (
+    db
+      .prepare(
+        `SELECT id FROM agents
+         ORDER BY COALESCE(last_seen_at, first_seen_at, '') DESC, id ASC
+         LIMIT ?`,
+      )
+      .all(nodeLimit) as Array<{ id: string }>
+  ).map((row) => row.id);
+  const counts = (returnedAgents: number, returnedEdges: number): GlobalDagDto['counts'] => ({
+    totalSessions,
+    totalAgents,
+    totalEdges,
+    returnedAgents,
+    returnedEdges,
+    // Same arithmetic as before the id-list rewrite: a zero-node selection
+    // over a non-empty agents table is honestly truncated.
+    truncated: returnedAgents < totalAgents,
+  });
+  if (ids.length === 0) {
+    // An empty IN () list is invalid SQLite - and with no selected nodes
+    // there is nothing to price and no edge can have both endpoints.
+    return { nodes: [], edges: [], counts: counts(0, 0) };
+  }
+  const idList = `(${ids.map(() => '?').join(', ')})`;
+  // No `agent_id IS NOT NULL` arm: NULL never matches an IN list, so rows
+  // with a NULL agent_id are excluded by the same predicate that scopes the
+  // scan (as are rows whose agent_id matches no selected agent).
   const nodeRows = db
     .prepare(
-      `WITH ${PRICED_CTE},
+      `WITH ${pricedCte(`WHERE tu.agent_id IN ${idList}`)},
        usage_by_agent AS (
          SELECT agent_id, SUM(tokens) AS total_tokens, ${COST_USD} AS cost_usd, ${UNPRICED} AS unpriced_tokens
          FROM priced
-         WHERE agent_id IS NOT NULL
          GROUP BY agent_id
        )
        SELECT
@@ -577,34 +719,25 @@ export function getGlobalDag(db: SqliteDatabase, nodeLimit: number): GlobalDagDt
          COALESCE(u.unpriced_tokens, 0) AS unpriced_tokens
        FROM agents ag
        LEFT JOIN usage_by_agent u ON u.agent_id = ag.id
-       ORDER BY COALESCE(ag.last_seen_at, ag.first_seen_at, '') DESC, ag.id ASC
-       LIMIT ?`,
+       WHERE ag.id IN ${idList}
+       ORDER BY COALESCE(ag.last_seen_at, ag.first_seen_at, '') DESC, ag.id ASC`,
     )
-    .all(nodeLimit) as AgentNodeRow[];
+    .all(...ids, ...ids) as AgentNodeRow[];
+  // The edge scan reuses the SAME resolved id list instead of re-deriving the
+  // selection with a second ORDER BY/LIMIT subquery - nodes and edges can
+  // never disagree about membership.
   const edgeRows = db
     .prepare(
-      `WITH selected AS (
-         SELECT id FROM agents
-         ORDER BY COALESCE(last_seen_at, first_seen_at, '') DESC, id ASC
-         LIMIT ?
-       )
-       SELECT ${EDGE_COLUMNS}
+      `SELECT ${EDGE_COLUMNS}
        FROM orchestration_edges
-       WHERE parent_agent_id IN (SELECT id FROM selected)
-         AND child_agent_id IN (SELECT id FROM selected)
+       WHERE parent_agent_id IN ${idList}
+         AND child_agent_id IN ${idList}
        ORDER BY id ASC`,
     )
-    .all(nodeLimit) as EdgeRow[];
+    .all(...ids, ...ids) as EdgeRow[];
   return {
     nodes: nodeRows.map(toAgentNode),
     edges: edgeRows.map(toEdge),
-    counts: {
-      totalSessions,
-      totalAgents,
-      totalEdges,
-      returnedAgents: nodeRows.length,
-      returnedEdges: edgeRows.length,
-      truncated: nodeRows.length < totalAgents,
-    },
+    counts: counts(nodeRows.length, edgeRows.length),
   };
 }

@@ -4,8 +4,12 @@
  * edges the API served, it never reconstructs relationships client-side.
  * Provenance is always visible: solid edges are observed (`tool_use`),
  * dashed edges are inferred (`directory` / `task_notification` /
- * `queue_operation`), and the session's unattributed usage bucket is shown
- * even when it is zero.
+ * `queue_operation` / `legacy_explore`), and the session's unattributed usage
+ * bucket is shown even when it is zero.
+ *
+ * Review item M-9: every listed session also carries an "analyse" action that
+ * opens the same per-session cost analysis the cost view offers for its top-5,
+ * so cost analysability is not limited to the sessions that happen to rank.
  */
 import { useEffect, useState } from 'react';
 import { fetchSessions, fetchSessionTree } from '../api';
@@ -13,6 +17,7 @@ import type { AgentNodeDto, OrchestrationEdgeDto, SessionSummaryDto, SessionTree
 import { agentTypeLabel, formatTokens, formatUsd, projectLabel, shortId } from '../format';
 import { describeAgentGraph } from './chart-summary';
 import { computeLayeredLayout } from './layout/layered';
+import { SessionCostAnalysis } from './SessionCostAnalysis';
 import { statusMeta } from './status';
 import type { ViewProps } from './types';
 
@@ -122,7 +127,8 @@ function TreePanel({ tree }: { readonly tree: SessionTreeDto }) {
         {describeAgentGraph(tree.agents, tree.edges)}
       </p>
       <p className="legend-inline muted" aria-label="edge provenance legend">
-        — observed (tool_use) ┄ inferred (directory, task_notification, queue_operation)
+        — observed (tool_use) ┄ inferred (directory, task_notification, queue_operation,
+        legacy_explore)
       </p>
       <p className="unattributed" data-testid="unattributed">
         Unattributed to any agent: {formatTokens(tree.unattributed.totalTokens)} tokens ·{' '}
@@ -145,6 +151,9 @@ export function SessionsView({ token, onAuthRejected }: ViewProps) {
   const [list, setList] = useState<ListState>({ kind: 'loading' });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [treeState, setTreeState] = useState<TreeState>({ kind: 'idle' });
+  // Cost analysis reprices transcripts off disk (WP-C4/C5), so like the cost
+  // view it is opt-in per session, never fetched for every listed row.
+  const [analysedSessionId, setAnalysedSessionId] = useState<string | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -219,7 +228,7 @@ export function SessionsView({ token, onAuthRejected }: ViewProps) {
             {list.sessions.map((session) => {
               const meta = statusMeta(session.status);
               return (
-                <li key={session.id}>
+                <li key={session.id} className="session-item">
                   <button
                     type="button"
                     className={
@@ -246,6 +255,15 @@ export function SessionsView({ token, onAuthRejected }: ViewProps) {
                       </span>
                     )}
                   </button>
+                  <button
+                    type="button"
+                    className="link-button analyse-button"
+                    aria-pressed={session.id === analysedSessionId}
+                    aria-label={`analyse cost of session ${shortId(session.id)}`}
+                    onClick={() => setAnalysedSessionId(session.id)}
+                  >
+                    analyse
+                  </button>
                 </li>
               );
             })}
@@ -265,6 +283,20 @@ export function SessionsView({ token, onAuthRejected }: ViewProps) {
           {treeState.kind === 'ready' && <TreePanel tree={treeState.tree} />}
         </div>
       </div>
+
+      <h2>Session cost analysis</h2>
+      {analysedSessionId === null ? (
+        <p className="empty-state" data-testid="analysis-prompt">
+          Pick “analyse” on a session row to reprice it across its compaction boundaries and
+          estimate what it would have cost without delegation.
+        </p>
+      ) : (
+        <SessionCostAnalysis
+          token={token}
+          sessionId={analysedSessionId}
+          onAuthRejected={onAuthRejected}
+        />
+      )}
     </section>
   );
 }

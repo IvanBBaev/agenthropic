@@ -337,7 +337,97 @@ describe('POST /api/hooks/event applyStatus seam (WP-IN12)', () => {
         headers: AUTH,
       });
       expect(response.statusCode).toBe(500);
+      // Root-scope error handler contract: the uniform { error } shape with
+      // the raw driver/filesystem message suppressed.
+      expect(response.json()).toEqual({ error: 'Internal server error.' });
+      expect(response.body).not.toContain('disk full');
       expect(calls).toEqual([]);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+/**
+ * M-7 - the hook receiver lives on the ROOT Fastify scope (index.ts calls
+ * registerHookRoutes(app, ...) directly), outside the apiRoutes plugin whose
+ * scoped setErrorHandler cannot cover it. Before the root-scope handler in
+ * buildServer, a throwing append/applyStatus (SQLITE_BUSY/FULL, I/O) fell to
+ * Fastify's default handler and leaked the raw error message in a shape that
+ * matched neither ApiErrorSchema nor the declared 202. These tests pin the
+ * uniform { error } contract for both throw sites and for 400 validation.
+ */
+describe('POST /api/hooks/event error contract (M-7)', () => {
+  const buildApp = async (eventStore: EventStorePort, applyStatus?: () => void) => {
+    const app = buildServer({ token: TEST_TOKEN, schemaVersion: 1 });
+    await registerHookRoutes(app, { eventStore, now: () => FIXED_NOW, applyStatus });
+    await app.ready();
+    return app;
+  };
+
+  it('a throwing append is a 500 with the uniform shape and no raw SQLite message', async () => {
+    const failingStore: EventStorePort = {
+      append: () => {
+        throw new Error('SQLITE_BUSY: database is locked');
+      },
+      readAll: () => [],
+    };
+    const app = await buildApp(failingStore);
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: HOOK_EVENT_PATH,
+        payload: HOOK_BODY,
+        headers: AUTH,
+      });
+      expect(response.statusCode).toBe(500);
+      expect(response.json()).toEqual({ error: 'Internal server error.' });
+      expect(response.body).not.toContain('SQLITE_BUSY');
+      expect(response.body).not.toContain('database is locked');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('a throwing applyStatus is a 500 with the uniform shape; the append still landed', async () => {
+    const store = new InMemoryEventStore();
+    const app = await buildApp(store, () => {
+      throw new Error('SQLITE_FULL: database or disk is full');
+    });
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: HOOK_EVENT_PATH,
+        payload: HOOK_BODY,
+        headers: AUTH,
+      });
+      expect(response.statusCode).toBe(500);
+      expect(response.json()).toEqual({ error: 'Internal server error.' });
+      expect(response.body).not.toContain('SQLITE_FULL');
+      // The append committed before the seam threw - the row is durable, and
+      // the sender's retry dedupes to zero rows while re-firing the seam
+      // (WP-IN12), so nothing is lost.
+      expect(store.readAll()).toHaveLength(1);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('a 400 validation failure keeps the single-key { error } shape', async () => {
+    const store = new InMemoryEventStore();
+    const app = await buildApp(store);
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: HOOK_EVENT_PATH,
+        payload: HOOK_BODY,
+        headers: { ...AUTH, [HOOK_DELIVERY_ID_HEADER]: 'z'.repeat(MAX_DELIVERY_ID_LENGTH + 1) },
+      });
+      expect(response.statusCode).toBe(400);
+      const body = response.json() as Record<string, unknown>;
+      expect(Object.keys(body)).toEqual(['error']);
+      expect(typeof body['error']).toBe('string');
+      expect(store.readAll()).toHaveLength(0);
     } finally {
       await app.close();
     }

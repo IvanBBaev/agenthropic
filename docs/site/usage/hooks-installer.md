@@ -25,10 +25,16 @@
 >   entirely from the `~/.claude/projects/*.jsonl` transcripts — the Phase-0 probe
 >   found **0 of 463** spawn edges were hook-sourced. It follows that the *absence*
 >   of hook events means nothing about whether an agent ran.
-> - **Leak-free token acquisition is resolved.** The generated command references
->   the token only as a shell expansion — `Authorization: Bearer ${DASHBOARD_TOKEN}`
->   — expanded by the shell **at fire time**. `install.mjs` never reads, embeds or
->   prints the token value, and the POST target is hard-pinned to `127.0.0.1`.
+> - **Leak-free token acquisition is resolved — in two steps.** The generated
+>   command references the token by env-var **name** only; the value is read at
+>   fire time and `install.mjs` never reads, embeds or prints it, with the POST
+>   target hard-pinned to `127.0.0.1`. The *mechanism* was revised once
+>   (2026-08, review item M-11): the first shipped shape let the shell expand
+>   `${DASHBOARD_TOKEN}` into curl's argv, visible in the process table during
+>   the POST; the current shape has **curl itself** import the variable
+>   (`--variable '%DASHBOARD_TOKEN'` + `--expand-header`, curl ≥ 8.3.0), so the
+>   value appears in no argv at all. Details in
+>   [leak-free token acquisition](#leak-free-token-acquisition-security-critical).
 > - **`hooks/` is confirmed**, not "leaning-unconfirmed", and it contains no
 >   long-lived scripts: each hook is a single fail-silent `curl` POST written into
 >   the settings file. There is no `hooks/dispatch.sh` and no dispatcher indirection.
@@ -238,7 +244,7 @@ about is still safe to leave registered.
 > // The same command string is used for all four events.
 > {
 >   "hooks": {
->     "UserPromptSubmit": [{ "hooks": [{ "type": "command", "timeout": 5, "command": "curl --silent --fail --max-time 3 --output /dev/null --request POST --header 'Content-Type: application/json' --header \"Authorization: Bearer ${DASHBOARD_TOKEN}\" --data-binary @- 'http://127.0.0.1:4317/api/hooks/event' || true" }] }],
+>     "UserPromptSubmit": [{ "hooks": [{ "type": "command", "timeout": 5, "command": "curl --silent --fail --max-time 3 --output /dev/null --request POST --header 'Content-Type: application/json' --variable '%DASHBOARD_TOKEN' --expand-header 'Authorization: Bearer {{DASHBOARD_TOKEN}}' --header \"X-Agenthropic-Delivery-Id: $$-$(date +%s)-$RANDOM\" --data-binary @- 'http://127.0.0.1:4317/api/hooks/event' || true" }] }],
 >     "Stop":             [{ "hooks": [{ "type": "command", "timeout": 5, "command": "…same…" }] }],
 >     "SubagentStop":     [{ "hooks": [{ "type": "command", "timeout": 5, "command": "…same…" }] }],
 >     "PreCompact":       [{ "hooks": [{ "type": "command", "timeout": 5, "command": "…same…" }] }]
@@ -250,8 +256,13 @@ about is still safe to leave registered.
 > `--max-time`, a 5-second hook `timeout`, and a trailing `|| true`. A dashboard that
 > is down, slow, or missing must never block or slow a Claude Code session — hooks
 > are optional telemetry, and the JSONL transcripts remain the ground truth either
-> way. The `${DASHBOARD_TOKEN}` in the command is a literal shell expansion written
-> into the file; the value is resolved by the shell when the hook fires.
+> way. The quoting split in the command is deliberate: the two token arguments are
+> **single-quoted** (the shell must never expand them — curl imports the env var
+> itself, see
+> [leak-free token acquisition](#leak-free-token-acquisition-security-critical)),
+> while the `X-Agenthropic-Delivery-Id` header is **double-quoted** because the
+> shell *must* expand `$$-$(date +%s)-$RANDOM` at fire time — that is what makes
+> the id per-firing, and it carries no secret.
 
 ### The receiver they POST to: `HookSource` _(WP-IN3)_
 
@@ -353,19 +364,53 @@ reads from as **unresolved**, not merely unconfirmed detail — this page states
 precisely so `WP-X8` implements exactly this and nothing weaker, not to imply the design
 is finished.
 
-> **As built: resolved, and it satisfies every "never" in the table above.** The
-> generated command contains the *reference* `Authorization: Bearer
-> ${DASHBOARD_TOKEN}` — a shell expansion the shell performs **at fire time**, when
-> Claude Code runs the hook. Therefore:
+> **As built: resolved — in two steps, because the first attempt failed its own
+> bar.** The shape shipped 2026-07 referenced the token as a shell expansion —
+> `Authorization: Bearer ${DASHBOARD_TOKEN}`, expanded by the shell at fire time —
+> and this page originally claimed it "never appears in `argv`/`ps`". **That claim
+> was wrong** (review item M-11, fixed 2026-08): the *settings file* held only the
+> variable name, but the shell expanded the value into **curl's argv**, so for the
+> up-to-3-second life of each POST the token sat in the process table — readable
+> exactly the way the table above warns about (`ps`, `/proc/<pid>/cmdline`), and by
+> exactly the local-multi-user attacker the token defends against.
+>
+> The current command closes that window by never letting the shell touch the
+> token: it hands curl the env var **name** via `--variable '%DASHBOARD_TOKEN'`
+> and a **single-quoted** header template,
+> `--expand-header 'Authorization: Bearer {{DASHBOARD_TOKEN}}'`. Curl imports the
+> environment itself, *after* argv parsing, so every argv position — the hook
+> shell's and curl's own — carries only the variable name and the literal
+> `{{…}}` template. This is pinned by tests that simulate the shell's expansion
+> and assert a canary token value appears in no argv word
+> (`apps/server/test/hooks-installer.test.ts`, "token argv hygiene (M-11)").
+> The rest of the 2026-07 properties were true and still hold:
 >
 > - the settings file on disk holds the variable **name**, never the value;
-> - the token is never a CLI argument, so it never appears in `argv`/`ps`;
 > - the command writes to `/dev/null` (`--silent --output /dev/null`) and prints
->   nothing, so it cannot leak into a transcript;
+>   nothing on success, so it cannot leak into a transcript;
 > - `hooks/install.mjs` itself never reads, embeds or prints the token — it has no
 >   code path that touches the value at all;
 > - the server's log serializer strips `?token=` from logged URLs, and the token is
 >   never persisted or echoed.
+>
+> Three operational facts that come with the mechanism:
+>
+> - **Minimum curl 8.3.0** (`--variable`/`--expand-header`; macOS ships a new
+>   enough curl since 14.4, current Linux distributions likewise). An older curl
+>   rejects the unknown option at parse time and sends **nothing**: the hook still
+>   exits 0 (`|| true`), a short token-free error goes to stderr, and the session
+>   is never blocked — the mechanism degrades to zero telemetry, never to a leaked
+>   token. If no hook events arrive, check `curl --version` first.
+> - **Rotation is unchanged**: the environment stays the only runtime source of
+>   truth — no token-bearing file is written at install time, so rotating means
+>   exporting the new value, nothing more. A settings file installed before the
+>   M-11 fix is upgraded in place by re-running the installer (entries are
+>   recognized by their loopback endpoint, not their exact command text).
+> - **Residual exposure, honestly:** the fix closes the *cross-account* argv
+>   window. An attacker running as the **same** account (or root) can always read
+>   the token anyway — from the process environment, or from whatever profile or
+>   `launchd` plist exports it. No hook-command mechanism can defend that
+>   boundary; the defense there is not sharing the account.
 >
 > The env var name is configurable via `--token-env <NAME>` (default
 > `DASHBOARD_TOKEN`, validated as UPPER_SNAKE_CASE). How that variable gets into the

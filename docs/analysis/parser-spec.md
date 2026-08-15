@@ -74,7 +74,7 @@ normative MUSTs for the production parser.
 | 4 | Index subagents as **self-referential candidate parents** (depth-2 parents live inside depth-1 agent transcripts, not ROOT) | ✅ green | S2, S5 | `WP-IN8`, data-model |
 | 5 | Match block ids by **structural equality**, never substring (a `toolu_`/hex id also appears in prose — substring join forges false edges) | ✅ green | S3 | `WP-IN8` |
 | 6 | Sum tokens from **child transcripts**; parent rollup is ≈0% (measured **0.00%**, disjoint `message.id` sets) | ✅ green | S6 | `WP-IN7`, `WP-IN9` |
-| 7 | Legacy 2.1.70 bare-`Explore` fallback | ⚠️ **absent from corpus** — not exercisable; pointer session `site/08871133-82a3-4ae2-8303-781a8761e92a` | S1 | `WP-IN8` (defensive) |
+| 7 | Legacy 2.1.70 bare-`Explore` fallback | ✅ **implemented (defensive, 2026-08)** — narrowest reading: bare `{agentType:'Explore'}` sidecar (no `toolUseId`/`spawnDepth` keys) joined via a raw top-level `agentId` on a foreign `progress` record, only when every modern anchor misses; edge carries the DISTINCT `legacy_explore` provenance (persisted verbatim). Exercised by synthetic fixture `legacy-bare-explore` (`packages/test-fixtures`); still **absent from corpus**, so the shape stays PROVISIONAL until a real pre-2.1.71 transcript ratifies it; pointer session `site/08871133-82a3-4ae2-8303-781a8761e92a` | S1 | `WP-IN8` (defensive) |
 | 8 | Handle compaction resets (`compact_boundary` + `compactMetadata`, JSONL-native) | ✅ green | S2, S4 | `WP-IN8`, cost |
 | 9 | Concurrency-safe: key on **`session-uuid`**, never slug (two same-slug concurrent sessions must stay two roots) | ✅ green | S2, S5 | `WP-IN8` |
 | 10 | Version-detect / branch-on-shape (not on a version string) | ✅ green | S2 | `WP-IN8` |

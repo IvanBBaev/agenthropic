@@ -109,6 +109,12 @@ function countingFs(inner: CorpusFs, counters: FsCounters): CorpusFs {
       counters.bytes += Buffer.byteLength(text, 'utf8');
       return text;
     },
+    readFileTailConfined: (absPath, fromByte, maxBytes) => {
+      const tail = inner.readFileTailConfined(absPath, fromByte, maxBytes);
+      counters.files += 1;
+      counters.bytes += tail.data.length;
+      return tail;
+    },
   };
 }
 

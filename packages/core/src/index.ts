@@ -20,5 +20,12 @@ export { parseSession, SubstrateError, classifyRelativePath } from './parser/par
 export { extractCompactionBoundaries } from './parser/compaction';
 export type { CompactionBoundary } from './parser/compaction';
 export type { TokenBuckets, UsageRow, DedupedUsage, PricingEntry, SiblingWave } from './types';
-export type { ParsedSession, ParsedAgent, ParsedEdge, ParsedAgentType } from './parser/types';
+export { LEGACY_EXPLORE_EDGE_SOURCE } from './parser/types';
+export type {
+  ParsedSession,
+  ParsedAgent,
+  ParsedEdge,
+  ParsedEdgeSource,
+  ParsedAgentType,
+} from './parser/types';
 export type { SessionSubstrate, SubstrateFile } from './parser/substrate';

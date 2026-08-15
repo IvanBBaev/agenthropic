@@ -163,9 +163,11 @@ place.
 > the ones sitting at zero (they get a dimmed `bucket-zero` class rather than being
 > filtered out) — a board that hides empty buckets would let a reader infer "no
 > errors" from an absent error count. It fetches `GET /api/sessions` (page size 50)
-> and then stays live off two typed SSE frames: `session-ingested` triggers a
+> and then stays live off three typed SSE frames: `session-ingested` triggers a
 > refetch, `agent-status-changed` patches the affected session's counts in place and
-> falls back to a refetch when the patch does not match anything it is holding.
+> falls back to a refetch when the patch does not match anything it is holding, and
+> `ingest-failed` raises a dismissible banner naming the quarantined session and the
+> failure reason.
 > Heartbeats are SSE *comment* frames and never surface to the client. Where a
 > session has tokens that could not be priced, the row shows `~ n unpriced`
 > alongside its dollar figure rather than absorbing them into it.
@@ -391,8 +393,9 @@ Two things follow directly from "no token → no data/stream":
 >   server's log serializer strips it.
 > - The client exposes four connection states — `connecting → open → reconnecting →
 >   closed` — surfaced in the header chip. Malformed frames are dropped silently
->   rather than crashing the view, and only two typed server frames exist:
->   `session-ingested` and `agent-status-changed`.
+>   rather than crashing the view, and exactly three typed server frames exist:
+>   `session-ingested`, `agent-status-changed` and `ingest-failed` (the shared list
+>   in `packages/shared/src/realtime/event-types.ts` is authoritative for both ends).
 > - **"Resilient" resolved to the browser's built-in `EventSource` reconnect**, hinted
 >   by a server-sent `retry:` field — there is no custom backoff schedule, and there
 >   is **no replay**: a reconnect re-subscribes to the live feed, it does not

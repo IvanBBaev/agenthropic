@@ -390,6 +390,9 @@ describe('/api/sessions/:id/cost-analysis (WP-C4 + WP-C5)', () => {
       readFileConfined: () => {
         throw new Error('unreachable');
       },
+      readFileTailConfined: () => {
+        throw new Error('unreachable');
+      },
     };
     const provider = createSubstrateProvider({
       env: { CLAUDE_PROJECTS_DIR: '/synthetic/crafted-corpus' },

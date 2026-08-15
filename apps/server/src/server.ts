@@ -14,6 +14,7 @@
  * never echoed in any response.
  */
 import Fastify, {
+  type FastifyError,
   type FastifyInstance,
   type FastifyRequest,
   type FastifyServerOptions,
@@ -22,6 +23,7 @@ import { Type, type TypeBoxTypeProvider } from '@fastify/type-provider-typebox';
 import { isAllowedOrigin, redactTokenInUrl, timingSafeTokenEqual } from '@agenthropic/shared';
 import { apiRoutes } from './api/routes';
 import type { SubstrateProvider } from './api/substrate-provider';
+import type { SkipReason } from './corpus/fs-port';
 import type { SqliteDatabase } from './db/connection';
 import { RealtimeHub } from './realtime/hub';
 
@@ -51,12 +53,48 @@ export interface BuildServerOptions {
    * absent, that endpoint replies 503 and every other route is unaffected.
    */
   readonly substrateProvider?: SubstrateProvider;
+  /**
+   * Cumulative ingest skip counters (review H-2): a skipped corpus file
+   * freezes that session's dollar totals, so the running total must be
+   * visible without log access. When absent (a server built without ingest
+   * wiring) /api/health omits the field rather than faking a zero.
+   */
+  readonly skipCounters?: () => Readonly<Partial<Record<SkipReason, number>>>;
+  /**
+   * Boot ingest phase (review M-16). The composition root now binds the
+   * listening socket BEFORE the startup replay tick, so there is a real window
+   * in which the server answers but the corpus is still being re-read —
+   * /api/health names it 'replaying' so a probe can tell "warming up" from
+   * "idle and current". When absent (a server built without ingest wiring) the
+   * field is omitted rather than faking a phase.
+   */
+  readonly ingestPhase?: () => 'replaying' | 'idle';
+  /**
+   * Wall-clock duration of the last completed watcher pass (review M-15).
+   * Returns null while no pass has finished yet; /api/health then omits the
+   * field — a fake 0 would read as "instant poll", the wrong fact. When the
+   * seam itself is absent (a server built without ingest wiring) the field is
+   * likewise omitted.
+   */
+  readonly tickDurationMs?: () => number | null;
 }
 
 const HealthResponseSchema = Type.Object(
   {
     status: Type.Literal('ok'),
     schemaVersion: Type.Integer({ minimum: 0 }),
+    // Keys are SkipReason members - enforced at compile time by the
+    // skipCounters seam type; the wire schema stays an open string record so
+    // a new skip reason can never desync route schema from reporter.
+    ingestSkips: Type.Optional(Type.Record(Type.String(), Type.Integer({ minimum: 0 }))),
+    // 'replaying' between the loopback bind and the end of the startup replay
+    // tick, 'idle' after (review M-16). `status` stays 'ok' throughout: a
+    // replaying server is healthy, just not yet current.
+    ingest: Type.Optional(Type.Union([Type.Literal('replaying'), Type.Literal('idle')])),
+    // Duration of the last completed corpus pass (review M-15) — how long the
+    // poll ACTUALLY takes, so an operator can see it approaching the poll
+    // interval. Omitted until a pass has finished.
+    lastTickDurationMs: Type.Optional(Type.Number({ minimum: 0 })),
   },
   { additionalProperties: false },
 );
@@ -131,6 +169,24 @@ export function buildServer(options: BuildServerOptions) {
   const app: FastifyInstance = Fastify({ logger: buildLoggerOptions(options.logger ?? false) });
   const typed = app.withTypeProvider<TypeBoxTypeProvider>();
 
+  // Uniform error contract for ROOT-scope routes. The hook receiver is
+  // registered on this scope by the composition root (index.ts), OUTSIDE the
+  // apiRoutes plugin whose scoped setErrorHandler covers only its own
+  // encapsulation - without this handler a throwing event-store append
+  // (SQLITE_BUSY/FULL, I/O) fell through to Fastify's default handler and
+  // leaked the raw driver message in a shape matching no declared schema.
+  // 5xx details stay server-side: the raw error goes to the log (a no-op
+  // sink when logging is off), never to the client.
+  app.setErrorHandler((error: FastifyError, request, reply) => {
+    const statusCode = error.statusCode ?? 500;
+    let message = error.message;
+    if (statusCode >= 500) {
+      request.log.error(error);
+      message = 'Internal server error.';
+    }
+    void reply.code(statusCode).send({ error: message });
+  });
+
   // Security gate - registered before ANY route so no /api/* route can ever
   // be reached unauthenticated.
   //
@@ -162,10 +218,17 @@ export function buildServer(options: BuildServerOptions) {
     }
   });
 
-  typed.get('/api/health', { schema: { response: { 200: HealthResponseSchema } } }, async () => ({
-    status: 'ok' as const,
-    schemaVersion,
-  }));
+  typed.get('/api/health', { schema: { response: { 200: HealthResponseSchema } } }, async () => {
+    // "No pass yet" and "no seam" both OMIT the field — never a fake number.
+    const lastTickDurationMs = options.tickDurationMs?.() ?? null;
+    return {
+      status: 'ok' as const,
+      schemaVersion,
+      ...(options.skipCounters === undefined ? {} : { ingestSkips: options.skipCounters() }),
+      ...(options.ingestPhase === undefined ? {} : { ingest: options.ingestPhase() }),
+      ...(lastTickDurationMs === null ? {} : { lastTickDurationMs }),
+    };
+  });
 
   // Active SSE connections, so server shutdown closes them promptly.
   const activeStreams = new Set<() => void>();

@@ -16,9 +16,13 @@ export type AgentType = 'main' | 'subagent';
  */
 export type AgentStatus = 'working' | 'waiting' | 'completed' | 'error' | 'unknown';
 
-/** The four structural spawn-edge join paths (parser-spec section 4). */
+/**
+ * The four structural spawn-edge join paths (parser-spec section 4), plus the
+ * `legacy_explore` heuristic join (parser-spec gate #7) - kept distinct so a
+ * name-based legacy guess is never persisted as an observed spawn.
+ */
 export type OrchestrationEdgeSource =
-  'tool_use' | 'directory' | 'task_notification' | 'queue_operation';
+  'tool_use' | 'directory' | 'task_notification' | 'queue_operation' | 'legacy_explore';
 
 /** The five priced token buckets (parser-spec section 5.4). */
 export type TokenBucket = 'input' | 'output' | 'cache_read' | 'cache_write_5m' | 'cache_write_1h';

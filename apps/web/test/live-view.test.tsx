@@ -5,8 +5,14 @@
  * fetch and EventSource are mocked - no real server, no real ~/.claude tree.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, render, screen, waitFor, fireEvent } from '@testing-library/react';
-import { LiveView, SESSION_LIMIT } from '../src/views/LiveView';
+import { act, cleanup, render, screen, waitFor, fireEvent, within } from '@testing-library/react';
+import {
+  CLOCK_INTERVAL_MS,
+  ingestedSessionId,
+  LiveView,
+  SESSION_LIMIT,
+  toIngestFailureNotice,
+} from '../src/views/LiveView';
 import { createSseClient, type SseClient } from '../src/sse';
 import { deferred, jsonResponse, sessionList, sessionSummary, statusCounts } from './fixtures';
 import { MockEventSource } from './mock-event-source';
@@ -26,6 +32,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -355,5 +362,258 @@ describe('LiveView', () => {
       MockEventSource.latest().emit('session-ingested', { type: 'session-ingested' });
     });
     expect(sessionsCalls()).toHaveLength(1);
+  });
+
+  describe('ingest-failed banners', () => {
+    const FAILED_SESSION = 'ffffffff-0000-0000-0000-000000000001';
+
+    function emitIngestFailure(overrides: Record<string, unknown> = {}): void {
+      act(() => {
+        MockEventSource.latest().emit('ingest-failed', {
+          type: 'ingest-failed',
+          payload: {
+            sessionId: FAILED_SESSION,
+            reason: 'refusing to price at $0: unknown model id',
+            attempt: 1,
+            willRetry: true,
+            occurredAt: '2026-07-29T10:10:00.000Z',
+            ...overrides,
+          },
+        });
+      });
+    }
+
+    it('renders a dismissible banner naming the session and reason, without a refetch', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, sessionList([sessionSummary()])));
+      renderView();
+      await screen.findByRole('list', { name: 'sessions' });
+
+      emitIngestFailure();
+
+      const banner = screen.getByRole('alert');
+      expect(banner.textContent).toContain('Ingest failed for session');
+      expect(banner.textContent).toContain('ffffffff…');
+      expect(banner.textContent).toContain('refusing to price at $0: unknown model id');
+      expect(banner.textContent).toContain('attempt 1');
+      expect(banner.textContent).toContain('will retry');
+      // A failed session never reached the read API: nothing new to fetch.
+      expect(sessionsCalls()).toHaveLength(1);
+
+      fireEvent.click(within(banner).getByRole('button', { name: 'Dismiss' }));
+      expect(screen.queryByRole('alert')).toBeNull();
+    });
+
+    it('marks a quarantined session as such when the watcher gives up', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, sessionList([sessionSummary()])));
+      renderView();
+      await screen.findByRole('list', { name: 'sessions' });
+
+      emitIngestFailure({ attempt: 3, willRetry: false });
+
+      const banner = screen.getByRole('alert');
+      expect(banner.textContent).toContain('attempt 3');
+      expect(banner.textContent).toContain('quarantined until its transcript changes');
+    });
+
+    it('replaces the banner on a repeat failure instead of stacking one per attempt', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, sessionList([sessionSummary()])));
+      renderView();
+      await screen.findByRole('list', { name: 'sessions' });
+
+      emitIngestFailure({ attempt: 1 });
+      emitIngestFailure({ attempt: 2 });
+
+      const banners = screen.getAllByRole('alert');
+      expect(banners).toHaveLength(1);
+      expect(banners[0]?.textContent).toContain('attempt 2');
+    });
+
+    it('keeps one banner per failed session and dismisses them independently', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, sessionList([sessionSummary()])));
+      renderView();
+      await screen.findByRole('list', { name: 'sessions' });
+
+      emitIngestFailure();
+      emitIngestFailure({ sessionId: 'eeeeeeee-0000-0000-0000-000000000002', reason: 'other' });
+      const banners = screen.getAllByRole('alert');
+      expect(banners).toHaveLength(2);
+
+      fireEvent.click(within(banners[0] as HTMLElement).getByRole('button', { name: 'Dismiss' }));
+
+      const remaining = screen.getAllByRole('alert');
+      expect(remaining).toHaveLength(1);
+      expect(remaining[0]?.textContent).toContain('eeeeeeee…');
+    });
+
+    it("clears a session's banner when a later ingest for it succeeds", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, sessionList([sessionSummary()])));
+      renderView();
+      await screen.findByRole('list', { name: 'sessions' });
+
+      emitIngestFailure();
+      emitIngestFailure({ sessionId: 'eeeeeeee-0000-0000-0000-000000000002' });
+      expect(screen.getAllByRole('alert')).toHaveLength(2);
+
+      act(() => {
+        MockEventSource.latest().emit('session-ingested', {
+          type: 'session-ingested',
+          sessionId: FAILED_SESSION,
+          occurredAt: '2026-07-29T10:11:00.000Z',
+        });
+      });
+
+      // The resolved failure is gone, the unresolved one stays, and the
+      // ingest still refetches the snapshot.
+      const remaining = screen.getAllByRole('alert');
+      expect(remaining).toHaveLength(1);
+      expect(remaining[0]?.textContent).toContain('eeeeeeee…');
+      await waitFor(() => expect(sessionsCalls()).toHaveLength(2));
+    });
+
+    it('leaves banners alone when a session-ingested frame carries no readable id', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, sessionList([sessionSummary()])));
+      renderView();
+      await screen.findByRole('list', { name: 'sessions' });
+
+      emitIngestFailure();
+      act(() => {
+        MockEventSource.latest().emit('session-ingested', { type: 'session-ingested' });
+      });
+
+      expect(screen.getAllByRole('alert')).toHaveLength(1);
+      await waitFor(() => expect(sessionsCalls()).toHaveLength(2));
+    });
+
+    it('counts unreadable ingest-failed frames instead of dropping them', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, sessionList([sessionSummary()])));
+      renderView();
+      await screen.findByRole('list', { name: 'sessions' });
+
+      act(() => {
+        MockEventSource.latest().emit('ingest-failed', { type: 'ingest-failed' });
+      });
+      expect(screen.getByRole('alert').textContent).toContain(
+        '1 ingest-failure frame arrived in a shape this build cannot read',
+      );
+
+      act(() => {
+        MockEventSource.latest().emit('ingest-failed', {
+          type: 'ingest-failed',
+          payload: { sessionId: 42 },
+        });
+      });
+      const banner = screen.getByRole('alert');
+      expect(banner.textContent).toContain('2 ingest-failure frames arrived');
+
+      fireEvent.click(within(banner).getByRole('button', { name: 'Dismiss' }));
+      expect(screen.queryByRole('alert')).toBeNull();
+    });
+
+    it('shows a failure banner that arrives while the snapshot is still loading', async () => {
+      const pending = deferred<Response>();
+      fetchMock.mockImplementation(() => pending.promise);
+      renderView();
+      expect(screen.getByText('Loading sessions…')).toBeDefined();
+
+      emitIngestFailure();
+
+      expect(screen.getByRole('alert').textContent).toContain('Ingest failed for session');
+      expect(screen.getByText('Loading sessions…')).toBeDefined();
+
+      await act(async () => {
+        pending.resolve(jsonResponse(200, sessionList([sessionSummary()])));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      // The banner survives the snapshot's arrival - a quarantined session is
+      // still absent from it.
+      expect(screen.getByRole('alert')).toBeDefined();
+      expect(screen.getByRole('list', { name: 'sessions' })).toBeDefined();
+    });
+  });
+
+  describe('recency clock', () => {
+    it('keeps relative-time labels moving on a quiet stream without refetching', async () => {
+      vi.useFakeTimers();
+      const lastActivityAt = new Date(Date.now() - 60_000).toISOString();
+      fetchMock.mockResolvedValue(
+        jsonResponse(200, sessionList([sessionSummary({ lastActivityAt })])),
+      );
+      renderView();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.getByText('just now')).toBeDefined();
+
+      // Two ticks move the clock past the 90 s "just now" window; nothing
+      // else happens - no SSE traffic, no refetch.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CLOCK_INTERVAL_MS * 2);
+      });
+      expect(screen.getByText('2m ago')).toBeDefined();
+      expect(sessionsCalls()).toHaveLength(1);
+    });
+
+    it('stops the clock on unmount', async () => {
+      vi.useFakeTimers();
+      fetchMock.mockResolvedValue(jsonResponse(200, sessionList([sessionSummary()])));
+      const view = renderView();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      const before = vi.getTimerCount();
+      expect(before).toBeGreaterThan(0);
+
+      view.unmount();
+      expect(vi.getTimerCount()).toBe(before - 1);
+    });
+  });
+});
+
+describe('toIngestFailureNotice', () => {
+  const payload = {
+    sessionId: 's',
+    reason: 'r',
+    attempt: 2,
+    willRetry: false,
+    occurredAt: '2026-07-29T10:10:00.000Z',
+  };
+
+  it('narrows a well-formed frame to the fields the board renders', () => {
+    expect(toIngestFailureNotice({ type: 'ingest-failed', payload })).toEqual({
+      sessionId: 's',
+      reason: 'r',
+      attempt: 2,
+      willRetry: false,
+    });
+  });
+
+  it.each([
+    ['a non-object frame', 42],
+    ['a null frame', null],
+    ['a missing payload', { type: 'ingest-failed' }],
+    ['a null payload', { type: 'ingest-failed', payload: null }],
+    ['a non-object payload', { type: 'ingest-failed', payload: 'boom' }],
+    ['a non-string sessionId', { payload: { ...payload, sessionId: 7 } }],
+    ['a non-string reason', { payload: { ...payload, reason: null } }],
+    ['a non-number attempt', { payload: { ...payload, attempt: '1' } }],
+    ['a non-boolean willRetry', { payload: { ...payload, willRetry: 'yes' } }],
+  ])('returns null for %s', (_label, frame) => {
+    expect(toIngestFailureNotice(frame)).toBeNull();
+  });
+});
+
+describe('ingestedSessionId', () => {
+  it('returns the id when the frame carries a string sessionId', () => {
+    expect(ingestedSessionId({ sessionId: 'abc' })).toBe('abc');
+  });
+
+  it.each([
+    ['a non-object frame', 'plain string'],
+    ['a null frame', null],
+    ['a missing sessionId', {}],
+    ['a non-string sessionId', { sessionId: 9 }],
+  ])('returns null for %s', (_label, frame) => {
+    expect(ingestedSessionId(frame)).toBeNull();
   });
 });

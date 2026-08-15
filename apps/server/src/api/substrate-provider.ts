@@ -9,15 +9,19 @@
  * port (no write capability exists) and the same containment-safe enumeration /
  * build path the ingest runner uses — root resolved via {@link resolveCorpusRoot},
  * names vetted by {@link enumerateSessions}, files read by
- * {@link buildSessionSubstrate}. The provider never fabricates paths from the
- * caller-supplied session id: the id is only COMPARED against enumerated refs,
- * so a crafted id can never traverse anywhere. A {@link ContainmentError} from
- * a crafted corpus is deliberately NOT swallowed — it propagates to the route,
- * which surfaces a detail-free 500.
+ * {@link buildSessionSubstrate}. Untrusted values become path components in
+ * exactly ONE place — the {@link resolveHintedRef} fast path — and only after
+ * passing the same vetting enumeration applies to names it reads off disk; any
+ * hint that fails vetting is dropped WITHOUT touching the path and the lookup
+ * falls back to full enumeration, where the caller-supplied id is only
+ * COMPARED against enumerated refs. A {@link ContainmentError} from a crafted
+ * corpus is deliberately NOT swallowed — it propagates to the route, which
+ * surfaces a detail-free 500.
  *
  * Returned data carries relative paths / parsed records only — no absolute
  * corpus paths and no secrets ever leave this module.
  */
+import { join } from 'node:path';
 import {
   extractCompactionBoundaries,
   parseSession,
@@ -26,12 +30,17 @@ import {
 } from '@agenthropic/core';
 import {
   DEFAULT_READ_LIMITS,
+  assertWithinRoot,
   buildSessionSubstrate,
   enumerateSessions,
+  isSafeEntryName,
+  isSessionUuid,
   nodeCorpusFs,
   resolveCorpusRoot,
   type CorpusFs,
+  type LstatInfo,
   type ReadLimits,
+  type SessionRef,
 } from '../corpus/index';
 
 /** One session's parsed reconstruction plus its compaction boundaries. */
@@ -84,6 +93,85 @@ export interface SubstrateProviderDeps {
   readonly homedir?: () => string;
   /** Read-limit overrides; merged over {@link DEFAULT_READ_LIMITS}. */
   readonly limits?: Partial<ReadLimits>;
+  /**
+   * Optional DB-backed location hint: the persisted `sessions.project_slug`
+   * for a session id, or null when no row (or no slug) exists. Purely a
+   * PERFORMANCE dep — a resolved hint skips the full-corpus enumeration that
+   * used to run on every cost-analysis request; a hint that is absent, stale,
+   * or fails vetting silently falls back to enumeration, which stays the
+   * correctness anchor. Wired by the composition root as
+   * `(id) => getSessionProjectSlug(db, id)`.
+   */
+  readonly slugOf?: (sessionId: string) => string | null;
+}
+
+/** lstat, returning `null` instead of throwing when the entry is gone/unreadable. */
+function tryLstat(fs: CorpusFs, absPath: string): LstatInfo | null {
+  try {
+    return fs.lstat(absPath);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fast-path ref resolution from a DB slug hint, instead of enumerating the
+ * whole corpus (which every cost-analysis request used to do: an O(corpus)
+ * readdir/lstat sweep — hundreds of ms of frozen event loop on a real corpus —
+ * to find one session whose slug the `sessions` table already knows).
+ *
+ * This is the ONE place a caller-supplied session id and a DB value become
+ * path components, so both are admitted only in exactly the shape enumeration
+ * itself would have produced, with the same checks in the same order:
+ * `isSessionUuid` on the id; `isSafeEntryName` + `assertWithinRoot` + a real
+ * non-symlink directory on the slug (a symlinked slug dir is never followed —
+ * a confined read's O_NOFOLLOW guards only the FINAL path component, so an
+ * intermediate symlink must be rejected here, mirroring enumeration's
+ * isRealDir); `assertWithinRoot` + a regular non-symlink file on the main
+ * transcript. `assertWithinRoot` is belt-and-braces on both paths: after
+ * `isSafeEntryName` (and the UUID gate) it cannot fire, exactly as on the
+ * enumeration path.
+ *
+ * Vetting-failure verdicts deliberately DIFFER from enumeration's: there, a
+ * traversal-shaped name was read off disk and proves a crafted corpus
+ * (ContainmentError, never swallowed); here it came from a DB row that is
+ * merely a HINT — the path is never touched and the caller falls back to
+ * enumeration, which answers from disk-vetted names only.
+ *
+ * Returns null on ANY miss — no dep, non-canonical id, no row, unsafe slug,
+ * or a stale hint (entry gone or of the wrong kind) — never a partial ref.
+ */
+function resolveHintedRef(
+  fs: CorpusFs,
+  corpusRoot: string,
+  sessionId: string,
+  slugOf: ((sessionId: string) => string | null) | undefined,
+): SessionRef | null {
+  if (slugOf === undefined || !isSessionUuid(sessionId)) {
+    return null;
+  }
+  const slug = slugOf(sessionId);
+  if (slug === null || !isSafeEntryName(slug)) {
+    return null;
+  }
+  const slugDirAbs = join(corpusRoot, slug);
+  assertWithinRoot(corpusRoot, slugDirAbs);
+  const slugStat = tryLstat(fs, slugDirAbs);
+  if (slugStat === null || !slugStat.isDirectory || slugStat.isSymbolicLink) {
+    return null;
+  }
+  const mainAbsPath = join(slugDirAbs, `${sessionId}.jsonl`);
+  assertWithinRoot(corpusRoot, mainAbsPath);
+  const mainStat = tryLstat(fs, mainAbsPath);
+  if (mainStat === null || !mainStat.isFile || mainStat.isSymbolicLink) {
+    return null;
+  }
+  return {
+    sessionId,
+    projectSlug: slug,
+    mainAbsPath,
+    sessionDirAbs: join(slugDirAbs, sessionId),
+  };
 }
 
 /** Build the production substrate provider over the read-only corpus port. */
@@ -103,22 +191,28 @@ export function createSubstrateProvider(deps: SubstrateProviderDeps): SubstrateP
         return { kind: 'no-corpus-root' };
       }
 
-      const enumeration = enumerateSessions(fs, corpusRoot);
-      if (enumeration.kind === 'unreadable-root') {
-        // A listing that failed proves nothing about the session — answering
-        // "not found" here would deny a session nobody looked at.
-        return { kind: 'unreadable-root' };
-      }
-      const ref = enumeration.refs.find((candidate) => candidate.sessionId === sessionId);
-      if (ref === undefined) {
-        return { kind: 'session-not-found' };
+      // The DB slug hint first: O(1) lstat probes instead of an O(corpus)
+      // sweep. Any miss falls through to enumeration below — the hint can
+      // only ever cost a lookup its speed, never its answer.
+      let ref = resolveHintedRef(fs, corpusRoot, sessionId, deps.slugOf);
+      if (ref === null) {
+        const enumeration = enumerateSessions(fs, corpusRoot);
+        if (enumeration.kind === 'unreadable-root') {
+          // A listing that failed proves nothing about the session — answering
+          // "not found" here would deny a session nobody looked at.
+          return { kind: 'unreadable-root' };
+        }
+        ref = enumeration.refs.find((candidate) => candidate.sessionId === sessionId) ?? null;
+        if (ref === null) {
+          return { kind: 'session-not-found' };
+        }
       }
 
       const built = buildSessionSubstrate(fs, ref, limits);
       if (built.kind === 'no-substrate') {
-        // The file IS there (it was enumerated a line ago); it just holds
-        // nothing parseable — an empty main, no agents. Reporting that as
-        // "not found" would deny a file this very call has seen.
+        // The file IS there (both ref paths lstat'ed it a moment ago); it just
+        // holds nothing parseable — an empty main, no agents. Reporting that
+        // as "not found" would deny a file this very call has seen.
         return { kind: 'no-substrate' };
       }
 

@@ -11,8 +11,10 @@
  * hex to a parent spawn-block id — from the `agent-<hex>.meta.json` sidecar
  * (primary), a parent-side async `toolUseResult`, or a queue-operation
  * `<task-id>` — then classified tool_use -> queue_operation -> task_notification
- * -> orphan. Ids are matched by structural POSITION, never substring (gate #5):
- * a `tool_use.id` mentioned in prose text must never forge an edge.
+ * -> legacy_explore (gate #7, pre-2.1.71 bare-`Explore` sidecars joined via a
+ * progress-line `agentId`) -> orphan. Ids are matched by structural POSITION,
+ * never substring (gate #5): a `tool_use.id` mentioned in prose text must
+ * never forge an edge.
  *
  * Loud vs tolerant (a MUST distinction):
  * - THROW {@link SubstrateError} on structurally malformed / contradictory
@@ -27,10 +29,10 @@
  * - TOLERATE records of an unknown/unrecognized `type` (stored, not crashed):
  *   the parser simply ignores record types it has no rule for.
  */
-import type { OrchestrationEdgeSource } from '@agenthropic/shared';
 import type { DedupedUsage, TokenBuckets, UsageRow } from '../types';
 import { dedupeUsageByMessageId } from '../usage/dedupe';
-import type { ParsedAgent, ParsedEdge, ParsedSession } from './types';
+import { LEGACY_EXPLORE_EDGE_SOURCE } from './types';
+import type { ParsedAgent, ParsedEdge, ParsedEdgeSource, ParsedSession } from './types';
 import type { SessionSubstrate } from './substrate';
 
 /** Structurally malformed or self-contradictory substrate — a loud failure. */
@@ -171,7 +173,24 @@ interface AgentSidecar {
   /** Dispatched subagent type (`general-purpose`, `Explore`, `Plan`, …). */
   agentType: string | undefined;
   spawnDepth: number | undefined;
+  /**
+   * True only for the pre-2.1.71 bare sidecar shape (gate #7): exactly
+   * `agentType: 'Explore'` with the `toolUseId` and `spawnDepth` KEYS absent.
+   * Key-PRESENCE, not value checks, on purpose: a sidecar carrying a malformed
+   * `toolUseId: 123` is a broken MODERN sidecar and must stay on the orphan
+   * path — treating it as legacy would fabricate a parent from bad data.
+   */
+  isLegacyBareExplore: boolean;
 }
+
+/**
+ * The only sidecar `agentType` the pre-2.1.71 legacy shape was ever observed
+ * with (phase0-probe: bare `{agentType: 'Explore'}` metas, 2 files). The
+ * fallback deliberately does NOT widen to other agent types: that would be
+ * inference beyond the evidence. PROVISIONAL until a real pre-2.1.71
+ * transcript ratifies the shape.
+ */
+const LEGACY_EXPLORE_AGENT_TYPE = 'Explore';
 
 // --- sessionId derivation ---------------------------------------------------
 
@@ -271,6 +290,10 @@ function collectSidecars(files: readonly ParsedFile[]): Map<string, AgentSidecar
       toolUseId: asString(record['toolUseId']),
       agentType: asString(record['agentType']),
       spawnDepth: asNumber(record['spawnDepth']),
+      isLegacyBareExplore:
+        record['agentType'] === LEGACY_EXPLORE_AGENT_TYPE &&
+        !('toolUseId' in record) &&
+        !('spawnDepth' in record),
     });
   }
   return sidecars;
@@ -294,6 +317,15 @@ interface SpawnIndices {
   toolUseResultByChildHex: Map<string, string>;
   /** child hex (a `queue-operation` `<task-id>`) -> that record's `<tool-use-id>`. */
   queueChildToToolUse: Map<string, string>;
+  /**
+   * child hex -> owning agent, from a FOREIGN top-level `agentId` on a
+   * `type: 'progress'` record (gate #7 legacy join key; see the fallback in
+   * {@link resolveParent} for the scope rationale). "Foreign" is structural:
+   * `collectAgentFiles` throws on an agent file whose inline `agentId`
+   * disagrees with its filename hex, so on any substrate that survives it, a
+   * foreign progress `agentId` can only live in the main transcript.
+   */
+  legacyProgressOwner: Map<string, string>;
 }
 
 /**
@@ -307,6 +339,7 @@ function buildIndices(transcripts: readonly Transcript[]): SpawnIndices {
   const queueOps = new Map<string, string>();
   const toolUseResultByChildHex = new Map<string, string>();
   const queueChildToToolUse = new Map<string, string>();
+  const legacyProgressOwner = new Map<string, string>();
 
   for (const transcript of transcripts) {
     for (const rawRecord of transcript.records) {
@@ -380,6 +413,18 @@ function buildIndices(transcripts: readonly Transcript[]): SpawnIndices {
             }
           }
         }
+      } else if (type === 'progress') {
+        // Gate #7 legacy join key: a pre-2.1.71 parent transcript names its
+        // spawned child by RAW top-level `agentId` on a progress record. Only
+        // the STRUCTURAL top-level field is read — never a nested
+        // `data.agentId` or a prose mention (gate #5: position, not
+        // substring). A transcript's own progress lines legitimately carry
+        // its OWN agentId; skipping them keeps an agent from registering as
+        // its own spawner.
+        const childHex = asString(record?.['agentId']);
+        if (childHex !== undefined && childHex !== transcript.owner) {
+          legacyProgressOwner.set(childHex, transcript.owner);
+        }
       }
     }
   }
@@ -390,6 +435,7 @@ function buildIndices(transcripts: readonly Transcript[]): SpawnIndices {
     queueOps,
     toolUseResultByChildHex,
     queueChildToToolUse,
+    legacyProgressOwner,
   };
 }
 
@@ -405,7 +451,7 @@ function makeEdge(
   sessionId: string,
   parentAgentId: string,
   childAgentId: string,
-  source: OrchestrationEdgeSource,
+  source: ParsedEdgeSource,
   toolUseId: string | null,
 ): ParsedEdge {
   return { sessionId, parentAgentId, childAgentId, source, toolUseId };
@@ -494,7 +540,34 @@ function resolveParent(
     };
   }
 
-  // 5. orphan: no structural join path — never fabricate a parent, emit no edge.
+  // 5 (legacy, gate #7): DEFENSIVE fallback for the pre-2.1.71 shape — a bare
+  //    `{agentType: 'Explore'}` sidecar (no `toolUseId`, no `spawnDepth`)
+  //    joined "via raw agentId in parent progress lines" (phase0-probe). The
+  //    shape is absent from the current corpus, so this is the NARROWEST
+  //    honest reading of that one-line description: it activates only when
+  //    (a) every modern anchor above missed, (b) the sidecar matches the bare
+  //    legacy shape by key-PRESENCE, and (c) a foreign progress record names
+  //    the child hex as its structural top-level `agentId`. Nested
+  //    `data.agentId` fields are deliberately NOT scanned — reaching into
+  //    payloads would drift toward the substring joins gate #5 forbids. The
+  //    edge carries the DISTINCT `legacy_explore` provenance (never a modern
+  //    literal) so downstream can always tell a legacy inference from an
+  //    observed anchor. Scope is PROVISIONAL until a real pre-2.1.71
+  //    transcript ratifies it.
+  if (sidecar?.isLegacyBareExplore === true) {
+    const progressOwner = indices.legacyProgressOwner.get(agentFile.hex);
+    if (progressOwner !== undefined) {
+      return {
+        parentAgentId: progressOwner,
+        // `isLegacyBareExplore` implies `agentType === 'Explore'`, so the
+        // constant is the sidecar value, not an invention.
+        subagentType: LEGACY_EXPLORE_AGENT_TYPE,
+        edge: makeEdge(sessionId, progressOwner, agentFile.hex, LEGACY_EXPLORE_EDGE_SOURCE, null),
+      };
+    }
+  }
+
+  // 6. orphan: no structural join path — never fabricate a parent, emit no edge.
   //    The subagent type is still recoverable from the sidecar when present.
   return { parentAgentId: null, subagentType: sidecar?.agentType ?? null, edge: undefined };
 }

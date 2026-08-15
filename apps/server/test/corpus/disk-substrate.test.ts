@@ -32,8 +32,10 @@ import type { NodeSpec, TreeSpec } from './fake-corpus-fs';
 const ROOT = '/corpus';
 const SLUG = '-Users-ivanbaev-Development-agenthropic';
 const OTHER_SLUG = '-Users-ivanbaev-Development-kiko';
+const THIRD_SLUG = '-Users-ivanbaev-Development-syncrona';
 const SESSION_ID = '11111111-2222-4333-8444-555555555555';
 const OTHER_SESSION_ID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+const THIRD_SESSION_ID = '99999999-8888-4777-8666-555555555555';
 const MAIN = `${SESSION_ID}.jsonl`;
 
 /** A `SessionRef` shaped exactly as `enumerateSessions` would emit it. */
@@ -98,6 +100,14 @@ function refsOf(enumeration: SessionEnumeration): readonly SessionRef[] {
   return enumeration.refs;
 }
 
+/** Assert the `sessions` arm and return its enumeration-level `skipped` list (M-14). */
+function enumerationSkipsOf(enumeration: SessionEnumeration): readonly SkippedFile[] {
+  if (enumeration.kind !== 'sessions') {
+    expect.unreachable(`expected enumerated sessions, got ${enumeration.kind}`);
+  }
+  return enumeration.skipped;
+}
+
 describe('enumerateSessions', () => {
   it('discovers a <uuid>.jsonl main transcript in a project slug dir', () => {
     const fs = fakeFs({ [SLUG]: dir({ [MAIN]: file('{"a":1}\n') }) });
@@ -112,6 +122,7 @@ describe('enumerateSessions', () => {
           sessionDirAbs: join(ROOT, SLUG, SESSION_ID),
         },
       ],
+      skipped: [],
     });
   });
 
@@ -148,7 +159,7 @@ describe('enumerateSessions', () => {
   it('treats a root that vanished (ENOENT) as genuinely holding no sessions', () => {
     const fs = fakeFs({ [SLUG]: dir({ [MAIN]: file('{}\n') }) }, { rootReaddirCode: 'ENOENT' });
 
-    expect(enumerateSessions(fs, ROOT)).toEqual({ kind: 'sessions', refs: [] });
+    expect(enumerateSessions(fs, ROOT)).toEqual({ kind: 'sessions', refs: [], skipped: [] });
   });
 
   it('returns no sessions for an empty corpus root', () => {
@@ -273,7 +284,7 @@ describe('enumerateSessions', () => {
   it('discovers every session across multiple slugs', () => {
     const fs = fakeFs({
       [SLUG]: dir({ [MAIN]: file('{}\n'), [`${OTHER_SESSION_ID}.jsonl`]: file('{}\n') }),
-      [OTHER_SLUG]: dir({ [MAIN]: file('{}\n') }),
+      [OTHER_SLUG]: dir({ [`${THIRD_SESSION_ID}.jsonl`]: file('{}\n') }),
     });
 
     expect(
@@ -284,9 +295,60 @@ describe('enumerateSessions', () => {
       [
         `${SLUG}/${SESSION_ID}`,
         `${SLUG}/${OTHER_SESSION_ID}`,
-        `${OTHER_SLUG}/${SESSION_ID}`,
+        `${OTHER_SLUG}/${THIRD_SESSION_ID}`,
       ].sort(),
     );
+  });
+
+  // M-14: the same session uuid under two slugs (a copied/moved project dir) must
+  // resolve to ONE deterministic ref, or every poll flap-reingests the pair.
+  it('keeps the lexicographically smallest slug when one uuid appears under two slugs', () => {
+    // OTHER_SLUG ('…-kiko') listed FIRST so first-seen readdir order and the
+    // deterministic winner ('…-agenthropic' < '…-kiko') disagree — proving the
+    // choice does not depend on enumeration order.
+    const fs = fakeFs({
+      [OTHER_SLUG]: dir({ [MAIN]: file('{}\n') }),
+      [SLUG]: dir({ [MAIN]: file('{}\n') }),
+    });
+
+    expect(enumerateSessions(fs, ROOT)).toEqual({
+      kind: 'sessions',
+      refs: [
+        {
+          sessionId: SESSION_ID,
+          projectSlug: SLUG,
+          mainAbsPath: join(ROOT, SLUG, MAIN),
+          sessionDirAbs: join(ROOT, SLUG, SESSION_ID),
+        },
+      ],
+      skipped: [{ relativePath: `${OTHER_SLUG}/${MAIN}`, reason: 'duplicate-session' }],
+    });
+  });
+
+  it('records every losing copy of a three-way duplicate uuid', () => {
+    const fs = fakeFs({
+      [THIRD_SLUG]: dir({ [MAIN]: file('{}\n') }),
+      [OTHER_SLUG]: dir({ [MAIN]: file('{}\n') }),
+      [SLUG]: dir({ [MAIN]: file('{}\n') }),
+    });
+    const enumeration = enumerateSessions(fs, ROOT);
+
+    expect(refsOf(enumeration).map((r) => r.projectSlug)).toEqual([SLUG]);
+    expect(enumerationSkipsOf(enumeration)).toEqual([
+      { relativePath: `${THIRD_SLUG}/${MAIN}`, reason: 'duplicate-session' },
+      { relativePath: `${OTHER_SLUG}/${MAIN}`, reason: 'duplicate-session' },
+    ]);
+  });
+
+  it('deduplicates only by uuid — distinct sessions across slugs all survive', () => {
+    const fs = fakeFs({
+      [SLUG]: dir({ [MAIN]: file('{}\n') }),
+      [OTHER_SLUG]: dir({ [`${OTHER_SESSION_ID}.jsonl`]: file('{}\n') }),
+    });
+    const enumeration = enumerateSessions(fs, ROOT);
+
+    expect(refsOf(enumeration)).toHaveLength(2);
+    expect(enumerationSkipsOf(enumeration)).toEqual([]);
   });
 });
 

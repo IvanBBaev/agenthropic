@@ -25,8 +25,13 @@ Each one POSTs the hook's stdin JSON, unmodified, to:
 http://127.0.0.1:<port>/api/hooks/event
 ```
 
-authenticating with `Authorization: Bearer ${DASHBOARD_TOKEN}` — the env var is
-expanded **by the shell at fire time**. The server accepts any JSON event
+authenticating with an `Authorization: Bearer <token>` header that **curl
+itself** builds at fire time: the command imports the env var with
+`--variable '%DASHBOARD_TOKEN'` and expands it inside a single-quoted
+`--expand-header 'Authorization: Bearer {{DASHBOARD_TOKEN}}'` template, so the
+token value never passes through any process's argv (see
+[Security model](#security-model) — this needs curl ≥ 8.3.0). The server
+accepts any JSON event
 (unknown hook names and extra fields are stored, never rejected), redacts
 secret-shaped material at the ingest boundary, and appends idempotently to the
 append-only `events_raw` substrate.
@@ -124,9 +129,35 @@ path there.
 
 - Hooks talk **only** to the loopback address (`127.0.0.1`, hard-pinned in the
   generated command) and **only** with the mandatory Bearer token.
-- The token is read from the environment **at fire time**; the installer never
-  reads, embeds, prints, or otherwise touches the token value, and the server
-  never logs, persists, or echoes it.
+- **The token value appears in no process's argv** — not the hook shell's and
+  not curl's own. The generated command hands curl the env var **name**
+  (`--variable '%DASHBOARD_TOKEN'`) and a single-quoted header template
+  (`--expand-header 'Authorization: Bearer {{DASHBOARD_TOKEN}}'`); curl reads
+  the environment itself, after argv parsing. This matters because argv is
+  readable by other processes (`ps`, `/proc/<pid>/cmdline` on Linux), and the
+  first shipped command shape (`--header "… Bearer ${DASHBOARD_TOKEN}"`, fixed
+  2026-08, review item M-11) let another OS account harvest the token from the
+  process table during the up-to-3-second POST window — exactly the
+  local-multi-user attacker the token exists to stop.
+- **Rotation stays trivial** because the environment remains the only runtime
+  source of truth: no token-bearing file is written at install time, so
+  rotating the token is "export the new value" — nothing to regenerate and no
+  stale copy on disk.
+- **Requires curl ≥ 8.3.0** (`--variable`/`--expand-header`; macOS ≥ 14.4 and
+  current Linux distributions ship newer). An older curl rejects the unknown
+  option at parse time and sends **nothing** — the hook still exits 0 (a short,
+  token-free error goes to stderr), so it degrades to zero telemetry, never to
+  a leaked token and never to a blocked session. If your dashboard receives no
+  hook events, check `curl --version` first. A settings file installed before
+  this fix is upgraded in place by re-running the installer.
+- **Residual exposure, stated honestly:** processes of the **same** OS account
+  (and root) can always read the token — from the process environment, from
+  the shell profile or `launchd` plist that exports it, or by asking the same
+  APIs the hook uses. The argv fix closes the cross-account `ps` window; it
+  does not (and cannot) defend against an attacker already running as you or
+  as root.
+- The installer never reads, embeds, prints, or otherwise touches the token
+  value, and the server never logs, persists, or echoes it.
 - The installer itself **never spawns processes and never talks to the
   network**; its only side effect is writing the one file you point it at
   (plus that file's backup). The generated `curl` command runs on the Claude

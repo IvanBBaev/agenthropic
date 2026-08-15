@@ -41,16 +41,45 @@ export interface ParsedAgent {
 }
 
 /**
+ * The DISTINCT provenance of a parser-spec gate-#7 legacy join: a pre-2.1.71
+ * bare-`Explore` child anchored via a raw `agentId` on a parent progress line.
+ * Deliberately NOT one of the four modern structural literals — collapsing it
+ * into `tool_use` (or any modern value) would let a weak legacy inference
+ * masquerade downstream as a strong observed anchor, breaking the
+ * observed-vs-inferred honesty rule. The literal is a full member of the
+ * shared `OrchestrationEdgeSourceSchema` union and the server persists it
+ * verbatim (the migration-13 CHECK on `orchestration_edges.source` admits it),
+ * so the provenance survives every hop to the UI. This constant is the named
+ * handle core emits it under, where the edge is born; `satisfies` pins it to
+ * the shared union so a drift there fails compilation here.
+ */
+export const LEGACY_EXPLORE_EDGE_SOURCE = 'legacy_explore' satisfies OrchestrationEdgeSource;
+
+/**
+ * Everything a parsed edge's `source` can be. A direct alias of the shared
+ * union (which carries the four modern structural literals AND
+ * `legacy_explore`), kept as the parser-side name so read-side code does not
+ * couple to the wire-schema module for a domain concept of its own.
+ */
+export type ParsedEdgeSource = OrchestrationEdgeSource;
+
+/**
  * One reconstructed spawn edge. Emitted only for a subagent whose parent
- * resolved via one of the four structural join paths (parser-spec section 4);
- * orphans emit no edge. `source` is single-sourced from `@agenthropic/shared`.
+ * resolved via one of the four structural join paths (parser-spec section 4)
+ * or the gate-#7 legacy fallback; orphans emit no edge. Every `source` value —
+ * `legacy_explore` included — is single-sourced from `@agenthropic/shared` and
+ * flows through to persistence verbatim (see {@link LEGACY_EXPLORE_EDGE_SOURCE}).
  */
 export interface ParsedEdge {
   sessionId: string;
   parentAgentId: string;
   childAgentId: string;
-  source: OrchestrationEdgeSource;
-  /** The structural anchor id when the resolving path carried one; `null` for directory joins. */
+  source: ParsedEdgeSource;
+  /**
+   * The structural anchor id when the resolving path carried one; `null` for
+   * directory joins and for `legacy_explore` joins (whose join key is the raw
+   * child hex, not a tool-use id).
+   */
   toolUseId: string | null;
 }
 

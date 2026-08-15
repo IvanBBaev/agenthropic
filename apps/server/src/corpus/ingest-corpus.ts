@@ -124,13 +124,22 @@ export function runCorpusIngest(deps: CorpusIngestDeps): CorpusIngestSummary {
       ? enumeration.refs
       : enumeration.refs.filter(deps.sessionFilter);
 
+  let filesSkipped = 0;
+
+  // Enumeration-level exclusions (today: `duplicate-session`, review M-14) are
+  // reported BEFORE the per-session loop and regardless of `sessionFilter` — a
+  // shadowed copy is a corpus-level fact, not a property of any admitted ref.
+  for (const skipped of enumeration.skipped) {
+    filesSkipped += 1;
+    deps.onWarning?.(skipped);
+  }
+
   let sessionsOk = 0;
   let sessionsFailed = 0;
   let sessionsSkipped = 0;
   let agentsUpserted = 0;
   let edgesInserted = 0;
   let usageRowsInserted = 0;
-  let filesSkipped = 0;
   let totalCostUsd = 0;
   const failures: CorpusIngestFailure[] = [];
 

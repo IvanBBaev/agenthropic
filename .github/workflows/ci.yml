@@ -1,6 +1,7 @@
-# CI quality gate: no-spawner gate, typecheck, lint, format, tests (with the
-# per-package Vitest coverage thresholds), license gate. The security gate runs
-# first so a broken invariant fails in seconds rather than after the suite.
+# CI quality gate: no-spawner gate, typecheck, lint, format, web production
+# build, tests (with the per-package Vitest coverage thresholds), license gate.
+# The security gate runs first so a broken invariant fails in seconds rather
+# than after the suite.
 #
 # NOTE: making this workflow merge-blocking requires a GitHub branch-protection
 # rule (Settings -> Branches -> require status checks to pass). That is an owner
@@ -47,6 +48,14 @@ jobs:
 
       - name: Format check
         run: pnpm run format:check
+
+      # The SPA's production build is its own gate: unit tests exercise modules
+      # under the Vitest transform, so a change that only breaks `vite build`
+      # (rollup resolution, static assets, env handling) would otherwise merge
+      # green and first fail at release time. Runs before the suite because it
+      # is the cheaper step.
+      - name: Web production build
+        run: pnpm --filter @agenthropic/web build
 
       - name: Test (coverage thresholds enforce the coverage gate)
         run: pnpm run test

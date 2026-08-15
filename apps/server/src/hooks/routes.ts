@@ -22,7 +22,7 @@
  */
 import { Type } from '@sinclair/typebox';
 import type { FastifyInstance } from 'fastify';
-import type { EventStorePort } from '@agenthropic/shared';
+import { ApiErrorSchema, type EventStorePort } from '@agenthropic/shared';
 import { buildHookEnvelope } from './envelope';
 import { redactSecrets } from './redact';
 
@@ -100,7 +100,21 @@ export async function registerHookRoutes(
   const now = options.now ?? ((): Date => new Date());
   app.post(
     HOOK_EVENT_PATH,
-    { schema: { headers: HookHeadersSchema, response: { 202: HookAcceptedResponseSchema } } },
+    {
+      // 400/500 declare the uniform { error } contract the ROOT-scope error
+      // handler in buildServer produces for this route (it is registered on
+      // the root scope, outside apiRoutes' scoped handler): 400 for header
+      // validation failures, 500 for a throwing append/applyStatus
+      // (SQLITE_BUSY/FULL, I/O) with the raw message suppressed.
+      schema: {
+        headers: HookHeadersSchema,
+        response: {
+          202: HookAcceptedResponseSchema,
+          400: ApiErrorSchema,
+          500: ApiErrorSchema,
+        },
+      },
+    },
     async (request, reply) => {
       // Redact BEFORE the envelope so the idempotency key is computed over
       // the redacted payload: a redelivered event redacts identically and

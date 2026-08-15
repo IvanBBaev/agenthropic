@@ -18,6 +18,35 @@ decision CD-1), appends everything into an immutable SQLite substrate, and rende
 the **persisted subagent DAG** with **dollar-accurate cost attribution** (tokens ×
 dated price — token counts are read from the JSONL, never inferred).
 
+## Quickstart
+
+Requires **Node 22+** and **pnpm** (the repo pins `pnpm@11.11.0` via `packageManager`,
+so `corepack enable` is enough).
+
+```sh
+git clone https://github.com/IvanBBaev/agenthropic.git
+cd agenthropic
+pnpm install
+
+# The auth token is mandatory (16+ characters); the server refuses to start without it.
+DASHBOARD_TOKEN="replace-with-a-long-random-secret" pnpm --filter @agenthropic/server dev
+```
+
+The server binds `127.0.0.1:4317` (loopback only, not configurable), creates its
+SQLite database at `apps/server/data/agenthropic.db`, runs migrations on boot, and
+immediately starts ingesting the JSONL corpus from `~/.claude/projects`.
+
+In a second terminal, start the dashboard:
+
+```sh
+pnpm --filter @agenthropic/web dev
+```
+
+Open <http://127.0.0.1:5173> and paste the same `DASHBOARD_TOKEN` on the token
+screen (the Vite dev server proxies `/api` to the server). Optional environment
+overrides: `DASHBOARD_PORT`, `DASHBOARD_DB_PATH`, `CLAUDE_PROJECTS_DIR` (corpus
+root), `DASHBOARD_INGEST=0` (disable ingest).
+
 ## Status
 
 🚧 **Pre-1.0, under active construction.** The design spine came first: ten canonical

@@ -13,7 +13,7 @@
  */
 import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { CorpusFs, LstatInfo } from '../../src/corpus/fs-port';
+import type { CorpusFs, LstatInfo, TailRead } from '../../src/corpus/fs-port';
 import { OversizeError } from '../../src/corpus/fs-port';
 
 export interface FileSpec {
@@ -159,27 +159,44 @@ export function makeFakeCorpusFs(
     },
 
     readFileConfined(absPath: string, maxBytes: number): string {
-      const node = resolve(absPath);
-      // O_NOFOLLOW: the final component is NOT followed — a symlink surfaces as ELOOP.
-      if (node.type === 'symlink') {
-        throw codedError('ELOOP', `symlink not followed: ${absPath}`);
-      }
-      if (node.type === 'dir') {
-        throw codedError('EISDIR', `is a directory: ${absPath}`);
-      }
-      if (node.type === 'fifo') {
-        throw codedError('ENOTREG', `not a regular file: ${absPath}`);
-      }
-      if (node.throwCode !== undefined) {
-        throw codedError(node.throwCode, `read failed: ${absPath}`);
-      }
-      const size = node.size ?? Buffer.byteLength(node.content, 'utf8');
-      if (size > maxBytes) {
-        throw new OversizeError(absPath, size, maxBytes);
-      }
+      const node = readableFile(resolve(absPath), absPath, maxBytes);
       return node.content;
     },
+
+    readFileTailConfined(absPath: string, fromByte: number, maxBytes: number): TailRead {
+      const node = readableFile(resolve(absPath), absPath, maxBytes);
+      const bytes = new TextEncoder().encode(node.content);
+      return {
+        data: bytes.slice(Math.min(fromByte, bytes.length)),
+        sizeBytes: node.size ?? bytes.length,
+      };
+    },
   };
+}
+
+/**
+ * The shared guard of both confined reads — mirrors the real adapter's
+ * `O_NOFOLLOW` open + fstat re-check arm for arm, then the size cap.
+ */
+function readableFile(node: NodeSpec, absPath: string, maxBytes: number): FileSpec {
+  // O_NOFOLLOW: the final component is NOT followed — a symlink surfaces as ELOOP.
+  if (node.type === 'symlink') {
+    throw codedError('ELOOP', `symlink not followed: ${absPath}`);
+  }
+  if (node.type === 'dir') {
+    throw codedError('EISDIR', `is a directory: ${absPath}`);
+  }
+  if (node.type === 'fifo') {
+    throw codedError('ENOTREG', `not a regular file: ${absPath}`);
+  }
+  if (node.throwCode !== undefined) {
+    throw codedError(node.throwCode, `read failed: ${absPath}`);
+  }
+  const size = node.size ?? Buffer.byteLength(node.content, 'utf8');
+  if (size > maxBytes) {
+    throw new OversizeError(absPath, size, maxBytes);
+  }
+  return node;
 }
 
 /**

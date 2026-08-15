@@ -31,6 +31,14 @@ export interface LstatInfo {
   readonly mtimeMs: number;
 }
 
+/** The product of {@link CorpusFs.readFileTailConfined}: a byte range plus the file's total size. */
+export interface TailRead {
+  /** The bytes `[min(fromByte, size), EOF)` — empty when `fromByte` is at or past EOF. */
+  readonly data: Uint8Array;
+  /** Total size of the file at read time (what the oversize cap was checked against). */
+  readonly sizeBytes: number;
+}
+
 /**
  * The read-only capability set the corpus adapter is allowed to use. A fake
  * implementation backs every unit test; {@link ./node-corpus-fs} is the sole
@@ -49,6 +57,14 @@ export interface CorpusFs {
    * or the underlying fs error (ENOENT / EACCES / EISDIR / ELOOP / …) otherwise.
    */
   readFileConfined(absPath: string, maxBytes: number): string;
+  /**
+   * Read the byte range `[min(fromByte, size), EOF)` of a regular file, with
+   * the same `O_NOFOLLOW` open and fstat re-check as {@link readFileConfined}.
+   * The `maxBytes` cap applies to the WHOLE file regardless of `fromByte` — a
+   * tail read is a cost optimization (review M-15), never a way around the
+   * read cap. Throws exactly like {@link readFileConfined}.
+   */
+  readFileTailConfined(absPath: string, fromByte: number, maxBytes: number): TailRead;
 }
 
 /** A file exceeded the per-file read cap and was deliberately NOT read. */
@@ -98,7 +114,8 @@ export type SkipReason =
   | 'unreadable'
   | 'empty-agent'
   | 'empty-main'
-  | 'non-artifact';
+  | 'non-artifact'
+  | 'duplicate-session';
 
 /** One discovered-but-not-ingested file, with the reason (and fs code, if any). */
 export interface SkippedFile {
@@ -123,6 +140,14 @@ export interface SessionRef {
 export interface EnumeratedSessions {
   readonly kind: 'sessions';
   readonly refs: readonly SessionRef[];
+  /**
+   * Files discovered but excluded AT ENUMERATION — today only
+   * `duplicate-session` (review M-14): a session uuid found under more than one
+   * slug directory keeps exactly one deterministic ref, and every other copy is
+   * recorded here. Per-file build hazards are NOT this list — they surface from
+   * {@link ./disk-substrate.buildSessionSubstrate}.
+   */
+  readonly skipped: readonly SkippedFile[];
 }
 
 /**

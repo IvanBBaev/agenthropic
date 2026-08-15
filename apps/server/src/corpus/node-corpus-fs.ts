@@ -18,12 +18,37 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  readSync,
   realpathSync,
 } from 'node:fs';
-import type { CorpusFs, LstatInfo } from './fs-port';
+import type { CorpusFs, LstatInfo, TailRead } from './fs-port';
 import { OversizeError } from './fs-port';
 
 type NodeError = Error & { code?: string };
+
+/**
+ * The shared post-open guard of both confined reads: `fstat` the OPEN
+ * descriptor (TOCTOU defence — the path may have been swapped since the
+ * caller's lstat) and enforce the size cap. Returns the file's byte size.
+ */
+function confinedSize(fd: number, absPath: string, maxBytes: number): number {
+  const st = fstatSync(fd);
+  if (!st.isFile()) {
+    // TOCTOU: the lstat'd regular file became a dir/fifo/socket before open.
+    const err = new Error(`not a regular file: ${absPath}`) as NodeError;
+    // A directory opened O_RDONLY|O_NOFOLLOW fstats as a dir → EISDIR. A
+    // fifo or socket never reaches here (the open itself blocks or
+    // errors), but a character device does: it opens cleanly and fstats as
+    // neither file nor directory → ENOTREG. Both arms are integration
+    // tested against real syscalls.
+    err.code = st.isDirectory() ? 'EISDIR' : 'ENOTREG';
+    throw err;
+  }
+  if (st.size > maxBytes) {
+    throw new OversizeError(absPath, st.size, maxBytes);
+  }
+  return st.size;
+}
 
 export function nodeCorpusFs(): CorpusFs {
   return {
@@ -51,22 +76,24 @@ export function nodeCorpusFs(): CorpusFs {
       // fails with ELOOP instead of following it out of the corpus root.
       const fd = openSync(absPath, constants.O_RDONLY | constants.O_NOFOLLOW);
       try {
-        const st = fstatSync(fd);
-        if (!st.isFile()) {
-          // TOCTOU: the lstat'd regular file became a dir/fifo/socket before open.
-          const err = new Error(`not a regular file: ${absPath}`) as NodeError;
-          // A directory opened O_RDONLY|O_NOFOLLOW fstats as a dir → EISDIR. A
-          // fifo or socket never reaches here (the open itself blocks or
-          // errors), but a character device does: it opens cleanly and fstats as
-          // neither file nor directory → ENOTREG. Both arms are integration
-          // tested against real syscalls.
-          err.code = st.isDirectory() ? 'EISDIR' : 'ENOTREG';
-          throw err;
-        }
-        if (st.size > maxBytes) {
-          throw new OversizeError(absPath, st.size, maxBytes);
-        }
+        confinedSize(fd, absPath, maxBytes);
         return readFileSync(fd, 'utf8');
+      } finally {
+        closeSync(fd);
+      }
+    },
+
+    readFileTailConfined(absPath: string, fromByte: number, maxBytes: number): TailRead {
+      const fd = openSync(absPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+      try {
+        const sizeBytes = confinedSize(fd, absPath, maxBytes);
+        const start = Math.min(fromByte, sizeBytes);
+        const data = new Uint8Array(sizeBytes - start);
+        // One positional read satisfies a regular file under the 64MiB cap; if
+        // the file shrank between fstat and read, the short result is
+        // truncated honestly rather than padded with zero bytes.
+        const read = readSync(fd, data, 0, data.length, start);
+        return { data: data.subarray(0, read), sizeBytes };
       } finally {
         closeSync(fd);
       }

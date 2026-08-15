@@ -31,9 +31,11 @@
 > - **There is no write surface beyond the hook receiver.** The alerts CRUD described in
 >   [Operator alerts API](#operator-alerts-api-wp-a8-phase-6) below was **cut** — see the
 >   note in that section.
-> - **The stream carries two typed event types, not generic projection deltas:**
->   `session-ingested` and `agent-status-changed`. Resumability is **not** implemented as
->   replay — see the "Resumability" note in the realtime-feed section below.
+> - **The stream carries three typed event types, not generic projection deltas:**
+>   `session-ingested`, `agent-status-changed` and `ingest-failed` (the third
+>   documented 2026-08, when the SPA gained a listener for it — a quarantined session
+>   is now a visible banner, not a silent absence). Resumability is **not** implemented
+>   as replay — see the "Resumability" note in the realtime-feed section below.
 >
 > The design-era prose and tables are kept below as the record, with `As built` notes
 > where the shipped system settled a question the page left open.
@@ -106,8 +108,13 @@ path is now literal — see the table's "As built" column.)*
 > **As built:** `/api/stream` is a hijacked Fastify reply that writes a `retry: <ms>`
 > field, a `: connected` comment, then hub frames, with a `: heartbeat` comment every
 > 15 s. Heartbeats are SSE **comment** frames and therefore never surface to
-> `EventSource` — client liveness is the connection state, not a heartbeat count. Two
-> typed frames are emitted: `session-ingested` and `agent-status-changed`. The token may
+> `EventSource` — client liveness is the connection state, not a heartbeat count. Three
+> typed frames are emitted: `session-ingested`, `agent-status-changed` and
+> `ingest-failed` (update 2026-08: this page previously said two — the third frame was
+> already published but undocumented, and the SPA did not listen for it). The frame-type
+> list is a single shared constant (`SERVER_EVENT_TYPES` in `packages/shared`) imported
+> by both the server bridge and the SPA's SSE client, because `EventSource` silently
+> drops a named event with no registered listener. The token may
 > be presented as `?token=` here (and only here) because `EventSource` cannot set
 > headers; the server's request-log serializer redacts it. The same-origin check runs
 > **before** the token check, so a foreign `Origin` gets 403 whether or not it holds a
@@ -128,7 +135,7 @@ path is now literal — see the table's "As built" column.)*
 | Property | As built |
 |---|---|
 | Resumability | **Reconnect, not replay.** The server sends a `retry:` hint and the browser's `EventSource` auto-reconnects; there is no `Last-Event-ID` handling and no `events_raw.seq` replay. Frames emitted while a client was disconnected are **lost**. The SPA compensates by treating any stream event as a cue to refetch persisted truth, so the displayed state re-converges — but a client that needs a gapless event log must read `GET /api/sessions/:id/events`, not the stream. |
-| What it pushes | Two typed frames only — `session-ingested` (a session was persisted; refetch) and `agent-status-changed` (one agent moved between status buckets, including into `unknown` via the missing-Stop watchdog). Not a generic row-delta feed over `sessions`/`agents`/`orchestration_edges`/`token_usage`. |
+| What it pushes | Three typed frames only — `session-ingested` (a session was persisted; refetch), `agent-status-changed` (one agent moved between status buckets, including into `unknown` via the missing-Stop watchdog), and `ingest-failed` (a session's ingest failed; rides the shared union's generic arm as `{ "type": "ingest-failed", "payload": { sessionId, reason, attempt, willRetry, occurredAt } }` with a sanitized, single-line, path-free reason — the SPA renders it as a dismissible banner on the live board, because a quarantined session never reaches the read API and would otherwise be invisible). Not a generic row-delta feed over `sessions`/`agents`/`orchestration_edges`/`token_usage`. |
 
 **The event-push model.** `/api/stream` is a fan-out off already-committed projection
 state, not a raw firehose of `events_raw` — the same "single-writer pipeline, read-only

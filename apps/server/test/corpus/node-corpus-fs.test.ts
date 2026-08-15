@@ -226,6 +226,51 @@ describe('nodeCorpusFs.readFileConfined', () => {
   });
 });
 
+describe('nodeCorpusFs.readFileTailConfined', () => {
+  it('reads the whole file from byte 0 and reports the true size', () => {
+    const tail = fs.readFileTailConfined(join(root, 'session.jsonl'), 0, CAP);
+    expect(tail.sizeBytes).toBe(16);
+    expect(new TextDecoder().decode(tail.data)).toBe('{"type":"user"}\n');
+  });
+
+  it('returns exactly the bytes past fromByte', () => {
+    const tail = fs.readFileTailConfined(join(root, 'session.jsonl'), 8, CAP);
+    expect(tail.sizeBytes).toBe(16);
+    expect(new TextDecoder().decode(tail.data)).toBe('"user"}\n');
+  });
+
+  it('clamps a fromByte past EOF to an empty read that still reports the size', () => {
+    const tail = fs.readFileTailConfined(join(root, 'session.jsonl'), 999, CAP);
+    expect(tail.data).toEqual(new Uint8Array(0));
+    expect(tail.sizeBytes).toBe(16);
+  });
+
+  it('reads the tail of a file whose size is exactly the cap', () => {
+    const tail = fs.readFileTailConfined(join(root, 'at-cap.jsonl'), CAP - 4, CAP);
+    expect(new TextDecoder().decode(tail.data)).toBe('aaaa');
+    expect(tail.sizeBytes).toBe(CAP);
+  });
+
+  it('enforces the cap against the WHOLE file even when the tail itself is tiny', () => {
+    // The last byte alone would fit comfortably; the FILE does not. A tail
+    // read is a cost optimization, never a way around the read cap.
+    const err = thrownBy(() =>
+      fs.readFileTailConfined(join(root, 'over-cap.jsonl'), 2 * CAP - 1, CAP),
+    );
+    expect(err).toBeInstanceOf(OversizeError);
+  });
+
+  it('throws ELOOP on a symlink even for a tail read (O_NOFOLLOW)', () => {
+    const err = thrownBy(() => fs.readFileTailConfined(join(root, 'link-to-file.jsonl'), 0, CAP));
+    expect(errnoCodeOf(err)).toBe('ELOOP');
+  });
+
+  it('throws ENOENT for a path that does not exist', () => {
+    const err = thrownBy(() => fs.readFileTailConfined(join(root, 'ghost.jsonl'), 0, CAP));
+    expect(errnoCodeOf(err)).toBe('ENOENT');
+  });
+});
+
 describe('nodeCorpusFs.realpath', () => {
   it('canonicalizes a symlinked directory to its real target', () => {
     // Compare against realpathSync of the real path: on macOS the temp root is

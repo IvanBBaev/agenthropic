@@ -39,7 +39,12 @@
  * are bounded: after {@link MAX_INGEST_ATTEMPTS} consecutive failures against
  * the SAME fingerprint the session is QUARANTINED — its fingerprint is
  * committed, which stops the retry loop, and it is re-admitted (with a fresh
- * budget) as soon as its file changes. A permanently unparseable file therefore
+ * budget) as soon as its file changes OR the pricing table changes. Pricing is
+ * resolved once per pass (when `pricing` is a resolver), and a content change
+ * re-admits every session parked by a spent or partly spent budget: the
+ * canonical cure for a halt-gate failure is seeding the missing pricing row,
+ * and that row must unblock the watcher without a restart (review M-2). A
+ * permanently unparseable file therefore
  * costs a bounded number of passes, not a hot loop. Every failure is reported
  * through `onIngestFailure` with a SANITIZED reason (see
  * {@link sanitizeFailureReason}) — session id and reason, never the substrate.
@@ -74,8 +79,11 @@ import { runWatchdogSweep } from './watchdog';
 /**
  * How many consecutive failed passes a session gets against one unchanged
  * fingerprint before it is quarantined. Small on purpose: the retry exists for
- * a transient cause (a pricing row that arrives, a half-written line), not as a
- * substitute for fixing the corpus.
+ * a transient cause (a half-written line), not as a substitute for fixing the
+ * corpus. A pricing row that arrives is NOT left to this budget: a pricing
+ * table change re-admits every parked session with a fresh budget, so a
+ * session that burned all attempts against a missing price is retried the
+ * moment the row is seeded.
  */
 export const MAX_INGEST_ATTEMPTS = 3;
 
@@ -116,7 +124,15 @@ export function sanitizeFailureReason(reason: string): string {
 
 export interface CorpusWatcherDeps {
   readonly db: SqliteDatabase;
-  readonly pricing: readonly PricingEntry[];
+  /**
+   * Pricing table, or a resolver called once per pass. The composition root
+   * passes a resolver so a row seeded while the server runs is priced on the
+   * very next tick — a boot-time snapshot left the watcher burning its whole
+   * retry budget against a stale table (review M-2). When the resolved CONTENT
+   * changes, every session parked by a failure budget is re-admitted with a
+   * fresh budget.
+   */
+  readonly pricing: readonly PricingEntry[] | (() => readonly PricingEntry[]);
   /** Env map forwarded to root/identity resolution (never `process.env` in tests). */
   readonly env: Record<string, string | undefined>;
   /** Poll cadence for {@link CorpusWatcher.start}; `tick()` can also be driven manually. */
@@ -166,6 +182,13 @@ export interface CorpusWatcherDeps {
    * zero operator-visible evidence.
    */
   readonly onTickOutcome?: (outcome: TickOutcome) => void;
+  /**
+   * Fired after every pass that actually RAN (never the 'stopped'/'overlapped'
+   * short-circuits) with its wall-clock duration — the M-15 seam that lets
+   * /api/health report how long the corpus poll actually takes, so a poll that
+   * grows past the interval is visible before it starves the event loop.
+   */
+  readonly onTickDuration?: (durationMs: number) => void;
 }
 
 /**
@@ -211,6 +234,21 @@ export interface CorpusWatcher {
   stop(): void;
 }
 
+/**
+ * Order-independent content fingerprint of the pricing table. Equality of
+ * fingerprints is what "the pricing table did not change" means to the
+ * watcher, so it hangs on every field cost resolution reads and on nothing
+ * else (not row order, not object identity across reloads).
+ */
+export function pricingContentFingerprint(pricing: readonly PricingEntry[]): string {
+  return pricing
+    .map(
+      (entry) => `${entry.model} ${entry.bucket} ${String(entry.usdPerMtok)} ${entry.effectiveFrom}`,
+    )
+    .sort()
+    .join('\n');
+}
+
 export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
   const fs = deps.fs ?? nodeCorpusFs();
   const limits: ReadLimits = { ...DEFAULT_READ_LIMITS, ...deps.limits };
@@ -222,9 +260,31 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
   const attempts = new Map<string, { fingerprint: string; count: number }>();
   /** Corpus root the persisted checkpoint was hydrated from; null = not yet. */
   let hydratedRoot: string | null = null;
+  /** Pricing content seen by the previous pass; null = no pass yet. */
+  let pricingFingerprint: string | null = null;
   let inFlight = false;
   let stopped = false;
   let timer: ReturnType<typeof setInterval> | null = null;
+
+  /**
+   * Resolve pricing for THIS pass and re-admit parked sessions when the table
+   * changed. Both halves of a quarantine must be undone: the retry budget
+   * (`attempts`) AND the committed fingerprint — quarantine works by
+   * committing, so clearing the budget alone would leave the session reading
+   * as "unchanged" and it would never be retried.
+   */
+  function resolvePricingForPass(): readonly PricingEntry[] {
+    const pricing = typeof deps.pricing === 'function' ? deps.pricing() : deps.pricing;
+    const fingerprint = pricingContentFingerprint(pricing);
+    if (pricingFingerprint !== null && pricingFingerprint !== fingerprint) {
+      for (const sessionId of attempts.keys()) {
+        fingerprints.delete(sessionId);
+      }
+      attempts.clear();
+    }
+    pricingFingerprint = fingerprint;
+    return pricing;
+  }
 
   /**
    * Drop bookkeeping for sessions that are no longer on disk: a vanished
@@ -330,6 +390,10 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
       hydratedRoot = corpusRoot;
     }
 
+    // Resolved BEFORE the fingerprint diff so a pricing change re-admits
+    // parked sessions into THIS pass, not the next one.
+    const pricing = resolvePricingForPass();
+
     const enumeration = enumerateSessions(fs, corpusRoot);
     if (enumeration.kind === 'unreadable-root') {
       // The root exists but its listing failed. Crucially, NOTHING is pruned:
@@ -362,7 +426,7 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
     const projectedIds = new Set<string>();
     const summary = runCorpusIngest({
       db: deps.db,
-      pricing: deps.pricing,
+      pricing,
       env: deps.env,
       fs,
       homedir: deps.homedir,
@@ -399,6 +463,7 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
       return { kind: 'overlapped' };
     }
     inFlight = true;
+    const startedAtMs = nowMs();
     try {
       let outcome: TickOutcome;
       try {
@@ -426,6 +491,8 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
       return outcome;
     } finally {
       inFlight = false;
+      // In the finally so even a containment-halt pass reports its cost.
+      deps.onTickDuration?.(nowMs() - startedAtMs);
     }
   }
 

@@ -15,6 +15,13 @@ export type {
 export { buildSessionSubstrate, enumerateSessions } from './disk-substrate';
 export { fingerprintSession } from './fingerprint';
 export { nodeCorpusFs } from './node-corpus-fs';
+export {
+  createTailCachingFs,
+  MAX_CACHE_BYTES,
+  MAX_CACHE_ENTRIES,
+  OVERLAP_BYTES,
+} from './tail-cache';
+export type { TailCacheOptions } from './tail-cache';
 export { resolveIdentity } from './identity';
 export type { Identity } from './identity';
 export {
@@ -46,5 +53,6 @@ export type {
   SkippedFile,
   SkipReason,
   SubstrateBuild,
+  TailRead,
   UnreadableRoot,
 } from './fs-port';

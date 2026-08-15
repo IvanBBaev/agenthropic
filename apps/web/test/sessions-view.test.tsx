@@ -10,6 +10,7 @@ import { SessionsView, SESSION_LIST_LIMIT } from '../src/views/SessionsView';
 import { createSseClient, type SseClient } from '../src/sse';
 import {
   agentNode,
+  costAnalysis,
   deferred,
   jsonResponse,
   orchestrationEdge,
@@ -41,11 +42,17 @@ function renderView() {
   return render(<SessionsView token="secret-token" sse={sse} onAuthRejected={onAuthRejected} />);
 }
 
-/** Route list vs tree fetches; /tree must match before /api/sessions. */
-function routeFetch(options: { list?: Response; tree?: Response } = {}): void {
+/**
+ * Route list vs tree vs cost-analysis fetches; the more specific paths must
+ * match before the /api/sessions list fallback swallows them.
+ */
+function routeFetch(options: { list?: Response; tree?: Response; analysis?: Response } = {}): void {
   fetchMock.mockImplementation((url: string) => {
     if (url.includes('/tree')) {
       return Promise.resolve(options.tree ?? jsonResponse(200, sessionTree()));
+    }
+    if (url.includes('cost-analysis')) {
+      return Promise.resolve(options.analysis ?? jsonResponse(200, costAnalysis()));
     }
     return Promise.resolve(options.list ?? jsonResponse(200, sessionList([sessionSummary()])));
   });
@@ -102,9 +109,13 @@ describe('SessionsView', () => {
     expect(container.querySelector('line.edge-inferred title')?.textContent).toBe(
       'inferred (task_notification)',
     );
-    expect(screen.getByLabelText('edge provenance legend').textContent).toContain(
-      'observed (tool_use)',
-    );
+    // The legend enumerates every inferred kind the parser can emit; a new
+    // kind that is not listed here would make the legend lie by omission.
+    const legend = screen.getByLabelText('edge provenance legend').textContent;
+    expect(legend).toContain('observed (tool_use)');
+    for (const kind of ['directory', 'task_notification', 'queue_operation', 'legacy_explore']) {
+      expect(legend).toContain(kind);
+    }
 
     // Node identity: subagentType, else type, else 'agent'; null status is 'unrecorded'.
     expect(
@@ -359,5 +370,46 @@ describe('SessionsView', () => {
     renderView();
     await screen.findByRole('list', { name: 'session list' });
     expect(screen.getByText('project unknown')).toBeDefined();
+  });
+
+  /**
+   * M-9: cost analysability must not be limited to the sessions that rank in
+   * the cost view's top-5. Like there, the analysis reprices transcripts off
+   * disk, so it stays opt-in per row - no request may leave before the user
+   * picks "analyse".
+   */
+  it('fetches no cost analysis until the user picks analyse on a row', async () => {
+    routeFetch();
+    renderView();
+    await screen.findByRole('list', { name: 'session list' });
+
+    expect(screen.getByTestId('analysis-prompt').textContent).toContain('Pick “analyse”');
+    // Exactly one request may leave on mount: the session list.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls.every(([url]) => !String(url).includes('cost-analysis'))).toBe(
+      true,
+    );
+  });
+
+  it('opens the per-session cost analysis for any listed row via its analyse action', async () => {
+    routeFetch();
+    renderView();
+    await screen.findByRole('list', { name: 'session list' });
+
+    const analyseButton = screen.getByRole('button', { name: /analyse cost of session aaaaaaaa/ });
+    expect(analyseButton.getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(analyseButton);
+
+    await screen.findByTestId('session-analysis');
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/sessions/aaaaaaaa-1111-2222-3333-444444444444/cost-analysis',
+      expect.anything(),
+    );
+    expect(screen.queryByTestId('analysis-prompt')).toBeNull();
+    expect(analyseButton.getAttribute('aria-pressed')).toBe('true');
+    // Analysing a session is independent of tree drill-down: no tree fetch
+    // leaves and the tree pane keeps inviting a selection.
+    expect(fetchMock.mock.calls.every(([url]) => !String(url).includes('/tree'))).toBe(true);
+    expect(screen.getByText('Select a session to see its persisted agent tree.')).toBeDefined();
   });
 });

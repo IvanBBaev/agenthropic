@@ -6,7 +6,7 @@
  * the WP-D2 pragma assertions, and refuses to hand back a database that does
  * not pass `PRAGMA integrity_check`.
  */
-import { copyFileSync, mkdirSync } from 'node:fs';
+import { copyFileSync, mkdirSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { openDatabase, type SqliteDatabase } from './connection';
 
@@ -19,9 +19,19 @@ export async function backupDatabase(db: SqliteDatabase, destPath: string): Prom
 /**
  * Restore a backup file to `destPath` and return the opened database.
  * Throws (and closes the handle) if the restored file fails integrity_check.
+ *
+ * In-place restore (destPath is the live database path) requires the server -
+ * every open handle on destPath - to be stopped first: an open WAL connection
+ * would keep writing sidecars for the file being replaced underneath it.
  */
 export function restoreDatabase(srcBackup: string, destPath: string): SqliteDatabase {
   mkdirSync(dirname(destPath), { recursive: true });
+  // A leftover `-wal`/`-shm` pair belongs to the database being REPLACED
+  // (e.g. after an unclean shutdown). SQLite recovery on open would replay
+  // those frames INTO the restored image - silently mixing two database
+  // states in exactly the disaster path restores exist for (review M-4).
+  rmSync(`${destPath}-wal`, { force: true });
+  rmSync(`${destPath}-shm`, { force: true });
   copyFileSync(srcBackup, destPath);
   const db = openDatabase(destPath);
   const result = db.pragma('integrity_check', { simple: true });

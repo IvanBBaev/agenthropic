@@ -12,7 +12,7 @@ export interface OrchestrationEdgeInsert {
   readonly sessionId: string;
   readonly parentAgentId: string;
   readonly childAgentId: string;
-  /** One of the four structural join paths (parser-spec section 4). */
+  /** A structural join path (parser-spec section 4) or `legacy_explore` (gate #7). */
   readonly source: OrchestrationEdgeSource;
   readonly instance: string;
   readonly hostId: string;

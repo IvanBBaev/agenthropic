@@ -97,7 +97,7 @@ export function enumerateSessions(fs: CorpusFs, corpusRoot: string): SessionEnum
     slugNames = fs.readDirNames(corpusRoot);
   } catch (err) {
     if (errnoCodeOf(err) === 'ENOENT') {
-      return { kind: 'sessions', refs }; // vanished root → genuinely no sessions
+      return { kind: 'sessions', refs, skipped: [] }; // vanished root → genuinely no sessions
     }
     return { kind: 'unreadable-root', code: errnoCodeOf(err) };
   }
@@ -145,7 +145,45 @@ export function enumerateSessions(fs: CorpusFs, corpusRoot: string): SessionEnum
     }
   }
 
-  return { kind: 'sessions', refs };
+  return dedupeSessionRefs(refs);
+}
+
+/**
+ * Collapse a duplicated session uuid (the same `<uuid>.jsonl` under more than
+ * one slug directory — a copied project dir) to ONE deterministic ref, and
+ * record every losing copy as `duplicate-session` (review M-14). Without this,
+ * the fingerprint map keyed on sessionId alone flip-flopped between the copies:
+ * whichever ref enumerated LAST won that tick, so the session re-ingested every
+ * pass forever and its `project_slug` flapped in the UI.
+ *
+ * The winner is the ref whose `projectSlug` sorts FIRST lexicographically —
+ * deterministic regardless of `readdir` order, and stable across ticks (which
+ * is the property that stops the flap). A copied dir usually gains a suffix
+ * ("-backup", " copy"), so the shortest-sorting slug tends to be the original;
+ * when it is not, the pick is still one honest, stable choice, and the skipped
+ * copies are reported rather than silently shadowed.
+ */
+function dedupeSessionRefs(refs: readonly SessionRef[]): SessionEnumeration {
+  const bySession = new Map<string, SessionRef>();
+  const skipped: SkippedFile[] = [];
+  for (const ref of refs) {
+    const incumbent = bySession.get(ref.sessionId);
+    if (incumbent === undefined) {
+      bySession.set(ref.sessionId, ref);
+      continue;
+    }
+    const loser = incumbent.projectSlug <= ref.projectSlug ? ref : incumbent;
+    if (loser !== ref) {
+      bySession.set(ref.sessionId, ref);
+    }
+    // The relative path (slug/<uuid>.jsonl) names WHICH copy lost — path-free
+    // above the corpus root, so it is safe for logs and SSE.
+    skipped.push({
+      relativePath: `${loser.projectSlug}/${loser.sessionId}${JSONL_SUFFIX}`,
+      reason: 'duplicate-session',
+    });
+  }
+  return { kind: 'sessions', refs: [...bySession.values()], skipped };
 }
 
 /** Mutable accumulator threaded through the artifact walk. */

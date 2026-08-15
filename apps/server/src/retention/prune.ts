@@ -35,14 +35,27 @@
  *  6. DRY RUN. `{ dryRun: true }` performs every measurement, including the
  *     dollar impact, and deletes nothing.
  *
- * KNOWN, DELIBERATE RESIDUE (not a bug - a fact the operator must know).
- * `token_usage` is re-derived from the JSONL corpus on every ingest pass, and
- * the first watcher tick after a restart replays the whole corpus. Pruning
- * usage rows whose transcript is still on disk therefore frees space only
- * until the next replay puts them back. That direction is the safe one - the
- * totals heal rather than staying quietly low - but it means row-level TTL on
- * `token_usage` reclaims space durably only for sessions whose transcripts are
- * gone. This is one of the things OPEN-1 has to settle.
+ * RETENTION vs REPLAY CHECKPOINTS (facts the operator must know; the
+ * interplay is undecided and awaits Ivan's OPEN-1 ratification).
+ * `token_usage` is re-derived from the JSONL corpus, but a restart does NOT
+ * re-read unchanged transcripts: a replay checkpoint (WP-IN10,
+ * `db/replay-checkpoints.ts`) is honored while the session's `sessions` row
+ * exists, and this module never touches that table. Two consequences, in
+ * opposite directions:
+ *
+ *  - A session that stays idle after the prune is never re-read, so its
+ *    pruned rows STAY GONE. The reclaim is durable and every dollar total
+ *    covering the window stays lower - explainable only through the journal
+ *    receipt.
+ *  - A session whose transcript changes later is re-read in full (its
+ *    fingerprint no longer matches), which RESURRECTS the pruned rows from
+ *    the JSONL. A subsequent prune removes and journals the same dollars
+ *    AGAIN, so summing journal receipts can OVER-COUNT what retention took
+ *    off the books for such sessions.
+ *
+ * Which side yields - invalidating affected checkpoints inside the prune
+ * transaction, or excluding pruned windows on re-ingest - is the OPEN-1
+ * decision; until it is made, both behaviors above are the shipped truth.
  */
 import type { SqliteDatabase } from '../db/connection';
 import {

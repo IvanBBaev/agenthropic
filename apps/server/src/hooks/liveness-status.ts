@@ -26,7 +26,7 @@
  * shown as 'unknown', never softened into something friendlier.
  */
 import type { AgentStatus } from '@agenthropic/shared';
-import { applyAgentStatus } from '../db/agents';
+import { applyAgentStatus, reconcileAgentStatus } from '../db/agents';
 import type { SqliteDatabase } from '../db/connection';
 import { mirrorMainAgentStatus } from '../db/sessions';
 import { extractLivenessIds } from '../db/event-store';
@@ -145,5 +145,86 @@ export function applyHookLiveness(
     // nothing about whether its parent session is still working.
     mirrorMainAgentStatus(db, target.agentId, target.status);
     return [transition];
+  })();
+}
+
+/**
+ * M-13 — replay stored SubagentStop verdicts for agents that JUST got their
+ * first row.
+ *
+ * A subagent that finishes within one poll interval fires its SubagentStop
+ * hook BEFORE ingest has ever parsed its transcript. CD-1 makes the live path
+ * store that hook as raw liveness and change no row — correct, but without
+ * this replay the verdict is lost forever: the watchdog eventually ages the
+ * agent to 'unknown' even though a hook genuinely observed it complete.
+ *
+ * Scope is deliberately narrow:
+ *  - only agents FIRST INSERTED by the current projection (`newAgentIds`) —
+ *    an agent that already had a row received its live delivery normally, and
+ *    re-applying old stops to it would be a second, unaccountable writer;
+ *  - only SubagentStop. `Stop` recurs on every turn and maps to the
+ *    non-terminal 'waiting', so replaying a stale one would overwrite fresher
+ *    liveness with an old idle verdict;
+ *  - through {@link reconcileAgentStatus}, which refuses to move a row that is
+ *    already terminal — replayed evidence never outranks a later verdict, and
+ *    a repeat reconcile of the same stored rows is a no-op.
+ *
+ * The lookup goes through the `events` hook projection (indexed by
+ * session_id) rather than scanning `events_raw`. A stored payload that does
+ * not parse or names no agent is SKIPPED, never thrown on: reconciliation is
+ * best-effort recovery and must not be able to fail an ingest tick. A payload
+ * that never carried a session_id is invisible to the session-scoped query —
+ * accepted, because real Claude Code hook stdin always carries one.
+ */
+export function reconcilePendingSubagentStops(
+  db: SqliteDatabase,
+  sessionId: string,
+  newAgentIds: ReadonlySet<string>,
+): AgentStatusChangedEvent[] {
+  if (newAgentIds.size === 0) {
+    // The common ingest tick: nothing new, nothing to replay, no query.
+    return [];
+  }
+  const rows = db
+    .prepare(
+      `SELECT r.payload AS payload
+         FROM events e
+         JOIN events_raw r ON r.id = e.raw_event_id
+        WHERE e.session_id = ? AND e.event_type = ?
+        ORDER BY e.id`,
+    )
+    .all(sessionId, SUBAGENT_STOP_HOOK) as { payload: string }[];
+  // One transaction around the whole replay, for the same reason as the live
+  // path: an agent row and its session mirror must never diverge. Nested
+  // inside the projection transaction this is a savepoint, so a reconcile
+  // commits or rolls back with the rows that triggered it.
+  return db.transaction((): AgentStatusChangedEvent[] => {
+    const transitions: AgentStatusChangedEvent[] = [];
+    for (const row of rows) {
+      let payload: unknown;
+      try {
+        payload = JSON.parse(row.payload);
+      } catch {
+        // A raw payload that is not valid JSON cannot arrive through the
+        // append port (it stringifies), but events_raw makes no such CHECK —
+        // a damaged row must not be able to sink the whole ingest tick.
+        continue;
+      }
+      const target = resolveHookStatusTarget(SUBAGENT_STOP_HOOK, payload);
+      if (target === null || !newAgentIds.has(target.agentId)) {
+        continue;
+      }
+      const transition = reconcileAgentStatus(db, target.agentId, target.status);
+      if (transition === null) {
+        // Duplicate stored stops for the same agent: the first one already
+        // moved the row to its terminal, the rest are no-ops by design.
+        continue;
+      }
+      // Parity with the live path: a main-agent target mirrors onto its
+      // session row; for a subagent this is a guarded no-op.
+      mirrorMainAgentStatus(db, target.agentId, target.status);
+      transitions.push(transition);
+    }
+    return transitions;
   })();
 }

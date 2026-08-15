@@ -12,6 +12,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  LEGACY_EXPLORE_EDGE_SOURCE,
   parseSession,
   SubstrateError,
   UsageConflictError,
@@ -22,6 +23,8 @@ import {
 import {
   DUPLICATED_MESSAGE_ID,
   EVICTED_TOOL_USE_ID,
+  LEGACY_CHILD_HEX,
+  LEGACY_DECOY_HEX,
   QUEUED_TOOL_USE_ID,
   getFixture,
   listFixtures,
@@ -255,6 +258,70 @@ describe('parseSession — usage-dedup fixture (lone subagent, no main)', () => 
       cacheRead: 0,
       cacheWrite5m: 15000,
       cacheWrite1h: 0,
+    });
+  });
+});
+
+// --- fixture: legacy-bare-explore (gate #7 legacy fallback) ------------------
+
+describe('parseSession — legacy-bare-explore fixture (legacy_explore join)', () => {
+  const SESSION = '99999999-aaaa-4bbb-8ccc-dddddddddddd';
+  const result = parseSession(getFixture('legacy-bare-explore'));
+
+  it('anchors the flat legacy child to the main agent instead of orphaning it', () => {
+    expect(agentById(result, LEGACY_CHILD_HEX)).toEqual({
+      id: LEGACY_CHILD_HEX,
+      type: 'subagent',
+      subagentType: 'Explore',
+      parentAgentId: SESSION,
+      startedAt: '2026-01-18T10:00:07.000Z',
+      endedAt: '2026-01-18T10:00:10.000Z',
+    });
+  });
+
+  it('emits exactly one edge with the DISTINCT legacy_explore provenance and no tool-use id', () => {
+    expect(result.edges).toHaveLength(1);
+    expect(result.edges[0]).toEqual({
+      sessionId: SESSION,
+      parentAgentId: SESSION,
+      childAgentId: LEGACY_CHILD_HEX,
+      source: LEGACY_EXPLORE_EDGE_SOURCE,
+      toolUseId: null,
+    });
+    // The literal itself is asserted so a rename of the exported constant can
+    // never silently change the provenance value persisted downstream.
+    expect(result.edges[0]?.source).toBe('legacy_explore');
+  });
+
+  it('never indexes the nested data.agentId decoy as an agent or an edge endpoint', () => {
+    expect(agentById(result, LEGACY_DECOY_HEX)).toBeUndefined();
+    const touchesDecoy = result.edges.some(
+      (edge) => edge.childAgentId === LEGACY_DECOY_HEX || edge.parentAgentId === LEGACY_DECOY_HEX,
+    );
+    expect(touchesDecoy).toBe(false);
+  });
+
+  it('ignores the child transcript self-agentId progress line (no self-spawn)', () => {
+    // If the own-agentId guard failed, the child transcript's progress record
+    // would overwrite the join index and the parent would become the child hex.
+    expect(edgeForChild(result, LEGACY_CHILD_HEX)?.parentAgentId).toBe(SESSION);
+  });
+
+  it('dedupes usage and attributes each row to its transcript owner', () => {
+    expect(result.usage).toHaveLength(2);
+    expect(usageFor(result, 'msg_synth_legacy_parent_0001')).toEqual({
+      messageId: 'msg_synth_legacy_parent_0001',
+      model: 'synthetic-model-a',
+      timestamp: '2026-01-18T10:00:04.000Z',
+      usage: { input: 40, output: 55, cacheRead: 900, cacheWrite5m: 0, cacheWrite1h: 0 },
+      agentId: null,
+    });
+    expect(usageFor(result, 'msg_synth_legacy_child_0001')).toEqual({
+      messageId: 'msg_synth_legacy_child_0001',
+      model: 'synthetic-model-a',
+      timestamp: '2026-01-18T10:00:10.000Z',
+      usage: { input: 12, output: 30, cacheRead: 0, cacheWrite5m: 250, cacheWrite1h: 0 },
+      agentId: LEGACY_CHILD_HEX,
     });
   });
 });
@@ -1769,5 +1836,119 @@ describe('parseSession — tolerates an empty .meta.json sidecar', () => {
     expect(agentById(result, CHILD)?.parentAgentId).toBeNull();
     expect(agentById(result, CHILD)?.subagentType).toBeNull();
     expect(edgeForChild(result, CHILD)).toBeUndefined();
+  });
+});
+
+// --- gate #7 narrowness: near-legacy shapes must stay orphans ----------------
+//
+// The legacy fallback is DEFENSIVE and key-presence based; each substrate here
+// is exactly one detail away from the true legacy shape. If any of them ever
+// produced an edge, the fallback would have widened beyond the narrowest
+// honest reading of phase0-probe and could forge parents on modern sessions
+// whose real anchor merely got lost.
+
+describe('parseSession — gate #7 narrowness (near-legacy shapes stay orphans)', () => {
+  const SESSION = '10ac1e70-0000-4000-8000-000000000000';
+  const HEX = 'fa11bac0';
+
+  /**
+   * Builds the legacy layout with a pluggable sidecar record and main-transcript
+   * progress payload; the child transcript itself never carries an anchor.
+   */
+  function nearLegacy(options: {
+    sidecar?: Record<string, unknown>;
+    progress?: Record<string, unknown>;
+  }): ParsedSession {
+    const mainLines = [
+      jline({
+        sessionId: SESSION,
+        type: 'user',
+        timestamp: '2026-08-01T00:00:00.000Z',
+        message: { role: 'user', content: 'go' },
+      }),
+    ];
+    if (options.progress !== undefined) {
+      mainLines.push(
+        jline({
+          sessionId: SESSION,
+          type: 'progress',
+          timestamp: '2026-08-01T00:00:01.000Z',
+          ...options.progress,
+        }),
+      );
+    }
+    const files: Array<{ path: string; lines: string[] }> = [
+      { path: `${SESSION}.jsonl`, lines: mainLines },
+      {
+        path: `subagents/agent-${HEX}.jsonl`,
+        lines: [
+          jline({
+            sessionId: SESSION,
+            agentId: HEX,
+            type: 'user',
+            timestamp: '2026-08-01T00:00:02.000Z',
+            message: { role: 'user', content: 'near-legacy task with no anchors' },
+          }),
+        ],
+      },
+    ];
+    if (options.sidecar !== undefined) {
+      files.push({ path: `subagents/agent-${HEX}.meta.json`, lines: [jline(options.sidecar)] });
+    }
+    return parseSession(substrate(files));
+  }
+
+  function expectOrphan(result: ParsedSession): void {
+    expect(agentById(result, HEX)?.parentAgentId).toBeNull();
+    expect(result.edges).toHaveLength(0);
+  }
+
+  it('joins when the shape IS the bare legacy one (control for the negatives below)', () => {
+    const result = nearLegacy({ sidecar: { agentType: 'Explore' }, progress: { agentId: HEX } });
+    expect(agentById(result, HEX)?.parentAgentId).toBe(SESSION);
+    expect(agentById(result, HEX)?.subagentType).toBe('Explore');
+    expect(edgeForChild(result, HEX)?.source).toBe(LEGACY_EXPLORE_EDGE_SOURCE);
+  });
+
+  it('never joins via a nested data.agentId — only the structural top-level field is a key', () => {
+    expectOrphan(
+      nearLegacy({ sidecar: { agentType: 'Explore' }, progress: { data: { agentId: HEX } } }),
+    );
+  });
+
+  it('treats a toolUseId KEY (even with a malformed value) as modern, never legacy', () => {
+    // A broken-modern sidecar must fail loudly-visibly as an orphan, not get
+    // silently adopted by the weaker legacy inference.
+    expectOrphan(
+      nearLegacy({
+        sidecar: { agentType: 'Explore', toolUseId: 123 },
+        progress: { agentId: HEX },
+      }),
+    );
+  });
+
+  it('treats a spawnDepth KEY as modern, never legacy', () => {
+    expectOrphan(
+      nearLegacy({
+        sidecar: { agentType: 'Explore', spawnDepth: 0 },
+        progress: { agentId: HEX },
+      }),
+    );
+  });
+
+  it('keeps a bare sidecar of any OTHER agentType an orphan (only Explore is attested)', () => {
+    const result = nearLegacy({ sidecar: { agentType: 'Plan' }, progress: { agentId: HEX } });
+    expect(agentById(result, HEX)?.subagentType).toBe('Plan');
+    expectOrphan(result);
+  });
+
+  it('keeps a bare Explore sidecar an orphan when no progress line names the child', () => {
+    const result = nearLegacy({ sidecar: { agentType: 'Explore' } });
+    expect(agentById(result, HEX)?.subagentType).toBe('Explore');
+    expectOrphan(result);
+  });
+
+  it('ignores a progress record that carries no top-level agentId at all', () => {
+    expectOrphan(nearLegacy({ sidecar: { agentType: 'Explore' }, progress: {} }));
   });
 });

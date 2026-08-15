@@ -73,7 +73,13 @@ describe('DagView', () => {
     expect(screen.getByTestId('dag-node-agent-main')).toBeDefined();
     // Node label carries the session identity so cross-session nodes stay tellable apart.
     expect(screen.getByTestId('dag-node-agent-child').textContent).toContain('bbbbbbbb…');
-    expect(screen.getByLabelText('edge provenance legend').textContent).toContain('inferred');
+    // The legend enumerates every inferred kind the parser can emit; a new
+    // kind that is not listed here would make the legend lie by omission.
+    const legend = screen.getByLabelText('edge provenance legend').textContent;
+    expect(legend).toContain('observed (tool_use)');
+    for (const kind of ['directory', 'task_notification', 'queue_operation', 'legacy_explore']) {
+      expect(legend).toContain(kind);
+    }
   });
 
   it('shows the truncation banner with real N-of-M numbers', async () => {

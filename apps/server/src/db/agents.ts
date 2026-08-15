@@ -104,7 +104,20 @@ const AGENT_STATUS_CASE = `CASE
          ELSE agents.status
        END`;
 
-export function upsertAgent(db: SqliteDatabase, row: AgentUpsert): void {
+export interface AgentUpsertResult {
+  /** True when the row did not exist before this call — a FIRST sighting. */
+  readonly inserted: boolean;
+}
+
+export function upsertAgent(db: SqliteDatabase, row: AgentUpsert): AgentUpsertResult {
+  // First-sighting probe (M-13). A SubagentStop hook that fires before the
+  // transcript is ever parsed is stored as raw liveness and changes no row
+  // (CD-1) — the projection replays it the moment the row is CREATED, so it
+  // must know which upserts were first sightings. `info.changes` cannot tell:
+  // ON CONFLICT ... DO UPDATE reports 1 for insert and update alike. The
+  // probe-then-write pair is race-free because every caller runs on the
+  // single write connection, inside the projection transaction.
+  const existing = db.prepare('SELECT 1 FROM agents WHERE id = ?').get(row.id);
   db.prepare(
     `INSERT INTO agents
        (id, session_id, type, subagent_type, status, parent_agent_id, first_seen_at, last_seen_at)
@@ -126,6 +139,7 @@ export function upsertAgent(db: SqliteDatabase, row: AgentUpsert): void {
     row.firstSeenAt,
     row.lastSeenAt,
   );
+  return { inserted: existing === undefined };
 }
 
 interface AgentStatusRow {
@@ -151,6 +165,46 @@ export function applyAgentStatus(
     .prepare('SELECT session_id AS sessionId, status FROM agents WHERE id = ?')
     .get(id) as AgentStatusRow | undefined;
   if (row === undefined || row.status === status) {
+    return null;
+  }
+  setAgentStatus(db, id, status);
+  return {
+    type: 'agent-status-changed',
+    agentId: id,
+    sessionId: row.sessionId,
+    oldStatus: row.status,
+    newStatus: status,
+  };
+}
+
+/**
+ * M-13 reconcile primitive: apply a status recovered from STORED hook evidence
+ * to an agent whose row was created AFTER the hook fired.
+ *
+ * Differs from {@link applyAgentStatus} in exactly one arm: a row that already
+ * holds an OBSERVED terminal ('completed' / 'error') is left alone. The live
+ * hook path may move any status because its evidence is fresher than the row
+ * by definition; a reconcile replays OLD evidence, so any terminal verdict
+ * that landed in the meantime must win. That same arm is what makes
+ * reconciliation idempotent: the first pass moves the row, every replay of
+ * the same stored evidence finds the terminal already set and returns null.
+ * The same-status arm keeps the primitive's contract honest — it can never
+ * emit an `X -> X` transition onto the realtime stream.
+ */
+export function reconcileAgentStatus(
+  db: SqliteDatabase,
+  id: string,
+  status: AgentStatus,
+): AgentStatusChangedEvent | null {
+  const row = db
+    .prepare('SELECT session_id AS sessionId, status FROM agents WHERE id = ?')
+    .get(id) as AgentStatusRow | undefined;
+  if (
+    row === undefined ||
+    row.status === 'completed' ||
+    row.status === 'error' ||
+    row.status === status
+  ) {
     return null;
   }
   setAgentStatus(db, id, status);

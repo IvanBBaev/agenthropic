@@ -83,6 +83,24 @@ front, avoids re-litigating "who could actually exploit this" in every section:
 | **Local multi-user** | Another OS account *on the same host* connecting to `127.0.0.1:<port>`. This attacker model **survives a perfect loopback bind** — bind alone only stops the network; it does not stop a second account on the same Mac Mini. | Mandatory auth token, `timingSafeEqual`-compared, checked independently of bind. |
 | **Malicious event payload** | A client that can submit — or, worse, does not even need authorization to submit — an event/webhook-registration payload whose *contents* the server later acts on, e.g. dialing a URL the payload names. | Never deriving an outbound-dial target from event-payload data; outbound targets are operator-configured only. |
 
+> **As built — an honest amendment to the local-multi-user row (M-11, fixed
+> 2026-08).** "Defeated by the mandatory token" is only as true as the token's own
+> custody, and agenthropic's first shipped hook command undermined it: the command
+> written into Claude Code's settings let the shell expand `${DASHBOARD_TOKEN}`
+> into **curl's argv**, so for the up-to-3-second life of every hook POST the
+> token value sat in the process table — harvestable via `ps`/`/proc/<pid>/cmdline`
+> by *exactly this attacker*, who could then pass the gate legitimately. The fix
+> (2026-08): the generated command now has curl import the env var itself
+> (`--variable '%DASHBOARD_TOKEN'` + a single-quoted `--expand-header` template,
+> curl ≥ 8.3.0), so the token appears in **no** process's argv; a test simulates
+> the shell expansion and asserts a canary value is absent from every argv word.
+> On an older curl the command fails closed — nothing sent, session never blocked
+> — rather than falling back to the leaking shape. **Residual exposure:** a
+> process of the *same* account, or root, can always read the token (process
+> environment, the profile/`launchd` plist that exports it); the token defends
+> the cross-account boundary, nothing stronger. Details:
+> [hooks installer](../usage/hooks-installer.md).
+
 A fourth pattern shows up only in `hoangsonww` and deserves its own framing: **an
 attacker model that collapses the other three.** Because its bind is "configurable"
 and its token is "a no-op when unset," whichever of LAN peer or local multi-user the

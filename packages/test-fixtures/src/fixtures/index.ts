@@ -4,6 +4,7 @@
  */
 import { depth2Sync } from './depth-2-sync.js';
 import { flatToolUse } from './flat-tool-use.js';
+import { legacyBareExplore } from './legacy-bare-explore.js';
 import { nestedWorkflow } from './nested-workflow.js';
 import { queueOperation } from './queue-operation.js';
 import { taskNotificationRecovery } from './task-notification-recovery.js';
@@ -17,6 +18,7 @@ const REGISTRY: Readonly<Record<FixtureName, Fixture>> = {
   'queue-operation': queueOperation,
   'usage-dedup': usageDedup,
   'depth-2-sync': depth2Sync,
+  'legacy-bare-explore': legacyBareExplore,
 };
 
 /** All fixture names, in a stable order. */
@@ -38,3 +40,4 @@ export type { Fixture, FixtureFile, FixtureName } from './types.js';
 export { EVICTED_TOOL_USE_ID, TASK_ID } from './task-notification-recovery.js';
 export { QUEUED_TASK_ID, QUEUED_TOOL_USE_ID } from './queue-operation.js';
 export { DUPLICATED_MESSAGE_ID } from './usage-dedup.js';
+export { LEGACY_CHILD_HEX, LEGACY_DECOY_HEX } from './legacy-bare-explore.js';

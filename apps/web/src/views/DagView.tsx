@@ -162,7 +162,8 @@ export function DagView({ token, onAuthRejected }: ViewProps) {
         {describeAgentGraph(dag.nodes, dag.edges)}
       </p>
       <p className="legend-inline muted" aria-label="edge provenance legend">
-        — observed (tool_use) ┄ inferred (directory, task_notification, queue_operation)
+        — observed (tool_use) ┄ inferred (directory, task_notification, queue_operation,
+        legacy_explore)
       </p>
     </section>
   );

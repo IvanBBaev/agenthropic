@@ -30,8 +30,9 @@
  *  - PROOF OF PROJECTION. A checkpoint is honored only while its session STILL
  *    HAS A ROW in `sessions`. A checkpoint therefore cannot hide a session that
  *    is missing from the database — if the row is gone (restore from an older
- *    backup, a retention sweep, a manual delete), the session re-ingests
- *    exactly as it does today.
+ *    backup, a manual delete; retention can never remove `sessions` rows, see
+ *    RETENTION_PROTECTED_TABLES), the session re-ingests exactly as it does
+ *    today.
  *  - DEGRADE, NEVER CRASH. Every statement is wrapped: an absent, corrupt or
  *    unwritable checkpoint table yields an empty map (a full replay), never an
  *    exception into the ingest loop. The store is a cache, and a cache that

@@ -92,6 +92,21 @@ function routeSessionFetch(options: { list?: Response; tree?: Response } = {}): 
   });
 }
 
+/**
+ * The cost view rides two endpoints since M-8 (summary + the burners' DAG
+ * slice), so a blanket mockResolvedValue would feed the summary to both.
+ * Route the DAG request to a real DAG payload; everything else gets the
+ * summary under test.
+ */
+function routeCostFetch(summary: Response): void {
+  fetchMock.mockImplementation((url: string) => {
+    if (url.includes('/api/dag/global')) {
+      return Promise.resolve(jsonResponse(200, globalDag()));
+    }
+    return Promise.resolve(summary);
+  });
+}
+
 describe('a status the UI does not recognise', () => {
   it('renders visibly instead of vanishing or crashing', () => {
     const meta = statusMeta('archived');
@@ -208,7 +223,7 @@ describe('a missing project slug', () => {
   });
 
   it('uses that copy in the top-sessions table', async () => {
-    fetchMock.mockResolvedValue(
+    routeCostFetch(
       jsonResponse(
         200,
         costSummary({
@@ -280,7 +295,7 @@ describe('unpriced tokens in the session list', () => {
 
 describe('the cost totals', () => {
   it('say the headline dollar figure covers priced tokens only when a gap exists', async () => {
-    fetchMock.mockResolvedValue(
+    routeCostFetch(
       jsonResponse(
         200,
         costSummary({
@@ -295,7 +310,7 @@ describe('the cost totals', () => {
   });
 
   it('do not carry that note when every token is priced', async () => {
-    fetchMock.mockResolvedValue(
+    routeCostFetch(
       jsonResponse(
         200,
         costSummary({
@@ -310,14 +325,14 @@ describe('the cost totals', () => {
   });
 
   it('distinguish an empty database from a genuine $0', async () => {
-    fetchMock.mockResolvedValue(jsonResponse(200, costSummary()));
+    routeCostFetch(jsonResponse(200, costSummary()));
     renderCost();
     await screen.findByLabelText('totals');
     expect(screen.getByTestId('no-usage-note').textContent).toContain('No usage recorded yet');
   });
 
   it('do not claim emptiness when usage exists but nothing is priced', async () => {
-    fetchMock.mockResolvedValue(
+    routeCostFetch(
       jsonResponse(
         200,
         costSummary({
@@ -334,7 +349,7 @@ describe('the cost totals', () => {
 
 describe('the cost-flow session labels', () => {
   it('never truncate a real project slug into something that reads like an id', async () => {
-    fetchMock.mockResolvedValue(
+    routeCostFetch(
       jsonResponse(
         200,
         costSummary({
@@ -490,7 +505,7 @@ describe('the chart text alternatives', () => {
   });
 
   it('is reachable from the cost flow through aria-describedby', async () => {
-    fetchMock.mockResolvedValue(
+    routeCostFetch(
       jsonResponse(
         200,
         costSummary({

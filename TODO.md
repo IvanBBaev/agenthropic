@@ -201,6 +201,18 @@ packages** with zero pragmas and guard tests, the status lifecycle + WP-IN12 wat
 live, the corpus-scale benchmark + read-path fixes, the WP-D10 retention mechanism
 (values still OPEN-1/2/3), the web/API honesty audits, and the six approved audit
 fixes — **1318 tests**. See DONE.md Milestone 1 for the full record.)_
+_(Updated **2026-08-15**: the 2026-08-10 → 2026-08-15 review-remediation waves are done but
+**UNCOMMITTED** (base `2f8d103`) — the 14-item parser gate is now **14/14 implemented** (the
+last one, #7 legacy bare-`Explore`, ships as a defensive fallback with a DISTINCT persisted
+`legacy_explore` provenance; #7 and N1 stay **absent from real corpus**, so they remain
+PROVISIONAL fallbacks, not measured paths), plus M-14 duplicate-`session-uuid` dedup at
+enumeration (gate item #9 hardened: two slugs holding the same session uuid now ingest once,
+smallest slug wins, the loser is counted as a `duplicate-session` skip), M-15 byte-offset
+tail-read cache (a poll pass costs O(new bytes); `lastTickDurationMs` on `/api/health`), and
+M-16 listen-before-replay with `ingest: 'replaying' | 'idle'` on `/api/health`. Gates on the
+merged tree: typecheck · lint · format:check · gate:spawner · gate:licenses green, **105 test
+files / 1540 tests, 100/100/100/100 in all five packages**. New PROVISIONAL constants:
+`OVERLAP_BYTES` = 4096, tail-cache caps 128 MiB / 512 entries, M-14 smallest-slug-wins.)_
 
 > **Recorded architectural divergence (deliberate, not a defect to refactor):** JSONL is
 > parsed and ingested straight into the projections (`sessions` · `agents` ·

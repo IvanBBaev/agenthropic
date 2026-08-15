@@ -4,7 +4,13 @@
  * connecting/open/reconnecting/closed state machine.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createSseClient, type SseConnectionState, type SseEvent } from '../src/sse';
+import { SERVER_EVENT_TYPES as SHARED_EVENT_TYPES } from '../../../packages/shared/src/realtime/event-types';
+import {
+  createSseClient,
+  SERVER_EVENT_TYPES,
+  type SseConnectionState,
+  type SseEvent,
+} from '../src/sse';
 import { MockEventSource } from './mock-event-source';
 
 beforeEach(() => {
@@ -99,6 +105,25 @@ describe('createSseClient', () => {
     MockEventSource.latest().emit('session-started', { id: 'abc' });
 
     expect(any).toHaveBeenCalledWith({ type: 'session-started', data: { id: 'abc' } });
+  });
+
+  it('re-exports the shared event-type list itself, not a hand-copied mirror', () => {
+    // The mirror drifted once (`ingest-failed` published but never registered,
+    // so EventSource dropped every quarantine notice unheard); identity with
+    // the shared list makes that drift impossible.
+    expect(SERVER_EVENT_TYPES).toBe(SHARED_EVENT_TYPES);
+  });
+
+  it('eagerly registers every shared server event type, ingest-failed included', () => {
+    const client = createSseClient('t');
+    const seen: string[] = [];
+    client.onAnyEvent((event) => seen.push(event.type));
+
+    for (const type of SERVER_EVENT_TYPES) {
+      MockEventSource.latest().emit(type, { type });
+    }
+
+    expect(seen).toEqual([...SERVER_EVENT_TYPES]);
   });
 
   it('silently ignores event types nobody registered', () => {

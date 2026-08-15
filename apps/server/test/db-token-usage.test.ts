@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import type { DedupedUsage } from '@agenthropic/core';
 import { insertTokenUsageRows } from '../src/db/token-usage';
 import { createMigratedTempDb, insertSession, type TempDb } from './helpers';
@@ -49,6 +49,7 @@ describe('insertTokenUsageRows (WP-D8 / LONG token_usage matrix)', () => {
     expect(insertTokenUsageRows(temp.db, sessionId, messages)).toEqual({
       inserted: 10,
       corrected: 0,
+      crossSessionCollisions: 0,
     });
     const count = temp.db.prepare('SELECT COUNT(*) AS n FROM token_usage').get() as { n: number };
     expect(count.n).toBe(10);
@@ -58,10 +59,12 @@ describe('insertTokenUsageRows (WP-D8 / LONG token_usage matrix)', () => {
     expect(insertTokenUsageRows(temp.db, sessionId, messages)).toEqual({
       inserted: 10,
       corrected: 0,
+      crossSessionCollisions: 0,
     });
     expect(insertTokenUsageRows(temp.db, sessionId, messages)).toEqual({
       inserted: 0,
       corrected: 0,
+      crossSessionCollisions: 0,
     });
     const count = temp.db.prepare('SELECT COUNT(*) AS n FROM token_usage').get() as { n: number };
     expect(count.n).toBe(10);
@@ -152,11 +155,13 @@ describe('insertTokenUsageRows (WP-D8 / LONG token_usage matrix)', () => {
       expect(insertTokenUsageRows(temp.db, sessionId, [partial])).toEqual({
         inserted: 5,
         corrected: 0,
+        crossSessionCollisions: 0,
       });
       // All five rows change: three by tokens, all five by the settled model.
       expect(insertTokenUsageRows(temp.db, sessionId, [settled])).toEqual({
         inserted: 0,
         corrected: 5,
+        crossSessionCollisions: 0,
       });
 
       expect(readMessage('msg-stream')).toEqual([
@@ -175,6 +180,7 @@ describe('insertTokenUsageRows (WP-D8 / LONG token_usage matrix)', () => {
       expect(insertTokenUsageRows(temp.db, sessionId, [partial])).toEqual({
         inserted: 0,
         corrected: 0,
+        crossSessionCollisions: 0,
       });
 
       expect(readMessage('msg-stream')).toEqual([
@@ -198,6 +204,7 @@ describe('insertTokenUsageRows (WP-D8 / LONG token_usage matrix)', () => {
       expect(insertTokenUsageRows(temp.db, sessionId, [sameOutputBiggerCache])).toEqual({
         inserted: 0,
         corrected: 1,
+        crossSessionCollisions: 0,
       });
 
       const rows = readMessage('msg-stream');
@@ -231,6 +238,7 @@ describe('insertTokenUsageRows (WP-D8 / LONG token_usage matrix)', () => {
       expect(insertTokenUsageRows(temp.db, sessionId, [mainMessage])).toEqual({
         inserted: 0,
         corrected: 5,
+        crossSessionCollisions: 0,
       });
 
       const rows = readMessage('msg-main');
@@ -241,6 +249,165 @@ describe('insertTokenUsageRows (WP-D8 / LONG token_usage matrix)', () => {
         )
         .get('msg-main') as { n: number };
       expect(attributed.n).toBe(5);
+    });
+  });
+
+  /**
+   * M-12 ownership: a CLI resume/fork copies history lines VERBATIM into a new
+   * session file, so the same message_id can arrive from two sessions. The
+   * first-ingested session owns it; the copy is excluded (never double-counted,
+   * never re-attributed) and the exclusion is observable, never silent.
+   */
+  describe('cross-session message ownership (M-12)', () => {
+    const FORK_SESSION = 'sess-fork';
+    let warnSpy: MockInstance;
+
+    const shared = (agentId: string | null, output: number): DedupedUsage => ({
+      messageId: 'msg-shared',
+      model: 'claude-opus-4-6',
+      timestamp: '2026-07-11T12:00:00Z',
+      agentId,
+      usage: { input: 10, output, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 },
+    });
+
+    const sumTokens = (db: TempDb['db']): number => {
+      const row = db.prepare('SELECT COALESCE(SUM(tokens), 0) AS total FROM token_usage').get() as {
+        total: number;
+      };
+      return row.total;
+    };
+
+    const ownerOf = (db: TempDb['db'], messageId: string): string => {
+      const row = db
+        .prepare(
+          `SELECT session_id AS owner FROM token_usage WHERE message_id = ? AND bucket = 'output'`,
+        )
+        .get(messageId) as { owner: string };
+      return row.owner;
+    };
+
+    beforeEach(() => {
+      insertSession(temp.db, FORK_SESSION);
+      warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('excludes a fork replay entirely: attribution stays with the owner, nothing double-counts', () => {
+      expect(insertTokenUsageRows(temp.db, sessionId, [shared('agent-owner', 50)])).toEqual({
+        inserted: 5,
+        corrected: 0,
+        crossSessionCollisions: 0,
+      });
+
+      // The fork's copy names a different agent — the exact rewrite the guard exists to refuse.
+      expect(insertTokenUsageRows(temp.db, FORK_SESSION, [shared('agent-fork', 50)])).toEqual({
+        inserted: 0,
+        corrected: 0,
+        crossSessionCollisions: 1,
+      });
+
+      expect(ownerOf(temp.db, 'msg-shared')).toBe(sessionId);
+      const agents = temp.db
+        .prepare('SELECT DISTINCT agent_id AS agentId FROM token_usage WHERE message_id = ?')
+        .all('msg-shared') as Array<{ agentId: string }>;
+      expect(agents).toEqual([{ agentId: 'agent-owner' }]);
+      // Counted exactly once: 10 input + 50 output, the corpus ground truth.
+      expect(sumTokens(temp.db)).toBe(60);
+    });
+
+    it('keeps global totals identical under BOTH ingest orders', () => {
+      // Order 1: original session first.
+      insertTokenUsageRows(temp.db, sessionId, [shared('agent-owner', 50)]);
+      insertTokenUsageRows(temp.db, FORK_SESSION, [shared('agent-fork', 50)]);
+      const totalOrder1 = sumTokens(temp.db);
+      expect(ownerOf(temp.db, 'msg-shared')).toBe(sessionId);
+
+      // Order 2: fork file discovered first — it becomes the owner, and that
+      // is the documented rule (first-ingested wins), not a defect.
+      const other = createMigratedTempDb();
+      try {
+        insertSession(other.db, sessionId);
+        insertSession(other.db, FORK_SESSION);
+        insertTokenUsageRows(other.db, FORK_SESSION, [shared('agent-fork', 50)]);
+        insertTokenUsageRows(other.db, sessionId, [shared('agent-owner', 50)]);
+        expect(ownerOf(other.db, 'msg-shared')).toBe(FORK_SESSION);
+        expect(sumTokens(other.db)).toBe(totalOrder1);
+      } finally {
+        other.cleanup();
+      }
+    });
+
+    it('never merges a larger foreign read — convergence MAX is within-session only', () => {
+      insertTokenUsageRows(temp.db, sessionId, [shared('agent-owner', 50)]);
+
+      expect(insertTokenUsageRows(temp.db, FORK_SESSION, [shared('agent-fork', 500)])).toEqual({
+        inserted: 0,
+        corrected: 0,
+        crossSessionCollisions: 1,
+      });
+
+      const output = temp.db
+        .prepare(`SELECT tokens FROM token_usage WHERE message_id = ? AND bucket = 'output'`)
+        .get('msg-shared') as { tokens: number };
+      expect(output.tokens).toBe(50);
+    });
+
+    it('surfaces the collision once, counts only — never message ids', () => {
+      insertTokenUsageRows(temp.db, sessionId, [shared('agent-owner', 50)]);
+      expect(warnSpy).not.toHaveBeenCalled();
+
+      insertTokenUsageRows(temp.db, FORK_SESSION, [shared('agent-fork', 50)]);
+
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const line = warnSpy.mock.calls[0]?.[0] as string;
+      expect(line).toContain('skipped 1 message(s)');
+      expect(line).not.toContain('msg-shared');
+      expect(line).not.toContain(FORK_SESSION);
+    });
+
+    it('lets the owner session keep converging freely after a foreign replay was excluded', () => {
+      insertTokenUsageRows(temp.db, sessionId, [shared('agent-owner', 50)]);
+      insertTokenUsageRows(temp.db, FORK_SESSION, [shared('agent-fork', 500)]);
+
+      // The owner's own fuller read still settles the message. Exactly ONE row
+      // moves: model and timestamp are unchanged, so of the five buckets only
+      // `output` actually grows — the WHERE guard reports real UPDATEs, not
+      // touched rows.
+      expect(insertTokenUsageRows(temp.db, sessionId, [shared('agent-owner', 309)])).toEqual({
+        inserted: 0,
+        corrected: 1,
+        crossSessionCollisions: 0,
+      });
+
+      const output = temp.db
+        .prepare(`SELECT tokens FROM token_usage WHERE message_id = ? AND bucket = 'output'`)
+        .get('msg-shared') as { tokens: number };
+      expect(output.tokens).toBe(309);
+    });
+
+    it('skips only the colliding message, not the rest of the batch', () => {
+      insertTokenUsageRows(temp.db, sessionId, [shared('agent-owner', 50)]);
+
+      const fresh: DedupedUsage = {
+        messageId: 'msg-fork-own',
+        model: 'claude-opus-4-6',
+        timestamp: '2026-07-11T12:05:00Z',
+        agentId: 'agent-fork',
+        usage: { input: 1, output: 2, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 },
+      };
+      expect(
+        insertTokenUsageRows(temp.db, FORK_SESSION, [shared('agent-fork', 50), fresh]),
+      ).toEqual({
+        inserted: 5,
+        corrected: 0,
+        crossSessionCollisions: 1,
+      });
+
+      expect(ownerOf(temp.db, 'msg-fork-own')).toBe(FORK_SESSION);
+      expect(ownerOf(temp.db, 'msg-shared')).toBe(sessionId);
     });
   });
 });

@@ -22,13 +22,24 @@ import type { SqliteDatabase } from '../db/connection';
 import { insertOrchestrationEdge } from '../db/edges';
 import { upsertSession } from '../db/sessions';
 import { insertTokenUsageRows } from '../db/token-usage';
+import { reconcilePendingSubagentStops } from '../hooks/liveness-status';
+import type { AgentStatusChangedEvent } from './ingest-events';
 import type { NormalizedSession } from './normalize-session';
 
-/** What the projection actually changed — all three are new-row counts. */
+/** What the projection actually changed. */
 export interface ProjectionCounts {
   readonly agentsUpserted: number;
   readonly edgesInserted: number;
   readonly usageRowsInserted: number;
+  /** Messages skipped by the M-12 first-ingested-session ownership rule. */
+  readonly crossSessionUsageCollisions: number;
+  /**
+   * Status transitions produced by replaying stored SubagentStop hooks onto
+   * agents FIRST INSERTED by this projection (M-13). Returned rather than
+   * published: the projection has no realtime hub, so the caller decides what
+   * to do with them — the same seam shape `applyHookLiveness` uses.
+   */
+  readonly statusReconciliations: readonly AgentStatusChangedEvent[];
 }
 
 /**
@@ -44,6 +55,8 @@ export function projectSession(
 ): ProjectionCounts {
   let edgesInserted = 0;
   let usageRowsInserted = 0;
+  let crossSessionUsageCollisions = 0;
+  let statusReconciliations: readonly AgentStatusChangedEvent[] = [];
 
   db.transaction((): void => {
     upsertSession(db, normalized.session);
@@ -51,9 +64,18 @@ export function projectSession(
     // Order is load-bearing, and it was fixed by the normalizer: a parent is
     // never referenced before its own row exists (agents.parent_agent_id is a
     // self-FK).
+    const newAgentIds = new Set<string>();
     for (const agent of normalized.agents) {
-      upsertAgent(db, agent);
+      if (upsertAgent(db, agent).inserted) {
+        newAgentIds.add(agent.id);
+      }
     }
+
+    // M-13: an agent that JUST got its first row may already have a stored
+    // SubagentStop verdict waiting — the hook fired before its transcript was
+    // ever parsed. Replay it inside the same transaction, so a fast subagent
+    // commits as 'completed', never as watchdog-fodder ending 'unknown'.
+    statusReconciliations = reconcilePendingSubagentStops(db, normalized.sessionId, newAgentIds);
 
     for (const edge of normalized.edges) {
       const { inserted } = insertOrchestrationEdge(db, { ...edge, createdAt: now() });
@@ -62,12 +84,16 @@ export function projectSession(
       }
     }
 
-    usageRowsInserted = insertTokenUsageRows(db, normalized.sessionId, normalized.usage).inserted;
+    const usageResult = insertTokenUsageRows(db, normalized.sessionId, normalized.usage);
+    usageRowsInserted = usageResult.inserted;
+    crossSessionUsageCollisions = usageResult.crossSessionCollisions;
   })();
 
   return {
     agentsUpserted: normalized.agents.length,
     edgesInserted,
     usageRowsInserted,
+    crossSessionUsageCollisions,
+    statusReconciliations,
   };
 }

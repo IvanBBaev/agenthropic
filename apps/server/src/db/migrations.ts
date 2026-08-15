@@ -2,9 +2,12 @@
  * WP-D3 - ordered, idempotent, in-code migration runner - plus the Phase-1
  * schema migrations (WP-D4..D8) and the pricing seed (WP-C1).
  *
- * Applied migration ids are recorded in `schema_version`; running the runner
- * twice yields an identical schema and applies nothing the second time.
+ * Applied migration ids are recorded in `schema_version` together with a
+ * content checksum; running the runner twice yields an identical schema and
+ * applies nothing the second time, and a migration edited after being applied
+ * fails the run loudly (see `migrationChecksum`).
  */
+import { createHash } from 'node:crypto';
 import type { SqliteDatabase } from './connection';
 
 export interface Migration {
@@ -36,6 +39,12 @@ const BUCKET_CHECK = TOKEN_BUCKETS.map((b) => `'${b}'`).join(',');
  * so the floor is set before the corpus. PROVISIONAL (WP-C1) - the price
  * NUMBERS are unchanged and still await ratification; only the coverage floor
  * moved so the engine can price historical data at all.
+ *
+ * FROZEN: these constants are covered by every migration's content checksum
+ * (see `migrationChecksum`) because an in-place edit of exactly these values
+ * is how migration 7 diverged from the operator database (review H-1). A
+ * pricing change must ship as a NEW migration carrying its own inline data,
+ * never by editing these.
  */
 const PRICING_SEED_EFFECTIVE_FROM = '2026-01-01';
 const PRICING_SEED: ReadonlyArray<{
@@ -317,6 +326,102 @@ export const migrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    id: 11,
+    name: 'model-pricing-seed-convergence',
+    up(db) {
+      // Corrective migration (review H-1). Migration 7's seed was edited IN
+      // PLACE after the operator database had applied it: the original seed
+      // wrote bare model keys ('opus-4-8', 'sonnet-5', 'fable-5', 'haiku-4-5')
+      // with a '2026-07-11' floor, while the current 7 writes the corpus-exact
+      // 'claude-'-prefixed keys (haiku date-suffixed) at '2026-01-01'. The
+      // runner skips by recorded id, so a database that ran the ORIGINAL 7
+      // kept the old rows - and under current code every real-model message
+      // failed the PricingError halt gate. This migration converges both
+      // histories: delete exactly the original seed's rows, then upsert the
+      // canonical ones. On a database that ran the current 7 the delete
+      // matches nothing and the upsert rewrites identical values - either
+      // start state ends row-identical. Operator-authored rows (any other
+      // model key or effective_from) are never touched.
+      db.exec(`
+        DELETE FROM model_pricing
+        WHERE effective_from = '2026-07-11'
+          AND model IN ('opus-4-8', 'sonnet-5', 'fable-5', 'haiku-4-5', '<synthetic>');
+      `);
+      const upsert = db.prepare(
+        `INSERT INTO model_pricing (model, bucket, usd_per_mtok, effective_from)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT (model, bucket, effective_from) DO UPDATE SET usd_per_mtok = excluded.usd_per_mtok`,
+      );
+      // Same derivation as migration 7, duplicated INSIDE this up() body on
+      // purpose: the content checksum covers this function's source, and a
+      // shared helper would let a rate-multiplier edit escape it.
+      for (const { model, inputUsdPerMtok, outputUsdPerMtok } of PRICING_SEED) {
+        const rates: Record<string, number> = {
+          input: inputUsdPerMtok,
+          output: outputUsdPerMtok,
+          cache_read: inputUsdPerMtok * 0.1,
+          cache_write_5m: inputUsdPerMtok * 1.25,
+          cache_write_1h: inputUsdPerMtok * 2.0,
+        };
+        for (const bucket of TOKEN_BUCKETS) {
+          upsert.run(model, bucket, rates[bucket], PRICING_SEED_EFFECTIVE_FROM);
+        }
+      }
+    },
+  },
+  {
+    id: 12,
+    name: 'orchestration-edge-endpoint-indexes',
+    up(db) {
+      // Review M-5 (index half): the global-DAG edge query filters on
+      // parent_agent_id AND child_agent_id, but migration 5 indexed only
+      // session_id - so every DAG page full-scanned the edge table. Pure
+      // read-path accelerators, same contract as migration 10: a dropped
+      // index costs speed, never truth.
+      db.exec(`
+        CREATE INDEX idx_orchestration_edges_parent_agent_id ON orchestration_edges(parent_agent_id);
+        CREATE INDEX idx_orchestration_edges_child_agent_id ON orchestration_edges(child_agent_id);
+      `);
+    },
+  },
+  {
+    id: 13,
+    name: 'orchestration-edges-legacy-explore-source',
+    up(db) {
+      // Parser gate #7: pre-2.1.71 bare-`Explore` sidecars join via a
+      // name-based heuristic, and the parser emits that edge with the
+      // DISTINCT source 'legacy_explore' (never disguised as 'tool_use' -
+      // provenance honesty is the design rule the CHECK exists to defend).
+      // Migration 5's CHECK enumerates only the four structural paths, so
+      // ingesting such a session would abort on the constraint and the whole
+      // legacy DAG would silently stay frozen. SQLite cannot ALTER a CHECK:
+      // rebuild the table, copy every row byte-for-byte, and recreate the
+      // three indexes (migrations 5 and 12) that DROP TABLE takes with it.
+      db.exec(`
+        CREATE TABLE orchestration_edges_new (
+          id              INTEGER PRIMARY KEY,
+          session_id      TEXT NOT NULL,
+          parent_agent_id TEXT NOT NULL,
+          child_agent_id  TEXT NOT NULL,
+          source          TEXT NOT NULL CHECK (source IN ('tool_use','directory','task_notification','queue_operation','legacy_explore')),
+          instance        TEXT NOT NULL,
+          host_id         TEXT NOT NULL,
+          created_at      TEXT,
+          UNIQUE (session_id, parent_agent_id, child_agent_id)
+        );
+        INSERT INTO orchestration_edges_new
+          (id, session_id, parent_agent_id, child_agent_id, source, instance, host_id, created_at)
+          SELECT id, session_id, parent_agent_id, child_agent_id, source, instance, host_id, created_at
+            FROM orchestration_edges;
+        DROP TABLE orchestration_edges;
+        ALTER TABLE orchestration_edges_new RENAME TO orchestration_edges;
+        CREATE INDEX idx_orchestration_edges_session_id ON orchestration_edges(session_id);
+        CREATE INDEX idx_orchestration_edges_parent_agent_id ON orchestration_edges(parent_agent_id);
+        CREATE INDEX idx_orchestration_edges_child_agent_id ON orchestration_edges(child_agent_id);
+      `);
+    },
+  },
 ];
 
 export interface MigrationRunResult {
@@ -325,9 +430,39 @@ export interface MigrationRunResult {
 }
 
 /**
+ * Content checksum for a migration, recorded in `schema_version` at apply
+ * time and re-verified on every run, so an in-place edit of an already
+ * applied migration fails loudly instead of silently diverging (review H-1:
+ * the live database keeps the OLD effect while a fresh database gets the NEW
+ * one, and nothing detects it).
+ *
+ * The hash covers the migration's own `up` source AND the module-level seed
+ * constants, because the historical in-place edit went through PRICING_SEED -
+ * a constant OUTSIDE any up() body, invisible to a body-only hash. Whitespace
+ * is stripped before hashing so formatting and TS-transform differences never
+ * trip the verifier; the trade-off is that a whitespace-only edit inside a
+ * string literal is not detectable.
+ */
+export function migrationChecksum(migration: Migration): string {
+  const frozenConstants = JSON.stringify({
+    TOKEN_BUCKETS,
+    PRICING_SEED_EFFECTIVE_FROM,
+    PRICING_SEED,
+  });
+  return createHash('sha256')
+    .update(`${String(migration.id)}\n${migration.name}\n`)
+    .update(migration.up.toString().replace(/\s+/g, ''))
+    .update('\n')
+    .update(frozenConstants)
+    .digest('hex');
+}
+
+/**
  * Apply all pending migrations in order, each inside a transaction that also
- * records its id in `schema_version`. Idempotent: a second run applies
- * nothing and leaves the schema byte-identical.
+ * records its id and content checksum in `schema_version`. Idempotent: a
+ * second run applies nothing and leaves the schema byte-identical. Throws
+ * before applying anything when an already-applied migration's current
+ * content no longer matches its recorded checksum.
  */
 export function runMigrations(
   db: SqliteDatabase,
@@ -338,13 +473,18 @@ export function runMigrations(
     CREATE TABLE IF NOT EXISTS schema_version (
       id         INTEGER PRIMARY KEY,
       name       TEXT NOT NULL,
-      applied_at TEXT NOT NULL
+      applied_at TEXT NOT NULL,
+      checksum   TEXT
     );
   `);
+  ensureChecksumColumn(db);
+  verifyAppliedChecksums(db, list);
   const appliedBefore = new Set(
     (db.prepare('SELECT id FROM schema_version').all() as Array<{ id: number }>).map((r) => r.id),
   );
-  const record = db.prepare('INSERT INTO schema_version (id, name, applied_at) VALUES (?, ?, ?)');
+  const record = db.prepare(
+    'INSERT INTO schema_version (id, name, applied_at, checksum) VALUES (?, ?, ?, ?)',
+  );
   const appliedIds: number[] = [];
   for (const migration of list) {
     if (appliedBefore.has(migration.id)) {
@@ -352,11 +492,66 @@ export function runMigrations(
     }
     db.transaction(() => {
       migration.up(db);
-      record.run(migration.id, migration.name, new Date().toISOString());
+      record.run(
+        migration.id,
+        migration.name,
+        new Date().toISOString(),
+        migrationChecksum(migration),
+      );
     })();
     appliedIds.push(migration.id);
   }
   return { appliedIds };
+}
+
+/**
+ * Databases migrated before checksum recording carry the three-column
+ * `schema_version`; CREATE TABLE IF NOT EXISTS never alters an existing shape,
+ * so the column is added here. It stays nullable: NULL means "applied before
+ * checksums existed" until the trust-on-first-verify backfill fills it.
+ */
+function ensureChecksumColumn(db: SqliteDatabase): void {
+  const columns = db
+    .prepare("SELECT name FROM pragma_table_info('schema_version')")
+    .pluck()
+    .all() as string[];
+  if (!columns.includes('checksum')) {
+    db.exec('ALTER TABLE schema_version ADD COLUMN checksum TEXT;');
+  }
+}
+
+function verifyAppliedChecksums(db: SqliteDatabase, list: readonly Migration[]): void {
+  const byId = new Map(list.map((m) => [m.id, m] as const));
+  const rows = db.prepare('SELECT id, checksum FROM schema_version').all() as Array<{
+    id: number;
+    checksum: string | null;
+  }>;
+  const backfill = db.prepare('UPDATE schema_version SET checksum = ? WHERE id = ?');
+  for (const row of rows) {
+    const migration = byId.get(row.id);
+    if (migration === undefined) {
+      // Applied by a build that knew more migrations than this one; content
+      // unknown here, so there is nothing to verify it against.
+      continue;
+    }
+    const current = migrationChecksum(migration);
+    if (row.checksum === null) {
+      // Trust-on-first-verify backfill: rows written before checksum
+      // recording cannot prove what content actually ran (the H-1 edit
+      // itself is invisible here - migration 11 repairs that data instead).
+      // Recording the current content once makes every FUTURE edit loud.
+      backfill.run(current, row.id);
+      continue;
+    }
+    if (row.checksum !== current) {
+      throw new Error(
+        `Migration ${String(row.id)} (${migration.name}) was edited after being applied: ` +
+          'its current content no longer matches the checksum recorded at apply time. ' +
+          'An applied migration is immutable - restore its original content and ship the ' +
+          'change as a NEW migration instead.',
+      );
+    }
+  }
 }
 
 /** Highest applied migration id, or 0 for a virgin database. */

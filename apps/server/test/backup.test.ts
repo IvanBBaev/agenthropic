@@ -1,4 +1,12 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -124,5 +132,57 @@ describe('backup + tested restore (WP-F8)', () => {
     openHandles.push(forensic);
     expect(existsSync(`${restorePath}-shm`)).toBe(true);
     expect(forensic.pragma('integrity_check', { simple: true })).not.toBe('ok');
+  });
+
+  it('does not let a stale WAL of the replaced database leak into the restored one', async () => {
+    // Review M-4. An in-place restore lands on a path that may still carry the
+    // OLD database's `-wal`/`-shm` pair (unclean shutdown). SQLite recovery on
+    // the next open would replay those frames INTO the restored image - rows
+    // of the database the operator is trying to get rid of.
+    dir = mkdtempSync(join(tmpdir(), 'agenthropic-backup-stalewal-'));
+    const goodPath = join(dir, 'good', 'agent.db');
+    const backupPath = join(dir, 'backups', 'agent.backup.db');
+    const livePath = join(dir, 'live', 'agent.db');
+
+    const good = openDatabase(goodPath);
+    openHandles.push(good);
+    runMigrations(good);
+    new SqliteEventStore(good).append({
+      idempotencyKey: 'good-row',
+      source: 'hook',
+      eventType: 'SessionStart',
+      payload: 1,
+      receivedAt: '2026-07-11T00:00:00Z',
+    });
+    await backupDatabase(good, backupPath);
+    good.close();
+
+    // The live database that the restore will overwrite, with a row the
+    // restore must NOT resurrect.
+    const live = openDatabase(livePath);
+    openHandles.push(live);
+    runMigrations(live);
+    new SqliteEventStore(live).append({
+      idempotencyKey: 'old-only',
+      source: 'hook',
+      eventType: 'Stop',
+      payload: 2,
+      receivedAt: '2026-07-11T00:00:01Z',
+    });
+    // Simulate the unclean shutdown: snapshot the hot sidecars while the
+    // connection is open (close() would checkpoint and delete them), then put
+    // them back after closing.
+    copyFileSync(`${livePath}-wal`, join(dir, 'stale.wal'));
+    copyFileSync(`${livePath}-shm`, join(dir, 'stale.shm'));
+    live.close();
+    copyFileSync(join(dir, 'stale.wal'), `${livePath}-wal`);
+    copyFileSync(join(dir, 'stale.shm'), `${livePath}-shm`);
+    expect(statSync(`${livePath}-wal`).size).toBeGreaterThan(0);
+
+    const restored = restoreDatabase(backupPath, livePath);
+    openHandles.push(restored);
+    expect(restored.pragma('integrity_check', { simple: true })).toBe('ok');
+    const rows = new SqliteEventStore(restored).readAll();
+    expect(rows.map((r) => r.idempotencyKey)).toEqual(['good-row']);
   });
 });

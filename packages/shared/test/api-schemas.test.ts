@@ -118,7 +118,13 @@ describe('graph schemas', () => {
   });
 
   it('accepts every persisted edge source and rejects an unknown one', () => {
-    for (const source of ['tool_use', 'directory', 'task_notification', 'queue_operation']) {
+    for (const source of [
+      'tool_use',
+      'directory',
+      'task_notification',
+      'queue_operation',
+      'legacy_explore',
+    ]) {
       expect(Value.Check(OrchestrationEdgeDtoSchema, { ...edge, source })).toBe(true);
     }
     expect(Value.Check(OrchestrationEdgeDtoSchema, { ...edge, source: 'guessed' })).toBe(false);

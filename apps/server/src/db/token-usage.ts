@@ -35,6 +35,25 @@
  * deduped set performs zero UPDATEs (not merely no-op ones) and reports
  * `{ inserted: 0, corrected: 0 }` - the byte-identical double-replay proof
  * depends on that distinction.
+ *
+ * OWNERSHIP (M-12). UNIQUE(message_id, bucket) is GLOBAL, not per-session, and
+ * a CLI resume/fork copies history lines VERBATIM into a NEW session file - so
+ * the same message_id can legitimately arrive from two different sessions.
+ * The rule: THE FIRST-INGESTED SESSION OWNS A message_id. A copy arriving from
+ * any other session is EXCLUDED entirely (all five buckets, even when it
+ * carries a larger `tokens` value - the convergence MAX above is a
+ * WITHIN-session streaming repair, never a cross-session merge), counted in
+ * `crossSessionCollisions`, and surfaced with one counts-only warn per write
+ * call. Never silent, never double-counted: the replayed lines are the SAME
+ * spend, already stored once under their owner, so global token totals are
+ * identical whichever file happens to be ingested first - token counts stay
+ * ground truth, read once and never invented. Attribution follows ownership
+ * and never flips afterwards: without this guard the upsert's
+ * `agent_id = excluded.agent_id` arm would silently rewrite who spent the
+ * money on every replay of the other file. Zero colliding message ids exist
+ * across this machine's whole corpus today (measured 2026-08-09, PROVISIONAL),
+ * which is why the rule ships with no migration: it pre-empts CLI behavior
+ * rather than repairing stored damage.
  */
 import type { DedupedUsage } from '@agenthropic/core';
 import type { SqliteDatabase } from './connection';
@@ -44,6 +63,12 @@ export interface TokenUsageInsertResult {
   readonly inserted: number;
   /** Existing rows corrected in place by a later, fuller read of the same message. */
   readonly corrected: number;
+  /**
+   * Messages (not rows) skipped because another session already owns their
+   * message_id - the M-12 ownership rule. Observable by contract: a collision
+   * is never silently swallowed.
+   */
+  readonly crossSessionCollisions: number;
 }
 
 /** The five priced buckets, paired with their `token_usage.bucket` snake-case names. */
@@ -84,19 +109,30 @@ export function insertTokenUsageRows(
   deduped: readonly DedupedUsage[],
 ): TokenUsageInsertResult {
   const upsertStatement = db.prepare(UPSERT_SQL);
-  // Existence + settle probe. This writer always emits a message's five bucket
-  // rows inside one transaction, so the `output` row is present exactly when
-  // the message is - one indexed lookup answers both questions.
+  // Existence + settle + ownership probe. This writer always emits a message's
+  // five bucket rows inside one transaction, so the `output` row is present
+  // exactly when the message is - one indexed lookup answers all three
+  // questions, and the ownership check happens BEFORE any bucket row is
+  // touched so a foreign message can never be half-written.
   const storedOutputStatement = db.prepare(
-    `SELECT tokens FROM token_usage WHERE message_id = ? AND bucket = 'output'`,
+    `SELECT tokens, session_id AS sessionId FROM token_usage
+      WHERE message_id = ? AND bucket = 'output'`,
   );
 
   const writeAll = db.transaction((entries: readonly DedupedUsage[]): TokenUsageInsertResult => {
     let inserted = 0;
     let corrected = 0;
+    let crossSessionCollisions = 0;
     for (const entry of entries) {
       const storedOutput = storedOutputStatement.get(entry.messageId) as
-        { tokens: number } | undefined;
+        { tokens: number; sessionId: string } | undefined;
+      if (storedOutput !== undefined && storedOutput.sessionId !== sessionId) {
+        // M-12: another session owns this message_id (see OWNERSHIP above).
+        // The spend is already counted once under its owner - skip the whole
+        // message, count the collision, and move on.
+        crossSessionCollisions += 1;
+        continue;
+      }
       const settles = storedOutput === undefined || entry.usage.output > storedOutput.tokens;
       let changes = 0;
       for (const [key, bucket] of BUCKET_COLUMNS) {
@@ -118,8 +154,16 @@ export function insertTokenUsageRows(
         corrected += changes;
       }
     }
-    return { inserted, corrected };
+    return { inserted, corrected, crossSessionCollisions };
   });
 
-  return writeAll(deduped);
+  const result = writeAll(deduped);
+  if (result.crossSessionCollisions > 0) {
+    // Counts only, never ids: the log must not become a payload channel. One
+    // line per write call is naturally rate-limited to the poll cadence.
+    console.warn(
+      `[token-usage] skipped ${String(result.crossSessionCollisions)} message(s) owned by another session (resume/fork replay; spend already counted once under its owner)`,
+    );
+  }
+  return result;
 }

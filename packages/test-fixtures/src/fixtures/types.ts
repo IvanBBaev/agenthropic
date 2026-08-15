@@ -29,6 +29,7 @@ export const FIXTURE_NAMES = [
   'queue-operation',
   'usage-dedup',
   'depth-2-sync',
+  'legacy-bare-explore',
 ] as const;
 
 export type FixtureName = (typeof FIXTURE_NAMES)[number];

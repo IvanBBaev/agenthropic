@@ -23,6 +23,14 @@
  * the safe direction: the journal may over-report a prune, never under-report
  * it, so reconciling from it can never hide spend.
  *
+ * SUMMING RECEIPTS. Each entry truthfully describes its own prune, but the
+ * SUM of receipts is not guaranteed to equal the dollars retention removed
+ * overall: a pruned window whose transcript changes later is resurrected by
+ * re-ingest and journalled again by the next prune, so the sum can OVER-COUNT
+ * - see the RETENTION vs REPLAY CHECKPOINTS note in `prune.ts` (awaiting
+ * OPEN-1). Over-counting is still the safe direction; it inflates, never
+ * hides, removed spend.
+ *
  * POLICY STATUS: mechanism only; the retention policy itself is unset and
  * awaits Ivan's OPEN-1/2/3 ratification (docs/analysis/open-decisions.md).
  */

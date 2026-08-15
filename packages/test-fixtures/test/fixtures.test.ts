@@ -8,6 +8,8 @@ import {
   DUPLICATED_MESSAGE_ID,
   EVICTED_TOOL_USE_ID,
   FIXTURE_NAMES,
+  LEGACY_CHILD_HEX,
+  LEGACY_DECOY_HEX,
   QUEUED_TASK_ID,
   QUEUED_TOOL_USE_ID,
   TASK_ID,
@@ -53,7 +55,7 @@ function agentHexFromPath(relativePath: string): string {
 }
 
 describe('fixture manifest', () => {
-  it('lists exactly the six expected fixtures', () => {
+  it('lists exactly the seven expected fixtures', () => {
     expect([...listFixtures()]).toEqual([
       'flat-tool-use',
       'nested-workflow',
@@ -61,6 +63,7 @@ describe('fixture manifest', () => {
       'queue-operation',
       'usage-dedup',
       'depth-2-sync',
+      'legacy-bare-explore',
     ]);
   });
 
@@ -224,6 +227,50 @@ describe('queue-operation (recovery path N2)', () => {
 
   it('no parent tool_use block exists for the backgrounded spawn', () => {
     expect(toolUseBlocks(mainTranscript(fixture))).toHaveLength(0);
+  });
+});
+
+describe('legacy-bare-explore (gate #7 legacy shape)', () => {
+  const fixture = getFixture('legacy-bare-explore');
+  const childFile = fixture.files.find((f) => /agent-[0-9a-f]+\.jsonl$/.test(f.relativePath))!;
+  const hex = agentHexFromPath(childFile.relativePath);
+
+  it('the sidecar is EXACTLY the bare pre-2.1.71 shape (agentType only)', () => {
+    const meta = parsedLines(fixture, childFile.relativePath.replace('.jsonl', '.meta.json'))[0]!;
+    expect(meta).toEqual({ agentType: 'Explore' });
+    // Key-presence is the parser's legacy detection, so absence must be
+    // asserted as absence, not as undefined values.
+    expect(Object.keys(meta)).toEqual(['agentType']);
+  });
+
+  it('carries NO modern anchor anywhere (tool_use, queue-operation, toolUseResult, task-notification)', () => {
+    const main = mainTranscript(fixture);
+    expect(toolUseBlocks(main)).toHaveLength(0);
+    expect(main.some((record) => record.type === 'queue-operation')).toBe(false);
+    expect(main.some((record) => record.toolUseResult !== undefined)).toBe(false);
+    const childFirst = parsedLines(fixture, childFile.relativePath)[0]!;
+    expect(String(childFirst.message.content)).not.toContain('<task-notification>');
+  });
+
+  it('joins ONLY via the raw top-level agentId on a main-transcript progress record', () => {
+    expect(hex).toBe(LEGACY_CHILD_HEX);
+    const progress = mainTranscript(fixture).filter((record) => record.type === 'progress');
+    expect(progress).toHaveLength(1);
+    expect(progress[0]!.agentId).toBe(LEGACY_CHILD_HEX);
+    // The nested decoy names a non-agent hex: a payload-scanning join would
+    // index it, a structural top-level join cannot.
+    expect(progress[0]!.data.agentId).toBe(LEGACY_DECOY_HEX);
+    expect(LEGACY_DECOY_HEX).not.toBe(LEGACY_CHILD_HEX);
+  });
+
+  it('the child transcript carries a self-agentId progress line (self-spawn guard bait)', () => {
+    const child = parsedLines(fixture, childFile.relativePath);
+    const selfProgress = child.filter((record) => record.type === 'progress');
+    expect(selfProgress).toHaveLength(1);
+    expect(selfProgress[0]!.agentId).toBe(hex);
+    for (const record of child) {
+      expect(record.agentId).toBe(hex);
+    }
   });
 });
 

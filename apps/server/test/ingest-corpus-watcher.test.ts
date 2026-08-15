@@ -14,9 +14,11 @@ import { ContainmentError, type CorpusFs } from '../src/corpus/fs-port';
 import type { IngestFn } from '../src/corpus/ingest-corpus';
 import type { IngestOutcome } from '../src/ingest/ingest-session';
 import type { CorpusIngestSummary } from '../src/corpus/ingest-corpus';
+import type { PricingEntry } from '@agenthropic/core';
 import {
   MAX_INGEST_ATTEMPTS,
   createCorpusWatcher,
+  pricingContentFingerprint,
   sanitizeFailureReason,
   tickSummary,
   type CorpusWatcherDeps,
@@ -163,6 +165,34 @@ describe('createCorpusWatcher', () => {
       expect(watcher.tick().kind).toBe('ingested');
       // Not merely "no summary": a quiet corpus is a DIFFERENT fact from a
       // missing one, and the caller is entitled to tell them apart.
+      expect(watcher.tick()).toEqual({ kind: 'unchanged' });
+      expect(calls).toEqual([`${SESSION_A}.jsonl`]);
+    });
+
+    it('a uuid duplicated across two slugs settles after one ingest instead of flapping (M-14)', () => {
+      // Before enumeration-level dedup both copies fingerprinted under the same
+      // session key, so whichever the readdir order visited last kept "changing"
+      // the fingerprint and the pair re-ingested on EVERY tick forever.
+      const copySlug = `${SLUG}-copy`;
+      const calls: string[] = [];
+      const watcher = createCorpusWatcher(
+        makeDeps(
+          {},
+          {
+            fs: makeFakeCorpusFs(ROOT, {
+              [SLUG]: dir({ [`${SESSION_A}.jsonl`]: file(MAIN, { size: 10, mtimeMs: 1 }) }),
+              [copySlug]: dir({ [`${SESSION_A}.jsonl`]: file(MAIN, { size: 10, mtimeMs: 7 }) }),
+            }),
+            ingest: recorder(calls),
+          },
+        ),
+      );
+
+      const summary = ingested(watcher.tick());
+      expect(summary.sessionsDiscovered).toBe(1);
+      expect(summary.filesSkipped).toBe(1); // the shadowed copy, reported honestly
+
+      // The anti-flap proof: nothing changed on disk, so nothing re-ingests.
       expect(watcher.tick()).toEqual({ kind: 'unchanged' });
       expect(calls).toEqual([`${SESSION_A}.jsonl`]);
     });
@@ -448,6 +478,143 @@ describe('createCorpusWatcher', () => {
     });
   });
 
+  describe('pricing reload re-admits parked sessions (review M-2)', () => {
+    const REASON = 'refusing to price at $0: unknown model id';
+    const ROW: PricingEntry = {
+      model: 'claude-future-1',
+      bucket: 'input',
+      usdPerMtok: 3,
+      effectiveFrom: '2026-01-01T00:00:00Z',
+    };
+
+    it('resolves a pricing FUNCTION once per pass and hands the result to ingest', () => {
+      const slugTree: MutableTree = { [`${SESSION_A}.jsonl`]: file(MAIN, { mtimeMs: 1 }) };
+      const seen: (readonly PricingEntry[])[] = [];
+      let resolves = 0;
+      const watcher = createCorpusWatcher(
+        makeDeps(slugTree, {
+          pricing: () => {
+            resolves += 1;
+            return [ROW];
+          },
+          ingest: (_substrate: SessionSubstrate, deps): IngestOutcome => {
+            seen.push(deps.pricing);
+            return outcome();
+          },
+        }),
+      );
+
+      expect(ingested(watcher.tick()).sessionsOk).toBe(1);
+      expect(watcher.tick()).toEqual({ kind: 'unchanged' });
+
+      expect(resolves).toBe(2); // once per pass - never a boot-time snapshot
+      expect(seen).toEqual([[ROW]]);
+    });
+
+    it('a pricing-table change re-admits a quarantined session with a fresh budget', () => {
+      const slugTree: MutableTree = { [`${SESSION_A}.jsonl`]: file(MAIN, { mtimeMs: 1 }) };
+      let pricing: readonly PricingEntry[] = [];
+      let healed = false;
+      const calls: string[] = [];
+      const failures: IngestFailureReport[] = [];
+      const watcher = createCorpusWatcher(
+        makeDeps(slugTree, {
+          pricing: () => pricing,
+          ingest: (substrate: SessionSubstrate): IngestOutcome => {
+            calls.push(substrate.files[0]?.relativePath ?? '<no main>');
+            return healed
+              ? outcome()
+              : outcome({ ok: false, sessionId: null, costUsd: null, error: REASON });
+          },
+          onIngestFailure: (report) => failures.push(report),
+        }),
+      );
+      for (let i = 0; i < MAX_INGEST_ATTEMPTS + 2; i += 1) {
+        watcher.tick(); // burn the whole budget: quarantined, then quiet
+      }
+      expect(calls).toHaveLength(MAX_INGEST_ATTEMPTS);
+      calls.length = 0;
+      failures.length = 0;
+
+      // The canonical cure for a halt-gate failure: seed the missing pricing
+      // row. NOTHING on disk moves, yet the session must be retried.
+      pricing = [ROW];
+      healed = true;
+      expect(ingested(watcher.tick()).sessionsOk).toBe(1);
+      expect(calls).toEqual([`${SESSION_A}.jsonl`]);
+      expect(failures).toEqual([]);
+      expect(watcher.tick()).toEqual({ kind: 'unchanged' }); // committed again
+    });
+
+    it('the re-admitted budget is FRESH: a still-failing session reports attempt 1', () => {
+      const slugTree: MutableTree = { [`${SESSION_A}.jsonl`]: file(MAIN, { mtimeMs: 1 }) };
+      let pricing: readonly PricingEntry[] = [];
+      const failures: IngestFailureReport[] = [];
+      const watcher = createCorpusWatcher(
+        makeDeps(slugTree, {
+          pricing: () => pricing,
+          ingest: (): IngestOutcome =>
+            outcome({ ok: false, sessionId: null, costUsd: null, error: REASON }),
+          onIngestFailure: (report) => failures.push(report),
+        }),
+      );
+      for (let i = 0; i < MAX_INGEST_ATTEMPTS + 2; i += 1) {
+        watcher.tick();
+      }
+      failures.length = 0;
+
+      pricing = [ROW];
+      watcher.tick();
+
+      expect(failures).toEqual([
+        { sessionId: SESSION_A, reason: REASON, attempt: 1, willRetry: true },
+      ]);
+    });
+
+    it('a reload with identical CONTENT re-admits nothing (identity is not change)', () => {
+      const slugTree: MutableTree = { [`${SESSION_A}.jsonl`]: file(MAIN, { mtimeMs: 1 }) };
+      const calls: string[] = [];
+      const watcher = createCorpusWatcher(
+        makeDeps(slugTree, {
+          pricing: () => [ROW], // a NEW array object on every pass, same rows
+          ingest: (substrate: SessionSubstrate): IngestOutcome => {
+            calls.push(substrate.files[0]?.relativePath ?? '<no main>');
+            return outcome({ ok: false, sessionId: null, costUsd: null, error: REASON });
+          },
+        }),
+      );
+
+      for (let i = 0; i < MAX_INGEST_ATTEMPTS + 3; i += 1) {
+        watcher.tick();
+      }
+
+      expect(calls).toHaveLength(MAX_INGEST_ATTEMPTS); // quarantine held
+    });
+  });
+
+  describe('pricingContentFingerprint', () => {
+    it('is row-order independent and content sensitive', () => {
+      const a: PricingEntry = {
+        model: 'claude-a',
+        bucket: 'input',
+        usdPerMtok: 3,
+        effectiveFrom: '2026-01-01T00:00:00Z',
+      };
+      const b: PricingEntry = {
+        model: 'claude-b',
+        bucket: 'output',
+        usdPerMtok: 15,
+        effectiveFrom: '2026-02-01T00:00:00Z',
+      };
+
+      expect(pricingContentFingerprint([a, b])).toBe(pricingContentFingerprint([b, a]));
+      expect(pricingContentFingerprint([a])).not.toBe(
+        pricingContentFingerprint([{ ...a, usdPerMtok: 4 }]),
+      );
+      expect(pricingContentFingerprint([a])).not.toBe(pricingContentFingerprint([a, b]));
+    });
+  });
+
   describe('sanitizeFailureReason', () => {
     it('strips absolute paths so no user data reaches a log or an SSE frame', () => {
       const failures: IngestFailureReport[] = [];
@@ -511,6 +678,66 @@ describe('createCorpusWatcher', () => {
       // corpus at all, and saying "nothing changed" would be a claim about
       // disk state that this pass has no standing to make.
       expect(innerResults).toEqual([{ kind: 'overlapped' }, { kind: 'overlapped' }]);
+    });
+  });
+
+  describe('tick duration (review M-15)', () => {
+    it('reports the wall-clock cost of every pass that ran, ingesting or not', () => {
+      const slugTree: MutableTree = { [`${SESSION_A}.jsonl`]: file(MAIN, { mtimeMs: 1 }) };
+      const durations: number[] = [];
+      let now = NOW_MS;
+      const watcher = createCorpusWatcher(
+        makeDeps(slugTree, {
+          nowMs: () => now,
+          // The ingest work is what costs time inside a pass; 125ms is arbitrary.
+          ingest: recorder([], () => {
+            now += 125;
+            return outcome();
+          }),
+          onTickDuration: (durationMs) => durations.push(durationMs),
+        }),
+      );
+
+      expect(watcher.tick().kind).toBe('ingested');
+      expect(durations).toEqual([125]);
+
+      // An 'unchanged' pass still RAN (it walked the corpus) — its cost
+      // reports too; only that keeps the health figure honest on quiet days.
+      expect(watcher.tick().kind).toBe('unchanged');
+      expect(durations).toEqual([125, 0]);
+    });
+
+    it('never fires for the stopped short-circuit', () => {
+      const durations: number[] = [];
+      const watcher = createCorpusWatcher(
+        makeDeps({}, { onTickDuration: (durationMs) => durations.push(durationMs) }),
+      );
+      watcher.stop();
+
+      expect(watcher.tick()).toEqual({ kind: 'stopped' });
+      expect(durations).toEqual([]);
+    });
+
+    it('never fires for the overlapped short-circuit — only the outer pass reports', () => {
+      const slugTree: MutableTree = { [`${SESSION_A}.jsonl`]: file(MAIN, { mtimeMs: 1 }) };
+      const durations: number[] = [];
+      const innerResults: TickOutcome[] = [];
+      const holder: { watcher?: ReturnType<typeof createCorpusWatcher> } = {};
+      holder.watcher = createCorpusWatcher(
+        makeDeps(slugTree, {
+          ingest: recorder([]),
+          onIngestEvent: () => {
+            innerResults.push(holder.watcher!.tick());
+          },
+          onTickDuration: (durationMs) => durations.push(durationMs),
+        }),
+      );
+
+      expect(holder.watcher.tick().kind).toBe('ingested');
+      expect(innerResults).toEqual([{ kind: 'overlapped' }]);
+      // Exactly ONE report — the outer pass. A duration for the overlapped
+      // inner call would be a claim about work that never happened.
+      expect(durations).toEqual([0]);
     });
   });
 

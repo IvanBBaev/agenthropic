@@ -11,7 +11,7 @@
  *
  * Two corpora are scored, and they are never blended:
  *
- * - `annotations/synthetic/` - the six shipped fixtures, whose hierarchy is
+ * - `annotations/synthetic/` - the seven shipped fixtures, whose hierarchy is
  *   true by construction. Scoring them proves the tooling works end to end and
  *   that the parser reproduces every join path including gate item 4. It proves
  *   nothing about reality: the "truth" was written by the same side as the
@@ -129,8 +129,8 @@ describe('hierarchy gate - synthetic fixture corpus', () => {
 
   it('reproduces the by-construction hierarchy exactly, and says its n out loud', () => {
     emit(renderCorpusReport(score));
-    expect(score.claimed).toBe(8);
-    expect(score.correct).toBe(8);
+    expect(score.claimed).toBe(9);
+    expect(score.correct).toBe(9);
     expect(score.wrong).toBe(0);
     expect(score.abstained).toBe(0);
     expect(score.unlabeled).toBe(0);
@@ -160,7 +160,7 @@ describe('hierarchy gate - synthetic fixture corpus', () => {
     expect(verdict.reasons.some((reason) => reason.includes('synthetic-by-construction'))).toBe(
       true,
     );
-    // A perfect 8/8 is also simply too small a sample to mean 95% of anything.
+    // A perfect 9/9 is also simply too small a sample to mean 95% of anything.
     expect(verdict.requiredSampleSize).toBe(minimumClaimsForThreshold());
     expect(verdict.reasons.some((reason) => reason.includes('sample too small'))).toBe(true);
     expect(renderCorpusReport(score)).toContain('NOT CERTIFIED');

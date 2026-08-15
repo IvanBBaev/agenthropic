@@ -95,3 +95,5 @@ export type {
   GenericRealtimeEvent,
   RealtimeEvent,
 } from './schemas/realtime';
+export { SERVER_EVENT_TYPES } from './realtime/event-types';
+export type { ServerEventType } from './realtime/event-types';

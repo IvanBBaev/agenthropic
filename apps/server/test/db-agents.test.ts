@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { upsertAgent } from '../src/db/agents';
-import { createMigratedTempDb, insertSession, type TempDb } from './helpers';
+import { reconcileAgentStatus, upsertAgent } from '../src/db/agents';
+import { createMigratedTempDb, insertAgent, insertSession, type TempDb } from './helpers';
 
 const SESSION_ID = 'session-1';
 const ROOT_ID = 'agent-root';
@@ -35,26 +35,31 @@ describe('upsertAgent (WP-D6)', () => {
   }
 
   it('inserts a root agent and a child pointing at it via parent_agent_id', () => {
-    upsertAgent(temp.db, {
-      id: ROOT_ID,
-      sessionId: SESSION_ID,
-      type: 'main',
-      subagentType: null,
-      status: 'working',
-      parentAgentId: null,
-      firstSeenAt: TS,
-      lastSeenAt: TS,
-    });
-    upsertAgent(temp.db, {
-      id: CHILD_ID,
-      sessionId: SESSION_ID,
-      type: 'subagent',
-      subagentType: 'explorer',
-      status: 'working',
-      parentAgentId: ROOT_ID,
-      firstSeenAt: TS,
-      lastSeenAt: TS,
-    });
+    // First sightings report inserted: true — the signal the M-13 replay keys on.
+    expect(
+      upsertAgent(temp.db, {
+        id: ROOT_ID,
+        sessionId: SESSION_ID,
+        type: 'main',
+        subagentType: null,
+        status: 'working',
+        parentAgentId: null,
+        firstSeenAt: TS,
+        lastSeenAt: TS,
+      }),
+    ).toEqual({ inserted: true });
+    expect(
+      upsertAgent(temp.db, {
+        id: CHILD_ID,
+        sessionId: SESSION_ID,
+        type: 'subagent',
+        subagentType: 'explorer',
+        status: 'working',
+        parentAgentId: ROOT_ID,
+        firstSeenAt: TS,
+        lastSeenAt: TS,
+      }),
+    ).toEqual({ inserted: true });
 
     const root = readAgent(ROOT_ID);
     expect(root).toMatchObject({
@@ -98,16 +103,19 @@ describe('upsertAgent (WP-D6)', () => {
       lastSeenAt: TS,
     });
 
-    upsertAgent(temp.db, {
-      id: CHILD_ID,
-      sessionId: SESSION_ID,
-      type: 'subagent',
-      subagentType: 'explorer',
-      status: 'completed',
-      parentAgentId: ROOT_ID,
-      firstSeenAt: TS,
-      lastSeenAt: '2026-07-11T00:05:00Z',
-    });
+    // A re-upsert of an existing row is NOT a first sighting.
+    expect(
+      upsertAgent(temp.db, {
+        id: CHILD_ID,
+        sessionId: SESSION_ID,
+        type: 'subagent',
+        subagentType: 'explorer',
+        status: 'completed',
+        parentAgentId: ROOT_ID,
+        firstSeenAt: TS,
+        lastSeenAt: '2026-07-11T00:05:00Z',
+      }),
+    ).toEqual({ inserted: false });
 
     const count = temp.db
       .prepare('SELECT COUNT(*) AS n FROM agents WHERE id = ?')
@@ -215,5 +223,75 @@ describe('upsertAgent (WP-D6)', () => {
         lastSeenAt: TS,
       }),
     ).toThrow(/FOREIGN KEY/i);
+  });
+});
+
+describe('reconcileAgentStatus (M-13 replay primitive)', () => {
+  let temp: TempDb;
+
+  beforeEach(() => {
+    temp = createMigratedTempDb();
+    insertSession(temp.db, SESSION_ID);
+  });
+
+  afterEach(() => {
+    temp.cleanup();
+  });
+
+  function statusOf(id: string): string {
+    const row = temp.db.prepare('SELECT status FROM agents WHERE id = ?').get(id) as {
+      status: string;
+    };
+    return row.status;
+  }
+
+  it("moves a non-terminal row and reports the transition ('working' -> 'completed')", () => {
+    insertAgent(temp.db, CHILD_ID, SESSION_ID, null, 'working');
+
+    expect(reconcileAgentStatus(temp.db, CHILD_ID, 'completed')).toEqual({
+      type: 'agent-status-changed',
+      agentId: CHILD_ID,
+      sessionId: SESSION_ID,
+      oldStatus: 'working',
+      newStatus: 'completed',
+    });
+    expect(statusOf(CHILD_ID)).toBe('completed');
+  });
+
+  it("moves an 'unknown' row too — replayed evidence beats a watchdog guess", () => {
+    insertAgent(temp.db, CHILD_ID, SESSION_ID, null, 'unknown');
+
+    expect(reconcileAgentStatus(temp.db, CHILD_ID, 'completed')).toMatchObject({
+      oldStatus: 'unknown',
+      newStatus: 'completed',
+    });
+    expect(statusOf(CHILD_ID)).toBe('completed');
+  });
+
+  it('returns null for an agent id with no row (never creates one — CD-1)', () => {
+    expect(reconcileAgentStatus(temp.db, 'no-such-agent', 'completed')).toBeNull();
+    const count = temp.db.prepare('SELECT COUNT(*) AS n FROM agents').get() as { n: number };
+    expect(count.n).toBe(0);
+  });
+
+  it("never moves a row already 'completed' (idempotence under replay)", () => {
+    insertAgent(temp.db, CHILD_ID, SESSION_ID, null, 'completed');
+
+    expect(reconcileAgentStatus(temp.db, CHILD_ID, 'completed')).toBeNull();
+    expect(statusOf(CHILD_ID)).toBe('completed');
+  });
+
+  it("never moves a row already 'error' — replayed evidence cannot outrank a later terminal", () => {
+    insertAgent(temp.db, CHILD_ID, SESSION_ID, null, 'error');
+
+    expect(reconcileAgentStatus(temp.db, CHILD_ID, 'completed')).toBeNull();
+    expect(statusOf(CHILD_ID)).toBe('error');
+  });
+
+  it('returns null when the row already holds the target non-terminal status (no X -> X transition)', () => {
+    insertAgent(temp.db, CHILD_ID, SESSION_ID, null, 'waiting');
+
+    expect(reconcileAgentStatus(temp.db, CHILD_ID, 'waiting')).toBeNull();
+    expect(statusOf(CHILD_ID)).toBe('waiting');
   });
 });

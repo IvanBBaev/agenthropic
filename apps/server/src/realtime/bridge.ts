@@ -4,15 +4,22 @@
  * the shared {@link RealtimeEvent} DTOs that travel over SSE. The composition
  * root stamps `occurredAt` at publish time; the ingest layer stays clock-free
  * for events just as it is for everything but the edge stamp.
+ *
+ * Every `type` literal published here is pinned to the shared
+ * SERVER_EVENT_TYPES list (`satisfies ServerEventType`): the web client
+ * registers one EventSource listener per listed name and EventSource silently
+ * drops named events nobody listens for, so publishing an unlisted type is a
+ * frame the dashboard never sees. The contract test in
+ * test/realtime-event-contract.test.ts holds the two sides equal.
  */
-import type { GenericRealtimeEvent, RealtimeEvent } from '@agenthropic/shared';
+import type { GenericRealtimeEvent, RealtimeEvent, ServerEventType } from '@agenthropic/shared';
 import type { IngestEvent } from '../ingest/ingest-events';
 import type { IngestFailureReport } from '../ingest/corpus-watcher';
 
 export function toRealtimeEvent(event: IngestEvent, occurredAt: string): RealtimeEvent {
   if (event.type === 'session-ingested') {
     return {
-      type: 'session-ingested',
+      type: 'session-ingested' satisfies ServerEventType,
       sessionId: event.sessionId,
       projectSlug: event.projectSlug,
       agentCount: event.agentsUpserted,
@@ -23,7 +30,7 @@ export function toRealtimeEvent(event: IngestEvent, occurredAt: string): Realtim
     };
   }
   return {
-    type: 'agent-status-changed',
+    type: 'agent-status-changed' satisfies ServerEventType,
     sessionId: event.sessionId,
     agentId: event.agentId,
     status: event.newStatus,
@@ -49,7 +56,7 @@ export function toIngestFailureEvent(
   occurredAt: string,
 ): GenericRealtimeEvent {
   return {
-    type: 'ingest-failed',
+    type: 'ingest-failed' satisfies ServerEventType,
     payload: {
       sessionId: report.sessionId,
       reason: report.reason,

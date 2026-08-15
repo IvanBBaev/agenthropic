@@ -20,6 +20,7 @@
  * exactly those. Heartbeats are SSE comment frames (`: heartbeat`) and never
  * reach the client - liveness is the connection state, not a heartbeat count.
  */
+import { SERVER_EVENT_TYPES } from '../../../packages/shared/src/realtime/event-types';
 
 export type SseConnectionState = 'connecting' | 'open' | 'reconnecting' | 'closed';
 
@@ -57,12 +58,15 @@ export interface SseClient {
 }
 
 /**
- * Typed event names the server emits (`event: <type>` frames). Mirrors the
- * RealtimeEvent union in @agenthropic/shared; append each new server event
- * type here so the live feed and onAnyEvent pick it up without code changes
- * elsewhere.
+ * Typed event names the server emits (`event: <type>` frames): the ONE list
+ * both packages import, re-exported here for the shell. A hand-copied mirror
+ * of it drifted once (`ingest-failed` was published but never registered, so
+ * EventSource dropped every quarantine notice unheard). The deep relative
+ * import deliberately bypasses the shared index so no TypeBox reaches the
+ * browser bundle - same mechanism as dto.ts, but for a value: the module is
+ * import-free.
  */
-export const SERVER_EVENT_TYPES: readonly string[] = ['session-ingested', 'agent-status-changed'];
+export { SERVER_EVENT_TYPES };
 
 /** EventSource.CLOSED - named locally so mocks need no static constants. */
 const READY_STATE_CLOSED = 2;

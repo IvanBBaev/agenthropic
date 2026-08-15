@@ -22,10 +22,14 @@
  * age rule. ISO-8601 UTC strings compare correctly as text (the same property
  * `api/queries.ts` relies on for dated pricing), so no date parsing is needed.
  *
- * INDEXES. Neither `events.occurred_at` nor `token_usage.occurred_at` is
- * indexed today, so the window scan is a table scan bounded by `LIMIT`. That
- * is acceptable for a bounded run and is called out in the WP-D10 report as a
- * proposed (unmade) migration: this lane may not author schema changes.
+ * INDEXES. Migration 10 (`retention-scan-indexes`) indexes both tables on
+ * `(occurred_at, id)`, so locating expired rows is an index range read, not a
+ * table scan. The window SELECT still orders by bare `id`, which that index
+ * does not provide, so the engine sorts every expired match: that step is
+ * bounded by the expired BACKLOG, not by `@limit`. Reordering the window to
+ * `(occurred_at, id)` would remove the sort but also change which rows fill a
+ * budget-limited run first - a semantics decision, not a comment fix, so the
+ * id-order contract stands until it is made deliberately.
  */
 import type { SqliteDatabase } from './connection';
 

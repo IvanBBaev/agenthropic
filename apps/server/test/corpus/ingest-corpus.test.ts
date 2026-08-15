@@ -531,6 +531,55 @@ describe('runCorpusIngest (WP-IN5)', () => {
     });
   });
 
+  describe('enumeration-level duplicates (M-14)', () => {
+    /** The same session uuid under both slugs — alpha wins (lexicographically smallest). */
+    function duplicatedCorpus(): TreeSpec {
+      return {
+        [SLUG]: dir(soleSession(SESSION_A)),
+        [SLUG_B]: dir(soleSession(SESSION_A)),
+      };
+    }
+
+    it('ingests only the winning copy and reports the loser as duplicate-session', () => {
+      const fs = makeFakeCorpusFs(ROOT, duplicatedCorpus());
+      const calls: StubCall[] = [];
+      const warnings: SkippedFile[] = [];
+
+      const summary = runCorpusIngest(
+        makeDeps({ fs, ingest: recorder(calls), onWarning: (skipped) => warnings.push(skipped) }),
+      );
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.deps.projectSlug).toBe(SLUG);
+      expect(summary.sessionsDiscovered).toBe(1);
+      expect(summary.sessionsOk).toBe(1);
+      expect(summary.filesSkipped).toBe(1);
+      expect(warnings).toEqual([
+        { relativePath: `${SLUG_B}/${SESSION_A}.jsonl`, reason: 'duplicate-session' },
+      ]);
+    });
+
+    it('reports the duplicate even when the sessionFilter admits nothing', () => {
+      // A shadowed copy is a corpus-level fact, not a property of any admitted
+      // ref — a watcher pass that admits zero changed sessions must still count it.
+      const fs = makeFakeCorpusFs(ROOT, duplicatedCorpus());
+      const warnings: SkippedFile[] = [];
+
+      const summary = runCorpusIngest(
+        makeDeps({
+          fs,
+          ingest: recorder([]),
+          sessionFilter: () => false,
+          onWarning: (skipped) => warnings.push(skipped),
+        }),
+      );
+
+      expect(summary.sessionsDiscovered).toBe(0);
+      expect(summary.filesSkipped).toBe(1);
+      expect(warnings.map((w) => w.reason)).toEqual(['duplicate-session']);
+    });
+  });
+
   describe('containment is the one hard stop', () => {
     it('aborts the whole run when a crafted slug name escapes the corpus root', () => {
       const fs = makeFakeCorpusFs(ROOT, {

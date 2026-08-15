@@ -422,6 +422,32 @@ button:disabled {
   border-color: #3a5a7a;
 }
 
+/* A session row plus its "analyse" action (M-9): the row button keeps the
+   full remaining width so tree selection stays the primary affordance. */
+.session-item {
+  display: flex;
+  gap: 0.3rem;
+  align-items: stretch;
+}
+
+.session-item .session-row {
+  flex: 1;
+  min-width: 0;
+}
+
+.analyse-button {
+  white-space: nowrap;
+  font-size: 0.8rem;
+  padding: 0 0.4rem;
+  border: 1px solid #2a2f37;
+  border-radius: 6px;
+}
+
+.analyse-button[aria-pressed='true'] {
+  color: #e6e8eb;
+  background: #22303f;
+}
+
 .chart-scroll {
   overflow-x: auto;
   background: #171a1f;
@@ -519,6 +545,12 @@ button:disabled {
 
 .kpi-note {
   font-size: 0.72rem;
+}
+
+/* The UTC-basis disclosure under the recent-window KPIs (M-9). */
+.windows-note {
+  margin: -0.5rem 0 1.1rem;
+  font-size: 0.78rem;
 }
 
 .flow-link {
