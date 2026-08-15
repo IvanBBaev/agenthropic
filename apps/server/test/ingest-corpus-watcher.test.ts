@@ -54,6 +54,8 @@ function outcome(overrides: Partial<IngestOutcome> = {}): IngestOutcome {
     agentsUpserted: 0,
     edgesInserted: 0,
     usageRowsInserted: 0,
+    statusReconciliations: [],
+    crossSessionUsageCollisions: 0,
     error: null,
     ...overrides,
   };
@@ -904,6 +906,60 @@ describe('createCorpusWatcher', () => {
       expect(watcher.tick()).toEqual({ kind: 'unchanged' }); // empty corpus
       expect(events.map((e) => e.type)).toEqual(['agent-status-changed']);
       expect(statusOf(temp, 'a-stale')).toBe('unknown');
+    });
+  });
+
+  describe('ingest-side reconciliations and collisions (M-17 / M-18)', () => {
+    it('forwards an M-13 replay onto the SAME seam the watchdog transitions use', () => {
+      // A status the projection already changed in the database used to stay
+      // invisible until the next full reload: the transition happened inside
+      // ingest, and only the watchdog's own transitions had a way out.
+      const slugTree: MutableTree = { [`${SESSION_A}.jsonl`]: file(MAIN, { mtimeMs: 1 }) };
+      const events: IngestEvent[] = [];
+      const watcher = createCorpusWatcher(
+        makeDeps(slugTree, {
+          ingest: () =>
+            outcome({
+              sessionId: SESSION_A,
+              statusReconciliations: [
+                {
+                  type: 'agent-status-changed',
+                  agentId: 'agent-c0ffee',
+                  sessionId: SESSION_A,
+                  oldStatus: null,
+                  newStatus: 'completed',
+                },
+              ],
+            }),
+          onIngestEvent: (event) => events.push(event),
+        }),
+      );
+
+      ingested(watcher.tick());
+
+      expect(events.map((e) => e.type)).toEqual(['session-ingested', 'agent-status-changed']);
+      expect(events[1]).toEqual({
+        type: 'agent-status-changed',
+        agentId: 'agent-c0ffee',
+        sessionId: SESSION_A,
+        oldStatus: null,
+        newStatus: 'completed',
+      });
+    });
+
+    it('forwards the M-12 collision count to onUsageCollisions', () => {
+      const slugTree: MutableTree = { [`${SESSION_A}.jsonl`]: file(MAIN, { mtimeMs: 1 }) };
+      const collisions: number[] = [];
+      const watcher = createCorpusWatcher(
+        makeDeps(slugTree, {
+          ingest: () => outcome({ sessionId: SESSION_A, crossSessionUsageCollisions: 6 }),
+          onUsageCollisions: (n) => collisions.push(n),
+        }),
+      );
+
+      ingested(watcher.tick());
+
+      expect(collisions).toEqual([6]);
     });
   });
 

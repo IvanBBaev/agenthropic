@@ -239,6 +239,8 @@ describe('ingestSession (WP-IN9)', () => {
       agentsUpserted: 0,
       edgesInserted: 0,
       usageRowsInserted: 0,
+      statusReconciliations: [],
+      crossSessionUsageCollisions: 0,
       error: 'clock exploded',
     });
 

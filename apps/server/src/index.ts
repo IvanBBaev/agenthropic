@@ -561,6 +561,10 @@ export async function start(
   // (or forever, on an ingest-less boot) — /api/health omits it rather than
   // faking a zero.
   let lastTickDurationMs: number | null = null;
+  // M-18: messages the M-12 ownership rule skipped since boot. Counted here
+  // rather than in the writer so /api/health can report the running total; an
+  // ingest-less boot honestly reports zero, exactly as skipCounters does.
+  let crossSessionUsageCollisions = 0;
   if (config.ingestEnabled) {
     watcher = createCorpusWatcher({
       db,
@@ -611,6 +615,9 @@ export async function start(
       onWarning: (skipped) => {
         skipReporter.onSkip(skipped);
       },
+      onUsageCollisions: (collisions) => {
+        crossSessionUsageCollisions += collisions;
+      },
       onTickOutcome: (outcome) => {
         if (outcome.kind === 'ingested') {
           skipReporter.onTickSkips(outcome.summary.filesSkipped);
@@ -641,6 +648,8 @@ export async function start(
     // M-15: how long the last corpus pass took, so a poll outgrowing its
     // interval is visible from the dashboard side before it hurts.
     tickDurationMs: () => lastTickDurationMs,
+    // M-18: spend that a resume/fork replay deliberately did not re-count.
+    usageCollisions: () => crossSessionUsageCollisions,
     // WP-C4/C5: compaction repricing and delegation savings need the raw
     // substrate (boundaries are not persisted), so the cost-analysis route gets
     // a read-only corpus seam. Same env hygiene as the watcher - config is the

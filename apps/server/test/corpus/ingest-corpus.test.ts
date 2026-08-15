@@ -25,7 +25,7 @@ import {
   type IngestFn,
 } from '../../src/corpus/ingest-corpus';
 import { loadPricing } from '../../src/db/pricing';
-import type { SessionIngestedEvent } from '../../src/ingest/ingest-events';
+import type { AgentStatusChangedEvent, SessionIngestedEvent } from '../../src/ingest/ingest-events';
 import type { IngestDeps, IngestOutcome } from '../../src/ingest/ingest-session';
 import { createMigratedTempDb, type TempDb } from '../helpers';
 import {
@@ -79,6 +79,8 @@ function outcome(overrides: Partial<IngestOutcome> = {}): IngestOutcome {
     agentsUpserted: 0,
     edgesInserted: 0,
     usageRowsInserted: 0,
+    statusReconciliations: [],
+    crossSessionUsageCollisions: 0,
     error: null,
     ...overrides,
   };
@@ -486,6 +488,163 @@ describe('runCorpusIngest (WP-IN5)', () => {
 
       expect(summary.sessionsFailed).toBe(2);
       expect(events).toEqual([]);
+    });
+  });
+
+  describe('onStatusReconciled (M-17: the hook-before-row replay seam)', () => {
+    function reconciliation(agentId: string): AgentStatusChangedEvent {
+      return {
+        type: 'agent-status-changed',
+        agentId,
+        sessionId: SESSION_A,
+        oldStatus: null,
+        newStatus: 'completed',
+      };
+    }
+
+    it('fires once per reconciliation, in order, AFTER the session-ingested event', () => {
+      // The ordering is the contract, not an accident: a client must learn that
+      // the agent exists before it is told the agent's status settled.
+      const fs = makeFakeCorpusFs(ROOT, { [SLUG]: dir(soleSession(SESSION_A)) });
+      const seen: string[] = [];
+
+      runCorpusIngest(
+        makeDeps({
+          fs,
+          ingest: () =>
+            outcome({
+              statusReconciliations: [reconciliation('agent-c0ffee'), reconciliation('agent-dead')],
+            }),
+          onSessionIngested: (event) => seen.push(event.type),
+          onStatusReconciled: (event) => seen.push(`${event.type}:${event.agentId}`),
+        }),
+      );
+
+      expect(seen).toEqual([
+        'session-ingested',
+        'agent-status-changed:agent-c0ffee',
+        'agent-status-changed:agent-dead',
+      ]);
+    });
+
+    it('hands the event over verbatim', () => {
+      const fs = makeFakeCorpusFs(ROOT, { [SLUG]: dir(soleSession(SESSION_A)) });
+      const events: AgentStatusChangedEvent[] = [];
+      const replayed = reconciliation('agent-beef');
+
+      runCorpusIngest(
+        makeDeps({
+          fs,
+          ingest: () => outcome({ statusReconciliations: [replayed] }),
+          onStatusReconciled: (event) => events.push(event),
+        }),
+      );
+
+      expect(events).toEqual([replayed]);
+    });
+
+    it('never fires for a failed session that still carries reconciliations', () => {
+      // A rolled-back transaction changed no status, so announcing one would be
+      // a lie the UI could not undo.
+      const fs = makeFakeCorpusFs(ROOT, { [SLUG]: dir(soleSession(SESSION_A)) });
+      const events: AgentStatusChangedEvent[] = [];
+
+      const summary = runCorpusIngest(
+        makeDeps({
+          fs,
+          ingest: () =>
+            outcome({
+              ok: false,
+              error: 'rolled back',
+              statusReconciliations: [reconciliation('agent-c0ffee')],
+            }),
+          onStatusReconciled: (event) => events.push(event),
+        }),
+      );
+
+      expect(summary.sessionsFailed).toBe(1);
+      expect(events).toEqual([]);
+    });
+
+    it('replays without a sink wired', () => {
+      const fs = makeFakeCorpusFs(ROOT, { [SLUG]: dir(soleSession(SESSION_A)) });
+
+      const summary = runCorpusIngest(
+        makeDeps({
+          fs,
+          ingest: () => outcome({ statusReconciliations: [reconciliation('agent-c0ffee')] }),
+        }),
+      );
+
+      expect(summary.sessionsOk).toBe(1);
+    });
+  });
+
+  describe('onUsageCollisions (M-18: the cross-session ownership counter)', () => {
+    it('fires once per session, with the count of messages that session skipped', () => {
+      const fs = makeFakeCorpusFs(ROOT, {
+        [SLUG]: dir(soleSession(SESSION_A)),
+        [SLUG_B]: dir(soleSession(SESSION_B)),
+      });
+      const outcomes = [
+        outcome({ crossSessionUsageCollisions: 4 }),
+        outcome({ crossSessionUsageCollisions: 7 }),
+      ];
+      const collisions: number[] = [];
+
+      runCorpusIngest(
+        makeDeps({
+          fs,
+          ingest: recorder([], (_call, index) => outcomes[index]!),
+          onUsageCollisions: (n) => collisions.push(n),
+        }),
+      );
+
+      expect(collisions).toEqual([4, 7]);
+    });
+
+    it('stays silent for a session that collided with nothing', () => {
+      // Zero is not news: firing on it would turn the health counter's own
+      // "seam present" signal into noise the operator has to filter.
+      const fs = makeFakeCorpusFs(ROOT, { [SLUG]: dir(soleSession(SESSION_A)) });
+      const collisions: number[] = [];
+
+      runCorpusIngest(
+        makeDeps({
+          fs,
+          ingest: () => outcome({ crossSessionUsageCollisions: 0 }),
+          onUsageCollisions: (n) => collisions.push(n),
+        }),
+      );
+
+      expect(collisions).toEqual([]);
+    });
+
+    it('never fires for a failed session that still carries a collision count', () => {
+      const fs = makeFakeCorpusFs(ROOT, { [SLUG]: dir(soleSession(SESSION_A)) });
+      const collisions: number[] = [];
+
+      const summary = runCorpusIngest(
+        makeDeps({
+          fs,
+          ingest: () =>
+            outcome({ ok: false, error: 'rolled back', crossSessionUsageCollisions: 9 }),
+          onUsageCollisions: (n) => collisions.push(n),
+        }),
+      );
+
+      expect(summary.sessionsFailed).toBe(1);
+      expect(collisions).toEqual([]);
+    });
+
+    it('counts collisions without a sink wired', () => {
+      const fs = makeFakeCorpusFs(ROOT, { [SLUG]: dir(soleSession(SESSION_A)) });
+
+      const summary = runCorpusIngest(
+        makeDeps({ fs, ingest: () => outcome({ crossSessionUsageCollisions: 3 }) }),
+      );
+
+      expect(summary.sessionsOk).toBe(1);
     });
   });
 

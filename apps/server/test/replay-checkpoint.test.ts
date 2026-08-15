@@ -128,6 +128,8 @@ function outcome(sessionId: string, overrides: Partial<IngestOutcome> = {}): Ing
     agentsUpserted: 0,
     edgesInserted: 0,
     usageRowsInserted: 0,
+    statusReconciliations: [],
+    crossSessionUsageCollisions: 0,
     error: null,
     ...overrides,
   };
@@ -152,6 +154,8 @@ function projectingIngest(temp: TempDb, calls: string[], failing = new Set<strin
         agentsUpserted: 0,
         edgesInserted: 0,
         usageRowsInserted: 0,
+        statusReconciliations: [],
+        crossSessionUsageCollisions: 0,
         error: REASON_SAMPLE,
       };
     }

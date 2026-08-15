@@ -77,6 +77,15 @@ export interface BuildServerOptions {
    * likewise omitted.
    */
   readonly tickDurationMs?: () => number | null;
+  /**
+   * Messages the M-12 cross-session ownership rule has skipped since boot. A
+   * collision means real spend that this session's rows deliberately do NOT
+   * carry (it is already counted once, under the session that ingested the
+   * message first), so an operator comparing two sessions' totals needs to know
+   * it happened; until now it existed only as a stderr line. When the seam is
+   * absent the field is omitted; when it is present, a genuine 0 is reported.
+   */
+  readonly usageCollisions?: () => number;
 }
 
 const HealthResponseSchema = Type.Object(
@@ -95,6 +104,9 @@ const HealthResponseSchema = Type.Object(
     // poll ACTUALLY takes, so an operator can see it approaching the poll
     // interval. Omitted until a pass has finished.
     lastTickDurationMs: Type.Optional(Type.Number({ minimum: 0 })),
+    // Messages skipped by the M-12 ownership rule since boot (review M-18) —
+    // spend that IS counted, but under the session that ingested it first.
+    crossSessionUsageCollisions: Type.Optional(Type.Integer({ minimum: 0 })),
   },
   { additionalProperties: false },
 );
@@ -227,6 +239,9 @@ export function buildServer(options: BuildServerOptions) {
       ...(options.skipCounters === undefined ? {} : { ingestSkips: options.skipCounters() }),
       ...(options.ingestPhase === undefined ? {} : { ingest: options.ingestPhase() }),
       ...(lastTickDurationMs === null ? {} : { lastTickDurationMs }),
+      ...(options.usageCollisions === undefined
+        ? {}
+        : { crossSessionUsageCollisions: options.usageCollisions() }),
     };
   });
 

@@ -31,6 +31,7 @@ import {
   type SessionSubstrate,
 } from '@agenthropic/core';
 import type { SqliteDatabase } from '../db/connection';
+import type { AgentStatusChangedEvent } from './ingest-events';
 import { normalizeSession } from './normalize-session';
 import { projectSession } from './project-session';
 
@@ -51,6 +52,17 @@ export interface IngestOutcome {
   readonly agentsUpserted: number;
   readonly edgesInserted: number;
   readonly usageRowsInserted: number;
+  /**
+   * M-13 transitions the projection COMMITTED for agents it inserted for the
+   * first time (a SubagentStop that arrived before the row existed). They are
+   * carried out rather than published here for the same reason projectSession
+   * carries them out: this layer owns no hub. The runner above forwards them,
+   * and the composition root turns them into SSE frames — without that, a
+   * status the database already changed stayed invisible until the next reload.
+   */
+  readonly statusReconciliations: readonly AgentStatusChangedEvent[];
+  /** M-12 messages skipped because another session owns the message_id. */
+  readonly crossSessionUsageCollisions: number;
   readonly error: string | null;
 }
 
@@ -63,6 +75,8 @@ function failure(error: string): IngestOutcome {
     agentsUpserted: 0,
     edgesInserted: 0,
     usageRowsInserted: 0,
+    statusReconciliations: [],
+    crossSessionUsageCollisions: 0,
     error,
   };
 }
@@ -97,6 +111,8 @@ export function ingestSession(substrate: SessionSubstrate, deps: IngestDeps): In
       agentsUpserted: counts.agentsUpserted,
       edgesInserted: counts.edgesInserted,
       usageRowsInserted: counts.usageRowsInserted,
+      statusReconciliations: counts.statusReconciliations,
+      crossSessionUsageCollisions: counts.crossSessionUsageCollisions,
       error: null,
     };
   } catch (err) {

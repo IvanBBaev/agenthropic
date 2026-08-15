@@ -24,7 +24,7 @@
  */
 import type { PricingEntry, SessionSubstrate } from '@agenthropic/core';
 import type { SqliteDatabase } from '../db/connection';
-import type { SessionIngestedEvent } from '../ingest/ingest-events';
+import type { AgentStatusChangedEvent, SessionIngestedEvent } from '../ingest/ingest-events';
 import { ingestSession, type IngestDeps, type IngestOutcome } from '../ingest/ingest-session';
 import { resolveCorpusRoot } from './corpus-paths';
 import { buildSessionSubstrate, enumerateSessions } from './disk-substrate';
@@ -65,6 +65,21 @@ export interface CorpusIngestDeps {
   readonly sessionFilter?: (ref: SessionRef) => boolean;
   /** Fired after each successfully ingested session (WP-IN5 live loop seam). */
   readonly onSessionIngested?: (event: SessionIngestedEvent) => void;
+  /**
+   * Fired once per M-13 status transition the projection committed while
+   * inserting an agent for the first time — the same live-loop seam as
+   * `onSessionIngested`, for the other half of what an ingest can change.
+   * Ordered AFTER the session's own event on purpose: a client learns that the
+   * agent exists before it is told the agent's status settled.
+   */
+  readonly onStatusReconciled?: (event: AgentStatusChangedEvent) => void;
+  /**
+   * Fired once per session that hit the M-12 ownership rule, with the number of
+   * messages skipped. Counts only, never ids — same posture as the writer's own
+   * log line: a collision is an operator-visible integrity signal, not a
+   * payload channel.
+   */
+  readonly onUsageCollisions?: (collisions: number) => void;
 }
 
 /** One session that failed to ingest, with the surfaced reason. */
@@ -197,6 +212,12 @@ export function runCorpusIngest(deps: CorpusIngestDeps): CorpusIngestSummary {
         usageRowsInserted: outcome.usageRowsInserted,
         costUsd: outcome.costUsd,
       });
+      for (const reconciled of outcome.statusReconciliations) {
+        deps.onStatusReconciled?.(reconciled);
+      }
+      if (outcome.crossSessionUsageCollisions > 0) {
+        deps.onUsageCollisions?.(outcome.crossSessionUsageCollisions);
+      }
     } else {
       sessionsFailed += 1;
       failures.push({

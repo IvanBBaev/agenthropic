@@ -163,6 +163,12 @@ export interface CorpusWatcherDeps {
   /** Per-file skip diagnostics forwarded from the runner. */
   readonly onWarning?: (skipped: SkippedFile) => void;
   /**
+   * Per-session count of messages the M-12 ownership rule skipped, forwarded
+   * from the runner. Counts only, never ids — the composition root accumulates
+   * them into the figure /api/health reports.
+   */
+  readonly onUsageCollisions?: (collisions: number) => void;
+  /**
    * Fired once per failed session per pass — including the startup replay.
    * This is the ONLY place an ingest failure becomes visible, so a silent
    * dashboard always has a matching report.
@@ -434,11 +440,17 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
       now: deps.now,
       ingest: deps.ingest,
       onWarning: deps.onWarning,
+      onUsageCollisions: deps.onUsageCollisions,
       sessionFilter: (ref) => changed.has(ref.sessionId),
       onSessionIngested: (event) => {
         projectedIds.add(event.sessionId);
         deps.onIngestEvent?.(event);
       },
+      // The M-13 replay is an agent-status-changed event like any watchdog
+      // transition, so it rides the SAME seam — handed over directly rather
+      // than wrapped, which keeps this loop free of a branch that only the
+      // hook-before-row corpus could ever exercise.
+      onStatusReconciled: deps.onIngestEvent,
     });
     const checkpointable = settlePass(changed, next, summary, projectedIds);
     deps.checkpoints?.commit(corpusRoot, checkpointable, new Set(next.keys()));
