@@ -125,10 +125,38 @@ path there.
   to strip only the agenthropic entries.
 - The installer refuses to touch a file it cannot parse as JSON.
 
+## Verifying the wiring
+
+Nothing in the generated command reports success anywhere you can see it — it is
+`--silent --fail` with a trailing `|| true`, deliberately, so that a broken
+dashboard cannot break a Claude Code session. Confirmation therefore has to come
+from the server side:
+
+```sh
+curl -s -H "Authorization: Bearer $DASHBOARD_TOKEN" http://127.0.0.1:4317/api/health
+```
+
+A dashboard that is up but silent is almost always one of three things: the token
+in your environment is not the one the server started with, `curl` is older than
+8.3.0 (see the security notes below), or the hooks were installed into a settings
+file that this project does not use. The health response and the server's ingest
+log are how you tell those apart — the fields it reports, the ones it deliberately
+omits rather than faking, and the skip/quarantine lines are all documented in
+[troubleshooting](../docs/site/operations/troubleshooting.md).
+
 ## Security model
 
 - Hooks talk **only** to the loopback address (`127.0.0.1`, hard-pinned in the
   generated command) and **only** with the mandatory Bearer token.
+- **The token has a minimum length, enforced at startup.** The server refuses to
+  boot unless `DASHBOARD_TOKEN` is at least 16 characters
+  (`MIN_TOKEN_LENGTH` in `packages/shared/src/security/index.ts`), because
+  "mandatory" alone would be satisfied by `DASHBOARD_TOKEN=x` — a token that is
+  present and useless, which is the failure mode the rule was written against.
+  Sixteen is a chosen floor rather than a measured one; its practical effect is
+  that the value has to come from a generator (`openssl rand -hex 32` or
+  equivalent) instead of from typing. The installer never sees the value either
+  way, so this constrains what you export, not what you install.
 - **The token value appears in no process's argv** — not the hook shell's and
   not curl's own. The generated command hands curl the env var **name**
   (`--variable '%DASHBOARD_TOKEN'`) and a single-quoted header template
@@ -174,5 +202,9 @@ path there.
   catalogued alternative.
 - **Redaction phase (OPEN-3):** payloads are redacted at the ingest boundary
   from Phase 1 (the audit-recommended resolution, implemented as the default in
-  `apps/server/src/hooks/redact.ts`). The fuller retention/redaction policy
-  (WP-D10) awaits the OPEN-1/2/3 sign-off in `docs/analysis/open-decisions.md`.
+  `apps/server/src/hooks/redact.ts`). The fuller retention side (WP-D10) still
+  awaits the OPEN-1/2/3 sign-off in `docs/analysis/open-decisions.md`: the
+  sweeper mechanism is built and tested, but its policy is deliberately blank
+  and its runner is called from tests only, so **nothing currently deletes a
+  stored hook event**. Redaction, not expiry, is what keeps `events_raw` free of
+  secret-shaped material today.

@@ -1,6 +1,6 @@
 # ADR-0002: LB2 — Identity: personal-first / commercial-clean
 
-- **Status:** accepted — scope discipline **holds**; **amended 2026-07-30**: the `instance`/`host_id` hedge shipped on `orchestration_edges` only, not on every row, and "OPCⁿ" remains undefined (see the as-built update below)
+- **Status:** accepted — scope discipline **holds**; **amended 2026-07-30**: the `instance`/`host_id` hedge shipped on `orchestration_edges` only, not on every row, and "OPCⁿ" remains undefined; **amended 2026-08-15**: commercial-clean is now published (`LICENSE` tracked, GitHub reports `MIT`), while "OPCⁿ" and the "< 30s" criterion are both still open (see the as-built updates below)
 - **Date:** 2026-07-03
 - **Deciders:** Ivan Baev (project owner), via the six-lens concept-analysis-v2 workflow
   (Architect · Developer · QA · Business Analyst · Gap · Holistic)
@@ -39,6 +39,35 @@ the authoring discipline, not the repository's own public licensing posture.
 
 **"< 30s time-to-understand a session" is unmeasured** — see
 [ADR-0012](adr-cd-10-scope-secrets-retention.md)'s as-built update.
+
+## As-built update — 2026-08-15
+
+**Verdict: holds; one of the four open items above is closed, three are not.**
+
+**Commercial-clean is now published, not just asserted.** The `LICENSE` file is
+tracked and `gh api repos/IvanBBaev/agenthropic --jq .license.spdx_id` returns `MIT`,
+re-verified on 2026-08-15. The 2026-07-30 paragraph above — "asserted but not yet
+published" — is superseded on that point: "MIT-clean code only" now describes the
+dependencies, the authoring discipline, **and** the repository's own public posture.
+The dependency half continues to hold, with the CD-9 gate green over 412 installed
+packages ([ADR-0011](adr-cd-9-per-artifact-licensing.md)).
+
+**The three other open items are unchanged, and none of them are closeable by code.**
+
+- **The fleet hedge is still on one table.** `instance`/`host_id` remain `NOT NULL`
+  on `orchestration_edges` only. Six further migrations have landed since
+  ([ADR-0006](adr-cd-4-schema-events-and-orchestration.md)'s 2026-08-15 update) and
+  none of them extended the hedge, which is consistent with the scope discipline this
+  ADR exists to enforce, but leaves the acceptance criterion as written **not met**.
+- **"OPCⁿ" is still undefined.** Nothing has defined or dropped it. It therefore still
+  may not drive tenancy, schema or license-strictness investment — and it has not.
+- **"< 30s time-to-understand a session" is still UNMEASURED.** No timing study has
+  been run, no instrumentation records it, and no number should be quoted for it. It
+  is the one acceptance criterion in this ADR that requires a human sitting in front
+  of the dashboard to answer, and that has not happened in a way anyone recorded.
+
+Recording the licensing fix without restating the three that remain would leave this
+ADR reading better than the project is.
 
 ## Context
 

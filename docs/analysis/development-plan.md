@@ -127,6 +127,38 @@ Coverage wording is normalized throughout to **>90%** (the delivery bar is stric
 90; the merge gate blocks at 90.0% or below). Cut/deleted WP rows are kept, struck
 through, so WP numbering stays stable.
 
+### 2c. As-built corrections (2026-08-15) — where the plan and the tree disagree
+
+The plan below was written before any code existed. Phases 1–4 have since been built, and
+three things it states as future commitments now have an as-built answer that differs from
+the wording. The plan text is left intact — it is the record of what was agreed — and the
+corrections live here.
+
+**The coverage number moved up; the word "blocking" is still not true.** Every "**>90%**"
+in this document (§3 Phase 1, §5 `WP-F3`/`WP-F4`/`WP-X5`, §8) describes a bar that shipped
+at **100%** for statements, branches, functions and lines, pinned per package in its own
+`vitest.config.ts` across all five packages. Each package also carries a static guard that
+fails if a `v8 ignore` / `c8 ignore` / `istanbul ignore` pragma appears in `src/`, because a
+pragma removes code from the **denominator** and makes 100% reachable by not looking. But
+`WP-F4`'s "coverage gate **blocking merges**" and `WP-X5`'s "a PR dropping below the
+threshold is blocked (demonstrated)" remain **UNENFORCED**: branch protection on `main` is
+not enabled, so a red run reports and is obeyed by convention — it cannot physically stop a
+merge. Enabling protection is an owner act on GitHub, not a work package. Until it is done,
+read every "blocking" in this plan as "runs, reports, and is honoured voluntarily".
+
+**Phase 4's `< 30s` exit gate is UNMEASURED.** The four views are built and the five daily
+questions have on-screen answers, but "time-to-understand a session < 30s" is a *measured*
+claim about a human using the product, and nobody has timed it. It is not passed, not
+failed — untested. It stays an open exit gate.
+
+**Phase 0's hard stop was overridden, not passed.** CD-8 required a signed Gate A and a
+`WP-S7` GO before production code; implementation began on **2026-07-11** by explicit owner
+override in chat. The override released *dispatching only*. It signed no Gate A, ratified no
+`LABEL-ME` numbers — every Phase-0 figure quoted in this plan is still **PROVISIONAL** — and
+the hierarchy-accuracy gate still reports **NOT CERTIFIED** because the hand-labelled corpus
+does not exist. Where §3 and §5 speak of Phase 0 gating the build, read it as a gate that
+was stepped over knowingly and is still owed its evidence.
+
 ---
 
 ## 3. Roadmap — phases & exit gates

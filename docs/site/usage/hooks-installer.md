@@ -1,12 +1,14 @@
 # Hooks installer
 
-> **Design-target documentation — pre-Phase-0.** This page documents agenthropic's
-> *intended* behavior for installing the Claude Code lifecycle hooks, as fixed by the
-> design basis (docs/ai/DESIGN.md) and the build plan (docs/analysis/development-plan.md).
-> **No application code is built yet** (see the [roadmap](../guide/roadmap.md)); installing
-> the Claude Code lifecycle hooks ships in **Phase 2 — Ingest substrate**. Values marked
-> _(planned)_ or _(leaning-unconfirmed)_ may change; the **security invariants are binding
-> and will not**. This replaces the earlier stub.
+> **How to read this page.** The installer is **built and runnable** —
+> `node hooks/install.mjs`, four hooks, no dispatcher script. The page keeps the
+> design-era text it was written as, before any of it existed, because the gap between
+> what was planned and what shipped is unusually large here: the plan assumed twelve hook
+> events feeding the subagent tree, and the built system uses four that feed **liveness
+> only**. Rather than delete the wrong version, each section carries an **As built** box
+> saying what replaced it and why. A step marked _(planned)_ or _(leaning-unconfirmed)_ is
+> therefore design history, not an open question. The **security invariants were binding
+> then and are binding now.**
 
 > **Update — 2026-07 (as built).** The installer exists: **`hooks/install.mjs`**, a
 > dependency-free Node ESM script, with `hooks/README.md` as its runbook. Run
@@ -46,12 +48,12 @@ This page documents how the Claude Code lifecycle hooks are designed to be insta
 verified end to end: where the hook scripts live, how they're registered in Claude Code's
 own settings, the authed loopback receiver they POST to, how a hook acquires
 `DASHBOARD_TOKEN` without leaking it, and how to confirm a real session actually produced
-an `events_raw` row. The key takeaway: **there is no installer yet** *(As built: there
-is — `hooks/install.mjs`; the sentence stands as the state at the time of writing.)* —
-this is the target
-contract one devops-owned work package, `WP-X8`, has to satisfy, and its own Done-when is
-exactly the phrase the title of this page describes: *"Install → working end-to-end hook →
-loopback ingest → `events_raw` on a real session"* (`docs/analysis/development-plan.md`).
+an `events_raw` row. It was written as a target contract for one devops-owned work
+package, `WP-X8`, whose Done-when is exactly the phrase the title of this page describes:
+*"Install → working end-to-end hook → loopback ingest → `events_raw` on a real session"*
+(`docs/analysis/development-plan.md`). That package has since shipped, so where the text
+below says there is no installer yet, read it as the record of what was true when the
+contract was written — the installer is `hooks/install.mjs` and you can run it now.
 Background on what the hooks carry and why two of them get special treatment is
 [hook ingestion](../architecture/hooks.md) — this page does not duplicate that catalogue,
 it covers getting the scripts onto disk, wired into Claude Code, and proven to work.
@@ -93,7 +95,8 @@ downstream in the Normalizer/Projection, not in the hook script itself.
 >
 > The practical consequence for a reader: hooks make the dashboard *live*, they do
 > not make it *correct*. Uninstall them and the DAG and the dollar figures are
-> unaffected; you only lose the sub-poll-interval freshness.
+> unaffected — what you lose is sub-poll-interval freshness and, more visibly, any
+> report that something **finished**. The next section spells that out.
 
 One caveat that directly affects what the installer can register: `SubagentStart` is
 listed in parentheses in `DESIGN.md` §5 — `` `SubagentStop` (+ `SubagentStart`) `` —
@@ -109,6 +112,59 @@ derivation went further than the fallback described here — it is JSONL-only, w
 `SubagentStop` contribution at all.)*
 Full treatment of the hedge is the dedicated `SubagentStart` section in
 [hook ingestion](../architecture/hooks.md).
+
+## What the hooks actually buy you: the ability to say "finished"
+
+This section is not in the design text; it is the as-built answer to "why bother
+installing these at all", and it is the single most useful thing to understand before you
+decide. Reading a transcript proves that **activity happened**. It cannot prove that
+activity **ended** — a file that stops growing looks exactly like a file whose author is
+thinking. So ingest only ever writes `working`, and the watchdog can only ever age a
+silent agent to `unknown`. The terminal signal has to come from outside the transcript,
+and the hooks are the only place it comes from:
+
+| Hook | What the server does with it | Resulting status |
+| --- | --- | --- |
+| `SubagentStop` | Resolves the subagent it names — from the agent id in the payload, or failing that from an `agent-<hex>.jsonl` transcript path — and marks that one row finished | `completed` |
+| `Stop` | Identifies the **main** agent (whose id is the session uuid) and records that it is idle right now | `waiting` |
+| `UserPromptSubmit` | Stored, and projected onto the session's event timeline | *(none)* |
+| `PreCompact` | Stored, and projected onto the session's event timeline | *(none)* |
+
+Only two of the four move anything. The other two are registered because they are cheap
+to collect and they show up in the timeline `GET /api/sessions/:id/events` serves — not
+because anything downstream keys off them. In particular, `PreCompact` does **not** drive
+the cost engine's compaction repricing: compaction boundaries are read from
+`compactMetadata` in the transcript, never from the hook, so a session with no hooks
+installed still reprices correctly across a compaction.
+
+Three properties of that table are deliberate and worth stating outright:
+
+- **`Stop` maps to `waiting`, not `completed`.** Claude Code fires `Stop` at the end of
+  every *turn*, so reading it as "the session is over" would reintroduce exactly the
+  confident lie the status lifecycle exists to remove. `waiting` says what is actually
+  known: idle right now. If it never comes back, the watchdog ages it to `unknown` after
+  `DASHBOARD_WATCHDOG_MINUTES` (default **10**, a **PROVISIONAL** constant), and `unknown`
+  is displayed as `unknown` rather than softened into something friendlier.
+- **A hook never guesses its target.** If the payload does not identify an agent this
+  server has already parsed from a transcript, the delivery is stored as raw liveness and
+  changes **no row**. Attributing a `SubagentStop` to the wrong agent would mark a running
+  agent finished — the same class of bug the lifecycle removes. That rule has one
+  consequence worth knowing about: a subagent that starts and finishes inside a single
+  poll interval fires its `SubagentStop` *before* ingest has ever seen its transcript, so
+  the live path correctly discards the verdict. It is not lost — when ingest later inserts
+  that agent's first row, the stored `SubagentStop` payloads for the session are replayed
+  against **only** the just-inserted agents, and only through a reconcile that refuses to
+  move a row already in a terminal state. Replayed evidence never outranks a later
+  verdict.
+- **A hook can only UPDATE a `status` column.** It cannot create an agent, delete one,
+  re-parent one, add an edge, or touch token usage. That is CD-1 enforced at the code
+  level, not a convention.
+
+The consequence, stated plainly: **if you do not install these hooks, nothing in the
+dashboard will ever read `done`.** Agents move `working` → `unknown` and stay there. That
+is not a defect in the board; it is the board declining to claim an ending nobody
+observed. Everything else — the tree, the global DAG, every token and dollar figure —
+is unaffected, because none of it comes from hooks in the first place.
 
 ## The designed install procedure
 
@@ -131,9 +187,15 @@ exactly why this page is design-target, not a runbook you can follow today.
 > node hooks/install.mjs --out .claude/settings.json --remove
 > ```
 >
-> Other flags: `--port <n>` (default `4317`, matching the server default) and
+> Other flags: `--port <n>` (default `4317`, matching the server default),
 > `--token-env <NAME>` (default `DASHBOARD_TOKEN`) — the *name* of the env var the
-> generated command expands, never its value.
+> generated command expands, never its value — and `--help` / `-h`, which prints the
+> usage and exits. Two argument rules are deliberately strict rather than forgiving:
+> an **unrecognised flag is a hard error**, not a warning, because silently ignoring
+> `--to-ken-env` would install hooks that reference an environment variable nobody
+> sets; and `--token-env` accepts only an UPPER_SNAKE_CASE name
+> (`/^[A-Z_][A-Z0-9_]*$/`), because anything else would be shell metacharacters
+> landing inside a generated command string.
 >
 > Three behaviors worth knowing before you run it: the merge is **non-destructive**
 > (unrelated settings keys and foreign hook entries are preserved verbatim, and
@@ -316,6 +378,35 @@ receiver, **accept-any-event**. Never-seen `event_type` → 202 + a row lands
 > delivery against a JSONL line describing the same fact, because the two never share
 > a table (see the verification section below).
 
+#### Why each firing carries a delivery id
+
+Content-based deduplication has a blind spot that shows up immediately with these four
+events: a `Stop` body is **byte-identical on every turn of a session**. Hash the payload
+and the tenth turn of a long session is indistinguishable from a retry of the first — one
+of which must be kept and the other must be dropped, and the payload cannot tell you
+which. Only the sender knows. So the generated command stamps every firing with a header,
+`X-Agenthropic-Delivery-Id`, minted in the hook's own shell at fire time from the shell
+pid, the epoch second and `$RANDOM`. It carries no user data, it is hashed into the
+idempotency key and nothing else, and it is never stored, logged or echoed back. The
+installer never computes a value itself, so no id is ever baked into the settings file.
+
+Three edge behaviours follow, and all three are conservative on purpose:
+
+- The header is bounded at **200 characters**; a longer value is a `400`, and the
+  validation message names the header, never its value. An unbounded client-controlled
+  string does not reach the hash function.
+- A header sent **twice** arrives as an array, and an ambiguous delivery id is treated as
+  **absent** rather than resolved by picking one. An empty value is absent too. Absent
+  means the key falls back to content alone — a weaker guarantee, chosen over a guess at
+  which firing the id names.
+- The liveness seam runs on **every** delivery, including one whose append deduplicated to
+  zero rows. That looks redundant until you consider the failure it covers: a crash
+  between the committed append and the status update would otherwise lose a terminal
+  status permanently, because the retry would see `stored: false` and skip. Re-applying is
+  free — the seam is a guarded no-op when the agent already holds that status, so no
+  duplicate transition reaches the SSE stream. An append that *throws* skips it: nothing
+  landed, so there is nothing to say.
+
 ## Leak-free token acquisition _(security-critical)_
 
 This is explicitly part of `WP-X8`'s scope, not an afterthought — the work package is
@@ -463,7 +554,11 @@ marked _(planned)_ since no installer or receiver exists yet:
    prompt that invokes a tool fires `PreToolUse`/`PostToolUse`; a subagent-heavy session
    also exercises `SubagentStart`/`SubagentStop`, the pair the hierarchy tables depend on.
    This mirrors the same kind of session Phase 0's own spike captures for its tree
-   validation ([roadmap](../guide/roadmap.md), Phase 0).
+   validation ([roadmap](../guide/roadmap.md), Phase 0). *(As built: the installer
+   registers four events, so the ones to exercise are `UserPromptSubmit`, `Stop`,
+   `SubagentStop` and `PreCompact`. `PreToolUse`/`PostToolUse` are not registered, and
+   `SubagentStart` does not exist — and no hierarchy table depends on any of them, because
+   the tree is parsed from the transcript, not assembled from hooks.)*
 4. **Confirm a row landed.** Check `events_raw` for a row with `source = 'hook'`, an
    `event_type` matching what fired, and a well-formed `idempotency_key`
    ([data model](../architecture/data-model.md) — the reference DDL (not yet built;

@@ -29,11 +29,18 @@ this page (full grading rationale: [the moat §3](the-moat.md)).
 > `orchestration_edges` exists, and no second host does. The security row was implemented
 > exactly as committed: loopback-only bind, mandatory `DASHBOARD_TOKEN` compared with
 > `timingSafeEqual`, no spawner, no SSRF (the server makes no outbound network request at
-> all). **72 test files / 879 tests pass**, coverage gated >90% in every shipped package.
-> Three P0 correctness proofs are green and merge-blocking — Σ tokens against an
+> all). Test figures, re-measured 2026-08-15: **106 test files / 1554 tests**, with **100%
+> statements, branches, functions and lines** enforced in **all five** packages —
+> `packages/test-fixtures` is inside the gate, not excluded from it. Three P0 correctness
+> proofs run green in CI on every push and pull request — Σ tokens against an
 > independently written reader, a byte-identical double replay, and the DAG rebuilt from
-> JSONL alone after a simulated outage. That is the whole of what is proven; nothing here
-> should be read as a broader guarantee.
+> JSONL alone after a simulated outage. Calling them *merge-blocking* would be one word too
+> strong: that takes a branch-protection rule on `main`, which is an owner action and was
+> still unset at the last recorded check. And coverage of the code is not accuracy of the
+> output — the hierarchy-accuracy exit gate reports **NOT CERTIFIED at n = 0**, because no
+> session has been hand-labeled. Those three proofs are the whole of what is proven;
+> nothing here should be read as a broader guarantee. None of it is released, either:
+> there is no tag and no published package.
 >
 > **2. No rival was ever installed.** Every claim about the six audited projects and the
 > baseline rests on **reading their source and documentation** during due diligence in
@@ -84,7 +91,7 @@ Legend: **✅** shipped and confirmed · **⚠️** partial or caveated · **❌
 
 | Project | Subagent DAG | Dollar-cost attribution | Persistence | Telegram sink | Cross-machine |
 |---|---|---|---|---|---|
-| **agenthropic** *(as built, 2026-07)* | ✅ **built** — persisted, per-instance `orchestration_edges` over four structural join paths; proven rebuildable from JSONL alone *(was: ⚠️ planned, Phase 3)* | ✅ **built** — delegation-savings + compaction repricing off ground-truth `token_usage`; Σ verified against the JSONL by an independent reader *(was: ⚠️ planned, Phase 3)* | ✅ **built** — SQLite WAL + migrations; `events_raw` is append-only but holds **hook events only** *(was: ⚠️ planned, Phase 1)* | ❌ **not built** — v2.0, entered only via KC-5; may never start; alerts API + UI cut *(was: ⚠️ planned, Phase 5)* | ❌ **not built** — `instance`/`host_id` key exists on `orchestration_edges` only (not on every row); the rollup is not a work package |
+| **agenthropic** *(as built, 2026-07)* | ✅ **built** — persisted, per-instance `orchestration_edges` over five recorded join provenances (four modern structural paths plus a distinct `legacy_explore`); proven rebuildable from JSONL alone *(was: ⚠️ planned, Phase 3)* | ✅ **built** — delegation-savings + compaction repricing off ground-truth `token_usage`; Σ verified against the JSONL by an independent reader *(was: ⚠️ planned, Phase 3)* | ✅ **built** — SQLite WAL + migrations; `events_raw` is append-only but holds **hook events only** *(was: ⚠️ planned, Phase 1)* | ❌ **not built** — v2.0, entered only via KC-5; may never start; alerts API + UI cut *(was: ⚠️ planned, Phase 5)* | ❌ **not built** — `instance`/`host_id` key exists on `orchestration_edges` only (not on every row); the rollup is not a work package |
 | `davila7/claude-code-templates` (28.4k★, MIT) | ❌ flat leaderboard/timeline only | ❌ | ❌ in-memory TTL cache | ❌ | ❌ |
 | `simple10/agents-observe` (607★, MIT) | ⚠️ real `buildAgentTree()` parent→child tree + force-directed graph, but edges are event-derived at render time, session-scoped, never persisted as first-class rows | ❌ | ✅ SQLite (`projects`/`sessions`/`agents`/`events`/`filters`) | ❌ | ❌ single-host |
 | `hoangsonww/Claude-Code-Agent-Monitor` (92,163 LOC, MIT) | ⚠️ real nested tree via a persisted `agents.parent_agent_id` column, recursively rendered — but the flagship `OrchestrationDAG.tsx` is a **type-aggregated**, 3–4-layer diagram of agent *categories*, not a per-instance graph | — no cost/pricing schema or live delegation-savings metric documented in the audit | ✅ 12-table schema, dual SQLite driver | ✅ first-class `formatTelegram` webhook provider + `alert_rules`/`webhook_targets`/`webhook_deliveries` schema | ❌ single-host |
@@ -102,9 +109,9 @@ it were that same per-instance graph. Nobody
 ships a **global, cross-session, instance-keyed** orchestration graph — that is
 exactly moat item #1 (see [the DAG moat](../architecture/dag-moat.md)).
 *(As built: agenthropic's side of that claim is now shipped and proven — the edges are
-rows, not a render-time reconstruction, and a merge-blocking test rebuilds the whole DAG
-from JSONL alone after a simulated outage. The rival side of the claim is still
-2026-07-03 reading, not a re-test.)*
+rows, not a render-time reconstruction, and a test that runs green in CI on every push
+rebuilds the whole DAG from JSONL alone after a simulated outage. The rival side of the
+claim is still 2026-07-03 reading, not a re-test.)*
 
 ## Security posture
 
@@ -174,9 +181,13 @@ in-memory tree, rebuilt on every render           deterministic projection
 > `orchestration_edges`, one transaction per session. Read the right-hand column as
 > `~/.claude/projects/*.jsonl → agents + orchestration_edges → queried`. Likewise, "built
 > two independent ways" did not survive: edges are derived from **JSONL alone**, over four
-> structural join paths (`tool_use`, `directory`, `queue_operation`, `task_notification`).
-> That is stronger than it sounds — it is why a merge-blocking test can rebuild the entire
-> DAG after a simulated hook outage and get a byte-identical dump.
+> structural join paths (`tool_use`, `directory`, `queue_operation`, `task_notification`)
+> plus a fifth, deliberately separate provenance, `legacy_explore`, for the pre-2.1.71
+> bare-`Explore` sidecars whose parent is inferred rather than observed. Keeping that fifth
+> value distinct instead of folding it into `tool_use` is the point: a reader can tell an
+> observed edge from a heuristic one, all the way to the UI. That is stronger than it
+> sounds — it is why a test can rebuild the entire DAG after a simulated hook outage and
+> get a byte-identical dump.
 
 The persisted side of that diagram starts from the self-referential column
 `agenthropic` grafts from `hoangsonww`'s schema onto `simple10`'s clean base:
@@ -267,29 +278,37 @@ governs what is copied-with-attribution versus clean-room reimplemented all live
 
 ## Where agenthropic stands today
 
-> **Update — 2026-07 (as built).** The paragraph below is superseded; it is kept because
-> other pages link to this section. **The bootstrap phase is over.** Implementation began
+> **As built (this section).** The paragraph below is superseded; it is kept because other
+> pages link to this section. **The bootstrap phase is over.** Implementation began
 > **2026-07-11**, by explicit owner override of the CD-8 no-code-before-spike gate — not
 > because the gate was cleared. What runs: the loopback-bound, token-gated server; the
-> SQLite/WAL substrate and migrations; JSONL ingest with replay-on-startup; the persisted
-> subagent DAG; the cost engine; the hook receiver; the SSE hub; the read API; and all four
-> dashboard views. **72 test files / 879 tests pass**, coverage gated >90% in every shipped
-> package (`packages/test-fixtures` is a deliberate, documented exclusion).
+> SQLite/WAL substrate and thirteen migrations; JSONL ingest with replay-on-startup and
+> tail-follow polling; the persisted subagent DAG; the cost engine; the hook receiver and
+> its installer; the status watchdog; the SSE hub; the read API; and all four dashboard
+> views plus a per-session cost-analysis panel. Re-measured 2026-08-15: **106 test files /
+> 1554 tests**, with **100% statements, branches, functions and lines** enforced in **all
+> five** packages — `packages/test-fixtures` was folded inside the gate rather than left
+> out of it. Retention is the one deliberate half-build: the mechanism exists and is
+> tested, the policy is unset pending an owner decision, the default is a no-op, and
+> nothing prunes.
 >
-> Three things are still honestly open, and matter more than the feature list:
-> the Phase-0 spike numbers remain **PROVISIONAL** until ratified against a hand-labeled
-> corpus; the v1.0 usability target ("<30s to understand a session") is **unmeasured**, so
-> nothing on this page claims agenthropic is *faster to read* than a rival; and the
-> roadmap's kill checkpoints **KC-0 and KC-1 both passed unmet** — see
-> [the roadmap](roadmap.md) for that record in full.
+> Four things are still honestly open, and matter more than the feature list: the Phase-0
+> spike numbers remain **PROVISIONAL** until ratified against a hand-labeled corpus; the
+> hierarchy-accuracy exit gate reports **NOT CERTIFIED at n = 0**, so parser accuracy on
+> real data is unmeasured rather than merely unproven; the v1.0 usability target ("<30s to
+> understand a session") is **unmeasured** too, so nothing on this page claims agenthropic
+> is *faster to read* than a rival; and the roadmap's kill checkpoints **KC-0 and KC-1 both
+> passed unmet** — see [the roadmap](roadmap.md) for that record in full.
 
-As of this writing, every "planned" row above is exactly that — planned, not shipped.
-agenthropic is in its **bootstrap phase**: the design basis (architecture, data model,
-hook set, security model, roadmap) is settled and treated as the source of truth, but
-no application code is scaffolded yet, and a Phase 0 feasibility spike gates the first
-line of production code. See [the roadmap](roadmap.md) for the phase-by-phase build
-sequence, and the [FAQ](faq.md) for the questions this comparison doesn't answer on
-its own (cost to run, data location, why not just fork one of the six rivals).
+When this page was first written, every "planned" row above was exactly that — planned,
+not shipped. agenthropic was then in its **bootstrap phase**: the design basis
+(architecture, data model, hook set, security model, roadmap) was settled and treated as
+the source of truth, no application code was scaffolded yet, and a Phase 0 feasibility
+spike gated the first line of production code. That is the state the tables above were
+drawn against; the amendment immediately above says which rows have since moved. See
+[the roadmap](roadmap.md) for the phase-by-phase build sequence, and the [FAQ](faq.md)
+for the questions this comparison doesn't answer on its own (cost to run, data location,
+why not just fork one of the six rivals).
 
 ## See also
 

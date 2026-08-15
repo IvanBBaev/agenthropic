@@ -1,0 +1,77 @@
+name: Feature request
+description: Propose something agenthropic should do that it does not do today.
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        agenthropic has a deliberately narrow scope: it observes Claude Code agent and
+        subagent activity, locally, read-only. Its entire feature set is driven by five
+        concrete daily questions rather than feature parity with anything else, so the
+        most useful thing you can tell the maintainer is which of them your idea serves.
+
+        Two things are declined by design, before the discussion starts:
+
+        - **Anything that makes the server execute or spawn a process.** No `/api/run`,
+          no "re-run this session", no shelling out. That surface is refused on purpose
+          and guarded by a static CI gate; see
+          [SECURITY.md](https://github.com/IvanBBaev/agenthropic/blob/main/SECURITY.md).
+        - **Anything that requires exposing the server beyond loopback**, or that dials
+          an outbound URL taken from ingested data.
+
+  - type: dropdown
+    id: daily-question
+    attributes:
+      label: Which daily question does this serve?
+      description: >-
+        The five questions the dashboard exists to answer. If your idea does not serve
+        one of them, say so honestly - that is not automatically a rejection, but it does
+        change the conversation.
+      options:
+        - 'Q1 - What is the subagent tree of this session, and which branch is still running?'
+        - 'Q2 - Which agent/subagent burned the most tokens (and roughly what did it cost)?'
+        - 'Q3 - Did any session get stuck / error without me noticing?'
+        - 'Q4 - What did today/this week cost, and how much did Haiku/Sonnet routing save?'
+        - "Q5 - Show me last night's sessions - persisted, after a restart."
+        - 'None of the five - I think this is worth doing anyway'
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you unable to see or do today? Describe the situation, not the solution.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like it to do
+      description: >-
+        The behaviour you want. If it needs data, say where that data would come from -
+        the JSONL corpus, the hooks, or something that does not exist yet.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Including "I currently do X by hand", which is useful signal on its own.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: This does not require the server to execute a command, spawn a process, or evaluate code.
+          required: true
+        - label: This does not require binding beyond `127.0.0.1`, or exposing the dashboard publicly.
+          required: true
+        - label: I understand this is a single-maintainer personal project and that a request may simply be declined.
+          required: true

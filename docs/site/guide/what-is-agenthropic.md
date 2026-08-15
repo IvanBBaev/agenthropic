@@ -19,12 +19,27 @@ is no longer true — see the update immediately below.)*
 >
 > **What runs today**, all verified against the repository: the Fastify server bound to
 > `127.0.0.1:4317` and gated by a mandatory `DASHBOARD_TOKEN`; the SQLite/WAL substrate
-> with a forward-only migration runner; JSONL corpus ingest with replay-on-startup; the
-> persisted subagent DAG (`orchestration_edges`, four structural join paths); the cost
-> engine including compaction repricing and delegation savings; the hook receiver; the SSE
-> realtime hub; the read API; and all four dashboard views — live status, session tree,
-> global DAG, cost/Sankey. **72 test files / 879 tests pass**, coverage gated **>90%** in
-> every shipped package (`packages/test-fixtures` is a deliberate, documented exclusion).
+> with a forward-only migration runner (thirteen migrations) and a daily backup timer;
+> JSONL corpus ingest with replay-on-startup and tail-follow polling that re-reads only
+> new bytes; the persisted subagent DAG (`orchestration_edges`, **five** structural join
+> provenances since migration 13 — `tool_use`, `directory`, `task_notification`,
+> `queue_operation` and the legacy `legacy_explore` fallback); the cost engine including
+> compaction repricing and delegation savings; the hook receiver and its installer; a
+> five-value agent status lifecycle (`working`, `waiting`, `completed`, `error`,
+> `unknown`) with a watchdog that ages an unobserved agent rather than guessing at its
+> ending; the SSE realtime hub; the read API; and all four dashboard views — live status,
+> session tree, global DAG, cost/Sankey — plus a per-session cost-analysis panel. It is
+> **not released**: no tag, no package, `private: true` at version `0.1.0`, run from a
+> checkout.
+>
+> **Test figures, re-measured 2026-08-15:** **106 test files / 1554 tests**, with **100%
+> statements, branches, functions and lines** enforced in **all five** packages —
+> `packages/test-fixtures` was folded into the gate rather than left outside it. Two
+> things that does not mean. It is not merge-*blocking*: a red run is not a blocked
+> button until a branch-protection rule exists on `main`, which is an owner action and was
+> still unset at the last recorded check. And covering the code is not measuring the
+> output — the hierarchy-accuracy exit gate reports **NOT CERTIFIED at n = 0** because no
+> session has been hand-labeled.
 >
 > **Three corrections to the prose below.** (1) **Four hooks, not twelve.** The installer
 > registers `UserPromptSubmit`, `Stop`, `SubagentStop` and `PreCompact`; **`SubagentStart`
@@ -113,9 +128,14 @@ reported (see [Hook ingestion](../architecture/hooks.md), "The `SubagentStart` h
 > `Stop`, `SubagentStop`, `PreCompact`. More importantly, **no hook has dedicated
 > structural handling — not even `SubagentStop`.** Hooks are **liveness only, never
 > structure**: no hook creates an agent row, asserts a parent→child edge, or writes a token
-> row. The hierarchy comes entirely from the JSONL transcripts, via the parser's four
-> structural join paths (`tool_use`, `directory`, `queue_operation`, `task_notification`).
-> The `events_raw` → normalized `events` → projection chain below was likewise never built
+> row. The hierarchy comes entirely from the JSONL transcripts, via the parser's join
+> paths — four modern ones (`tool_use`, `directory`, `queue_operation`,
+> `task_notification`) plus `legacy_explore`, a last-resort fallback for pre-2.1.71
+> transcripts added in 2026-08. Each edge stores which path produced it, and
+> `legacy_explore` is deliberately *not* filed as `tool_use`: one edge was observed in a
+> materialised spawn block, the other was inferred from a degraded legacy shape, and once
+> both are written under the same name no reader can ever tell them apart again. The
+> `events_raw` → normalized `events` → projection chain below was likewise never built
 > as separate stages — `events_raw` holds hook events only, and JSONL is parsed straight
 > into the projections. Both divergences are deliberate and recorded.
 
@@ -224,8 +244,10 @@ As of this writing, agenthropic is in the **bootstrap phase**:
   aligned with a sibling project's pattern, but repo structure and the MVP schema
   scope are still open. *(As built: no longer true. The leaning became the decision and
   shipped unchanged — `apps/server`, `apps/web`, `packages/shared`, `packages/core`,
-  `packages/test-fixtures`, `hooks/`, on Node 22, with **72 test files / 879 tests
-  passing** and coverage gated >90% in every shipped package.)*
+  `packages/test-fixtures`, `hooks/`, on Node 22, with **106 test files / 1554 tests
+  passing** and **100%** statements/branches/functions/lines enforced in all five
+  packages, re-measured 2026-08-15. What has *not* happened is a release: no tag, no
+  published package, `private: true` at version `0.1.0`.)*
 - **A Phase 0 feasibility spike gates everything.** Before any production code is
   written, the spike must confirm — against real, hand-labeled Claude Code sessions —
   that the subagent tree can be built reliably from the JSONL logs alone

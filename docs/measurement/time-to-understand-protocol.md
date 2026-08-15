@@ -211,6 +211,39 @@ fix is a UI change, not a protocol change — and the gate stays open until it l
 Similarly, "this week" currently has to be summed by eye across seven rows of the
 per-day table; if Q4 fails on time, that is why.
 
+> **Correction — 2026-08. The web app has changed since this risk was registered.**
+> The prediction above is left exactly as written, because a pre-registration that
+> gets quietly edited to match later events stops being one. What follows is the
+> annotation, not a rewrite.
+>
+> **The "no view calls it" claim is no longer true.** `apps/web/src/api.ts` now
+> exposes six reads rather than four — `checkHealth`, `fetchSessions`,
+> `fetchSessionTree`, `fetchGlobalDag`, `fetchCostSummary` and `fetchCostAnalysis` —
+> and the sixth is the one this section was about:
+> `GET /api/sessions/:id/cost-analysis` is called by the UI.
+> `apps/web/src/views/SessionCostAnalysis.tsx` renders
+> `delegationSavings.savingsUsd` with its `isEstimate` label carried through to the
+> screen: a `~` prefix, an explicit "estimate" badge, and the count of agents
+> excluded from the figure because no top-tier comparison model could be resolved
+> for them. It is mounted from two places — the sessions view
+> (`SessionsView.tsx:294`) and the cost view's "Session analysis" block
+> (`CostView.tsx:473`), which shows a prompt until a session is picked.
+>
+> **The KPI strip landed split.** `Today (UTC)` and `Last 7 days (UTC)` are built in
+> the cost view (review item M-9), so the "sum seven rows by eye" problem named in
+> the paragraph above is gone. The third designed tile — a **fleet-wide** delegation
+> saved figure spanning all sessions — was **not** built. Savings remain per-session
+> and require selecting a session first. The routing surface is unchanged:
+> `router.ts` still exposes `live | sessions | dag | cost`.
+>
+> **What this does and does not settle.** The expected `FAIL(unanswerable)` for Q4's
+> savings half no longer follows automatically, since the number is now on screen.
+> Whether Q4 actually passes depends on whether "pick a session, then read the
+> estimate" fits inside the time budget — which is precisely the question the
+> measurement exists to answer and which no amount of reading the source can settle.
+> Nothing here is evidence that it does. Section 7 stands unchanged: the protocol is
+> unsigned, the gate is UNMET, and the `<30s` clause remains **UNMEASURED**.
+
 ---
 
 ## 7. Signature

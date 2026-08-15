@@ -1,6 +1,6 @@
 # ADR-0004: CD-2 — Single immutable substrate + deterministic projection
 
-- **Status:** accepted, **amended in practice 2026-07-30** — append-only immutability shipped and is trigger-enforced; the two-stage Normalizer → Projection pipeline was not built (see the as-built update below)
+- **Status:** accepted, **amended in practice 2026-07-30** — append-only immutability shipped and is trigger-enforced; the two-stage Normalizer → Projection pipeline was not built; **amended 2026-08-15** — the abort test is CI-failing rather than merge-blocking, though the triggers that enforce immutability sit below CI and are unaffected (see the as-built updates below)
 - **Date:** 2026-07-03
 - **Deciders:** Ivan Baev (project owner), via the six-lens concept-analysis-v2 workflow
 - **Source:** [`concept-analysis-v2.md` §3, row CD-2](../../../analysis/concept-analysis-v2.md#3-canonical-decision-register-v2)
@@ -68,6 +68,25 @@ on disk. It is exactly as strong for the failure mode this project actually face
 independently and does not truncate it — the property CD-1's probe measured. If a
 hooks-only data source ever appears, this half of CD-2 has to be rebuilt as
 originally drawn.
+
+## As-built update — 2026-08-15
+
+**Verdict: unchanged. One process claim is narrower than written, and it does not reach the
+data.** The negative test that asserts both `RAISE(ABORT, 'events_raw is append-only')`
+paths is called **merge-blocking** above. It runs in CI on every push and fails the run if
+either trigger stops firing, but it withholds no merge — `main` is not branch-protected
+(`404 Branch not protected`, verified 2026-08-15); see
+[the standing correction](README.md#a-standing-correction-merge-blocking).
+
+That correction is worth stating precisely, because it is easy to over-read. The
+immutability of `events_raw` does **not** depend on CI at all: it is enforced by SQLite
+`BEFORE UPDATE` / `BEFORE DELETE` triggers living inside the database file, which abort a
+write whether or not any test ever runs. The test proves the triggers are there; the
+triggers are what stops the write. A weakened claim about the test is therefore a claim
+about process discipline, not about whether the substrate can be edited. It cannot.
+
+Thirteen migrations have now been applied ([ADR-0006](adr-cd-4-schema-events-and-orchestration.md)'s
+2026-08-15 update) and none of them added an UPDATE or DELETE path to `events_raw`.
 
 ## Context
 

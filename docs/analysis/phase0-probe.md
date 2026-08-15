@@ -17,6 +17,16 @@ tokens), and its two load-bearing claims were then **re-verified by hand**.
 This probe **corrects three things** the earlier docs asserted — see §4. Every integer below was
 computed from disk, not inferred.
 
+> **The census below is a 2026-07-04 snapshot and is no longer the census of record
+> (note added 2026-08-15).** The corpus has grown by roughly six weeks of daily use since,
+> and the numbers in §1 have moved with it — [parser-spec.md](parser-spec.md) §4.2 holds the
+> current figures and is what to quote. Nothing here is retracted: the probe's *verdict* rests
+> on structural facts (which spawn tools carry the join key, which layouts exist, where the
+> tokens live), and those have held. It is the **magnitudes** that expired, so treat §1 as
+> dated evidence rather than as a description of the corpus today. One counting subtlety
+> survives the move and is worth carrying across: a subagent-transcript count is not a session
+> count, and the two have been confused before — §4.2 states both explicitly.
+
 ---
 
 ## 1. The corpus (census)

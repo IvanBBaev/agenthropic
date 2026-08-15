@@ -298,13 +298,16 @@ files / 1540 tests, 100/100/100/100 in all five packages**. New PROVISIONAL cons
   `configure-pages` → `jekyll-build-pages` → `upload-pages-artifact` → `deploy-pages`
   flow, zero new dependencies). Publishes **`docs/`, not `docs/site/`** — 129 relative
   links point outward to `../analysis`, so a site-only publish would break them;
-  `docs/ai/` is git-excluded and absent from the CI checkout. **No longer blocked on
-  Ivan** (2026-08-07): `configure-pages` runs with `enablement: true`, which turns Pages on
-  via the API under the `pages: write` permission the workflow already holds, so the
-  one-time Settings → Pages click is gone. Idempotent on every later run, and **not** a
-  silent success path — a denied token still fails the step loudly rather than deploying
-  nowhere. _(Nothing is deployed until the workflow actually reaches `main`, which needs a
-  push, which needs an explicit ask.)_
+  `docs/ai/` is git-excluded and absent from the CI checkout. **STILL BLOCKED ON IVAN** —
+  the 2026-08-07 claim recorded here ("`enablement: true` turns Pages on via the API, so the
+  one-time Settings → Pages click is gone") was **wrong, and two real runs disproved it**
+  (`31318246506` on 2026-08-09, `31879212583` on 2026-08-15): `Create Pages site failed.
+  Error: Resource not accessible by integration`. `pages: write` authorises **deploying to**
+  an existing Pages site; **creating** one needs repo-administration rights that the default
+  `GITHUB_TOKEN` never has. The workflow header now records this truthfully (2026-08-15).
+  **Owner action, one time:** Settings → Pages → Source: "GitHub Actions" (or
+  `gh api -X POST repos/IvanBBaev/agenthropic/pages -f build_type=workflow` with an
+  admin-scoped token). Every push touching `docs/**` fails this workflow until then.
 - [ ] **WP-A1** alert port (v2-facing; not on the v1.0 critical path).
 - **Exit gate:** coverage >90% green & blocking ✅ (now genuinely including `apps/web` —
   its script ran without `--coverage` until 2026-07-30, so the thresholds silently never
@@ -313,11 +316,12 @@ files / 1540 tests, 100/100/100/100 in all five packages**. New PROVISIONAL cons
   of 2026-07-30 the badge finally means what it says: CI is `success` on `9b6c6b3`, the
   first pushed commit containing Waves 1–4 (until then the newest run on `main` was
   `eded0b3` from 2026-07-12, so the badge attested only to the Phase-1 foundation) ·
-  Pages builds ❌→🔄 — run `30528892265` failed in `configure-pages` with
-  `Get Pages site failed … Not Found` while Pages was off; since **2026-08-07** the
-  workflow runs `actions/configure-pages` with `enablement: true`, so the next push to
-  `main` should switch Pages on and deploy by itself — tick this only after a green
-  `pages.yml` run, not by assumption.
+  Pages builds ❌ — three failed runs, all the same cause: `30528892265` (`Get Pages site
+  failed … Not Found`), then `31318246506` and `31879212583` after `enablement: true` was
+  added (`Create Pages site failed … Resource not accessible by integration`). The
+  `enablement: true` fix did **not** work; a workflow token cannot create a Pages site.
+  Unblocked only by the owner's one-time Settings → Pages click (see WP-X7 above); tick
+  this only after a green `pages.yml` run, not by assumption.
 
 ### Phase 2 · Ingest substrate
 - [x] **WP-IN1** envelope + idempotency-key (`hooks/envelope.ts`) · **IN2** EventStore
@@ -341,10 +345,14 @@ files / 1540 tests, 100/100/100/100 in all five packages**. New PROVISIONAL cons
   ledger; `message.id` dedup applied)** · **IN10** replay-on-startup (the watcher's first
   tick; a `ContainmentError` is a stop-everything exit) · **IN12** missing-Stop→`unknown`
   watchdog (`ingest/watchdog.ts`).
-- [~] **WP-IN6** pure Normalizer · **IN7** projection — **folded into
-  `ingest/ingest-session.ts`** by the divergence above (pure parse in
-  `packages/core/src/parser`, single-transaction write in the server). The behaviour is
-  covered; the two-stage decomposition is not built.
+- [x] **WP-IN6** pure Normalizer · **IN7** projection — **the decomposition IS built**
+  (verified 2026-08-15; the "folded into `ingest-session.ts`, not built" note recorded here
+  was stale). `ingest/normalize-session.ts` is the pure half — 243 lines, four **type-only**
+  imports, no database, clock, filesystem or environment, so the parent-first ordering rule
+  and the FK-safety nulling rule are decided as a value and asserted without a DB.
+  `ingest/project-session.ts` is the impure half — the single transaction, the edge
+  `created_at` stamp, and the M-13 replay of stored `SubagentStop` verdicts.
+  `ingest/ingest-session.ts` is down to 123 lines of orchestration between the two.
 - [x] **Cost:** WP-C3 CostEngine (`core/cost/compute-cost.ts`) · C4 compaction repricing ·
   C5 delegation-savings (`isEstimate: true` carried in the DTO) · C6 priceless-fails —
   `PricingError` HALTS the session ingest **before any row is written** (no partial
@@ -402,9 +410,9 @@ files / 1540 tests, 100/100/100/100 in all five packages**. New PROVISIONAL cons
   readonly open → online backup → `integrity_check` = ok), and an explicit **blockers**
   section that names what is still open instead of hiding it. Two of those four blockers
   are now closed: `apps/web` coverage is enforced (2026-07-30) and `LICENSE` is tracked
-  (`9b6c6b3`, GitHub reports `MIT`). Pages enablement is closed in the workflow itself
-  (WP-X7, `enablement: true`). **Still open, and Ivan's alone:** `main` is not
-  branch-protected.
+  (`9b6c6b3`, GitHub reports `MIT`). **Still open, and Ivan's alone — now two, not one:**
+  `main` is not branch-protected, and Pages is not enabled (the `enablement: true` fix
+  failed against a workflow token — see WP-X7; corrected 2026-08-15).
 - **Exit gate (= the v1.0 definition, best-path §6.1):** all 5 daily questions answerable ✅
   (server + UI — the "+ UI" half was **overstated until 2026-08-07**: `/api/sessions/:id/
   cost-analysis` had no reader in the dashboard, so the compaction/delegation question was

@@ -275,7 +275,15 @@ strip instead and drop the room — it is cosmetic, not load-bearing.
 
 ---
 
-_Recommendation-only. No code, no adoption, no commits until Ivan approves the
+_Recommendation-only. No code and no adoption of the animated room until Ivan approves the
 decision above and its gating. Consistent with Part A decisions in
 [implementation-plan.md](implementation-plan.md) (JSONL-primary ingest, SSE over WS,
 personal-first / commercial-clean licensing)._
+
+> **Still gated (note added 2026-08-15).** The repository now contains an implementation of
+> the core product, so the blanket "no code, no commits" this page closed with no longer
+> describes agenthropic as a whole. It does still describe the animated room: nothing from
+> this analysis has been built or adopted, no dependency on `pixel-agents` or any of the
+> three reference tools has been taken, and the gate above is unchanged — post-1.0, behind
+> the moat, read-only if it ever happens. The general rule that no commit or push happens
+> without an explicit ask is a project-wide convention and remains in force.

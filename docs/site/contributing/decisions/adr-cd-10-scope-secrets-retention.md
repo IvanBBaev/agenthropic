@@ -1,6 +1,6 @@
 # ADR-0012: CD-10 — Scope, secrets & retention: MVP discipline for a solo owner
 
-- **Status:** accepted, **partially built as of 2026-07-30** — scope discipline held; payload redaction shipped at the ingest boundary; **retention TTL is not implemented**, blocked on the open OPEN-1/2/3 decisions (see the as-built update below)
+- **Status:** accepted, **partially built as of 2026-07-30** — scope discipline held; payload redaction shipped at the ingest boundary; ~~**retention TTL is not implemented**~~ *(amended 2026-08-15 — the retention **mechanism** now exists and is tested; the retention **policy** is still unset)*, blocked on the open OPEN-1/2/3 decisions (see the as-built updates below)
 - **Date:** 2026-07-03
 - **Deciders:** Ivan Baev (project owner), via the six-lens concept-analysis-v2 workflow
 - **Source:** [`concept-analysis-v2.md` §3, row CD-10](../../../analysis/concept-analysis-v2.md#3-canonical-decision-register-v2)
@@ -56,6 +56,67 @@ secret is handled by any code path. The `>0600`-dotfile-rejected criterion has
 nothing to run against. Separately, `ANTHROPIC_API_KEY` does stay out of the
 dashboard env entirely — it appears nowhere in the server source, and the server has
 no outbound network call that could use one.
+
+## As-built update — 2026-08-15
+
+**Verdict: still partially built, but the shape of the gap has changed.** The
+2026-07-30 sentence "there is no TTL sweeper, no prune, no purge, and no retention
+configuration anywhere" is superseded. `apps/server/src/retention/` now holds
+`policy.ts`, `prune.ts`, `journal.ts`, `backup-files.ts`, `runner.ts` and `port.ts`,
+with `db/retention-queries.ts` behind them. What has **not** changed is the reason
+`WP-D10` is still not done: the policy numbers are blank, and they are not an agent's
+to fill in.
+
+**The separation being maintained here is mechanism versus policy, and it is the
+whole point.** The mechanism can express either branch of OPEN-1; the policy that
+selects a branch awaits Ivan's ratification. Concretely:
+
+- **The default deletes nothing, ever.** `NO_RETENTION` is what
+  `loadRetentionPolicy` returns for an environment with no `DASHBOARD_RETENTION_*`
+  variable set, and a deployment that never configures retention behaves
+  byte-identically to a build without the module. Shipping a mechanism therefore did
+  not smuggle in a data-destruction default.
+- **`events_raw` is never a delete target under any policy.** It is on a protected
+  list alongside `sessions`, `agents`, `orchestration_edges`, `model_pricing` and
+  `schema_version` — the append-only substrate and the persisted DAG. The reason
+  `agents` is protected is the sharpest of them: deleting an agent row would fire
+  `parent_agent_id ON DELETE SET NULL` and **silently re-parent a subtree**, turning
+  a retention pass into a quiet corruption of the moat artifact.
+- **The recommended resolution of OPEN-1 is declared and refused, not silently
+  ignored.** `rawEvents: 'archive-segments'` parses, and then
+  `assertRetentionPolicy` throws an error naming the decision it is waiting on. A
+  configuration this project cannot honour honestly produces a loud stop rather than
+  a plausible no-op — the same posture as the `PricingError` halt in
+  [ADR-0006](adr-cd-4-schema-events-and-orchestration.md).
+- **Pruning cost-bearing rows requires an explicit acknowledgement.** `token_usage`
+  is the ground truth behind every dollar the dashboard reports, so a policy that
+  prunes it must set `acknowledgeCostLoss`, and the prune then refuses to run without
+  a durable journal receipt. Priced rows can only leave the database with the removed
+  dollars written down first.
+- **An unparseable retention variable throws rather than defaulting.** A typo in a
+  deletion policy is never interpreted generously.
+
+**What is wired, and what is not.** Backup-file pruning is live: the daily backup
+scheduler in `apps/server/src/index.ts` runs a keep-minimum-floored pass after each
+write, so backup files on disk are bounded today. The **row**-level runner
+(`createRetentionRunner`) is constructed only by its tests — no bootstrap path calls
+it. That is consistent with the policy being unset, since wiring it up would run a
+no-op, but it means the row half of the mechanism has never executed outside a test
+and should not be described as running in production.
+
+**So the risk named in Context is still not mitigated.** "Unbounded local storage
+growth" now has a bounded, tested tool pointed at it and no instruction to fire. A
+long-running instance still grows without bound in `events` and `token_usage`. The
+blocker remains OPEN-1 / OPEN-2 / OPEN-3 in
+[`open-decisions.md`](../../../analysis/open-decisions.md), and it remains Ivan's.
+Building the mechanism was the part that could be done without choosing on his
+behalf; choosing is not.
+
+**Redaction, secrets and scope are unchanged.** The redaction default is still
+pending sign-off and still may only grow, never relax; `token_ref` still does not
+exist because alerting does not; `ANTHROPIC_API_KEY` still appears nowhere in the
+server source; and **"< 30s time-to-understand a session" is still UNMEASURED** — no
+one has timed it, so it is neither met nor missed.
 
 ## Context
 

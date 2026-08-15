@@ -7,6 +7,31 @@ change, and no plan-of-record decision.** It is the deliverable proposed by
 **CD-8** no scaffolding happens until Gate A is signed **and** `WP-S7` reads GO;
 accordingly this file contains **ASCII wireframes only** — no React/TS/CSS.
 
+> **As built (note added 2026-08-15).** The CD-8 hold was overridden by the owner on
+> 2026-07-11 and the SPA now exists, so this document has stopped being a proposal and
+> become the **reference the implementation is checked against**. It is not rewritten to
+> match the code — a design intent that silently re-forms around whatever shipped can never
+> catch a divergence — so read the wireframes as the target and this box as the delta.
+>
+> What landed as designed: the **token gate** (`App.tsx` renders `TokenScreen` and nothing
+> else until a token is in memory, and a 401 from inside the shell clears it); the four
+> v1.0 views (`LiveView`, `SessionsView`, `DagView`, `CostView`, plus a
+> `SessionCostAnalysis` drill-down); the **always-visible uncertainty legend** in the
+> persistent chrome, generated from the status vocabulary itself so a new state cannot
+> appear on screen without appearing in the legend; `unknown` as a first-class rendered
+> state, kept distinct from a null persisted status; and solid-versus-dashed edge
+> provenance in the DAG, whose inline legend names all five sources including
+> `legacy_explore`. §4's honesty language is the part of this document that survived
+> contact with code most intact.
+>
+> What is **not** yet true: **"<30s at-a-glance" has never been measured.** It is written
+> here as a design target and is quoted as a Phase-4 exit gate, but no one has timed a human
+> answering a question with this UI — the gate is neither passed nor failed, it is untested,
+> and it should not be reported as met. Relative-time labels also still freeze on an idle tab
+> (impl-review M-10, acknowledged in `CostView.tsx`), which quietly undercuts the "live"
+> half of the status board's promise. The delegation-savings figure exists per session; an
+> **aggregate** savings number of the kind §2's Q4 flow implies was not verified to exist.
+
 **Why this exists (the gap it fills).** Across the ~70-file corpus there were
 **zero wireframes, zero user flows, zero information architecture, and zero visual
 language** (corpus-audit §9.5). The project's actual UX thinking survived only in a

@@ -29,14 +29,21 @@ paired-capture corpus. See [the Phase-0 corpus probe](../../analysis/phase0-prob
 >
 > Short version of what is true today: implementation began **2026-07-11**, by explicit
 > owner override of the CD-8 no-code-before-GO gate — **not** because the gate opened.
-> Running now: the loopback-bound, token-gated server; SQLite/WAL with migrations; JSONL
-> ingest with replay-on-startup; the persisted subagent DAG; the cost engine; the hook
-> receiver; the SSE hub; the read API; and all four dashboard views. **72 test files / 879
-> tests pass**, coverage gated >90% in every shipped package. The three P0 correctness
-> proofs are green and merge-blocking. **Phases 5–6 (alerting) are not started, are v2.0,
-> are entered only via KC-5, and may never start** — the operator-alerts API and UI were
-> cut outright. The Phase-0 numbers quoted above and below remain **PROVISIONAL** until
-> ratified against a hand-labeled corpus.
+> Running now: the loopback-bound, token-gated server; SQLite/WAL with thirteen migrations
+> and a daily backup timer; JSONL ingest with replay-on-startup and tail-follow polling;
+> the persisted subagent DAG; the cost engine; the hook receiver and its installer; the
+> status watchdog; the SSE hub; the read API; and all four dashboard views plus a
+> per-session cost-analysis panel. **106 test files / 1554 tests pass** (re-measured
+> 2026-08-15), with **100%** statements/branches/functions/lines enforced in all five
+> packages. The three P0 correctness proofs are green in CI on every push and pull request
+> — but *merge-blocking* is a word this page has to stop using, because blocking a merge
+> requires a branch-protection rule on `main` that is an owner action and was still unset
+> at the last recorded check. Retention is **mechanism-built and policy-unset**: it exists,
+> it is tested, and by default it does nothing. **Phases 5–6 (alerting) are not started,
+> are v2.0, are entered only via KC-5, and may never start** — the operator-alerts API and
+> UI were cut outright. The Phase-0 numbers quoted above and below remain **PROVISIONAL**
+> until ratified against a hand-labeled corpus, and the accuracy gate that would ratify
+> them currently reports **NOT CERTIFIED at n = 0**.
 
 ## Update — the real schedule: kill checkpoints, and two that were missed
 
@@ -51,10 +58,10 @@ a deferral *is* the failure.
 |---|---|---|---|---|
 | **KC-0** | 2026-07-13 | Gate A signed **and** the friction log opened **and** ≥1 rival dashboard installed for a two-week trial | Archive the repo; salvage the security posture and probe method as a write-up | **PASSED UNMET** — Gate A was signed 2026-07-10, but the friction log was never opened and no rival was ever installed. 2 of 5 boxes open at the deadline. |
 | **KC-1** | 2026-07-27 | The WP-S7 verdict written (GO or CONDITIONAL-GO) **and** the throwaway DAG-with-dollars render exists **and** the 14-day friction log does **not** show a rival answering ≥4 of the 5 daily questions acceptably | Archive | **PASSED UNMET** — see below. |
-| **KC-2** | 2026-09-14 | Phases 1–2 exit gates green (security spine live, >90% gate blocking, ingest idempotent, kill+restart zero-loss) | Descope per the ladder if the P0 chain is intact; otherwise archive | Not yet reached |
-| **KC-3** | 2026-10-12 | The three P0 release blockers green and merge-blocking | Archive — "the moat proof *is* the project" | Not yet reached; the three proofs are already green |
-| **KC-4** | **2026-12-01** | v1.0 tagged: five daily questions answerable, <30s time-to-understand, tree/DAG served from `orchestration_edges`, every dollar traceable. **This date does not move.** | Archive + a public write-up of what was learned. No third rebase exists. | Not yet reached |
-| **KC-5** | earned, never dated | v2.0 entry: **14 consecutive days of real daily use of v1.0 by its own author**, plus ≥3 dated friction-log entries asking for alerts | v2 cancelled; maintenance mode | Not entered; may never be |
+| **KC-2** | 2026-09-14 | Phases 1–2 exit gates green (security spine live, coverage gate blocking, ingest idempotent, kill+restart zero-loss) | Descope per the ladder if the P0 chain is intact; otherwise archive | Not yet reached. The coverage gate is configured at 100% and fails the CI run, but "blocking" in the literal sense still awaits branch protection. |
+| **KC-3** | 2026-10-12 | The three P0 release blockers green and merge-blocking | Archive — "the moat proof *is* the project" | Not yet reached. The three proofs are green in CI; the *merge-blocking* half of the condition is not satisfied until `main` is protected. |
+| **KC-4** | **2026-12-01** | v1.0 tagged: five daily questions answerable, <30s time-to-understand, tree/DAG served from `orchestration_edges`, every dollar traceable. **This date does not move.** | Archive + a public write-up of what was learned. No third rebase exists. | Not yet reached. Note that one clause of this condition — the <30s figure — has never been measured, so it cannot currently be evaluated any more than KC-1's could. |
+| **KC-5** | earned, never dated | v2.0 entry: **14 consecutive days of real daily use of v1.0 by its own author**, plus ≥3 dated friction-log entries asking for alerts | v2 cancelled; maintenance mode | Not entered; may never be — **and never entering it is a success of the roadmap, not a failure.** |
 
 ### Why "passed unmet" and not "passed"
 
@@ -103,17 +110,32 @@ KC-4 (2026-12-01) is the next hard date, and that one does not move.
 | 1 — Foundation, security spine, storage | **Built.** Loopback bind, mandatory token, WAL, migrations, append-only `events_raw` with triggers, coverage and static gates in CI. |
 | 1.5 — Animated-room view | **Not built.** Still optional, still unscheduled. |
 | 2 — Ingest substrate | **Built, with a recorded divergence** — see the note on that section. There is no single merged cross-source event log. |
-| 3 — Projection, DAG moat, reconciliation, cost | **Built, with a recorded divergence** — no separate Normalizer/Projection stage, and the DAG is derived from JSONL alone rather than "two independent paths." All three P0 proofs are green. |
-| 4 — Read API + dashboard | **Built** — all four views. The "<30s to understand a session" exit criterion is **unmeasured**; nobody has timed it. |
+| 3 — Projection, DAG moat, reconciliation, cost | **Built, with a recorded divergence** — no separate Normalizer/Projection stage, and the DAG is derived from JSONL alone rather than "two independent paths." All three P0 proofs are green in CI. Hierarchy *accuracy*, as opposed to code coverage, is still **NOT CERTIFIED**: the gate needs ≥52 hand-labeled edges and has 0. |
+| 4 — Read API + dashboard | **Built** — all four views, plus a per-session cost-analysis panel added afterwards, because the endpoint had shipped without a UI and "all five daily questions answerable (server + UI)" was therefore true of the server and false of the dashboard. The "<30s to understand a session" exit criterion is **unmeasured**; nobody has timed it. |
 | 5 — Alerting core | **Not started.** v2.0, behind KC-5, may never start. |
 | 6 — Operator alerts UI + release hardening | Alerts API + UI **cut outright**. Release hardening is tracked separately. |
 | Experimental — context-layer feed | **Not built**; the placeholder was deleted rather than left as a stub. |
 | Deferred — fleet aggregation | Only the schema key exists, and only on `orchestration_edges`. No second host. |
 
-Also still open, and worth naming rather than burying: the repository's own `LICENSE` is
-not yet tracked in git, the GitHub Pages site is not yet enabled (the workflow is
-committed, and its deploy job fails by design rather than pretending to succeed), and
-**retention is not implemented** — redaction is live, but nothing prunes the database.
+Also still open, and worth naming rather than burying:
+
+- **The GitHub Pages site is not live.** The workflow is committed and its deploy job
+  fails rather than pretending to succeed. Enabling Pages is a one-time owner click and
+  cannot be automated: a workflow token may deploy to an existing Pages site but may not
+  create one, which two red runs demonstrated with `Create Pages site failed. Error:
+  Resource not accessible by integration`.
+- **`main` is not branch-protected.** Every claim on this page about a gate "blocking"
+  something should be read as "fails the run", not "stops the merge", until that changes.
+- **Retention is mechanism-built and policy-unset.** Pruning, an audit journal,
+  backup-file expiry and a runner all exist and are covered by tests. What does not exist
+  is a decision about how many days of what to keep, because a retention TTL has to be
+  reconciled with an append-only `events_raw` first. The shipped default is a no-op and no
+  runner starts at boot, so storage still grows without bound — but the honest description
+  is "the policy is unset", not "the feature is missing".
+- **The accuracy gate has never run on real labels.** `n = 0` of the ≥52 needed.
+
+Resolved since this section was first written: the repository's `LICENSE` (MIT) is
+present and tracked.
 
 ## How to read this roadmap
 
@@ -215,8 +237,10 @@ behind the pre-answer.
 > outstanding. Read them as strong indications, not as measurements.
 >
 > What *is* settled by test rather than by probe: the three P0 correctness checks in Phase
-> 3 below are green and merge-blocking. Those are proofs. The Phase-0 accuracy percentages
-> are not yet.
+> 3 below are green in CI on every push and pull request. Those are proofs. The Phase-0
+> accuracy percentages are not — and neither is hierarchy accuracy in general, which has
+> its own gate (≥95% over ≥52 hand-labeled edges) currently reporting **NOT CERTIFIED**
+> for want of any labels at all.
 
 ## Phase 1 — Foundation, security spine, storage
 
@@ -227,8 +251,12 @@ from the very first commit — not something added at the end.
 
 - The project scaffold and toolchain, with continuous integration wired up from day
   one.
-- A merge-blocking automated test-coverage threshold (**above 90%**), so coverage can
-  only go up from here, never quietly regress.
+- An automated test-coverage threshold intended to block merges (**above 90%** as
+  planned), so coverage can only go up from here, never quietly regress. *(As built: the
+  threshold is set at **100%** on all four axes in every one of the five packages, which
+  is stricter than planned, and `packages/test-fixtures` was folded inside the gate rather
+  than excluded from it. "Merge-blocking" is the part that did not land — see the note
+  below.)*
 - Static checks that turn the build red the moment anyone introduces a subprocess
   spawner, a URL dialed from untrusted event data (an SSRF path), or a dependency under
   a disallowed license.
@@ -250,16 +278,27 @@ building and publishing.
 > **As built: this phase shipped, with one clause of the exit gate still open.**
 >
 > Live and tested: the loopback bind, the mandatory token (hashed, compared in constant
-> time), WAL, the migration runner, `events_raw` immutability enforced by SQLite triggers
-> and proven by test, the >90% coverage gate blocking merges in every shipped package
-> (`packages/test-fixtures` is a deliberate, documented exclusion), and the static guards —
-> which do turn the build red on a deliberately introduced spawner, SSRF sink, or
-> disallowed license.
+> time), WAL with a daily backup timer and a restore path that refuses any image failing
+> `PRAGMA integrity_check`, the migration runner, `events_raw` immutability enforced by
+> SQLite triggers and proven by test, a coverage gate set at **100%** on statements,
+> branches, functions and lines in **all five** packages — `packages/test-fixtures`
+> included, because `getFixture` and the fixture builders are real code whose defects fail
+> silently through every test that consumes them — and the static guards, which do turn
+> the build red on a deliberately introduced spawner, SSRF sink, or disallowed license.
 >
-> Still open: **the documentation site is not publishing.** The workflow is committed, but
-> GitHub Pages has not been enabled for the repository — an owner action nobody else can
-> take. The deploy job fails rather than reporting a success it did not achieve. The page
-> you are reading is in the repository; it is not yet served from a Pages URL.
+> Two clauses of the exit gate are still open, and both are owner actions rather than code:
+>
+> - **The coverage gate does not literally block a merge.** It fails the CI run, which is
+>   not the same thing. Blocking requires a branch-protection rule on `main` requiring the
+>   `CI` check, and at the last check recorded in the release checklist that rule did not
+>   exist. Wherever this page says a gate "blocks", read "turns the run red".
+> - **The documentation site is not publishing.** The workflow is committed, but GitHub
+>   Pages has not been enabled for the repository. That is not an oversight in the
+>   workflow: a workflow's `GITHUB_TOKEN` can deploy to an existing Pages site but cannot
+>   create one, so the `enablement: true` input is idempotent once Pages exists and
+>   powerless before then. The deploy job fails rather than reporting a success it did not
+>   achieve. The page you are reading is in the repository; it is not yet served from a
+>   Pages URL.
 
 ## Phase 1.5 — Animated-room view *(optional, cosmetic, deferred)*
 
@@ -370,9 +409,14 @@ dollar costs — and prove all three survive a crash, a restart, or a missing ev
   built via **two independent paths**, so the subagent tree survives even if one signal
   (say, the dedicated subagent-start hook) never fires for a given session.
   *(As built: the table is real and is the moat artifact, but the redundancy works
-  differently. It is not "hooks or JSONL" — it is **JSONL alone**, via four structural join
+  differently. It is not "hooks or JSONL" — it is **JSONL alone**, via structural join
   paths inside the transcript: the `tool_use` link, the working directory, the
-  task-notification recovery path, and the queue-operation path. The signal this was hedging
+  task-notification recovery path, the queue-operation path, and — added in 2026-08 for
+  pre-2.1.71 transcripts — a `legacy_explore` last resort. Every edge records which path
+  produced it, and the set is closed at the storage layer by a `CHECK` constraint, so a
+  sixth path cannot be slipped in by a parser edit alone: it needs a migration. That is a
+  deliberate speed bump on exactly the change that would otherwise dilute provenance
+  quietly. The signal this was hedging
   against — a dedicated subagent-start hook — does not exist in Claude Code at all, so the
   hedge would have had nothing to fall back on. Deriving structure from the transcript alone
   turned out to be the stronger design, and it is the reason the outage proof below can be
@@ -399,7 +443,8 @@ a model with no price on file — that's a hard failure, not a quiet default.
 > **As built: this is the phase that delivered, and the exit gate is the one part of this
 > page you can take literally.**
 >
-> **The three release-blocking proofs are green and merge-blocking today:**
+> **The three release-blocking proofs are green today, and run on every push and pull
+> request:**
 >
 > 1. **Σ `token_usage` equals the JSONL, exactly.** The check is deliberately hostile to
 >    itself: the expected total is computed by an independent reader written inside the
@@ -410,16 +455,23 @@ a model with no price on file — that's a hard failure, not a quiet default.
 >    hooks separately proven to carry liveness only, never structure.
 >
 > A 12-scenario negative catalogue passes alongside them. The watchdog is real: an agent
-> that never reports completion is marked `unknown`, a fifth status value alongside
-> `working`, `waiting`, `completed` and `error`. Compaction repricing against the
-> pre-compaction baseline is implemented, the delegation-savings metric is implemented, and
-> a model with no price on file is a hard failure rather than a silent zero.
+> that never reports completion is marked `unknown` after the inactivity window
+> (`DASHBOARD_WATCHDOG_MINUTES`, default 10) — a fifth status value alongside `working`,
+> `waiting`, `completed` and `error`, and the honest one, because the dashboard has no way
+> to observe an ending nobody reported. Compaction repricing against the pre-compaction
+> baseline is implemented, the delegation-savings metric is implemented, and a model with
+> no price on file is a hard failure rather than a silent zero.
 >
-> **Do not read more into that than it says.** Three specific properties are proven. The
-> ≥95% hand-labeled-accuracy clause in the same exit gate is **not** among them — that
-> still rests on the PROVISIONAL probe numbers, and ratification against a hand-labeled
-> corpus remains outstanding. "Exact, deterministic, and rebuildable" is proven. "95%
-> accurate against a human's answer key" is not yet.
+> **Do not read more into that than it says.** Three specific properties are proven, and
+> "green in CI" is not the same as "merge-blocking" while `main` is unprotected. The ≥95%
+> hand-labeled-accuracy clause in the same exit gate is **not** among the proven three —
+> that still rests on the PROVISIONAL probe numbers, and ratification against a
+> hand-labeled corpus remains outstanding. The gate does not quietly pass in the meantime:
+> the test run prints **`EXIT GATE (>= 95.0% hierarchy accuracy, n >= 52): NOT CERTIFIED`**
+> with the reason `sample too small: n = 0 claimed edges`, which is the correct output for
+> a measurement nobody has taken. "Exact, deterministic, and rebuildable" is proven. "95%
+> accurate against a human's answer key" is not, and is not being estimated in the
+> meantime.
 
 See [the DAG moat](../architecture/dag-moat.md) and [the cost model](../architecture/cost-model.md)
 for the mechanics behind this phase.
@@ -447,14 +499,22 @@ a dated, versioned price.
 > The read API is authenticated and loopback-only, the live stream is SSE with a
 > same-origin check and no wildcard cross-origin access, and **all four views exist**:
 > live status, the session-scoped subagent tree, the global cross-session DAG, and the
-> cost-flow view. `apps/web` carries 127 tests and — since 2026-07-30 — actually runs
-> them under a coverage gate.
+> cost-flow view — joined afterwards by a per-session cost-analysis panel, because the
+> `cost-analysis` endpoint had shipped without a consumer and "all five daily questions
+> answerable from the UI" was therefore true of the server and false of the dashboard.
+> `apps/web` carries 283 tests across 17 files (2026-08-15) and — since 2026-07-30 —
+> actually runs them under a coverage gate, now set at 100%.
 >
 > Two of the exit-gate clauses hold literally. The tree and global DAG are served by
 > SQL over the persisted `orchestration_edges` table (`apps/server/src/db/edges.ts` →
 > `apps/server/src/api/queries.ts`), not rebuilt in the browser; and every dollar
 > figure is ground-truth tokens times a dated, versioned price, with anything unpriced
-> surfacing as `unpricedTokens` rather than a silent `$0`.
+> surfacing as `unpricedTokens` rather than a silent `$0`. The cost-analysis panel keeps
+> the same discipline in a harder place: delegation savings is a counterfactual about a
+> run that never happened, so it is rendered with a `~`, an explicit estimate badge and the
+> hypothetical model named, and the subagents whose top-tier model cannot be resolved are
+> excluded from it and counted next to it rather than guessed at — a savings figure quietly
+> computed over a subset would be the same class of lie as a silent `$0`.
 >
 > **The "understandable in under 30 seconds" clause has never been measured.** Nobody
 > has sat down with a stopwatch and a session they didn't already know. It is not
@@ -484,8 +544,15 @@ or the logs.
 > `webhook_targets` table, no dispatcher and no Telegram adapter anywhere in the
 > repository — the grep is empty, not thin. This phase is v2.0 work, and v2.0 is
 > entered only through **KC-5**, the one checkpoint with no date on it: it is earned by
-> the dashboard surviving real daily use, or it is never entered at all. Read this
-> section as a design that is on file, not a queue position.
+> the dashboard surviving real daily use — 14 consecutive days of it, plus at least three
+> dated friction-log entries actually asking for alerts — or it is never entered at all.
+> Read this section as a design that is on file, not a queue position.
+>
+> And to be explicit about the asymmetry, because it is easy to misread as a slipped
+> deliverable: **if that evidence never materialises, v2.0 never starts, and that is a
+> success of the roadmap rather than a failure of it.** The checkpoint exists to stop
+> alerting from being built on the assumption that it will be wanted. A "no" from real use
+> is the checkpoint working.
 
 ## Phase 6 — Operator alerts UI + release hardening
 
@@ -500,16 +567,18 @@ checklist enumerating every security and coverage gate, including a live-fire ba
 restore.
 
 **Exit gate:** an operator can fully manage rules and targets from the UI; no endpoint
-or view ever exposes a raw secret; the alerting code is covered at the same >90% bar as
-everything else; the release checklist is complete.
+or view ever exposes a raw secret; the alerting code is covered at the same bar as
+everything else *(as built, that bar has since risen to 100% on all four axes)*; the
+release checklist is complete.
 
 > **As built: split in two — the alerts half is cut, the release half is done.** The
 > operator-alerts API and UI follow Phase 5 into v2.0 behind KC-5 and were cut outright
 > from v1.0. The release-hardening half, which never depended on alerting, exists:
 > [`RELEASE.md`](https://github.com/IvanBBaev/agenthropic/blob/main/RELEASE.md)
 > enumerates every build-failing gate and the backup-restore drill. Its remaining
-> unticked boxes are human acts — tracking the `LICENSE` file, enabling Pages and
-> branch protection, ratifying the labeled corpus — not missing code.
+> unticked boxes are human acts — enabling Pages and branch protection, ratifying the
+> labeled corpus, settling the retention policy — not missing code. (The `LICENSE` file
+> was one of those boxes and is now tracked.)
 
 ## Experimental, off the critical path — context-layer feed
 
@@ -517,7 +586,8 @@ Alongside the six numbered phases, the plan keeps a strictly **experimental**, c
 labeled, non-blocking track: a read-only feed of session and agent data into a future
 memory/vector-database layer (the "observability becomes memory" idea from the design
 basis). It is deliberately isolated so nothing in the core dashboard imports it, its
-coverage is excluded from the >90% gate while it stays experimental, and the API key
+coverage is excluded from the coverage gate while it stays experimental *(as built that
+gate is 100%, not the ">90%" this plan assumed)*, and the API key
 that would drive it is kept out of the dashboard's own runtime environment entirely —
 a security boundary, not a convenience.
 

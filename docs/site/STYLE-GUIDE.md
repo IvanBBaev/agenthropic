@@ -57,14 +57,29 @@ Constraints on every amendment:
 - **Prefer "not built" over vagueness.** Name what is blocked and on whom; mark an
   estimate as an estimate; never leave a reader able to conclude a feature exists when it
   does not.
-- **Carry the standing caveats forward** wherever they are load-bearing: the Phase-0 spike
-  numbers stay **PROVISIONAL** until ratified against a hand-labeled corpus, the "<30s to
-  understand a session" v1.0 usability claim is **unmeasured**, and kill checkpoints KC-0
-  and KC-1 both **passed unmet** — work continues by explicit owner override, not because
-  the gates were satisfied.
-- **Don't overclaim the proofs.** Three P0 correctness proofs are green and merge-blocking
-  (Σ tokens vs JSONL · byte-identical double replay · DAG rebuilt from JSONL alone). Cite
-  those precisely; do not stretch them into a general correctness guarantee.
+- **Carry the standing caveats forward** wherever they are load-bearing. None of these has
+  been retired; a page that drops one is wrong, not merely terse:
+  - the Phase-0 spike numbers stay **PROVISIONAL** until ratified against a hand-labeled
+    corpus;
+  - the hierarchy-accuracy exit gate reports **NOT CERTIFIED at n = 0** — the LABEL-ME
+    corpus (≥52 hand-labeled edges) does not exist, so parser accuracy on real data is
+    unmeasured rather than merely unproven;
+  - the "<30s to understand a session" v1.0 usability claim is **unmeasured** — nobody has
+    ever timed it;
+  - kill checkpoints KC-0 and KC-1 both **passed unmet** — work continues by explicit owner
+    override, not because the gates were satisfied;
+  - **branch protection on `main` is not enabled**, so no CI gate physically blocks a merge;
+  - **GitHub Pages has never been enabled**, so the docs site is not live and every run of
+    the Pages workflow fails at `configure-pages`;
+  - the **retention policy values are unset** — the mechanism is built, the numbers await
+    OPEN-1/2/3, and the shipped default is a no-op.
+- **Don't overclaim the proofs.** Three P0 correctness proofs are green in CI on every push
+  and pull request (Σ tokens vs JSONL · byte-identical double replay · DAG rebuilt from
+  JSONL alone). Cite those precisely; do not stretch them into a general correctness
+  guarantee — and **do not call them "merge-blocking."** Blocking a merge takes a
+  branch-protection rule on `main`; that rule is an owner action on github.com, it was
+  still unset at the last check recorded in `RELEASE.md`, and `.github/workflows/ci.yml`
+  says so in its own header comment. The proofs fail the run; they do not stop the button.
 
 ## Mechanics
 - **Placeholder secrets** in samples: `DASHBOARD_TOKEN=<token>`, `--host <tailscale-host>`.

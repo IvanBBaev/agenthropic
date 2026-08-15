@@ -1,13 +1,13 @@
 # Telegram alerts
 
-> **Design-target documentation — pre-Phase-0.** This page documents agenthropic's
-> *intended* behavior for the alerting core and the Telegram sink, as fixed by the
-> design basis (docs/ai/DESIGN.md) and the build plan
-> (docs/analysis/development-plan.md). **No application code is built yet** (see the
-> [roadmap](../guide/roadmap.md)); the alerting core and the Telegram sink ship in
-> **Phase 5 — Alerting core** (operator alerts UI and release hardening follow in
-> Phase 6). Values marked _(planned)_ or _(leaning — unconfirmed)_ may change; the
-> **security invariants are binding and will not**. This replaces the earlier stub.
+> **How to read this page.** Unlike the rest of the usage section, nothing described
+> here is built. The dashboard around it is: the server, the ingest pipeline, the
+> persisted DAG, the cost engine and the four dashboard views all exist and run. The
+> **alerting core and the Telegram sink do not**, and — as the box below explains —
+> they are not on the schedule either. So read this as a design contract to check a
+> future pull request against, not as a feature you can configure. Values marked
+> _(planned)_ or _(leaning — unconfirmed)_ are the state of the design when it was
+> written; the **security invariants are binding and will not change**.
 
 > **Update — 2026-07 (as built): nothing on this page exists, and it is not on the
 > path to existing.** Read the whole page as a design record, not as a feature you
@@ -31,12 +31,23 @@
 > - **Zero alerting code exists in the repository**: no `alert_rules`,
 >   `alert_events`, `webhook_targets` or `webhook_deliveries` table, no rules engine,
 >   no dispatcher, no Telegram adapter, and no `token_ref` resolver. There is nothing
->   to enable, no flag to flip, and no partial version running.
+>   to enable, no flag to flip, and no partial version running. The absence is
+>   structural rather than merely unfinished: those four table names appear nowhere in
+>   the source tree, and the server has **no outbound HTTP client of any kind** — its
+>   runtime dependencies are Fastify, TypeBox and `better-sqlite3`, and nothing under
+>   `apps/server/src` or `packages/*/src` calls `fetch`, imports `node:http`/`node:https`,
+>   or pulls in an HTTP library. (`fetch` does appear twice in the repository, in
+>   `apps/web/src/api.ts` — the browser bundle calling this server's own relative `/api`
+>   paths — and in `scripts/time-to-understand.mjs`, a local measurement script. Neither
+>   is the server process and neither takes a URL from ingested data.) Note also that
+>   **no automated gate defends this**: `scripts/check-no-spawner.mjs` has no
+>   outbound-HTTP pattern, so the absence is upheld by review, not by CI.
 >
 > The security *rules* on this page do hold today, because they are project-wide and
 > not alerting-specific: the server dials nothing derived from an ingested payload,
 > and secrets never reach SQLite, SSE or logs. They hold trivially, in the sense that
-> the outbound-dispatch code path they constrain has never been written.
+> the outbound-dispatch code path they constrain has never been written — the first
+> rule holds because the server cannot dial *anything*.
 
 This page covers the designed alerting core — the rule engine, the no-SSRF webhook
 dispatcher, the secret-handling contract, and the delivery guarantees — and its one
@@ -131,7 +142,14 @@ rather than papered over, per the project's own documentation style:
   **not stated in any source document** — and neither source says which of them (if
   either) is what `WP-A5`'s `stuck_agent` alert rule actually keys off. Treat "a stuck
   agent triggers this alert" as the designed outcome, and the precise upstream signal
-  as open pending Phase 3/5 implementation.
+  as open pending Phase 3/5 implementation. *(As built: `WP-IN12` shipped, and it
+  resolved the ambiguity in the narrow direction — one staleness sweep on every poll
+  tick, moving an agent with no terminal signal and no recent activity from `working`
+  to `unknown` after `DASHBOARD_WATCHDOG_MINUTES` (default **10**, **PROVISIONAL**).
+  It is the only producer of `unknown`, and it deliberately never guesses `completed`.
+  Nothing consumes it as an alert trigger, because there is no rules engine to consume
+  it — see [the hooks installer](hooks-installer.md) for how the same signal reaches
+  the dashboard's status column.)*
 - **`error`'s exact trigger is likewise not spelled out beyond the enum name.** The
   closest fixed anchor is the `agents.status` `CHECK` constraint (DESIGN §4), whose four
   values include `'error'` — so the shape is plausibly "an agent whose status resolves
@@ -231,8 +249,11 @@ browser)."
   TELEGRAM_BOT_TOKEN_REF=<token-ref-name>
   ```
 
-See also [configuration](configuration.md) for how secrets fit into the broader,
-still-undesigned-in-detail config surface (that page is itself a Phase 1 stub today).
+See also [configuration](configuration.md) for how secrets fit into the broader config
+surface — that page is no longer a stub: it enumerates the environment variables the
+server actually reads, including the one secret that *is* live today, `DASHBOARD_TOKEN`,
+which is held to the same never-in-SQLite, never-to-the-browser rule `token_ref` is
+designed around.
 
 ## Delivery guarantees: exactly one throttled notification
 
@@ -283,6 +304,13 @@ UI (`WP-A9`) are Phase 6 work, not yet built. The shape below is the designed se
 marked planned throughout since exact endpoint paths, request/response shapes, and UI
 copy are not fixed by any source:
 
+> **As built: steps 3 and 4 will not happen in this form.** `WP-A8` and `WP-A9` were
+> cut, so there is no API to register a target through and no UI to configure a rule
+> in — the surviving intent is that configuration would live in a file. Read the
+> numbered steps for the *contract* they fix (a target is operator-configured; the
+> request carries a `token_ref` name, never a secret), not for the mechanism they
+> name. Steps 1 and 2 are external to agenthropic and unaffected.
+
 1. **Register a Telegram bot and obtain a chat id** _(planned; external to
    agenthropic)_ — done through Telegram's own bot-registration flow (e.g. BotFather),
    entirely outside agenthropic's own surface. agenthropic never talks to Telegram's
@@ -327,18 +355,30 @@ of `docs/analysis/development-plan.md` (Phase 5–6):
 
 ## Current status
 
-As of this writing, agenthropic is **pre-Phase-0** (see the [roadmap](../guide/roadmap.md)):
-the design and build plan above are finished, but the Phase-0 feasibility spike has not
-returned its GO/CONDITIONAL-GO verdict (CD-8), and none of Phase 1 through Phase 4's
-prerequisite work — the security spine, the ingest substrate, the projection, or the
-read API — has landed yet. Track A's own critical-path note in
-`docs/analysis/development-plan.md` flags alerting as "the longest tail of the whole
-graph" precisely because it depends on all of that landing first; its lowest-risk
-pieces (`WP-A1`'s port design and `WP-A2`'s schema) are scheduled to start early, in
-parallel with unrelated tracks, specifically so alerting doesn't end up being the very
-last thing blocking a release. Everything on this page is a **binding design
-commitment to verify Phase 5–6 pull requests against**, not a description of running
-code.
+The paragraph that stood here described a pre-Phase-0 project waiting on a feasibility
+verdict. That is no longer where things are, and the change is worth stating precisely,
+because it moves alerting *further* from being built rather than closer.
+
+The Phase-0 spike returned **CONDITIONAL GO**, and the prerequisite phases this page said
+had not landed have landed: the security spine, the ingest substrate, the persisted
+projection and the read API all exist and run. Every dependency alerting was waiting on is
+therefore satisfied. What changed at the same time is the schedule those dependencies were
+supposed to feed. **v1.0 is defined as the persisted cross-session DAG plus dollar-accurate
+cost, explicitly "no alerts"**, with a hard date of **2026-12-01**; alerting was moved
+wholesale into v2.0, and v2.0 is entered only through kill checkpoint **KC-5** — fourteen
+consecutive days of the author actually using v1.0 daily, plus at least three dated
+friction-log entries wishing for a notification. Nothing schedules it; only evidence
+admits it. Two of the ten work packages below, `WP-A8` (operator alerts API) and `WP-A9`
+(alerts UI), were **cut outright** and stay cut even if KC-5 passes, on the reasoning that
+a single operator does not need CRUD screens for himself.
+
+So the old "longest tail of the whole graph" framing has inverted. Alerting is not the
+last thing blocking a release; it is deliberately outside the release, and the honest
+current status is that **it may never be built at all — and the roadmap counts that
+outcome as a success**, since it would mean the project declined to build a notification
+system for a dashboard nobody opens. Everything above this section remains a **binding
+design commitment to check a future pull request against**, and none of it is a
+description of running code.
 
 ## See also
 
@@ -351,8 +391,8 @@ code.
 - [The moat](../guide/the-moat.md) — why Telegram alerting is one of the five features
   no audited rival delivers, and the licensing mode (copy-with-attribution) that governs
   grafting `hoangsonww`'s webhook provider.
-- [Configuration](configuration.md) — the broader environment/config surface (itself a
-  Phase 1 stub today) that `token_ref` resolution will sit inside.
+- [Configuration](configuration.md) — the broader environment/config surface, now built
+  and documented, that `token_ref` resolution would sit inside.
 - [Roadmap](../guide/roadmap.md) — Phase 5's exit gate and Phase 6's operator-UI
   follow-on, and how alerting's critical-path position was derived.
 - [Data model](../architecture/data-model.md) — the full designed DDL for

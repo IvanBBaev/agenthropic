@@ -61,21 +61,36 @@ Run each gate locally on the release commit; all six are the same commands CI ru
 - [ ] `pnpm run typecheck`
 - [ ] `pnpm run lint`
 - [ ] `pnpm run format:check`
-- [ ] `pnpm run test` — the full workspace suite (**72 test files / 879 tests** as of
-      2026-07-30). Coverage: `@agenthropic/server`, `@agenthropic/core`,
-      `@agenthropic/shared` **and `@agenthropic/web`** all run `vitest run --coverage`
-      against 90/90/90/90 thresholds (each package's `vitest.config.ts`);
-      `@agenthropic/test-fixtures` is deliberately outside the gate scope (WP-F3 scope
-      note in `packages/test-fixtures/vitest.config.ts`).
+- [ ] `pnpm run test` — the full workspace suite (**106 test files / 1554 tests** on a
+      local run of 2026-08-15; the figure moves as the tree does, so re-measure on the
+      release commit rather than trusting this line). Coverage: **all five** packages —
+      `@agenthropic/server`, `@agenthropic/web`, `@agenthropic/core`,
+      `@agenthropic/shared` and `@agenthropic/test-fixtures` — run `vitest run --coverage`
+      against **100/100/100/100** thresholds (each package's `vitest.config.ts`).
 - [ ] **Read the coverage headroom before tagging — the gate passing is not the same as
-      the gate being comfortable.** Thresholds are global per package, so a thin file can
-      hide behind a fat one. Last measured: server 99.75% stmts / 97.70% branches · core
-      100% / 95.62% · shared 100% / 100% · **web 99.07% / 91.50%** — 1.5 points of branch
-      headroom, with `apps/web/src/views/DagView.tsx` (75.67% branch) and
-      `apps/web/src/views/layout/cost-flow.ts` (75.75% branch) the two thinnest files.
-      _(Historical note: until 2026-07-30 `apps/web` ran `vitest run` without
-      `--coverage`, so its configured thresholds silently never executed. The Phase-4
-      exit gate requires `apps/web` inside the >90% gate — it now is.)_
+      the gate being comfortable.** At a 100% global threshold there is no per-file
+      headroom left to read: every file is at 100% or the run is red, so the "thin file
+      hiding behind a fat one" failure this box was written to catch can no longer
+      happen. What is worth reading instead is *how* the 100% was reached — a test that
+      only executes a line without asserting on it satisfies the gate and proves nothing,
+      and no threshold can detect that. Three cheap ways to manufacture a 100% are
+      guarded by tests that read the configs and sources as text — lowering a threshold,
+      adding a coverage `exclude`, and reintroducing an ignore pragma — but **the guard
+      is not uniform across the five packages, so read this before ticking the box.**
+      `apps/server`, `packages/core`, `packages/shared` and `packages/test-fixtures`
+      assert all three. `apps/web` asserts only the pragma sweep: it cannot assert the
+      absence of an `exclude`, because it legitimately carries one (`src/main.tsx`,
+      `src/vite-env.d.ts`), and it does not assert its four thresholds either. So a
+      change that widened the web exclude list or lowered the web thresholds would pass
+      CI silently. Diff `apps/web/vitest.config.ts` by hand on the release commit;
+      `docs/site/contributing/testing.md` §"Three asymmetries" records this as a real gap
+      in the mechanism rather than a technicality.
+      _(Historical notes: until 2026-07-30 `apps/web` ran `vitest run` without
+      `--coverage`, so its configured thresholds silently never executed;
+      `packages/test-fixtures` was outside the gate scope entirely until it was pulled
+      in. The bar was raised from the CD-7 floor of >90% to 100% across all five packages
+      after that. Earlier revisions of this box quoted 90/90/90/90 thresholds, a
+      four-package scope, and per-package figures below 100% — all three are superseded.)_
 - [ ] `pnpm run gate:spawner` — WP-F5 static no-spawner / no-wide-bind / no-WebSocket /
       no-eval gate over `apps/`, `packages/`, `scripts/`, `hooks/`
       ([`scripts/check-no-spawner.mjs`](scripts/check-no-spawner.mjs)). The allowlist is
@@ -111,9 +126,14 @@ trail).
       with audited inline markers, never whole-file.
 - [ ] **No SSRF — no code path dials a payload-supplied URL.** v1.0 ships **no**
       webhook/alert dispatcher at all (the A-track is post-1.0, roadmap §6), so the
-      strongest form holds: there is no outbound-dial feature to misuse. Verified by
-      review plus `gate:spawner`'s scan; the full no-SSRF negative corpus is a v2.0
-      gate (`WP-A10`).
+      strongest form holds: there is no outbound-dial feature to misuse. **Verified by
+      review and by the grep below — not by `gate:spawner`,** which carries no
+      outbound-HTTP pattern at all and would pass a newly added `fetch()` without
+      comment. Run:
+      `grep -rnE "\bfetch\(|node:https?|\baxios\b|\bundici\b" apps/server/src packages/*/src`
+      — expect empty (matches in `apps/web/src` are the browser bundle calling this
+      server's own relative `/api` paths, and are not the server process). The full
+      no-SSRF negative corpus is a v2.0 gate (`WP-A10`).
 - [ ] **Secrets never in SQLite, never on the SSE stream, never in logs** — redaction
       at the ingest boundary proven by `apps/server/test/hooks-redact.test.ts`; log
       hygiene by `apps/server/test/server-logging.test.ts`. v1.0 stores no third-party
@@ -242,16 +262,27 @@ scan."**
       commit that contains Waves 1–4 (before it, the badge described only the Phase-1
       foundation). Re-read the section at tag time; it must describe v1.0, not this
       pre-tag state.
-- [ ] **Docs site deployed** — the `Docs site (GitHub Pages)` workflow
-      ([`.github/workflows/pages.yml`](.github/workflows/pages.yml)) is green on the
-      release commit. **No longer a [HUMAN] step as of 2026-08-07:** the workflow now
-      passes `enablement: true` to `configure-pages`, which turns Pages on through the
-      API using the `pages: write` permission it already holds, and is a no-op on every
-      run after the first. _(History: run `30528892265` on `9b6c6b3` died in
-      `configure-pages` with `Get Pages site failed … Not Found` because Pages was off
-      and the input was then `false`.)_ This is still not a silent success path — if the
-      token is ever denied the call, the step fails loudly rather than deploying nowhere,
-      so this box is ticked by a green run, never by assumption.
+- [ ] **[HUMAN] Enable GitHub Pages, then confirm the deploy.** The
+      `Docs site (GitHub Pages)` workflow
+      ([`.github/workflows/pages.yml`](.github/workflows/pages.yml)) must be green on the
+      release commit — but it cannot go green until the owner turns Pages on once.
+      **An earlier revision of this checklist claimed otherwise and was wrong.** It said
+      that passing `enablement: true` to `configure-pages` lets the workflow turn Pages
+      on through the API with the `pages: write` permission it already holds, and struck
+      the [HUMAN] tag on that basis. `pages: write` authorises _deploying_ to an existing
+      Pages site; it does not authorise _creating_ one. Creation needs repo
+      administration rights, which the default `GITHUB_TOKEN` deliberately never has.
+      Three runs prove it, all dead in `configure-pages`:
+      `30528892265` (on `9b6c6b3`, input still `false`) with
+      `Get Pages site failed … Not Found`, then `31318246506` and `31879212583` with
+      `enablement: true` and `Create Pages site failed. Error: Resource not accessible by integration`.
+      The owner action is one of:
+      Settings → Pages → Source: "GitHub Actions", or
+      `gh api -X POST repos/IvanBBaev/agenthropic/pages -f build_type=workflow` with an
+      admin-scoped token. Only the owner can do either; the repository cannot do it for
+      itself. Once Pages exists, the workflow deploys on its own and the step fails
+      loudly rather than deploying nowhere, so this box is ticked by a green run, never
+      by assumption.
       Verify: `gh api repos/IvanBBaev/agenthropic --jq .has_pages` → `true`.
 
 ## 7. Version, tag, release notes

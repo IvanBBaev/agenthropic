@@ -1,6 +1,6 @@
 # ADR-0009: CD-7 — Security + the coverage gate are boundary conditions from commit one
 
-- **Status:** accepted — **built and enforced** as of 2026-07-30; every criterion below is a failing build or a hard process exit, with one criterion (no-SSRF) currently vacuous (see the as-built update below)
+- **Status:** accepted — **built and enforced** as of 2026-07-30; every criterion below is a failing build or a hard process exit, with one criterion (no-SSRF) currently vacuous (see the as-built update below); **amended 2026-08-15** — the coverage bar is now 100 in five packages, but the "**blocks merges**" half of that criterion is **not met**: branch protection on `main` is not enabled
 - **Date:** 2026-07-03
 - **Deciders:** Ivan Baev (project owner), via the six-lens concept-analysis-v2 workflow
 - **Source:** [`concept-analysis-v2.md` §3, row CD-7](../../../analysis/concept-analysis-v2.md#3-canonical-decision-register-v2)
@@ -61,6 +61,48 @@ yet ([ADR-0008](adr-cd-6-ports-and-adapters.md): `AlertSink` has no adapter; ale
 are post-1.0). "No outbound dial to a payload-supplied URL" is currently true because
 there is no outbound dial at all. When alerting is built, this criterion needs a real
 test; today it has nothing to test.
+
+## As-built update — 2026-08-15
+
+**Verdict: the coverage bar strengthened; its enforcement clause is still unmet.**
+Two things changed since the 2026-07-30 reading, and they point in opposite
+directions. Recording only the first would be exactly the kind of
+success-list-as-evidence this ADR already refuses.
+
+**The bar is 100, not 90, and it covers five packages, not four.** Every package —
+`apps/server`, `apps/web`, `packages/core`, `packages/shared` **and**
+`packages/test-fixtures` — runs `vitest run --coverage` with lines, branches,
+functions and statements all set to `100`, and on a clean run at this date all five
+hold it. Two of the 2026-07-30 statements are therefore superseded: the threshold is
+no longer 90, and `packages/test-fixtures` is no longer an exclusion. Its config
+records why the original reasoning was revisited — `getFixture`, `listFixtures` and
+`makeRawEventEnvelope` are real code, and "a defect in a fixture builder does not fail
+loudly; it silently weakens every downstream parser and ingest test that consumes it."
+The reasoning for the raised bar is stated in the same place: **a 90% bar on a package
+sitting at 100% licenses a ten-point regression to pass in silence, which is the
+opposite of a gate.** These are measured figures on one dated run, not a constant —
+see [testing & quality](../testing.md) §6.1 for the per-package numbers, the three
+ways a coverage figure can be bought, and the static guards that read the config as
+text to stop each of them.
+
+**But "blocks merges" remains false.** The Decision below says **CI-blocking**, and
+the fifth acceptance criterion says the gate "**blocks merges** at or below 90%."
+As of 2026-08-15, `gh api repos/IvanBBaev/agenthropic/branches/main/protection`
+returns `404 Branch not protected`. CI runs the gate on every push and pull request
+and fails correctly when a threshold is missed — the mechanism is real and stricter
+than specified — but nothing physically prevents a merge over a red run. The
+workflow file says so itself in a header comment: making it merge-blocking requires a
+GitHub branch-protection rule, which is an owner action on github.com and cannot be
+configured from the repository.
+
+So this criterion is **half satisfied and should be read that way**: the measurement
+side exceeds what was asked, the enforcement side has not been switched on. It is not
+an override — nobody decided to proceed without it — but it is also not a pass, and
+no commit inside this repository can close it.
+
+**One criterion remains vacuous.** The no-SSRF position is unchanged: still no
+outbound network call anywhere in `apps/server`, still nothing to test, still owed a
+real test the moment alerting exists.
 
 ## Context
 

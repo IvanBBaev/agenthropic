@@ -15,8 +15,14 @@
 > security invariants (`docs/ai/DESIGN.md` §8) and Ivan's delivery
 > bar (**>90% coverage · README badges + donation · GitHub Pages docs site**).
 >
-> **Status:** plan only — no code scaffolded. The stack/structure decisions below are
-> *recommendations to approve*, consistent with DESIGN §10 leaning.
+> **Status (as written, 2026-07-04):** plan only — no code scaffolded. The stack/structure
+> decisions below are *recommendations to approve*, consistent with DESIGN §10 leaning.
+>
+> **Status correction (2026-08-15):** the code has since been scaffolded and built, and the
+> delivery bar quoted above shipped at **100%** coverage rather than >90%. This document is
+> still superseded and still must not be acted on; the correction is here only so that a
+> reader who arrives at this page first does not carry away a picture of the repository
+> that stopped being true on 2026-07-11.
 
 ---
 

@@ -106,11 +106,17 @@ Reading the diagram left to right, one subagent turn produces (at minimum) this 
 > ships **four** of the listed hooks in a wireable form (`UserPromptSubmit`, `Stop`,
 > `SubagentStop`, `PreCompact` — `SubagentStart` does not exist; spike S4), and the
 > as-built ingest does not route JSONL through `events_raw` at all. A polling corpus
-> watcher (lstat fingerprint per session, default 3 s interval) detects change, the pure
-> parser reconstructs the session, cost is computed as a halt-gate, and one transaction
-> writes the projections. Hook POSTs land in `events_raw` (append-only, idempotency-keyed,
-> redacted first) plus one `events` liveness row. Step 7 (webhook sink / Telegram) is
-> unbuilt, post-1.0.
+> watcher detects change by comparing a per-session fingerprint — the main transcript's
+> `size:mtime` plus a sorted `rel:size:mtime` line for every sidecar artifact, all read
+> through `lstat` — then the pure parser reconstructs the session, cost is computed as a
+> halt gate, and one transaction writes the projections. There is no `fs.watch` anywhere;
+> polling is the deliberate choice, because a missed filesystem notification is a silent
+> data loss while a missed poll is only latency. The interval defaults to **3 s**
+> (`DASHBOARD_POLL_INTERVAL_MS`) — like every other tuning constant quoted on this page,
+> that number is **PROVISIONAL (LABEL-ME)**: it was chosen to feel live on one machine, not
+> derived from a measured load target. Hook POSTs land in `events_raw` (append-only,
+> idempotency-keyed, redacted first) plus one `events` liveness row. Step 7 (webhook sink /
+> Telegram) is unbuilt, post-1.0.
 
 ## Component responsibilities
 
@@ -149,7 +155,7 @@ around:
 | `StoragePort` | Persisted read/write of projected tables | `better-sqlite3`, WAL mode — single driver *(the `node:sqlite` fallback was dropped per best-path §6.3, applied 2026-07-06)* |
 | `RealtimeHub` | Push projected-state deltas to connected clients | SSE endpoint, same-origin enforced |
 | `AlertSink` | Match rules against state, deliver outbound | Webhook target → Telegram formatter |
-| `PricingProvider` | Versioned `model_pricing` lookup | SQLite table, `effective_from`/`verified_on` |
+| `PricingProvider` | Versioned `model_pricing` lookup | SQLite table, keyed by `(model, bucket, effective_from)` — a dated lookup that picks the newest row not later than the message *(the `verified_on` column sketched under CD-4 was never built; provenance of a rate lives in the migration that seeded it, not in a column)* |
 | `CostEngine` | Combine `token_usage` + `PricingProvider` into dollar cost and delegation-savings | Pure computation over persisted data |
 
 *(Port names and the full rationale: concept-analysis-v2 §3, CD-6. This table is a
@@ -203,10 +209,15 @@ Strengths). The reconciliation precedence that enforces this in the schema:
   correctly against its pre-compaction figures rather than silently losing history
   (DESIGN §4; concept-analysis-v2 §6, Cost). *(As built, the buckets that actually
   materialized are the API's real price axes — `input` / `output` / `cache_read` /
-  `cache_write_5m` / `cache_write_1h`, one row per `(message_id, bucket)` — plus an
-  `is_compaction_baseline` flag; the `speed`/`inference_geo`/`service_tier` axes from the
-  design sketch did not survive contact with the real JSONL. See
-  [data model](../architecture/data-model.md).)*
+  `cache_write_5m` / `cache_write_1h`, one row per `(message_id, bucket)`; the
+  `speed`/`inference_geo`/`service_tier` axes from the design sketch did not survive
+  contact with the real JSONL. The table does carry an `is_compaction_baseline` column,
+  but it is **dead** — the writer inserts a literal `0` and nothing ever reads it back
+  (implementation review 2026-08-09, finding L-7). Compaction repricing works by walking
+  the transcript's own compaction boundaries at analysis time, not by consulting a
+  persisted flag; the column is recorded here so nobody plans against a marker the code
+  does not maintain. See [data model](../architecture/data-model.md) and
+  [cost model](../architecture/cost-model.md).)*
 
 This is why the ingest loop reads the JSONL transcript directly rather than trusting hook
 payloads for anything cost-bearing — see
@@ -318,9 +329,13 @@ merely "ambiguous" (concept-analysis-v2 §4.5, Gap #4; §6). Full rule and CI en
 > ingest is **JSONL-primary** in code (the spike ran, CONDITIONAL-GO; numbers stay
 > PROVISIONAL until the hand-labeled corpus ratifies them); the hook catalog is
 > **verified** — `SubagentStart` does not exist and the installer wires the four real
-> events; the hook endpoint **is authenticated** (the same mandatory Bearer token,
-> supplied to the hook `curl` by shell expansion of `${DASHBOARD_TOKEN}` at fire time, so
-> the token never lands in `~/.claude` settings files); and the stack is **locked and
+> events; the hook endpoint **is authenticated** — the same mandatory Bearer token, which
+> the installed hook command never expands in the shell at all: `curl` imports the
+> environment variable into its own variable space (`--variable '%DASHBOARD_TOKEN'`) and
+> references it from a single-quoted `--expand-header` template, so the secret is
+> substituted inside curl *after* argv is parsed and no process listing, `~/.claude`
+> settings file, or shell history ever holds it (this needs curl ≥ 8.3.0; an older curl
+> fails at option parse and sends nothing); and the stack is **locked and
 > shipped** — Fastify + TypeBox, single `better-sqlite3` driver, React + Vite, pnpm
 > monorepo (`apps/server`, `apps/web`, `packages/shared`, `packages/core`,
 > `packages/test-fixtures`, `hooks/`). The list below is preserved as the honest record

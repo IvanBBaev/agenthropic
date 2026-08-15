@@ -257,6 +257,16 @@ WS/SSE-flow tests. This is healthy but it is **weeks of test infrastructure** th
 must be planned into the phases, not bolted on. simple10 having *no test-on-PR CI* is
 exactly the failure mode to avoid.
 
+> **This prediction held (note added 2026-08-15).** The build did need a dedicated fixtures
+> layer, and it got one: `packages/test-fixtures` is a workspace package in its own right,
+> and the test suite is larger than the source it covers. The bar also moved up rather than
+> down — the shipped threshold is 100%, not >90%, in every package, each defended by a
+> static guard that fails the suite if a coverage-ignore pragma appears in `src/`. What this
+> section did not anticipate is the part that is still missing: coverage is measured and
+> reported, but nothing blocks a merge, because branch protection on `main` is not enabled.
+> The failure mode named in the last sentence was avoided; its sibling — a gate that runs
+> but cannot stop anything — was not.
+
 ### 3.6 Developer's verdict
 Feasible and well-chosen stack; **effort is under-budgeted by roughly the
 integration + test-infra + hook-DX work the word "graft" hides.** Decide SSE-vs-WS

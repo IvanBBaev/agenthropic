@@ -134,6 +134,32 @@ on it. These are the durable output of this analysis.
 price** row **FAILS CI** — silent staleness is a red build, not a runtime "estimated" label.
 This extends the byte-exact-tokens guarantee to the priced output.
 
+> **How the register stands as built (note added 2026-08-15).** The ten decisions were
+> implemented, not revised: the register is still the right description of the system, and
+> the rows are left exactly as they were resolved. Four details have to be corrected against
+> the code, and one row records an event rather than a design.
+>
+> **CD-4 names a `verified_on` column that was never built.** The shipped `model_pricing`
+> table is `(model, bucket, usd_per_mtok, effective_from)` keyed on
+> `PRIMARY KEY (model, bucket, effective_from)`; there is no provenance column, and
+> `effective_from` alone carries the versioning. Whether provenance is worth adding is the
+> surviving half of OPEN-6 in [`open-decisions.md`](open-decisions.md) — a genuinely open
+> question, not an oversight to be quietly patched into the table above. **CD-7**'s closing
+> clause, ">90% coverage blocks merges", is half true and half false in a way worth naming:
+> the threshold shipped at 100% in all five packages, above what was asked, while *blocks
+> merges* is not enforced by anything, because branch protection on `main` is not enabled.
+> A coverage run can go red and a merge can still happen. **CD-9**'s per-artifact licensing
+> now has the LICENSE file it presupposed. **CD-1** was decided the way it was meant to be —
+> by the Phase-0 evidence, which returned CONDITIONAL GO for the JSONL-primary branch.
+>
+> **CD-8 was not satisfied; it was overridden.** Its hard stop said no production code until
+> the spike is green *and* Gate A is signed. The spike returned CONDITIONAL GO, Gate A is
+> only partially signed, and on 2026-07-11 the owner instructed implementation to begin
+> anyway. That is a legitimate decision by the only person entitled to make it, and it is
+> recorded here as what it was: an override of a gate, not a passage through one. It
+> released dispatching only — every security condition in CD-7 and CD-10 still binds, and
+> the Phase-0 numbers it did not ratify remain PROVISIONAL.
+
 ---
 
 ## 4. The six lenses (consolidated)
@@ -350,6 +376,25 @@ Merged across lenses; these become the gates in [`development-plan.md`](developm
 - README badges render **green/true** (via the badges skill) with a donation section.
 - The **GitHub Pages docs site builds** — while the application stays bound to `127.0.0.1`
   (docs public, app never exposed).
+
+> **Which of these have actually been met (note added 2026-08-15).** The criteria are left
+> as written; what follows is the honest split between *implemented*, *measured* and
+> *neither*, because the difference is the whole value of a quantified gate.
+>
+> The data-foundation and security blocks are implemented and covered by tests, including
+> the append-only substrate, the loopback-or-fail bind, the token-or-fail startup and the
+> exercised restore. The cost block is implemented with one correction: `model_pricing` is
+> versioned by `effective_from` only — there is no `verified_on` — and the seeded rates are
+> self-described in `migrations.ts` as approximate list prices, a mechanism proof rather
+> than a source of record.
+>
+> Two criteria are **not met, and cannot be met by writing code**. Hierarchy correctness
+> **≥95% against a labeled golden corpus** is **NOT CERTIFIED**: the `LABEL-ME` trees have
+> never been hand-filled, so there is no ground truth to measure against, and every
+> hierarchy number in this corpus remains **PROVISIONAL** self-check output. **Time to
+> understand a session < 30 s** has **never been measured** — not passed, not failed,
+> untested; nobody has sat with a stopwatch. The delivery bar's "blocks merges below 90%"
+> is likewise unenforced, for the reason given under the decision register above.
 
 ---
 

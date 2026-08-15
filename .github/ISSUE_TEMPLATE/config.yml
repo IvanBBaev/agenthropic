@@ -1,0 +1,13 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://github.com/IvanBBaev/agenthropic/blob/main/docs/site/README.md
+    about: >-
+      The docs corpus - architecture, the security model and threat model, usage, and
+      operations. Read this before filing; the answer to "why does it refuse to do X"
+      is usually there.
+  - name: Security vulnerability
+    url: https://github.com/IvanBBaev/agenthropic/blob/main/SECURITY.md
+    about: >-
+      Do not open a public issue for a security problem. SECURITY.md explains what is in
+      scope and how to report privately.

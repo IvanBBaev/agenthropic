@@ -1,6 +1,6 @@
 # ADR-0005: CD-3 — Reconciliation precedence
 
-- **Status:** accepted, **partly moot as built 2026-07-30** — JSONL-authoritative tokens hold and are P0-proven; the cross-source precedence and the two-phase `agent_id` backfill were never needed (see the as-built update below)
+- **Status:** accepted, **partly moot as built 2026-07-30** — JSONL-authoritative tokens hold and are P0-proven; the cross-source precedence and the two-phase `agent_id` backfill were never needed; **amended 2026-08-15** — the token-reconciliation proof is CI-failing rather than merge-blocking, and the parser thresholds it runs against are still PROVISIONAL (see the as-built updates below)
 - **Date:** 2026-07-03
 - **Deciders:** Ivan Baev (project owner), via the six-lens concept-analysis-v2 workflow
 - **Source:** [`concept-analysis-v2.md` §3, row CD-3](../../../analysis/concept-analysis-v2.md#3-canonical-decision-register-v2)
@@ -62,6 +62,21 @@ pass on the real corpus shape, which is evidence that it behaves as a hard key �
 that is an observation from working code, not a ratified answer, and the parser's
 thresholds remain PROVISIONAL (LABEL-ME) pending ratification against a hand-labelled
 corpus.
+
+## As-built update — 2026-08-15
+
+**Verdict: unchanged; "and it is merge-blocking" overstates the enforcement.** The P0
+token-reconciliation proof is exactly as described — Σ `token_usage` per session checked
+against an independently written in-test reader, so a shared bug in the production summing
+path cannot make both sides agree — and it runs in CI on every push, failing the run on a
+mismatch. It does not withhold a merge: `main` is not branch-protected (`404 Branch not
+protected`, verified 2026-08-15); see
+[the standing correction](README.md#a-standing-correction-merge-blocking).
+
+Nothing else here has moved. The `UNIQUE (message_id, bucket)` key still does the work that
+keeps the sum exact rather than approximately right, naive row summation still over-counts
+by ≈2.4×, the two-phase backfill is still unnecessary because a session is parsed before
+anything is written, and the parser thresholds are still **PROVISIONAL (LABEL-ME)**.
 
 ## Context
 

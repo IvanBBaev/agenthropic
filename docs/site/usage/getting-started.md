@@ -1,12 +1,12 @@
 # Getting started
 
-> **Design-target documentation — pre-Phase-0.** This page documents agenthropic's
-> *intended* behavior for installing and running the dashboard, as fixed by the design
-> basis (docs/ai/DESIGN.md) and the build plan (docs/analysis/development-plan.md). **No
-> application code is built yet** (see the [roadmap](../guide/roadmap.md)); installing
-> and running the dashboard ships in **Phase 1 — Foundation, security spine, storage**.
-> Values marked _(planned)_ or _(leaning — unconfirmed)_ may change; the **security
-> invariants are binding and will not**. This replaces the earlier stub.
+> **How to read this page.** The flow below is **runnable today** — the summary box
+> immediately after this one carries the real commands, and every step's own **As built**
+> note says what that step resolved to. The surrounding prose is the design-era text this
+> page was first written as, before any code existed, and it is kept rather than
+> rewritten: a step marked _(planned)_ or _(leaning — unconfirmed)_ records what was
+> still open when the plan was written. The **security invariants were binding then and
+> are binding now.**
 
 > **Update — 2026-07 (as built).** The code exists now (implementation began
 > 2026-07-11), so the flow below is runnable, not aspirational. The real values, all
@@ -22,7 +22,9 @@
 >   `DASHBOARD_PORT` (default **4317**). Startup fails without `DASHBOARD_TOKEN`,
 >   exactly as promised.
 > - **Run the SPA:** `pnpm --filter @agenthropic/web dev` (Vite dev server; React +
->   D3, four real views).
+>   D3, four real views). This is a **second process on a second port** — the server
+>   serves no static bundle, so the API port is not where the UI lives. Open the URL
+>   Vite prints and paste the same `DASHBOARD_TOKEN` into the SPA's gate.
 > - **Install the hooks:** `node hooks/install.mjs` (`WP-X8`, shipped) — generates
 >   four fail-silent hooks (`UserPromptSubmit`, `Stop`, `SubagentStop`, `PreCompact`)
 >   that POST to the loopback receiver with `Authorization: Bearer ${DASHBOARD_TOKEN}`
@@ -65,10 +67,13 @@ prerequisite step that installs or configures Claude Code itself: agenthropic is
 overview's "single-writer pipeline" framing) — if `~/.claude/projects/*.jsonl` does not
 yet exist for you, run at least one Claude Code session first.
 
-## The five-step flow
+## The flow, step by step
 
 Each step below is tagged **fixed** (the design commits to this and it will not change)
-or **planned** (the shape is decided, the exact command/value is not yet).
+or **planned** (the shape was decided, the exact command or value was not yet). The page
+was drafted as five steps; the built flow has six, because opening the SPA and handing it
+the token turned out to be a step of its own rather than a footnote to starting the
+server.
 
 ### 1. Obtain the repository — *(planned)*
 
@@ -147,29 +152,73 @@ start command and the listening port are not yet fixed (`ai/DESIGN.md` §10 name
 backend framework itself, Fastify vs Express, as still open):
 
 ```bash
-DASHBOARD_TOKEN=<token> pnpm --filter server start   # (planned — exact command/port TBD)
-# server binds 127.0.0.1:<port> only — refuses to start on 0.0.0.0, refuses to start
+DASHBOARD_TOKEN=<token> pnpm --filter @agenthropic/server dev
+# server binds 127.0.0.1:4317 only — refuses to start on 0.0.0.0, refuses to start
 # with DASHBOARD_TOKEN unset (WP-U0 / WP-F7)
 ```
 
-> **As built:** the real command is
-> `DASHBOARD_TOKEN=<token> pnpm --filter @agenthropic/server dev`, and the port
-> question is settled — default **4317**, overridable with `DASHBOARD_PORT`. The
-> bind host is **not** an environment variable at all: `127.0.0.1` is a constant in
+> **As built:** the command above is the real one, and the port question is settled —
+> default **4317**, overridable with `DASHBOARD_PORT`. Note the script name: there is
+> **only `dev`**. `apps/server/package.json` defines `dev`, `bench` and `test` and
+> nothing else, so there is no `start` script and **no production run mode** — the
+> server runs under `tsx watch` from source. An earlier draft of this page printed
+> `pnpm --filter server start`, which is wrong twice over: the workspace is named
+> `@agenthropic/server`, and that script does not exist.
+>
+> The bind host is **not** an environment variable at all: `127.0.0.1` is a constant in
 > `apps/server/src/config.ts` with a comment saying it is intentionally not
 > configurable, which is the strongest possible form of "refuses to start on
 > `0.0.0.0`". The framework question resolved to Fastify (+ TypeBox). The
 > security-contract test suite boots this exact composition root and asserts every
 > bound address is `127.0.0.1`.
 
-If you are only ever going to sit at the host's own keyboard, step 4 already gets you a
-working local dashboard. Step 5 is what makes it useful: real data flowing in, and (if
-needed) a way to reach it from another machine.
+**Check it is alive before you go further.** The one endpoint that answers without any
+session data is the health route:
 
-### 5. Install the Claude Code hooks, and reach the UI over a tunnel
+```bash
+curl -s -H "Authorization: Bearer <token>" http://127.0.0.1:4317/api/health
+```
 
-This step has two independent halves, each documented on its own dedicated page rather
-than duplicated here:
+It is auth-gated like everything else, so a **401** means the token you sent is not the
+token the server started with — not that the server is broken. A **200** carries
+`status: "ok"`, a `schemaVersion`, and, while a first pass over the corpus is still
+running, `ingest: "replaying"` (it reads `"idle"` afterwards). Read a *missing* field as
+missing, never as zero: the handler omits optional fields when it has nothing to report
+rather than emitting a fabricated `0`, so an absent `ingestSkips` means "no completed
+pass yet", not "no files were skipped". [The API reference](api.md#liveness-and-ingest-visibility--get-apihealth)
+lists the whole payload and what each omission means.
+
+### 5. Open the dashboard and give it the token
+
+The server hosts no UI. It serves the API and the SSE stream, and nothing else — there
+is no static-file plugin anywhere in `apps/server`, so pointing a browser at port 4317
+gets you JSON, not a dashboard. The SPA is a second process:
+
+```bash
+pnpm --filter @agenthropic/web dev
+```
+
+Open the URL Vite prints (port **5173** unless it is taken; the dev server binds
+`127.0.0.1` by an explicit invariant in `apps/web/vite.config.ts`, never a wildcard) and
+paste the same `DASHBOARD_TOKEN` into the gate. The shell renders **nothing** until a
+token is present. Two things worth knowing about that token in the browser:
+
+- It is held in **`sessionStorage` only** — never `localStorage`, never a cookie. Close
+  the tab and it is gone; that is the intended trade, not an oversight.
+- The dev server proxies `/api` to `http://127.0.0.1:4317`, so from the browser's point
+  of view the API and the stream are same-origin. The stream's origin check accepts a
+  request with no `Origin` header and otherwise only the server's own loopback origin —
+  no wildcard CORS, ever. This documentation pass verified the check and the proxy
+  config, not a live browser session; if API calls succeed while the connection chip
+  sits at `reconnecting`, that check is the first place to look.
+
+### 6. Install the Claude Code hooks, and reach the UI over a tunnel
+
+Steps 1–5 already give you a working local dashboard if you only ever sit at the host's
+own keyboard. This step is what makes it useful over time: liveness the transcripts alone
+cannot prove, and (if you need it) a way to reach the UI from another machine. It has two
+independent halves, each documented on its own dedicated page rather than duplicated
+here:
 
 - **Wiring Claude Code's lifecycle hooks** into the loopback ingest receiver so events
   actually flow into `events_raw` is a separate work package, `WP-X8` (owner `devops`),
@@ -188,13 +237,15 @@ than duplicated here:
   a reverse proxy to the open port). Full procedure, including the
   `tailscale serve` vs `tailscale funnel` distinction: [remote access](../security/remote-access.md).
 
-Until step 5's hooks half lands, step 4 gives you a running, authenticated, loopback
-server with nothing in it yet — which is exactly the boundary [what "running" looks
-like](#what-running-looks-like) describes next.
+The design-era text expected step 6's hook half to be the thing that put data on the
+board, and that turned out to be false: the watcher ingests transcripts on its own, so a
+server started at step 4 fills up by itself. What it cannot do without hooks is claim an
+ending — an agent moves `working` → `unknown` and stays there. That boundary is what
+[what "running" looks like](#what-running-looks-like) describes next.
 
 ## What "running" looks like
 
-Once steps 1–5 are all complete, one subagent turn in a locally-running Claude Code
+Once every step is complete, one subagent turn in a locally-running Claude Code
 session flows through the same single-writer pipeline the
 [architecture overview](../architecture/overview.md) walks in full — this page only
 summarizes the shape, not the diagram, to avoid drifting out of sync with it:
@@ -265,12 +316,15 @@ rather than gloss over it:
 
 ## Next steps
 
-- [Configuration](configuration.md) — every environment variable and config option
-  once the server bootstrap defines them, including `DASHBOARD_TOKEN` and the
-  `~/.claude/projects` path.
+- [Configuration](configuration.md) — every environment variable the server actually
+  reads, including `DASHBOARD_TOKEN`, the `~/.claude/projects` path, the poll interval
+  and the watchdog window, plus what the backup and retention machinery does and does
+  not do yet.
+- [API reference](api.md) — the ten routes, the health payload, and the response fields
+  the four views are built on.
 - [Hooks installer](hooks-installer.md) — installing the hook scripts, leak-free token
   acquisition, and verifying an end-to-end hook → loopback ingest → `events_raw` run
-  (Phase 2, `WP-X8`).
+  (`WP-X8`).
 - [Security model](../security/model.md) — the full rule → why → how-enforced
   catalogue behind every "fixed" row above.
 - [Remote access](../security/remote-access.md) — the SSH and Tailscale tunnel

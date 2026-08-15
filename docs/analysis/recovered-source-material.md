@@ -84,8 +84,19 @@ The 24 capabilities become the closest thing the corpus has to a target-feature 
 for agenthropic's own UI. Each row below is a build target; the ✓/~/✗ above is the field
 baseline agenthropic is measured against. Status is a *planning aid*, grounded in the
 security invariants and CD decisions already recorded in the corpus — it is **not** a
-committed scope and does not override any lane's own design doc. Boxes are unchecked
-because no code is scaffolded yet (pre-Gate-A).
+committed scope and does not override any lane's own design doc.
+
+> **Why the boxes stay unticked (note added 2026-08-15).** The original reason was that no
+> code was scaffolded; that reason expired on 2026-07-11. The boxes stay unticked for a
+> better one: this is a *derived planning aid*, not the build tracker, and a checklist that
+> starts recording delivery status becomes a second source of truth that will drift from the
+> first. Several rows are nonetheless demonstrably built — the persisted orchestration DAG
+> and the first-class agent entities behind it, the SSE liveness stream with its same-origin
+> check, auth-gated writes including the hook POST, per-model cost with cache-token
+> accounting across five priced buckets, and SQLite backups standing in for snapshot/restore
+> — while the alert rules and outbound webhooks remain exactly where the roadmap put them,
+> in v2.0 behind KC-5. For what is actually shipped, read the build's own documents rather
+> than this list.
 
 **Visualisation**
 - [ ] **Orchestration DAG / graph** — core moat. First-class persisted subagent DAG from

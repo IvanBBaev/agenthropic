@@ -14,6 +14,21 @@
 > happened*. That gap is closed only by WP-S5 human sign-off, and it is exactly what the
 > verdict below is made conditional on.
 
+> **Status of the condition, checked 2026-08-15: still unmet.** The five
+> `spike/corpus/sessions/<short>/LABEL-ME.md` files still hold their per-edge blanks —
+> the machine-derived rows are there, the human column beside each hex id is still
+> `__________`. Every number in this document therefore remains **PROVISIONAL / self-check**
+> five weeks after it was written, and the ≥95% hierarchy-accuracy gate reports
+> **NOT CERTIFIED**. What did happen in the meantime is that **implementation began on
+> 2026-07-11 by explicit owner override of CD-8**. The override released dispatching; it did
+> not discharge this condition, and nothing about a shipped parser converts a self-check into
+> a human-verified one. The one substantive technical change since: the parser now implements
+> **all fourteen** gate items rather than thirteen — §3's "#7 (legacy 2.1.70) absent" was
+> closed by a defensive fallback carrying its own `legacy_explore` provenance — but that shape
+> is still **unwitnessed in the real corpus** and its scope is itself PROVISIONAL. See
+> [parser-spec.md](parser-spec.md) §3, which separates implemented from measured for exactly
+> this reason.
+
 ---
 
 ## 1. Verdict — CONDITIONAL GO
@@ -175,6 +190,14 @@ at KC-1 (roadmap §3) is to treat it as the *ceiling*, not the *estimate*.
    (siblings time-ordered into waves; same-wave siblings shown as an unordered concurrent
    set) is acceptable for the dashboard — or state the intended strict order, understanding
    the substrate cannot reconstruct it and you would be supplying it from memory.
+
+**Re-checked 2026-08-15: all three are still open.** The `LABEL-ME.md` blanks are unfilled
+and every box in `spike/tree-gate/IVAN-SIGNOFF.md` still reads `AWAITING-IVAN`; no friction
+log exists anywhere in the repository (if one is being kept outside it, that is invisible
+from here and should be linked); and no EMP-1 adjudication has been recorded. This list has
+not shrunk in five weeks — which matters more now than it did in July, because the code these
+items were supposed to gate has since been written. The items did not become less necessary
+by being outrun.
 
 ---
 

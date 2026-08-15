@@ -1,16 +1,17 @@
 # Using the dashboard
 
-> **Design-target documentation — pre-Phase-0.** This page documents agenthropic's
-> *intended* behavior for the web dashboard and its views, as fixed by the design basis
-> (`docs/ai/DESIGN.md`) and the build plan (`docs/analysis/development-plan.md`). **No
-> application code is built yet** (see the [roadmap](../guide/roadmap.md)); the web
-> dashboard ships in **Phase 4 — Read API, the dashboard, and the five daily
-> questions**. Values marked _(planned)_ or _(leaning — unconfirmed)_ may change; the
-> **security invariants are binding and will not**. This replaces the earlier stub.
+> **How to read this page.** The four views described below are **built and shipped**
+> in `apps/web`. The page keeps the design-era text it was first written as — a
+> description of *intended* behaviour derived from the design basis (`docs/ai/DESIGN.md`)
+> and the build plan (`docs/analysis/development-plan.md`), written before any
+> application code existed — and amends it in place rather than replacing it. So a value
+> marked _(planned)_ or _(leaning — unconfirmed)_ records what was still open when the
+> plan was written, not what is open today; where the built thing settled the question,
+> an **As built** box under the paragraph says how. The **security invariants were
+> binding then and are binding now.**
 
 > **Update — 2026-07 (as built).** All four views described below are built and
-> shipped in `apps/web`, so the "no application code is built yet" sentence above is
-> now historical. What actually runs: a React SPA behind a hand-rolled hash router
+> shipped in `apps/web`. What actually runs: a React SPA behind a hand-rolled hash router
 > (`#/live`, `#/sessions`, `#/dag`, `#/cost` — `apps/web/src/router.ts`) whose shell
 > renders nothing until a token is present, held in **`sessionStorage` only**
 > (`apps/web/src/token.ts`). The four views are `LiveView` (WP-U6), `SessionsView`
@@ -82,6 +83,13 @@ is explicit that shipping means **all five** are answerable from the UI, and tha
 new session's story is understandable in under 30 seconds** — the numeric bar every
 view below is designed against, not a vague "should feel snappy."
 
+That second half of the gate is **UNMEASURED**. All five questions are answerable from
+the shipped UI, and the per-session cost analysis (§4) was built precisely because Q2/Q4
+were answerable from the server and not from the browser. But nobody has yet sat a reader
+in front of a session they had not seen before and timed them, so "under 30 seconds"
+remains the target it was written as. Treat it as a design intention this page is written
+against, not as a result anyone can quote back.
+
 ## How the four views fit together
 
 ```
@@ -150,14 +158,23 @@ work not yet written (owned by `WP-D4`). *(As built: it is written. See the box 
 > them together would fake certainty. On the API side, however, agents with a `null`
 > status are counted **into** the `unknown` bucket of a session's rollup — "an absent
 > status IS unknown, and hiding it would fake certainty" (`apps/server/src/api/queries.ts`).
+>
+> There is a sixth thing the board can show, and it exists to survive a version skew:
+> a status string this build of the SPA has never heard of. `statusMeta()` renders it as
+> `? unrecognised (<the raw value>)` rather than coercing it into the nearest known
+> state or dropping the row. If a future server persists a word this UI predates, you
+> will see the word — which is the only outcome that does not quietly misreport it.
 
-**How to read it.** Three states, read left to right as urgency: a session/agent still
-executing is `working`; one whose expected completion signal never arrived within the
-watchdog window is `unknown` — the state that should draw your eye first, since it is
-exactly the "stuck without me noticing" case Q3 asks about; one that reported a clean
-stop is `done`. Because the flip to `unknown` arrives over SSE (§5 below) rather than on
-a page reload, a session that goes stale while the board is already open updates in
-place.
+**How to read it.** `WP-U6` framed the board as three states read left to right as
+urgency: a session/agent still executing is `working`; one whose expected completion
+signal never arrived within the watchdog window is `unknown` — the state that should draw
+your eye first, since it is exactly the "stuck without me noticing" case Q3 asks about;
+one that reported a clean stop is `done`. That urgency ordering survived into the built
+board, but the vocabulary grew: what actually renders is the five persisted statuses in
+the fixed order `working · waiting · done · error · unknown`, plus `unrecorded` for a row
+whose status was never written. Because the flip to `unknown` arrives over SSE (§5 below)
+rather than on a page reload, a session that goes stale while the board is already open
+updates in place.
 
 > **As built:** `LiveView` renders **all five** buckets for every session, including
 > the ones sitting at zero (they get a dimmed `bucket-zero` class rather than being
@@ -208,6 +225,16 @@ hand-labeled real session, "even without the dedicated subagent-start signal"
 the tree view inherits that correctness bar rather than defining a separate, looser one
 for display purposes.
 
+> **The ≥95% bar has not been cleared, because it has not been run.** Measuring it needs
+> a hand-labelled corpus — the LABEL-ME task, at least 52 labelled agents across real
+> sessions — and that corpus does not exist yet. The harness that would score against it
+> is built and reports **NOT CERTIFIED** rather than a number, which is the correct
+> output for "no ground truth to compare against" and not a failure. Everything the
+> Phase-0 probe measured about hierarchy accuracy therefore stays **PROVISIONAL** until
+> the owner labels the corpus and ratifies the result. Read the tree as the persisted
+> edges it draws — each one carries its own provenance, see the box below — rather than
+> as a shape certified to be 95% right.
+
 **How to read it.** Root is the main agent; each edge is a persisted parent→child
 `orchestration_edges` row, not an inferred nesting guess; each node's status (see §1) is
 what tells you which branch is still running versus finished versus stuck.
@@ -222,9 +249,14 @@ moat itself (the moat is §3, next).
 > beyond the design text is edge provenance and three honesty affordances:
 >
 > - Every edge is drawn **solid when observed** (`source = tool_use`) and **dashed
->   when inferred** (`directory`, `task_notification`, `queue_operation`), with the
->   provenance also in each edge's `<title>` and a legend that is permanently on
->   screen rather than behind a hover or a toggle.
+>   when inferred** (`directory`, `task_notification`, `queue_operation`,
+>   `legacy_explore`), with the provenance also in each edge's `<title>` and a legend
+>   that is permanently on screen rather than behind a hover or a toggle. The legend
+>   names all five sources by their stored word, so an edge you can see is an edge whose
+>   evidence you can name — the four dashed sources are four different strengths of
+>   guess, not one undifferentiated "inferred". `legacy_explore` is the weakest of them
+>   and is kept separate for exactly that reason (see
+>   [the API reference](api.md#as-built-details-worth-knowing-before-you-call-these)).
 > - Edges whose endpoint is not in the payload are **counted and declared in text**
 >   ("reference agents outside this payload and are not drawn"), never drawn to a
 >   node that isn't there and never silently dropped.
@@ -266,8 +298,14 @@ for the full rival-by-rival comparison.
 > source of truth for the persisted subagent DAG — *provided* the parser keys on the
 > `Agent`/`Workflow` spawn tools (not `Task`), walks **both** on-disk layouts (85% of
 > agent files are nested), and indexes subagents as parents. That de-risks, but does
-> **not** replace, the formal Phase-0 spike; no production code ships before the
-> `WP-S7` GO gate.
+> **not** replace, the formal Phase-0 spike.
+>
+> The last clause of that paragraph used to read "no production code ships before the
+> `WP-S7` GO gate," and it is no longer what happened: implementation began on
+> **2026-07-11 by an explicit owner override** of that condition, recorded as such. The
+> override moved the build; it did not ratify the numbers. `CONDITIONAL-GO` and
+> `confidence 85` are still the probe's own **PROVISIONAL** figures, unsigned, and the
+> hierarchy-accuracy bar above them is still uncertified for want of a labelled corpus.
 
 **How to read it.** Same visual grammar as §2 (nodes = agent instances, edges =
 persisted parent→child relationships, node status = working/unknown/done from §1), but
@@ -278,12 +316,17 @@ something scoped into the current view (`WP-U8` builds the query and the render;
 layout upgrade is separately deferred).
 
 > **As built:** `DagView` reads `GET /api/dag/global` and shares `SessionsView`'s
-> layered layout, solid/dashed provenance legend and declared-not-drawn dropped
-> edges. The one thing unique to it is **truncation honesty**: the endpoint is capped
-> at 1000 nodes, and when the cap bites the view shows a banner with the real
-> figures — "Truncated: showing *n* of *N* agents and *m* of *M* edges (node limit
-> 1000)" — instead of presenting a partial graph as the whole picture. The
-> ELK/Graphviz layout upgrade is still not built.
+> layered layout, its five-source solid/dashed provenance legend and its
+> declared-not-drawn dropped edges. The one thing unique to it is **truncation
+> honesty**: the view asks for 1000 nodes — the endpoint's own default, with a hard
+> ceiling of 5000 (both PROVISIONAL constants in
+> `packages/shared/src/schemas/common.ts`, not ratified limits) — and when the cap
+> bites the view shows a
+> banner with the real figures — "Truncated: showing *n* of *N* agents and *m* of *M*
+> edges (node limit 1000)" — instead of presenting a partial graph as the whole
+> picture. The slice the server returns is the **most recently active** agents, so a
+> truncated graph is a recency window and the banner says so rather than letting it
+> read as "everything there is." The ELK/Graphviz layout upgrade is still not built.
 
 ## (d) Cost / Sankey / delegation-savings
 
@@ -344,6 +387,95 @@ rendering idea itself is fair game for this cost view.
 >   unratified** (`apps/server/src/db/migrations.ts`), so treat the dollar amounts as
 >   correctly-computed from numbers that have not yet been signed off.
 
+### The two recent-window KPIs, and the timezone they mean
+
+Q4 asks what *today* and *this week* cost, and the view answers with two tiles above the
+sankey: **Today (UTC)** and **Last 7 days (UTC)**. The parenthetical is not decoration.
+The server buckets usage by the UTC calendar date of the timestamp on the JSONL line, so
+a tile labelled plainly "today" would mean UTC-today to the server and local-today to
+whoever is reading it — the same figure, quietly meaning two different windows. Both
+tiles therefore name their own boundary, print the exact dates they cover
+(`YYYY-MM-DD`, and `weekStart → today` for the week), and are followed by a line saying
+outright that these are UTC calendar days over the recorded usage timestamps, not your
+local timezone.
+
+The seven-day width is a **PROVISIONAL** constant (`WEEK_WINDOW_DAYS`), and the window is
+inclusive of today, so it spans `today − 6 … today`. Two edges are handled deliberately
+rather than swept up: usage dated *after* today is excluded from both windows, because a
+future date means two machines disagree about the clock and folding it in would inflate a
+window it does not belong to; and usage carrying **no timestamp at all** lands in the
+per-day table's literal `unknown` row, sits outside every window, and is disclosed in
+that same note when it is non-zero. Neither is dropped, and neither is folded into a
+window to make the tiles add up.
+
+One staleness caveat, on record as review item M-10: the view has no clock tick and no
+SSE-driven refetch, so on a tab left open across UTC midnight the "today" boundary is
+only as fresh as the last render.
+
+### Top agent burners — ranked by tokens, not by dollars
+
+Q2 asks which agent burned the most. The sankey answers it in SVG `<title>` tooltips,
+which keyboard and assistive-technology users cannot reach at all, so the view also
+renders a plain ranked table (review item M-8). It reads a second endpoint,
+`GET /api/dag/global`, and has its own loading/error state: a failure there degrades that
+one section instead of taking the whole cost view down.
+
+The ranking key is **`totalTokens`, not `costUsd`** — and that choice is the point.
+`totalTokens` sums every usage row including the unpriced ones, so it is the true burn
+even for an agent whose model has no price row; ranking by dollars would quietly demote
+exactly the agents whose cost is unknown, which is the same class of lie as a silent
+$0.00. Each row still shows the dollar figure and the unpriced gap alongside. Ties break
+by cost and then by id, so the order is stable across refetches rather than reshuffling
+equal rows as if data had moved.
+
+Three scope facts are printed above the table rather than left for the reader to assume:
+
+- how many agents are ranked, and out of how many with recorded usage (the table shows
+  the top 10 — **PROVISIONAL**, chosen to answer "who burned the most?" without becoming
+  a second DAG view);
+- how many agents were **excluded for zero recorded tokens** — a burner list of
+  non-burners is noise, but making them silently vanish is a different problem, so the
+  count is disclosed;
+- that usage which is not attributed to any persisted agent sits outside this ranking
+  entirely.
+
+And when the DAG endpoint truncates, the table says what that does to the ranking: the
+server slices by **recency**, not by burn, so a truncated slice may not contain the
+biggest burner at all. The banner states that in words instead of presenting a partial
+ranking as a global one.
+
+### The per-session cost analysis panel
+
+Clicking a session in the **Top sessions** table opens the analysis panel underneath it —
+the browser-side consumer of `GET /api/sessions/:id/cost-analysis`. It is **opt-in per
+session** by design: that endpoint re-reads transcripts off disk, which is far too
+expensive to fire for every row of a summary table. Until you pick one, the panel says so
+plainly rather than rendering an empty frame.
+
+It shows two things that must not be read the same way:
+
+- **Compaction repricing is measured.** Naive and repriced totals are both ground truth,
+  and their `deltaUsd` is **not a saving** — on a complete substrate it should be about
+  zero. The panel therefore prints the delta with an explicit sign and, at or above one
+  cent (`DELTA_SIGNAL_USD`, **PROVISIONAL**), calls it what it is: a discrepancy worth
+  looking at, a signal that the substrate or the pricing is incomplete. Sub-cent deltas
+  are rounding and are not dressed up as findings.
+- **Delegation savings is a counterfactual.** The API pins its `isEstimate` field to the
+  literal `true` so it cannot be switched off, because the cache profile of the run that
+  never happened is not observable. The panel renders it with a `~`, an explicit
+  *estimate* badge and the hypothetical model named — never as a bare dollar amount
+  sitting flush with the measured figures above it. Subagents with no resolvable
+  top-tier model are **excluded** from the estimate rather than guessed at, and their
+  count is shown next to it.
+
+The panel's failure text is likewise not interchangeable. A 503, a 404 and a 422 each
+imply a different action by the reader, so each keeps its own sentence, and the 503/422
+cases quote the server's own message instead of restating a single hard-coded cause —
+an earlier version told readers "this server has no corpus configured" about a machine
+whose corpus was merely missing. Naming the wrong cause is worse than naming none: it
+sends the reader to fix something that is not broken. The full list of answers that
+endpoint can give is on [the API reference](api.md#the-six-answers-of-the-cost-analysis-endpoint).
+
 ## Auth & realtime: the SPA loads only behind the token gate
 
 The dashboard is not a public page with a login screen bolted on — it renders **nothing**
@@ -403,10 +535,12 @@ Two things follow directly from "no token → no data/stream":
 >   therefore not satisfied in the literal sense; the views compensate by refetching
 >   their snapshot on reconnect.
 
-Full endpoint and stream reference (routes, payload shapes, reconnection semantics)
-belongs on [the API reference](api.md) once it is written — that page is Phase 4 work
-exactly like this one, and is still a stub as of this writing. *(As built:
-[the API reference](api.md) is written and documents the ten real routes.)*
+The full endpoint and stream reference — routes, payload shapes field by field, the
+health payload, and the reconnection semantics — lives on
+[the API reference](api.md), which documents the ten routes the server actually
+registers. When this page was first written that reference was still an unwritten Phase 4
+deliverable, which is why several paragraphs above hedge about "illustrative naming";
+it is written now, and it is the authority wherever the two pages differ.
 
 ## Access: reached only through a tunnel
 
@@ -464,8 +598,8 @@ resolution inline.)*
   dashboard is the read side of.
 - [The moat](../guide/the-moat.md) — why the global DAG is the one feature no audited
   rival ships, and how it relates to the other four moat items.
-- [API reference](api.md) — the endpoint/stream reference this page defers to (stub,
-  also Phase 4). *(As built: written, and the accurate source for the ten real routes.)*
+- [API reference](api.md) — the endpoint/stream reference this page defers to: the ten
+  real routes, their response fields, and the health payload.
 - [Security model](../security/model.md) — the full loopback/token/same-origin
   catalogue every view and endpoint above inherits.
 - [Remote access](../security/remote-access.md) — SSH/Tailscale tunnel setup for

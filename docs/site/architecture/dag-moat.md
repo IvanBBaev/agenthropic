@@ -22,9 +22,9 @@ right, which is exactly why it is the moat and not a nice-to-have.
 >
 > - **The edges are JSONL-only, not dual-path.** No hook ever asserts an edge —
 >   `SubagentStart` does not exist, and even `SubagentStop` contributes only a liveness
->   timestamp. The parser derives every edge from the transcripts via **four join
->   paths**, recorded per row in a `source` column:
->   `'tool_use'`, `'directory'`, `'task_notification'`, `'queue_operation'`.
+>   timestamp. The parser derives every edge from the transcripts via **five join
+>   paths**, recorded per row in a `source` column: `'tool_use'`, `'directory'`,
+>   `'task_notification'`, `'queue_operation'`, and `'legacy_explore'`.
 >   "Rebuild from JSONL alone" is therefore not a fallback proof but the only branch
 >   the system has.
 > - **The real DDL differs from the CD-4 sketch**: the `UNIQUE` logical key is
@@ -34,9 +34,12 @@ right, which is exactly why it is the moat and not a nice-to-have.
 >   promised. See the DDL section below.
 > - **The P0 proofs are built and green** in the server test suite: Σ`token_usage`
 >   equals the JSONL sum exactly, double-replay is idempotent, and the DAG rebuilds
->   from JSONL alone. On the hand-labeled corpus the hard join produced **0.000%
->   orphaned agents** (G0.1b) — orphans, when they occur in the wild, get **no edge**
->   rather than a guessed one.
+>   from JSONL alone. Separately, the Phase-0 **desktop probe** reported **0.000%
+>   orphaned agents** for the hard join (G0.1b) — a `PROVISIONAL` self-check against
+>   *unlabelled* transcripts, not an accuracy measurement, and not to be read as the
+>   ≥95% hierarchy gate, which still reports `NOT CERTIFIED` at `n = 0` (§"the three
+>   P0 tests" below). What is a design fact rather than a measurement: orphans, when
+>   they occur in the wild, get **no edge** rather than a guessed one.
 
 ## Why this is "the moat" and not just a feature
 
@@ -149,13 +152,14 @@ against a future migration, not a shipped feature. Until Phase 5+ lands, treat a
 
 > **As built, the "dual-path" collapsed to one path — deeper than designed.** The hook
 > leg was never built: `SubagentStart` does not exist, and no hook (not even
-> `SubagentStop`) asserts an edge. What shipped instead is the parser's **four JSONL
+> `SubagentStop`) asserts an edge. What shipped instead is the parser's **five JSONL
 > join paths** — `tool_use` (the `Agent`/`Workflow` spawn's `tool_use.id` matched to
 > the child's `meta.toolUseId`), `directory` (nested `workflows/wf_*/` containment),
-> `task_notification`, and `queue_operation` — each recorded in the row's `source`
-> column, so an edge's provenance stays queryable. An agent none of the four paths can
-> join gets **no edge** (visible as an orphan), never a guessed one. The section below
-> is the design record of why the hedge existed.
+> `task_notification`, `queue_operation`, and the defensive `legacy_explore` fallback
+> for pre-2.1.71 transcripts — each recorded in the row's `source` column, so an edge's
+> provenance stays queryable. The paths are tried in that order and the first match
+> wins; an agent none of the five can join gets **no edge** (visible as an orphan),
+> never a guessed one. The section below is the design record of why the hedge existed.
 
 This is the core mechanism, and the single largest execution-risk item on the moat. The
 development plan's work package is explicit that the persisted edge must be derivable
@@ -282,9 +286,21 @@ alongside a healthy hook stream, to clear the gate.
 > green — token-sum exactness, double-replay idempotence (re-ingesting an unchanged
 > session writes nothing new), and DAG-rebuild-from-JSONL-alone. The last one is no
 > longer a *fallback* proof: since hooks never feed edges, JSONL-alone is the only
-> branch, and the test asserts the system's normal operation, not an outage mode. The
-> ≥95% bar was passed with margin — the hard join (G0.1b) produced **0.000% orphaned
-> agents and 100% usage attribution** on the hand-labeled corpus. Replay-on-startup is
+> branch, and the test asserts the system's normal operation, not an outage mode.
+>
+> **The ≥95% bar has not been passed — it has not been measured.** An earlier revision
+> of this note said it "was passed with margin … on the hand-labeled corpus," and both
+> halves of that were wrong. The **0.000% orphaned agents / 100% usage attribution**
+> figures come from the Phase-0 **desktop probe**, in which the parser scored its own
+> output against transcripts nobody had labelled — a self-check, not an accuracy
+> measurement, and `PROVISIONAL` for exactly that reason. The hand-labeled corpus does
+> not exist: the five `spike/corpus/sessions/<short>/LABEL-ME.md` trees are still
+> templates with their `GROUND TRUTH` sections blank, awaiting the owner. The exit gate
+> is built and runs, and because it has nothing to score against it prints
+> **`NOT CERTIFIED`** at **n = 0** rather than a number it cannot compute — it requires
+> n ≥ 52 hand-labelled edges with a one-sided Wilson lower bound clearing 95%
+> (`packages/test-fixtures/src/annotations/score.ts`). Treat parser accuracy on real
+> data as *unmeasured*, not as *proven*. Replay-on-startup is
 > the ingest watcher's first tick over the whole corpus; idempotent whole-session
 > re-ingest replaces the byte-identical-substrate formulation (JSONL never lands in
 > `events_raw` — see [ingest & reconciliation](../architecture/ingest-reconciliation.md)).
@@ -332,8 +348,10 @@ So the confirmed constraints on the table are:
 - a `derived_from_event_id` column tracing the edge back to the normalized event that
   produced it (CD-4) — the same provenance pattern as `events.raw_event_id`.
 
-The migration is now written, so the synthesis era is over. The real DDL (migration 5,
-`apps/server/src/db/migrations.ts`):
+The migration is now written, so the synthesis era is over. The table was introduced by
+migration 5, given endpoint indexes by migration 12, and rebuilt by migration 13 to widen
+the provenance `CHECK`. This is its **current** shape
+(`apps/server/src/db/migrations.ts`):
 
 ```sql
 CREATE TABLE orchestration_edges (
@@ -341,21 +359,34 @@ CREATE TABLE orchestration_edges (
   session_id      TEXT NOT NULL,
   parent_agent_id TEXT NOT NULL,
   child_agent_id  TEXT NOT NULL,
-  source          TEXT NOT NULL CHECK (source IN ('tool_use','directory','task_notification','queue_operation')),
+  source          TEXT NOT NULL CHECK (source IN ('tool_use','directory','task_notification','queue_operation','legacy_explore')),
   instance        TEXT NOT NULL,
   host_id         TEXT NOT NULL,
   created_at      TEXT,
   UNIQUE (session_id, parent_agent_id, child_agent_id)
 );
 CREATE INDEX idx_orchestration_edges_session_id ON orchestration_edges(session_id);
+CREATE INDEX idx_orchestration_edges_parent ON orchestration_edges(parent_agent_id);
+CREATE INDEX idx_orchestration_edges_child ON orchestration_edges(child_agent_id);
 ```
+
+Two later migrations are worth reading as decisions rather than as maintenance.
+**Migration 12** added the two endpoint indexes because the global-DAG query walks edges
+by `parent_agent_id` and `child_agent_id`, and with only the session index present every
+such walk degraded to a full table scan; the table stays correct without them, which is
+exactly why the fix could wait — a dropped index costs speed, never truth.
+**Migration 13** could not simply widen the `CHECK`, because SQLite cannot alter one: it
+creates the new table, copies every row, drops the old one, renames, and recreates all
+three indexes inside a single transaction. The cheaper alternative would have been to let
+the parser emit `legacy_explore` edges under a disguised `tool_use` label, and provenance
+honesty is precisely the property this `CHECK` exists to defend.
 
 Where the built table departs from the CD-4 sketch, and why:
 
 - **`derived_from_event_id` was not built.** CD-4 assumed edges would derive from
   normalized events; as built they derive from the JSONL parser directly (there is no
   Normalizer stage), so per-event provenance would point at nothing. The `source`
-  column carries the provenance instead — which of the four join paths produced the
+  column carries the provenance instead — which of the five join paths produced the
   edge.
 - **The `UNIQUE` logical key is session-scoped** (`session_id, parent_agent_id,
   child_agent_id`) rather than instance-scoped — agent ids are unique per session, and
@@ -364,6 +395,33 @@ Where the built table departs from the CD-4 sketch, and why:
   transaction that upserts agents in topological order; the join is by id, not
   enforced by the engine.
 - `instance` and `host_id` **non-null**: shipped exactly as `WP-D7` demanded.
+
+### The fifth path, and why it is labelled rather than blended
+
+Four of the five provenance values are *structural*: they name a fact the transcript
+states outright — a matched `toolUseId`, a directory containing a child, a task
+notification, a queue operation. The fifth, `legacy_explore`, is not. It exists for
+transcripts written before Claude Code 2.1.71, where a bare `Explore` sidecar carries
+neither a `toolUseId` nor a `spawnDepth`, so every structural anchor misses. The parser
+tries it only after all four structural paths have failed, and only when two independent
+conditions hold at once: the sidecar matches the bare legacy shape by key *presence*, and
+some other progress record names the child's hex id as its own structural top-level
+`agentId`. Nested `data.agentId` values are deliberately not scanned — that direction
+drifts toward the substring joins the parser's own gate #5 forbids.
+
+The consequence is a genuine inference sitting in the same table as four observations, so
+it is given its own label rather than being blended into `tool_use`. Nothing in the read
+path collapses the two: a consumer that wants only observed edges can filter on `source`,
+and a reader looking at a rendered tree can ask where any particular edge came from.
+
+Its status is **implemented but not measured**. The bare-`Explore` shape does not occur
+anywhere in the corpus available to this project, so the path is exercised by fixtures
+only, and its scope stays **PROVISIONAL** until a real pre-2.1.71 transcript ratifies it.
+That distinction also bounds the probe figures reported earlier on this page: they were
+produced by the four structural paths alone, with no `legacy_explore` edge anywhere in
+the set the probe ran over. It does not mean the ≥95% bar was cleared without
+`legacy_explore` — the bar has not been cleared at all, by any path, because it has
+never been scored against a labelled corpus.
 
 ## Roadmap placement
 
@@ -438,9 +496,10 @@ which library wins until that decision is made.
 
 - [Architecture overview](../architecture/overview.md) — the full ingest loop and the
   two invariants (ground-truth tokens, persisted agent hierarchy) this page assumes.
-- [Data model](../architecture/data-model.md) — the annotated schema reference for
-  `agents`, `orchestration_edges`, `sessions`, `events_raw`/`events`, `token_usage`
-  (now carrying the real migration DDL for all seven built tables).
+- [Data model](../architecture/data-model.md) — the annotated schema reference carrying
+  the real migration DDL for all nine built tables: `events_raw`, `events`, `sessions`,
+  `agents`, `orchestration_edges`, `token_usage`, `model_pricing`, `ingest_checkpoints`
+  and the migration runner's own `schema_version` ledger.
 - [Ingest & reconciliation](../architecture/ingest-reconciliation.md) — the as-built
   ingest pipeline, and the CD-1 ingest-primacy decision the edge derivation rests on.
 - [Phase-0 corpus probe](../../analysis/phase0-probe.md) — the empirical CD-1 verdict

@@ -1,8 +1,9 @@
 # FAQ
 
-This page answers the seven questions people ask first about agenthropic: whether it's
-cloud software, whether it calls home, what it costs, where your data lives, why it
-isn't a fork of an existing tool, whether it spans machines, and how alerts reach you.
+This page answers the eight questions people ask first about agenthropic: whether it's
+cloud software, whether it calls home, what it costs, where your data lives, whether you
+have to install its hooks, why it isn't a fork of an existing tool, whether it spans
+machines, and how alerts reach you.
 **Short version:** agenthropic is a self-hosted, local-first dashboard that binds to
 `127.0.0.1` on your own machine, never sends telemetry anywhere, has no cloud bill
 because there is no cloud tier, and the only thing it ever sends outbound is an alert
@@ -12,22 +13,43 @@ Every answer below links to the deeper reference page for the full detail.
 > **Update — 2026-07 (as built).** This page was written before any code existed. Four
 > corrections, and one of them changes an answer above:
 >
-> - **agenthropic is no longer pre-code.** Implementation began **2026-07-11**. Running
->   today: the loopback-bound, token-gated server; SQLite/WAL with migrations; JSONL ingest
->   with replay-on-startup; the persisted subagent DAG; the cost engine; the hook receiver;
->   the SSE hub; the read API; and all four dashboard views. **72 test files / 879 tests
->   pass**, coverage gated >90% in every shipped package.
+> - **agenthropic is no longer pre-code — and it is also not released.** Implementation
+>   began **2026-07-11**. Running today: the loopback-bound, token-gated server; SQLite/WAL
+>   with thirteen migrations and a daily backup timer; JSONL ingest with replay-on-startup
+>   and tail-follow polling that re-reads only new bytes; the persisted subagent DAG; the
+>   cost engine; the hook receiver and its installer; the status watchdog that ages an
+>   unobserved agent to `unknown`; the SSE hub; the read API; and all four dashboard views
+>   plus a per-session cost-analysis panel. There is still no tag and no published package —
+>   the workspace is `private: true` at `0.1.0`, so a checkout is the only way to run it.
+>   Test figures, re-measured **2026-08-15**: **106 test files / 1554 tests**, with **100%
+>   statements, branches, functions and lines** enforced in **all five** packages. Two
+>   things that figure does not mean: the thresholds fail the CI run but do not yet *block a
+>   merge* (that needs a branch-protection rule on `main`, an owner action, still unset at
+>   the last recorded check), and coverage of the code is not accuracy of the output — the
+>   hierarchy-accuracy exit gate still reports **NOT CERTIFIED at n = 0** because no session
+>   has been hand-labeled.
 > - **"The only outbound traffic is a Telegram alert" is now simply "no outbound traffic."**
 >   Alerting was not built and may never be: it is v2.0, entered only via **KC-5**, and the
 >   operator-alerts API and UI were **cut outright**. The running server **makes no
 >   outbound network request of any kind**. Read every "Phase 5, not yet built" below as
 >   "not built, not scheduled, possibly never."
-> - **Retention is still not implemented.** Redaction *is* (`hooks/redact.ts`, applied at
->   the hook ingest boundary), but the retention TTL is blocked on unresolved policy
->   decisions. Nothing prunes the database today; plan disk accordingly.
-> - **Still no benchmarks.** No CPU/RAM/disk footprint has been measured even now, and the
->   v1.0 usability target ("<30s to understand a session") is **unmeasured** too. Where this
->   page says a number does not exist, that is still true.
+> - **Retention is half-built: mechanism yes, policy no.** Redaction *is* implemented
+>   (`apps/server/src/hooks/redact.ts`, applied at the hook ingest boundary, before the
+>   idempotency key is computed). The retention *mechanism* — pruning, an audit journal,
+>   backup-file expiry, a runner — is implemented and tested as well, but the *policy*,
+>   meaning how many days of what is kept, is deliberately unset pending the OPEN-1/2/3
+>   decisions. The shipped default is a no-op that opens no transaction and reads no row,
+>   and nothing starts the runner at boot. So nothing prunes the database today; plan disk
+>   accordingly.
+> - **Still no footprint numbers.** No CPU/RAM/disk footprint has been measured even now,
+>   and the v1.0 usability target ("<30s to understand a session") is **unmeasured** too.
+>   One narrow exception, so that "no benchmarks" is not read wider than it is true:
+>   `apps/server/bench/corpus-scale.ts` measures replay and query latency against a
+>   **synthesised** corpus in a throwaway directory — it never reads the real
+>   `~/.claude/projects`, its volume figures are inflated fixtures rather than observed
+>   sessions, and it reports nothing about CPU, memory or disk. Its one published result
+>   (a summary query going from 627 ms to 9 ms) is a before/after on that synthetic
+>   corpus, not a claim about your machine.
 >
 > Two standing caveats: the Phase-0 spike numbers remain **PROVISIONAL** until ratified
 > against a hand-labeled corpus, and the roadmap's kill checkpoints **KC-0 and KC-1 both
@@ -42,8 +64,9 @@ Every answer below links to the deeper reference page for the full detail.
 |---|---|
 | Cloud / SaaS? | No — self-hosted, local-first. Runs on your own machine. |
 | Phones home? | No telemetry egress. **As built: no outbound traffic at all** — the alert sink was never built, so the server makes no outbound network request of any kind. |
-| Cost to run? | No cloud bill — it's a local process + SQLite on hardware you already own. **Still no published CPU/RAM/disk figures**: nothing has been benchmarked, before or since the code was written. |
-| Data safety / location? | Local SQLite (WAL) on your machine; tokens read from your own `~/.claude/projects/*.jsonl`; auth-gated writes; nothing leaves the box by default. *(As built: all four hold. Redaction is live; **retention is not** — nothing prunes the database yet.)* |
+| Cost to run? | No cloud bill — it's a local process + SQLite on hardware you already own. **Still no published CPU/RAM/disk figures.** One benchmark does exist (`apps/server/bench/corpus-scale.ts`), but it measures query and ingest *latency* against a **synthetic** corpus, not resource footprint on a real one — so it answers a different question than this row asks. |
+| Data safety / location? | Local SQLite (WAL) on your machine; tokens read from your own `~/.claude/projects/*.jsonl`; auth-gated writes; nothing leaves the box by default. *(As built: all four hold. Redaction is live; retention is **mechanism-built, policy-unset** — the default is a no-op, so nothing prunes the database yet.)* |
+| Do I have to install the hooks? | Optional, but they are the only signal that an agent *stopped*. Without them nothing ever reads `completed` — agents age `working` → `unknown`. `node hooks/install.mjs --out <settings.json>` writes them; `--dry-run` shows the result first. |
 | Why not fork simple10 / hoangsonww? | Neither ships the actual moat; greenfield lets us take the good parts of each without inheriting either's baggage (one's non-persisted edges, the other's RCE). *(Judged by reading their source in 2026-07 — neither was installed and run.)* |
 | Works across machines? | Not yet — single-host by design for now; the schema is hedged (`instance`/`host_id`) so fleet aggregation doesn't require a rewrite later. *(As built: the hedge is on `orchestration_edges` only, not every table.)* |
 | How do alerts reach me? | **They don't — nothing is built.** Telegram to a bot you own was the design; it is now v2.0 behind KC-5, may never start, and its API and UI were cut. Alerts reach you only as the dashboard UI updating over SSE. |
@@ -133,23 +156,30 @@ routing vs top-tier pricing) is one of the two features that make up the moat pr
 folded into Phase 3's cost engine (the reconciled build plan supersedes `DESIGN.md`'s
 earlier standalone-Phase-4 sketch — see [the cost model](../architecture/cost-model.md)).
 
-No CPU/RAM/disk footprint has been benchmarked yet — the project is pre-code
-(bootstrap phase), so there is no measured number to quote here. Storage growth over
-time is bounded by a retention TTL + payload-redaction policy planned from Phase 1,
-not yet implemented. See [the cost model](../architecture/cost-model.md) for the
+No CPU/RAM/disk footprint has been benchmarked — when this answer was first written the
+project was still pre-code (bootstrap phase), so there was no measured number to quote
+here. Storage growth over time was to be bounded by a retention TTL + payload-redaction
+policy planned from Phase 1. See [the cost model](../architecture/cost-model.md) for the
 dollar-cost/delegation-savings design and [backup & restore](../operations/backup-restore.md)
 for retention.
 
-> **As built: the code exists, the numbers still don't.** The "pre-code" reason is stale —
-> the system has been running since 2026-07 — but the conclusion is unchanged: **no
-> CPU/RAM/disk footprint has been measured**, so there is still no figure to quote. Treat
-> any expectation you form as a guess.
+> **As built: the code exists, the footprint numbers still don't.** The "pre-code" reason
+> is stale — the system has been running since 2026-07 — but the conclusion is unchanged:
+> **no CPU/RAM/disk footprint has been measured**, so there is still no figure to quote.
+> Treat any expectation you form as a guess. The corpus-scale benchmark that does exist
+> (`apps/server/bench/corpus-scale.ts`) measures latency on a synthetic corpus and says
+> nothing about CPU, memory or disk.
 >
 > The storage sentence needs a sharper correction. **Payload redaction is implemented**
-> (`hooks/redact.ts`, applied at the hook ingest boundary). **The retention TTL is not** —
-> the work package is open and blocked on unresolved policy decisions. So storage growth is
-> currently **unbounded**: nothing prunes the database. On a single developer machine this
-> is small, but it is not capped by anything, and no one has measured how fast it grows.
+> (`apps/server/src/hooks/redact.ts`, applied at the hook ingest boundary). **The retention
+> TTL is built but switched off.** The mechanism — pruning, an audit journal, backup-file
+> expiry, a runner — exists and is tested; the policy it would enforce does not, because
+> deciding how a TTL coexists with an append-only substrate is an owner decision (OPEN-1)
+> and a scheduled deleter has no business existing before the rule that tells it what to
+> delete is signed. The shipped default therefore deletes nothing and nothing starts the
+> runner at boot. So storage growth is currently **unbounded**: nothing prunes the
+> database. On a single developer machine this is small, but it is not capped by anything,
+> and no one has measured how fast it grows.
 
 ## Is my data safe? Where does it live?
 
@@ -174,9 +204,11 @@ leaves that machine by default.** Concretely:
 - **Retention:** a retention TTL and payload-redaction rule for stored tool payloads
   is planned from Phase 1 (not yet implemented — this project has no code yet).
   *(As built: half done, and the "no code yet" reason is stale. **Payload redaction is
-  implemented** at the hook ingest boundary (`hooks/redact.ts`). **The retention TTL is
-  not implemented** — that work package is open and blocked on unresolved policy
-  decisions, so nothing currently expires or prunes stored data.)*
+  implemented** at the hook ingest boundary (`apps/server/src/hooks/redact.ts`). **The
+  retention TTL is built but unconfigured** — the pruning mechanism, its audit journal and
+  its runner all exist and are tested, but the policy is unset pending the OPEN-1/2/3
+  decisions, the default is a no-op and no runner starts at boot, so nothing currently
+  expires or prunes stored data.)*
 - **Remote access, if you ever want it, is tunnel-only** — SSH port-forward or a
   Tailscale tunnel (e.g. `--host <tailscale-host>`), never a reverse proxy exposing
   the port publicly.
@@ -184,6 +216,46 @@ leaves that machine by default.** Concretely:
 Full detail: [security model](../security/model.md) (the flagship security page),
 [threat model](../security/threat-model.md) (what every audited rival got wrong and
 how agenthropic structurally avoids it), [backup & restore](../operations/backup-restore.md).
+
+## Do I have to install the hooks?
+
+**No — but if you skip them, nothing in the dashboard will ever say `completed`.** That
+is worth understanding before you decide, because it is a design decision rather than a
+missing feature.
+
+Reading a transcript proves that activity *happened*. It never proves that it *stopped*:
+a JSONL file that has stopped growing is indistinguishable from one whose next line has
+not been flushed yet. So the ingest path only ever writes `working`. The terminal signal
+has to come from Claude Code itself, and hooks are how Claude Code offers it —
+`SubagentStop` is what marks a subagent `completed`, and `Stop` marks a session's main
+agent `waiting` (not `completed`, because `Stop` fires at the end of every *turn*, so it
+means "idle right now"). Without those events an agent ages `working` → `unknown` when
+the watchdog window elapses (`DASHBOARD_WATCHDOG_MINUTES`, default 10), and `unknown` is
+the honest word: the dashboard declines to claim an ending nobody observed.
+
+Installing them is one command:
+
+```sh
+node hooks/install.mjs --out /path/to/project/.claude/settings.json
+```
+
+It writes four fail-silent `curl` hooks — `UserPromptSubmit`, `Stop`, `SubagentStop`,
+`PreCompact` — that POST their stdin JSON to the loopback ingest endpoint. The settings
+file is backed up before it is touched and unrelated keys are preserved; `--dry-run`
+prints the result without writing anything and `--remove` strips the agenthropic entries
+again. The auth token never enters any process's argv: the generated command hands curl
+the *name* of the environment variable and curl expands it itself at fire time, which
+needs curl ≥ 8.3.0 — on an older curl the hook delivers nothing rather than leaking. A
+dashboard that is down or unreachable never blocks your session either; the command runs
+`--silent --fail --max-time 3` with a trailing `|| true`.
+
+What hooks explicitly cannot do is change the shape of the graph. A hook event may move
+an existing agent's `status` and nothing else — it can never create, delete or re-parent
+a node in the DAG. Structure comes from the JSONL alone, which is why an outage in the
+hook path costs you liveness, not history.
+
+Details: [hooks installer](../usage/hooks-installer.md) and
+[hook ingestion](../architecture/hooks.md).
 
 ## Why not just fork simple10 or hoangsonww?
 

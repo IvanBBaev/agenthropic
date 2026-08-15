@@ -55,29 +55,92 @@ snapshot in §4–§5.
 > yourself. **Newest truth lives in [`../../DONE.md`](../../DONE.md) Milestone 1,
 > [`../../TODO.md`](../../TODO.md) and `WORKLOG.md`** — prefer them over §4–§5 below.
 
+> **⚠️ Update — 2026-08-15 (the current-truth snapshot; supersedes the 07-30 numbers).**
+>
+> 1. **v1.0 is code-complete; what remains is not code.** Four feature commits are pushed
+>    to `main`: `9b6c6b3` (waves 1–4), `2f8d103` (hardening waves), `71f6878` (the
+>    review-remediation waves — ingest correctness, O(new bytes) polling, boot honesty)
+>    and `ac5d53b` (ingest-side status reconciliations onto the SSE stream;
+>    cross-session usage collisions counted on `/api/health`).
+>    Measured on the 2026-08-15 working tree, not estimated: typecheck · lint · prettier ·
+>    the no-spawner gate (235 files) · the web production build · the license scan
+>    (412 packages) all green, and **106 test files / 1554 tests with 100% statements,
+>    branches, functions and lines in all five packages**, with **zero coverage-ignore
+>    pragmas** in `apps/server/src`. The coverage
+>    bar in §4–§5 below reads ">90%"; that was the historical gate and it has since been
+>    pinned to 100 in every package, with guard tests proving the figure cannot be faked —
+>    though not uniformly: `apps/web` asserts only the pragma sweep, because it
+>    legitimately carries a coverage `exclude`, so widening that list or lowering its four
+>    thresholds would pass CI silently. See
+>    [`../site/contributing/testing.md`](../site/contributing/testing.md).
+> 2. **All 14 items of the parser gate are IMPLEMENTED — but "implemented" is not
+>    "measured".** #7 (legacy bare-`Explore`) and N1 (`<task-notification>`) fire **zero**
+>    times on the real corpus and exist only as defensive fallbacks exercised by synthetic
+>    fixtures; #11 is amended (sibling order is wave-partial, never total). Any future
+>    session reporting "14/14 green" is overstating the corpus evidence. See
+>    [`parser-spec.md`](parser-spec.md) §3.
+> 3. **The five remaining v1.0 blockers are all Ivan's, and none is a programming task:**
+>    branch protection on `main` (without it CD-7's "coverage blocks merges" is not
+>    physically enforced); **enabling GitHub Pages** (Settings → Pages → Source: "GitHub
+>    Actions", or `gh api -X POST repos/IvanBBaev/agenthropic/pages -f build_type=workflow`
+>    with an admin-scoped token); the **LABEL-ME** corpus (≥52 hand-labelled agents —
+>    until then the hierarchy ≥95% gate reports `NOT CERTIFIED` and every Phase-0 number
+>    stays **PROVISIONAL**); the **unmeasured** "<30s to understand a session" claim; and
+>    the retention policy values (OPEN-1/2/3 — the mechanism is built and tested, the
+>    default `NO_RETENTION` is a byte-identical no-op).
+>    **On Pages, an earlier revision of this snapshot was wrong** and said the workflow
+>    "should now self-enable on push" because it passes `enablement: true` to
+>    `configure-pages`. It cannot. `pages: write` authorises *deploying* to an existing
+>    Pages site, never *creating* one; creation needs repo administration rights that the
+>    default `GITHUB_TOKEN` deliberately lacks. Three runs died in `configure-pages` to
+>    prove it: `30528892265` (`Get Pages site failed … Not Found`), then `31318246506`
+>    and `31879212583` (`Create Pages site failed. Error: Resource not accessible by
+>    integration`). It is an owner click, not an automation gap.
+> 4. **KC-2 (2026-09-14, "Phases 1–2 complete") is met well ahead of its window.** The
+>    next real checkpoint is **KC-3, 2026-10-12**, and it turns on items in (3) that no
+>    agent can perform. **KC-4 (v1.0, 2026-12-01) is unchanged and immovable.**
+> 5. **The public documentation corpus was re-synced with the code on 2026-08-15** (six
+>    path-disjoint lanes plus a link check and an adversarial honesty pass). Where a doc
+>    and the code now disagree, the code is the truth and the disagreement is a bug in
+>    the doc — report it.
+>
+> Unchanged and still binding: every security invariant, the analysis freeze (9 of 9),
+> the PROVISIONAL status of all unratified numbers, and the rules that nothing is
+> committed, pushed, archived or deleted without an explicit owner instruction.
+
 ---
 
 ## 1. What this project is
 
-**agenthropic** — a planned self-hosted, local-first dashboard for observing Claude Code
+**agenthropic** — a self-hosted, local-first dashboard for observing Claude Code
 agent/subagent activity on Ivan Baev's Mac Mini M4. Differentiator (the "moat", per the
 ruling strategy memo): **persistent cross-session subagent DAG + dollar-accurate cost
 attribution** — only those two. Greenfield clean build (ports & adapters, in the spirit
 of Ivan's `kiko` project), decided over forking any of six audited rival dashboards.
 
-**Hard facts about the current repository:**
-- **Zero application code. Zero git commits** (`main` has no commits; everything is
+**Facts about the repository as it stood on 2026-07-06, kept as the baseline this
+document was written against.** Three of the four are superseded — read them as the
+starting state, not as today's, and see the 2026-08-15 banner above for what is true now:
+
+- ~~**Zero application code. Zero git commits**~~ (`main` had no commits; everything was
   untracked working-tree files). 77 markdown files, ~144k words (re-measured
-  2026-07-06 — roadmap §1).
+  2026-07-06 — roadmap §1). **Superseded:** four feature commits are pushed, the
+  application is code-complete, and the no-spawner gate scans 235 source files.
 - The **schedule of record** is [`roadmap-v1-v2-2026-07-06.md`](roadmap-v1-v2-2026-07-06.md):
   kill checkpoints **KC-0…KC-5 with default-death** — Gate A signs by **2026-07-13**
   (KC-0) or the project archives; WP-S7 verdict due **2026-07-27** (KC-1); **v1.0 hard
   date 2026-12-01** (KC-4, immovable); v2.0 (alerts) entered only via KC-5 (earned by
   real daily use). **Analysis is frozen** (roadmap §8 — 9 analyses of 9; a request for
-  #10 is declined and answered with the KC table).
-- No production code may be written until **Gate A** is signed and the Phase-0 spike
-  returns **GO** (`WP-S7`) — see §5. This is decision CD-8 and it is still binding.
-- The one user is Ivan. The app will bind to `127.0.0.1` only, forever.
+  #10 is declined and answered with the KC table). **Still binding**, with the caveat in
+  the banner: KC-0 and KC-1 both passed unmet and work continued only under the owner
+  overrides recorded verbatim in [`TODO.md`](../../TODO.md).
+- ~~No production code may be written until **Gate A** is signed and the Phase-0 spike
+  returns **GO** (`WP-S7`)~~ — decision CD-8. **Superseded 2026-07-11 by an explicit
+  owner override**, recorded in `TODO.md`. The override moved the build; it did not
+  ratify a single number, so everything Phase-0 derived is still **PROVISIONAL**.
+- The one user is Ivan. The app binds to `127.0.0.1` only, forever. **Unchanged**, and
+  now enforced twice over — a `HOST` constant with no configuration path plus a
+  post-listen check that terminates the process.
 
 ## 2. Complete timeline (what happened, in order)
 

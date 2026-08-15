@@ -28,19 +28,30 @@ doesn't change the "build" verdict.
 >
 > - **The moat proper is built and proven.** The persisted per-instance DAG (`agents` +
 >   `orchestration_edges`, the latter carrying `instance` and `host_id` as `NOT NULL`) and
->   the cost engine (compaction repricing + delegation savings) run today. Three **P0 proofs are
->   green and merge-blocking**: Σ `token_usage` equals the JSONL, verified by an
->   independently written reader inside the test so a parser bug cannot make its own proof
->   pass; a double replay produces a **byte-identical** database; and the DAG **rebuilds
->   from JSONL alone** after a simulated outage, with hooks separately proven
+>   the cost engine (compaction repricing + delegation savings) run today. Three **P0 proofs
+>   run green in CI** on every push and pull request: Σ `token_usage` equals the JSONL,
+>   verified by an independently written reader inside the test so a parser bug cannot make
+>   its own proof pass; a double replay produces a **byte-identical** database; and the DAG
+>   **rebuilds from JSONL alone** after a simulated outage, with hooks separately proven
 >   liveness-only — appending hook events leaves the DAG dump unchanged. A 12-scenario
->   negative catalogue passes alongside them. Those three proofs are the whole of what is
->   proven; do not read them as a general correctness guarantee.
+>   negative catalogue passes alongside them. Two limits on that sentence: *merge-blocking*
+>   is a word this page has to stop using, because blocking a merge takes a
+>   branch-protection rule on `main` and that rule is an owner action still unset at the
+>   last recorded check; and those three proofs are the whole of what is proven — do not
+>   read them as a general correctness guarantee. In particular, proving the DAG rebuilds
+>   deterministically is not the same as proving it is *right*: the hierarchy-accuracy exit
+>   gate reports **NOT CERTIFIED at n = 0**, because no session has been hand-labeled.
 > - **LB1 is answered in code, not just on paper.** §2.1 below calls "can the DAG be
 >   rebuilt from JSONL alone?" the #1 architectural unknown. It is now a passing test.
 >   The parser walks both on-disk layouts, keys on `Agent`/`Workflow`, sums tokens from
 >   child transcripts, and joins parents to children over four structural paths
->   (`tool_use`, `directory`, `queue_operation`, `task_notification`).
+>   (`tool_use`, `directory`, `queue_operation`, `task_notification`) plus a fifth,
+>   deliberately separate provenance — `legacy_explore`, for the pre-2.1.71 bare-`Explore`
+>   sidecars whose parent is inferred rather than observed. Every edge records which of the
+>   five it came from, and the storage-layer `CHECK` constraint closes the set, so a sixth
+>   join path cannot be introduced by a parser edit alone: it needs a migration, which is a
+>   deliberate speed bump on exactly the change that would otherwise dilute provenance
+>   quietly.
 > - **Two of the five market-gap features are not built.** Telegram alerting (§2.3) is
 >   **v2.0, entered only via KC-5, and may never start** — the operator-alerts API and UI
 >   were cut outright, and the server makes no outbound network request of any kind.
@@ -53,6 +64,10 @@ doesn't change the "build" verdict.
 >   until ratified against a hand-labeled corpus. The "no production code ships before the
 >   formal spike" promise in §2.1's blockquote **did not hold**: implementation began
 >   2026-07-11 by explicit owner override of that gate.
+>
+> - **"Built" is not "released."** There is no tag and no published package — the workspace
+>   is `private: true` at version `0.1.0`, so a checkout is the only way to run any of it.
+>   Nothing on this page describes a download.
 >
 > The argument below is kept as the design record, with `*(As built: … )*` notes where a
 > specific claim resolved differently.
@@ -158,7 +173,9 @@ written).
 *(As built: shipped in migration 5, with a `source` column constrained to the four
 structural join paths — `tool_use`, `directory`, `task_notification`, `queue_operation` —
 and `UNIQUE (session_id, parent_agent_id, child_agent_id)` so a replay cannot duplicate an
-edge. It is queried, never reconstructed, exactly as described.)*
+edge. Migration 13 widened that `CHECK` to a fifth value, `legacy_explore`, kept distinct
+so an inferred parent never masquerades as an observed one. It is queried, never
+reconstructed, exactly as described.)*
 
 This item is also the single biggest execution risk: whether the DAG can be **rebuilt
 from `~/.claude/projects/*.jsonl` alone** after an outage is LB1, the #1 architectural
@@ -170,9 +187,9 @@ it on the paired-capture corpus rather than deciding it from scratch
 CD-1 decision this gates.
 
 > **As built, LB1 is settled by a test, not by a confidence score.** The DAG is rebuilt
-> from JSONL alone after a simulated outage in a merge-blocking P0 proof, and hooks are
-> separately proven liveness-only — replaying with hook events appended leaves the DAG dump
-> byte-identical. The `85/100` figure above is a **PROVISIONAL estimate from the probe**,
+> from JSONL alone after a simulated outage in a P0 proof that runs green in CI, and hooks
+> are separately proven liveness-only — replaying with hook events appended leaves the DAG
+> dump byte-identical. The `85/100` figure above is a **PROVISIONAL estimate from the probe**,
 > not a measurement of the shipped parser, and stays provisional until the parser is
 > ratified against a hand-labeled corpus.
 
@@ -294,11 +311,17 @@ non-retrofittable pieces (the persisted per-instance DAG and the security postur
 one roof, with retention/redaction policy from day one (concept-analysis-v2 CD-10). See
 [operations: backup & restore](../operations/backup-restore.md).
 
-> **As built: persistence shipped, the policy half only partly.** SQLite in WAL mode with
-> a migration runner is live, and **redaction is implemented** (`hooks/redact.ts`, applied at
-> the hook ingest boundary). **Retention is not implemented** — WP-D10 is still open and
-> stays blocked on the unresolved open decisions OPEN-1/2/3. "Retention/redaction from day
-> one" is therefore half true; say redaction, not retention.
+> **As built: persistence shipped, the policy half only partly.** SQLite in WAL mode with a
+> migration runner is live, and **redaction is implemented**
+> (`apps/server/src/hooks/redact.ts`, applied at the hook ingest boundary, before the
+> idempotency key is computed, so a redelivered event redacts identically and still
+> dedupes). **Retention is built but switched off.** The mechanism — pruning, an audit
+> journal, backup-file expiry, a runner — exists and is tested; the policy it would enforce
+> does not, because WP-D10 stays blocked on the unresolved open decisions OPEN-1/2/3. That
+> split is deliberate rather than unfinished: a scheduled deleter must not exist before the
+> rule telling it what to delete has been signed, so the shipped default deletes nothing,
+> short-circuits without opening a transaction, and is never started at boot. "Retention/
+> redaction from day one" is therefore half true; say redaction, not retention.
 
 ## 3. The corrected ranking: `simple10` #1, not `hoangsonww`
 
@@ -441,8 +464,8 @@ enforced by a CI provenance/license scan (CD-9) — see
 > gate:licenses` in `.github/workflows/ci.yml`. In practice it has had little to enforce —
 > **nothing was copied from `hoangsonww` at all**, because the only artifact scheduled from
 > it was the Telegram provider (§2.3), which was never built. The `cast` items were
-> clean-room reimplemented as required. The repository's own `LICENSE` (MIT) exists but is
-> **not yet tracked in git** — an owner action, not a code one.
+> clean-room reimplemented as required. The repository's own `LICENSE` (MIT) is present and
+> tracked — an earlier revision of this note said it was untracked, which is no longer true.
 
 ## 6. Where the moat lands in the roadmap
 

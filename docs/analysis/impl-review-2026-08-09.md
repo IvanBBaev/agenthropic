@@ -39,6 +39,75 @@ un-sinks the operator's actual database today and prevents the divergence class.
 
 ---
 
+## Disposition since this review (amendment, 2026-08-15)
+
+This report is a **dated record of what the tree looked like on 2026-08-09**, and the
+body below is left exactly as written — a review that quietly edits its own
+findings once they are fixed stops being evidence of anything. What follows is
+the delta: the tree has since moved, and a reader who acts on the findings
+without this section will chase work that is already done.
+
+The method here is narrow on purpose. A finding is marked **closed** only where
+the code that implements the fix **names the finding** in a comment and the
+mechanism was read and matched against the *Fix:* line recorded below — fourteen
+of the twenty-seven weaknesses carry such a reference. Where a fix landed partly,
+or where the shipped code addresses one half of a two-part finding, it says
+**partial** and names which half. Everything else is marked **not re-verified**:
+that is not a claim it is still broken, it is a statement that nobody looked
+again. The Low block was not re-reviewed at all.
+
+Both High findings are closed:
+
+- **H-1** — migration **11** (`model-pricing-seed-convergence`) rewrites the seed
+  rows, and `migrationChecksum` now hashes each migration's content into
+  `schema_version` and re-verifies it on every start, so an in-place edit of an
+  applied migration fails loudly instead of diverging in silence
+  (`apps/server/src/db/migrations.ts`). One thing this amendment **cannot**
+  assert: whether any particular operator database has actually been migrated. The
+  repair exists in code; whether it has run on `data/agenthropic.db` is a runtime
+  fact, not a tree fact.
+- **H-2** — the composition root wires `onWarning` into a rate-limited
+  `SkipReporter` (`apps/server/src/index.ts`), and its cumulative per-reason
+  counters surface as `ingestSkips` on `/api/health`. A file the ingest declines
+  to read is now reported rather than forgotten; parser-spec §4.3 documents the
+  first consumer of that seam.
+
+| # | Status (2026-08-15) | What changed |
+|---|---|---|
+| H-1 | closed | Migration 11 + per-migration content checksum verified on start |
+| H-2 | closed | `SkipReporter` wired to `onWarning`; `/api/health.ingestSkips` |
+| M-1 | closed | Gate #7 defensive fallback with distinct `legacy_explore` provenance, CHECK-constrained by migration 13. Scope stays PROVISIONAL and the shape is **unwitnessed in the real corpus** — see parser-spec §3 |
+| M-2 | closed | Watcher resolves pricing per tick and resets attempts when the pricing content changes |
+| M-4 | closed | Restore removes a pre-existing `-wal`/`-shm` before opening |
+| M-5 | closed | `usage_by_agent` restricted to the selected agent id-list; migration 12 adds the edge endpoint indexes |
+| M-6 | closed | `SERVER_EVENT_TYPES` moved into `packages/shared` and imported by both sides |
+| M-7 | closed | Root-scope `setErrorHandler` with 5xx message suppression |
+| M-8 | closed | Top-burners table shipped (`apps/web/src/views/top-burners.ts`) |
+| M-9 | partial | Today/this-week windows shipped (`cost-windows.ts`); an **aggregate delegation-saved figure was not verified** as existing |
+| M-10 | open, acknowledged in code | `CostView.tsx` names M-10 and records that the fix is a shared clock tick, not a per-view workaround |
+| M-11 | closed | Argv-free curl delivery (`--variable` / `--expand-header`), curl ≥ 8.3.0 floor, fail-closed below it |
+| M-12 | closed | A first-ingested-session ownership rule, with skipped messages counted rather than silently dropped |
+| M-13 | closed | Persisted-slug hint lets a late `SubagentStop` reconcile against the agent row |
+| M-14 | closed | Duplicate session uuid across slugs recorded as a `duplicate-session` skip — parser-spec §4.3 |
+| M-15 | partial | A tail-read path and a `lastTickDurationMs` health field shipped; **whether the synchronous full-fingerprint pass is gone was not verified** |
+| M-16 | closed | Boot ingest moved after listen; `/api/health.ingest` reports `replaying` / `idle` |
+| M-18 | partial | `crossSessionUsageCollisions` exposed on health under this item's number; the endpoint's re-enumeration cost was **not re-measured** |
+| M-20 | closed | Daily backups wired in the composition root, not only as a manual drill |
+| M-22 | partial | CI now runs a **web production build**; the production *run* path was not verified |
+| M-23 | superseded | All five packages now pin 100% and all five carry an anti-pragma guard (four named `coverage-honesty.test.ts`; `apps/web`'s is the `coverage honesty` block of `test/honesty.test.tsx`) |
+| M-3, M-17, M-19, M-21 | not re-verified | No code in the tree names them |
+| M-24 | **still open, owner-only** | The hierarchy-accuracy gate remains **unmeasured**: the LABEL-ME hand-labelled corpus does not exist, so the ≥95% bar reports **NOT CERTIFIED** and every Phase-0 number stays PROVISIONAL. No agent can close this — producing ground truth is Ivan's act |
+| M-25 | **still open, owner-only** | Branch protection on `main` is still not enabled, so no gate is merge-blocking; the KC calendar's owner-only acts are unchanged |
+| Low (all) | not re-verified | The block was not re-reviewed |
+
+The two items at the bottom of that table are the ones worth re-reading. Everything
+above them was work an agent could do and did; M-24 and M-25 are the findings that
+**cannot be closed by writing code**, and they are precisely the ones that gate the
+project's honesty claims — an uncertified accuracy number and an unenforced quality
+bar. Fourteen fixes have not moved them by one inch.
+
+---
+
 ## Strengths
 
 Merged and deduplicated across the ten dimensions. Every claim below was cited
@@ -121,6 +190,12 @@ against code by the dimension reviews.
   (`compaction.ts:92-114`; `waves.ts:44-53`).
 - The WP-IN5 adapter reuses the parser's own classifier, enforcing the
   four-artifact-types MUST by construction (`disk-substrate.ts:212-218`).
+
+The heading's "13 of the 14" was true on the review date and is kept for the
+record; the fourteenth (gate #7) landed afterwards — see M-1 in the disposition
+table. The count that replaced it is not "14 of 14" either: parser-spec §3 now
+separates **implemented** (14) from **exercised by the real corpus** (11), and
+gate #7 is one of the two shapes that exist only against fixtures.
 
 ### 4. Ingest is fail-safe in the correct direction: extra work, never wrong data
 

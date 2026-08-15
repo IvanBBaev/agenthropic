@@ -1,6 +1,6 @@
 # ADR-0007: CD-5 — Transport is SSE with same-origin enforcement
 
-- **Status:** accepted — **built and holding** as of 2026-07-30 (one open item: `Last-Event-ID` resumability, see the as-built update below)
+- **Status:** accepted — **built and holding**, re-checked 2026-08-15 (one open item: `Last-Event-ID` resumability; the origin and auth tests are CI-failing rather than merge-blocking — see the as-built updates below)
 - **Date:** 2026-07-03
 - **Deciders:** Ivan Baev (project owner), via the six-lens concept-analysis-v2 workflow
 - **Source:** [`concept-analysis-v2.md` §3, row CD-5](../../../analysis/concept-analysis-v2.md#3-canonical-decision-register-v2)
@@ -32,6 +32,26 @@ The server emits a `retry:` directive so a dropped client reconnects, but there 
 than being caught up on frames it missed. For a liveness channel whose durable facts
 all live in the database this is a small gap, but it is a gap, not a completed
 criterion.
+
+## As-built update — 2026-08-15
+
+**Verdict: holds, with one word corrected.** SSE is still the only realtime transport in
+the tree, no WebSocket dependency has appeared, and the security gate would fail the build
+if one did ([ADR-0009](adr-cd-7-security-and-coverage-boundary.md)). The negative catalogue
+still asserts a 403 on a foreign `Origin` **with and without** a valid token, and
+byte-identical 401 bodies across the four wrong-token shapes, so neither check leaks an
+oracle.
+
+Calling those assertions **merge-blocking** is the part that was wrong. They run in CI on
+every push and pull request and fail the run, but `main` is not branch-protected
+(`404 Branch not protected`, verified 2026-08-15), so a red run is a signal rather than a
+withheld merge — see [the standing correction](README.md#a-standing-correction-merge-blocking).
+
+The `Last-Event-ID` gap is unchanged: the server still emits only a `retry:` directive, a
+reconnecting client still resubscribes to the live feed instead of being caught up on the
+frames it missed, and `WP-U1`'s "resumable" is still not met. It has been open long enough
+now to be worth naming as a decision rather than an oversight — nobody has chosen to build
+replay, and nobody has chosen to drop the word from the work package either.
 
 ## Context
 

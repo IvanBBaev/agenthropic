@@ -2,9 +2,9 @@
 
 This page is the QA reference for agenthropic: how the **golden real-session fixture
 corpus** is captured, promoted, and labeled with ground truth; the **three P0
-release-blocker tests** that must be green and merge-blocking before Phase 3 is
-considered done; the **12-scenario negative-test catalogue**; and the **merge-blocking
->90% coverage gate** that is live from Phase 1, not a hardening pass bolted on at the
+release-blocker tests** that must be green before Phase 3 is considered done; the
+**12-scenario negative-test catalogue**; and the **coverage gate** — specified at >90%,
+shipped at 100 — that is live from Phase 1, not a hardening pass bolted on at the
 end. The key takeaway up front: this project treats test infrastructure as a first-class,
 phase-spanning engineering problem, not overhead — "you cannot unit-test 'the
 dashboard'; the four real units are ingest correctness, tree correctness, cost
@@ -16,46 +16,81 @@ high-coverage tests of synthetic happy-paths (**false safety**)" (concept-analys
 and the quantified acceptance criteria in
 [`concept-analysis-v2.md`](../../analysis/concept-analysis-v2.md) §6.
 
-> **Update — 2026-07 (as built).** This page was written before any test existed, so it
-> speaks in the future tense about gates that have since either been built or been
-> blocked. The verified state of the suite as of 2026-07-30:
+> **Update — 2026-08 (as built).** This page was written before a single test existed, so
+> the sections below still speak in the future tense about gates that have since been
+> built, superseded by something stricter, or blocked on a human act that has not
+> happened. This note is the verified state of the suite as of **2026-08-15**, measured by
+> running `pnpm -r --workspace-concurrency=1 run test` on a clean tree and reading the
+> per-package `coverage/coverage-summary.json` it writes. Where a section below disagrees
+> with this note, this note is the current truth and the section is the historical intent.
 >
-> - **The three P0 release-blocker tests are GREEN and merge-blocking.** They live in
->   `apps/server/test/p0/` — `p0-token-reconciliation.test.ts`, `p0-double-replay.test.ts`,
->   `p0-dag-rebuild.test.ts`, sharing a `harness.ts`. One detail matters more than the
->   pass/fail: the token-reconciliation proof does **not** compare the parser against
->   itself. It reads the JSONL with an **independent reader written inside the test**, so a
->   parser bug cannot make its own proof pass. The double-replay proof compares two
->   `VACUUM INTO` snapshots with `Buffer.equals` under a fixed clock — byte-identical, not
->   "equivalent". The DAG-rebuild proof additionally demonstrates the hooks-are-liveness-only
->   rule: appending hook events leaves the DAG dump unchanged.
-> - **The 12-scenario negative catalogue is green** (`apps/server/test/negative/`),
->   including byte-identical `401` bodies across four different wrong-token shapes (no
->   token echo, no length oracle) and a `403` on a foreign `Origin` **both with and
->   without** a valid token, so there is no auth oracle either. One half of scenario #2
->   ("normalized anomaly flagged") proved untestable as specified and is recorded as such
->   rather than quietly dropped.
-> - **Totals: 72 test files / 879 tests passing.** The >90% coverage gate is enforced in
->   every shipped package — `packages/shared`, `packages/core`, `apps/server`,
->   `apps/web`. **Honest note:** until 2026-07-30 `apps/web` ran `vitest run` *without*
->   `--coverage`, so its configured thresholds silently never executed. That was found and
->   fixed; §6 below is the design intent, and it is now actually true.
->   `packages/test-fixtures` is a deliberate, documented exclusion from the gate scope.
-> - **§2's golden real-session corpus is NOT what shipped.** The three-tier
+> - **The three P0 release-blocker tests are green.** They live in `apps/server/test/p0/` —
+>   `p0-token-reconciliation.test.ts`, `p0-double-replay.test.ts`, `p0-dag-rebuild.test.ts`,
+>   sharing a `harness.ts`. One detail matters more than the pass/fail: the
+>   token-reconciliation proof does **not** compare the parser against itself. It reads the
+>   JSONL with an independent minimal reader written inside the test against the normative
+>   rules of [`parser-spec.md`](../../analysis/parser-spec.md) §5.1–5.3, so a parser bug
+>   cannot make its own proof pass. The double-replay proof compares two `VACUUM INTO`
+>   snapshots with `Buffer.equals` under a fixed clock — byte-identical, not "equivalent" —
+>   and then re-asserts the same claim a second, independent way against an ordered logical
+>   dump of every table. The DAG-rebuild proof additionally demonstrates the
+>   hooks-are-liveness-only rule: appending hook events leaves the DAG dump unchanged.
+> - **All twelve negative-catalogue scenarios now have executable bodies, and they are
+>   green.** They are split by nature rather than kept in one file: the pure parser and
+>   cost facets (#3, #4, #8, #11, #12) live in
+>   `packages/core/test/negative/negative-catalogue.core.test.ts`, and the HTTP,
+>   persistence and security facets (#1, #2, #3-db, #4-http, #5, #6, #7, #8-halt, #9, #10)
+>   live in `apps/server/test/negative/`. Three scenarios appear on both sides on purpose —
+>   a malformed JSONL line and a malformed HTTP body are different failures of the same
+>   catalogue entry. The security entries are asserted at the level where an oracle would
+>   hide: byte-identical `401` bodies across four different wrong-token shapes (no token
+>   echo, no length oracle) and a `403` on a foreign `Origin` **both with and without** a
+>   valid token, so a probe cannot learn whether its token was good either. One half of
+>   scenario #2, "normalized anomaly flagged", remains untestable as the catalogue words it
+>   — there is no hook normalizer, because hooks are a secondary signal — and the test file
+>   says so in place of quietly dropping the clause; the anomaly surfaces instead through
+>   the `WP-IN12` watchdog as a visible `unknown` status.
+> - **Totals as of 2026-08-15: 106 test files / 1554 tests, green, across five packages**
+>   — `apps/server` 66/881, `apps/web` 17/283, `packages/core` 12/210,
+>   `packages/test-fixtures` 4/100, `packages/shared` 7/80. These counts move with every
+>   commit; treat them as a dated measurement, not a constant.
+> - **The coverage gate is no longer ">90%" anywhere in the repo. It is 100.** All five
+>   packages run `vitest run --coverage` and all five pin `lines`/`branches`/`functions`/
+>   `statements` at `100`, and all five are currently at 100 on every one of those four
+>   metrics. `packages/test-fixtures` is no longer excluded from the gate — that carve-out
+>   was reversed on the reasoning that a defect in a fixture builder does not fail loudly,
+>   it silently weakens every downstream test that consumes the fixture. §6.1 below is the
+>   as-built account of why the number is 100 rather than 90 and what stops it from being
+>   bought cheaply. **Honest note, kept from the previous revision:** until 2026-07-30
+>   `apps/web` ran `vitest run` *without* `--coverage`, so its configured thresholds
+>   silently never executed. That was found and fixed.
+> - **§2's golden real-session corpus is not what shipped.** The three-tier
 >   raw/redacted/manifested promotion of ≥3 captured real sessions was not built. What
->   exists is `packages/test-fixtures` with **six** typed fixtures — `flat-tool-use`,
+>   exists is `packages/test-fixtures` with **seven** typed fixtures — `flat-tool-use`,
 >   `nested-workflow`, `queue-operation`, `task-notification-recovery`, `depth-2-sync`,
->   `usage-dedup` — plus per-suite corpora written into temp directories. Tests **never**
->   touch the real `~/.claude/projects`: every corpus is built under `mkdtempSync` with
->   explicitly injected env. The package location that §"What's undecided" calls "a named
->   leaning" is now settled — it is `packages/test-fixtures`.
-> - **§3 (`WP-X2`, labeled ground truth) is NOT built, and cannot be built by an agent.**
->   The five `spike/corpus/sessions/<short>/LABEL-ME.md` trees exist but are **unfilled** —
->   they are Ivan's hand-labeling act. **Consequence, stated plainly: the ≥95% hierarchy
->   correctness gate in §2/§4 has never been scored**, because the answer key it would be
->   scored against does not exist yet. Every spike-derived accuracy number in this corpus
->   stays **PROVISIONAL** until that ratification happens. No test result on this page
->   should be read as satisfying that bar.
+>   `usage-dedup`, `legacy-bare-explore` — plus per-suite corpora written into temp
+>   directories. Tests **never** touch the real `~/.claude/projects`: every corpus is built
+>   under `mkdtempSync` with explicitly injected env. The package location that
+>   §"What's undecided" called "a named leaning" is settled — it is `packages/test-fixtures`.
+> - **§3's labeled ground truth is half-built, and the missing half cannot be built by an
+>   agent.** The format, loader, scorer, report and gate runner all exist (§3.1). The
+>   labels do not. `packages/test-fixtures/annotations/human/` is empty, and the five
+>   `spike/corpus/sessions/<short>/LABEL-ME.md` trees are still unfilled — labeling is
+>   Ivan's act, not an agent's. **Consequence, stated plainly: the ≥95% hierarchy
+>   correctness gate in §2/§4 has never been scored.** The gate run reports
+>   `SUBSTRATE UNAVAILABLE`, `Phase-3 exit clause: NOT MEASURED - no hand-labeled sessions`
+>   and a **NOT CERTIFIED** verdict, and it passes as a test in that state, because an
+>   unlabeled corpus is an honest state rather than a broken build. Every spike-derived
+>   accuracy number in this corpus stays **PROVISIONAL** until that labeling happens. No
+>   test result on this page should be read as satisfying that bar.
+> - **Nothing here is physically merge-blocking yet.** `.github/workflows/ci.yml` runs the
+>   spawner gate, typecheck, lint, format check, the web production build, the full suite
+>   with its coverage thresholds, and the license gate — in that order, security first so a
+>   broken invariant fails in seconds. But branch protection on `main` is not enabled, so
+>   GitHub does not withhold the merge button when that workflow is red. The gates are real
+>   and they fail loudly; calling them "merge-blocking" requires an owner action on
+>   github.com that has not been taken. Sections below that say "merge-blocking" are
+>   describing the intended end state.
 
 ## 1. Four units, not "the dashboard"
 
@@ -171,6 +206,73 @@ Everything downstream — the three P0 tests (§4), the negative catalogue (§5)
 ≥95% hierarchy gate (§2) — is scored against these `expected/*.json` files, which is why
 `WP-X2` sits on the critical dependency edge into both `WP-X3` and `WP-X4`
 (development-plan §5).
+
+## 3.1 As built: the annotation corpus, the Wilson floor, and a gate that refuses to sign
+
+What shipped is not `expected/*.json` but something with the same job and a stricter
+posture about its own authority. The ground truth lives in
+`packages/test-fixtures/annotations/`, in a hand-writable markdown format that is
+diffable and needs no tooling to author: a `## meta` block declaring the session,
+`provenance`, `substrate`, `labeled-by` and `labeled-on`, then a `## edges` block of one
+line per subagent — `<child hex> <- ROOT | ORPHAN | UNKNOWN | <parent hex>`, with an
+optional trailing comment. Everything outside those two blocks is prose the loader
+ignores, so a labeler can leave notes to themselves in the file. The loader, validator,
+scorer, report renderer and read-only filesystem adapters are in
+`packages/test-fixtures/src/annotations/`; the runner that wires the real parser to them
+is `packages/core/test/hierarchy-gate.test.ts`.
+
+Three design choices in that tooling are the point of it, and each exists to stop a
+number from meaning less than it appears to.
+
+**The score is a Wilson lower confidence bound, not a ratio.** A naive percentage is
+silent about sample size — 3/3 and 300/300 both read "100%", and only one of them is
+evidence. `wilsonLowerBound()` computes the one-sided 95% lower bound instead, which
+returns 0 when there are no observations at all: no data, no confidence. The direct
+consequence is a hard floor on the sample. Solving `n / (n + z²) ≥ 0.95` gives
+`n ≥ 0.95 · 1.6449² / 0.05 = 51.4`, so **52 labeled agents is the minimum at which even a
+flawless run can clear the bar**, and roughly 90 are needed to survive a single error.
+`minimumClaimsForThreshold()` computes that floor and `certifyExitGate()` refuses to
+certify below it no matter how good the raw percentage looks. The two prepared templates
+— `b24be30c` (42 agents, dual on-disk layout, deepest observed nesting) and `f28af3fd`
+(18 agents, an independent depth-2 population, 5 compactions) — total 60, chosen to clear
+52 with a little headroom while covering structurally distinct ground. Labeling only one
+of them leaves the sample below the floor, and the gate says so.
+
+**Provenance is enforced structurally, not by convention.** `annotations/synthetic/`
+holds seven annotations, one per fixture, that state the hierarchy each fixture was
+*built* to have. They are genuinely useful — they prove the loader, the scorer, the
+report and every join path work end to end, and they regression-guard the depth-2 case —
+but they were written by the same side as the parser, so agreement with them proves
+internal consistency and nothing else. Every annotation must therefore declare
+`provenance: human` or `provenance: synthetic-by-construction`; `scoreCorpus()` throws if
+a corpus mixes the two, so a blended figure cannot be produced by accident;
+`certifyExitGate()` hard-refuses any non-`human` corpus and prints the reason; and the
+report prints an `ADMISSIBILITY` banner above the numbers so no reader can quote the
+figure without also reading what it is made of.
+
+**Abstention is a first-class answer.** `UNKNOWN` is not scored as a miss and not scored
+as agreement — it is excluded from the accuracy fraction and reported in its own bucket,
+because a guess that turns out wrong is strictly worse than an abstention when the exit
+gate would be signed against it. `ORPHAN`, by contrast, is a positive claim ("there is no
+parent to find here, and a parser that invents one is wrong") and is scored. To stop
+abstention from becoming a way to launder a number, the report prints label coverage and
+a worst-case figure — every abstention assumed wrong — next to the headline, so an
+under-labeled corpus cannot masquerade as a passing one.
+
+**What the gate reports today.** `annotations/human/` is empty. Running
+`pnpm --filter @agenthropic/core exec vitest run test/hierarchy-gate.test.ts` therefore
+prints `SUBSTRATE UNAVAILABLE - not measured` for each missing substrate and
+`Phase-3 exit clause: NOT MEASURED - no hand-labeled sessions`, points at
+`packages/test-fixtures/annotations/README.md`, and returns **NOT CERTIFIED**. The test
+itself passes in that state, and the code says why in a comment at the branch: *nothing
+to certify on this machine — do not manufacture a verdict*. This is the distinction the
+whole subsystem is built around. A build that fails because a human has not done a manual
+task teaches a team to route around the check; a build that green-washes an unmeasured
+gate is worse. Passing while loudly reporting `n = 0` and refusing to certify is the only
+option that is both honest about the state and honest about the number.
+
+Until those templates come back filled in, **every hierarchy-accuracy figure anywhere in
+this corpus is PROVISIONAL** and the Phase-3 exit clause is unmet — not failed, unmeasured.
 
 ## 4. The three P0 release-blocker tests
 
@@ -306,7 +408,7 @@ missing-parent-id orphaning, **#4** malformed-JSON rejection (as distinct from t
 accept-and-store `event_type` case), and **#9** huge-payload handling. These four are the
 scenarios `WP-X4` most needs written as explicit test bodies.
 
-## 6. The merge-blocking >90% coverage gate
+## 6. The coverage gate: specified at >90%, shipped at 100
 
 The coverage bar is a canonical decision, not a style preference: CD-7 states plainly
 that "the coverage gate [is a] boundary condition from commit one, CI-blocking… >90%
@@ -345,6 +447,82 @@ coverage gate enforces for ordinary unit tests is applied deliberately to the se
 suite, not relaxed for it — see [security model](../security/model.md) for the control
 catalogue those contract tests protect.
 
+## 6.1 As built: why the number is 100, and what stops it being bought
+
+The gate that shipped is stricter than the gate that was specified. All five packages —
+`apps/server`, `apps/web`, `packages/core`, `packages/shared`, `packages/test-fixtures` —
+run `vitest run --coverage` and pin `lines`, `branches`, `functions` and `statements` at
+`100`, and as of 2026-08-15 all five sit at 100 on all four. The reasoning is written into
+the configs themselves, in a comment repeated in each: *a 90% bar on a package sitting at
+100% licenses a ten-point regression to pass in silence, which is the opposite of a gate.*
+A threshold is only load-bearing when it is set at the level the code actually holds. Set
+lower, it does not measure the code; it measures how far the code is allowed to fall
+before anyone is told.
+
+That raises the obvious objection: a 100% figure is exactly the kind of number that gets
+manufactured. There are three ways to buy one, and each has a test that reads the source
+as **text** and never imports it, so a mock or a stub cannot satisfy it.
+
+| The cheat | What it actually does | The guard |
+|---|---|---|
+| An ignore pragma — `/* v8 ignore */`, `/* c8 ignore */`, `/* istanbul ignore */` | Removes **both** arms of the operator from the denominator, so the uncovered arm stops existing rather than starts being tested | Every file under `src/**` is swept; the offender list must be empty |
+| Lowering the threshold | The bar moves to wherever the code happens to be | The config is read as text and each of the four numbers must literally be `100` |
+| Adding an `exclude` | A file that is never measured cannot lower the average | The config must contain `include: ['src/**']` and must **not** contain `exclude` |
+
+The guards live in `apps/server/test/coverage-honesty.test.ts` and its counterparts in
+`packages/core`, `packages/shared` and `packages/test-fixtures`, plus the
+`coverage honesty` block in `apps/web/test/honesty.test.tsx`. Their premise is stated in
+the server file's header and is the same premise as the ground-truth-tokens invariant
+this whole project is built on: *a coverage figure inflated by hiding code is the same
+category of lie as an inferred token count.*
+
+The corollary the guards enforce is that **the remedy for a genuinely unreachable branch
+is to delete it, not to hide it.** There is a worked instance of this in the history of
+`apps/server`: the branch threshold sat at 99 while `server.ts` carried an unreachable
+`??` fallback — Fastify types `request.url` as `string`, so the alternative arm was dead
+code. The arm was deleted and the threshold raised to 100. Suppressing it with a pragma
+would have produced the same headline number by removing *both* arms from the
+denominator, which is the cosmetic version of the same move and the reason the pragma is
+banned outright rather than merely discouraged.
+
+**Three asymmetries in that story, stated rather than smoothed over.**
+
+First, `apps/web` does carry an `exclude`: `src/main.tsx` and `src/vite-env.d.ts`.
+`main.tsx` is the DOM entry point — a mount call exercised by the browser, not by jsdom —
+and is excluded on the same reasoning as a CLI entry point. The exclusion is narrow and
+named, but it means `apps/web` is the one package whose 100 is over a set of files chosen
+by hand rather than over everything under `src/**`. Worth recording alongside it: seven
+type-defensive `??` arms in `src/views/layout/cost-flow.ts` used to be excluded and are
+now genuinely reached, through the exported `toFlowNode` / `toFlowLink` converters and an
+injectable `pathFor` seam — the exclusion list shrank by being tested away rather than by
+being argued away.
+
+Second, and directly downstream of the first, `apps/web`'s honesty test is weaker than the
+other four. It sweeps `src/` for pragmas and asserts the offender list is empty, but it
+does **not** assert the four thresholds and it does **not** assert the absence of further
+`exclude` entries — it cannot, since the package legitimately has one. The practical
+consequence is that a change widening the web exclude list, or lowering the web
+thresholds, would not trip a guard. That is a real gap in the mechanism, not a
+technicality.
+
+Third, 100% means 100% of `src/**` — not of the repository. Every package's coverage
+`include` is `src/**`, so two areas of live code never enter a denominator at all:
+`hooks/install.mjs`, which is exercised in earnest by `apps/server/test/hooks-installer.test.ts`
+against a throwaway temp directory but is measured by nothing; and the two CI gate scripts
+`scripts/check-no-spawner.mjs` and `scripts/check-licenses.mjs`, which have no unit tests
+whatsoever and are exercised only by being executed in CI. Both gates do run on every CI
+invocation and both currently pass — the spawner gate reports `OK (235 files scanned
+across 4 roots + repo-root config; 1 allowlisted)` and the license gate `OK (412 installed
+packages, all licenses allowlisted)`, measured 2026-08-15 — but "the gate script works" is
+established by its output, not by a test of the script.
+
+And the standing caveat that no coverage number escapes: 100% line and branch coverage
+records that every line and branch **executed**, not that every behaviour was
+**asserted**. It is a floor under the test suite, not a statement about its depth. What
+gives this suite its actual weight is the material in §3.1, §4 and §5 — an independent
+reader in the token proof, byte-identical replay snapshots, and twelve enumerated ways
+the system is expected to fail well.
+
 ## 7. Where this lands on the roadmap
 
 | Phase | Wave(s) | Testing-relevant exit gate |
@@ -358,30 +536,43 @@ catalogue those contract tests protect.
 (development-plan §3, §4.) The hard structural point: none of this is a procedural
 checklist an agent could skip under time pressure — `WP-F1` (the monorepo scaffold
 itself) has a real dependency edge on `WP-S7`, and `WP-IN13`/`WP-X3` are wired as
-**blocking** CI checks, not advisory ones (development-plan §1, §5).
+**blocking** CI checks, not advisory ones (development-plan §1, §5). Two corrections to
+that table from the as-built note: the coverage figure it calls ">90%" is 100 in every
+package that shipped, and "blocking" describes the intent rather than the current
+mechanism — the workflow runs on every push and pull request, but branch protection on
+`main` has not been enabled, so nothing physically withholds a merge.
 
 ## What's undecided
 
-- **The literal 10 base entries of the negative-test catalogue** are now **recovered** in
-  §5.1 from the external report's §7.1 (finding LOST-7); together with the two v1-only
-  additions (compaction-mid-session, `PreCompact` re-pricing) that gives the full
-  12-scenario enumeration. What remains open is only the **`WP-X4` test bodies** — writing
-  each of the 12 as an executable, corpus-scored test with its CD/acceptance-criterion
-  assertion — plus two source-level items the recovery surfaced: the WS→SSE wording of
-  scenario #7 (CD-5 supersedes the source) and the runtime-"estimated" vs build-time
-  "no-price-row-FAILS-CI" split of scenario #8 (`WP-C6`).
-- **Where the corpus physically lives in the repo** — a dedicated `packages/test-fixtures`
-  package is a named leaning for the eventual monorepo layout, not a locked decision
-  (see [architecture overview](../architecture/overview.md)); stack and repo structure
-  are an open decision project-wide.
-- **The redaction rule and retention TTL** that the corpus's "redacted" tier has to
-  implement are named as open Phase-0 inputs, not fixed policy numbers yet
-  (concept-analysis-v2 §7, open question 6).
-- **The join-key mechanism** behind `token_usage.agent_id` backfill (`WP-S3`, G0.1b) —
-  hard key vs. confidence-scored heuristic — is undecided and would change what the
-  P0 token-reconciliation test and the negative catalogue's backfill scenario are
-  actually allowed to assert (concept-analysis-v2 §7, open question 2; see
-  [ingest & reconciliation](../architecture/ingest-reconciliation.md)).
+- **The 12 negative-catalogue test bodies are written** — the item that stood open here
+  is closed. The literal base 10 were recovered in §5.1 from the external report's §7.1
+  (finding LOST-7), and all twelve now exist as executable tests, split between
+  `packages/core/test/negative/` (parser and cost facets) and `apps/server/test/negative/`
+  (HTTP, persistence and security facets). Two source-level readings the recovery
+  surfaced are settled in the tests themselves: scenario #7 is asserted against **SSE**
+  (CD-5 supersedes the source's "WebSocket", and the test proves it by checking the
+  `text/event-stream` content type), and scenario #8 holds at both times — build-time
+  `no-price-row-FAILS-CI` and a runtime halt that never degrades to a silent `$0`. What
+  is genuinely still open is the clause of scenario #2 that asks for a "normalized
+  anomaly flagged": there is no hook normalizer to flag it in, so the anomaly is observed
+  through the watchdog instead and the gap is recorded in the test file.
+- **Where the corpus physically lives in the repo** is settled: `packages/test-fixtures`,
+  which is now a real workspace package carrying seven typed fixtures, the annotation
+  corpus, and its own coverage gate.
+- **The redaction rule and the retention TTL** are still open, and remain the owner's to
+  set. The retention *mechanism* has since been built in `apps/server/src/retention/`,
+  but its default policy is a byte-identical no-op and every concrete number — what to
+  prune, after how long, with what backup floor — is deliberately unset pending
+  ratification (concept-analysis-v2 §7, open question 6; OPEN-1/2/3). See
+  [backup & restore](../operations/backup-restore.md).
+- **The join key behind `token_usage.agent_id`** (`WP-S3`, G0.1b) turned out not to need
+  the confidence-scored heuristic the open question contemplated. Attribution is a hard
+  structural key: `extractUsageRows()` in `packages/core/src/parser/parse-session.ts`
+  stamps each usage row with the owner of the transcript file the line was read from, and
+  usage in the main transcript is stamped `null` rather than attributed to a guess. That
+  is why the P0 token-reconciliation test can assert **integer** equality per session, per
+  model, per bucket instead of a tolerance. What has *not* been ratified is the accuracy
+  of the surrounding hierarchy attribution — that is the §3.1 gate, and it is unmeasured.
 
 ## See also
 

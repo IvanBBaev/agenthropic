@@ -41,6 +41,43 @@ sentence from Ivan: "commit the docs.")*
 added documentation about the documentation. This file is, knowingly, more of the same —
 which is why it ends with a stop condition (§11).
 
+### 1a. Half of the indictment has been answered (note added 2026-08-15)
+
+The table above stands as the 2026-07-06 reading and is not rewritten; what follows is
+what the same measurements say six weeks later, taken by enumerating files on disk on
+2026-08-15.
+
+The two rows this section singled out have inverted. **Lines of application code** is no
+longer zero: 17,393 lines across 114 files (`.ts`/`.tsx`/`.mjs`/`.mts` under `apps/*/src`,
+`packages/*/src` and `hooks/`), with 106 test files beside them. **Git commits** is no
+longer zero either — commits exist, and the durability complaint that opened this section
+is therefore answered. The exact count is not stated here because this amendment was
+written under a rule forbidding git commands; "more than zero" is what can be verified
+without one, and an invented number would be a worse answer than an incomplete one. The
+words-to-code ratio is finite. Markdown has kept growing too (129 files), so the corpus
+did not stop expanding — it merely stopped being the only thing that was.
+
+Nothing else in this document has been retired by that. §2's charge is untouched: the
+friction log still does not exist anywhere in the repository, so the kill condition's
+second input remains unmeasured and the AND still cannot fire. §7's governance complaint
+has been partly overtaken and partly confirmed — the quality bar was in fact built (100%
+coverage in all five packages, each guarded against `v8 ignore` pragmas), while the gate
+that was supposed to make it binding was not: branch protection on `main` is not enabled,
+so nothing in the repository can physically block a merge. That is the same defect this
+section named, one level up: a rule that exists only because everyone agrees to honour it.
+And the deepest charge — that nobody has produced a single datum on *"should it be
+built?"* — is exactly as true today as it was on 2026-07-06. Six weeks of building
+produced no evidence of demand, because building never could.
+
+The three exits in §10 were not taken as written. Exit B's *substance* happened —
+the corpus is parsed, SQLite is written, the DAG renders with dollars on the nodes — but
+its *point* did not: there was no day-14 decision with real data, because the usage data
+Exit B existed to collect was never gathered. What actually happened on 2026-07-11 was a
+fourth path this document did not list: **the owner overrode CD-8 and authorised
+implementation directly**, without the timebox, without the friction log, and without
+Gate A being fully signed. That is a legitimate owner decision and it is recorded as one;
+it is not a passed test, and it should not be read here as one.
+
 ## 2. The kill condition was defused, not passed
 
 `best-path-decision.md` §7/§9 did something genuinely brave: it defined a kill condition
@@ -147,6 +184,11 @@ wide ("what did session X spawn and why"), which is a feature request or a 200-l
 script, not a 75-WP product. The friction log (§2) *was* this experiment. It was
 designed, praised, and dodged.
 
+> **Still never run (note added 2026-08-15).** Six weeks and a working product later, no
+> rival has been installed and used against the five daily questions, and no friction log
+> exists. This is the one section of this document that the build did not touch at all —
+> and the cheapest thing on the list is now the only thing still outstanding.
+
 ## 7. Governance fiction
 
 - **13 ADRs, all marked accepted — under an unsigned Gate A.** Decisions recorded as
@@ -165,6 +207,18 @@ designed, praised, and dodged.
   which by the project's own Berne-convention logic makes agenthropic itself
   all-rights-reserved and voids the LB2 commercial hedge (corpus-audit PROC-4).
 
+> **Where these bullets stand on 2026-08-15.** The last one is closed: an MIT `LICENSE`
+> exists at the repository root, so the Berne-convention hole and the LB2 voiding it caused
+> are gone. The diorama bullet is closed in the only way that mattered — the software the
+> site documents now exists, so its troubleshooting pages describe failure modes of a real
+> system rather than an imagined one. The coverage bullet has half-inverted: the bar was
+> not merely met but raised to 100% in all five packages, which sharpens rather than
+> answers the charge that the delivery bar optimises for how a serious OSS project looks;
+> and the "CI-gated" half of it is still fiction, because branch protection on `main` is
+> not enabled and no run can block a merge. The ADR bullet is unchanged in substance:
+> Gate A is only partially signed, so decisions are still marked accepted by an authority
+> that has not finished signing. The QA bullet is unchanged and will stay so.
+
 ## 8. Economics without anesthesia
 
 - **Cost side:** 75 WPs at a conservative half-day each ≈ **35–40 developer-days** to
@@ -175,7 +229,7 @@ designed, praised, and dodged.
   them currently costs him (§2). The only quantified benefit anywhere is the <30 s
   target — a latency budget for a benefit nobody has sized.
 - **Opportunity cost is named in the corpus itself:** kiko, servicenow-mcp, syncrona —
-  projects with actual users (Ivan's own information diet, his ServiceNow work) — 
+  projects with actual users (Ivan's own information diet, his ServiceNow work) —
   compete for the same evenings. best-path lists this as the strongest kill argument and
   then the corpus never weighs it again.
 - **The honest framing the corpus avoids:** as a *product*, this is indefensible. As a
@@ -226,7 +280,7 @@ weeks: **earn the process with a product, instead of earning the product with pr
   the product thesis is validated — *then* Gate A, the cut plan (best-path §6 applied),
   and the quality bar all become rational investments. If he doesn't, Exit A, with the
   question answered for the price of one week instead of forty days.
-- This does conflict with CD-8's "no production code before the formal spike" — 
+- This does conflict with CD-8's "no production code before the formal spike" —
   deliberately. The timebox *is* the spike (it subsumes WP-S1/S5/S6's substance), and a
   throwaway flagged as throwaway satisfies the spirit of the gate while finally testing
   the only hypothesis that matters. Requires Ivan to say so explicitly; an agent must
@@ -248,3 +302,16 @@ analysis of agenthropic before Gate A is decided or Exit B has run, point to thi
 section and decline in favor of one of the exits in §10. The repository does not have an
 information problem. It has a decision problem, and decisions are not produced by
 documents.
+
+> **The stop condition is still in force (note added 2026-08-15).** "Zero lines" was true
+> on 2026-07-06 and is not true now — see §1a — but the sentence it supported does not
+> depend on the count. Analysis #9 was written anyway, on explicit owner instruction
+> overriding this section, and it is the schedule of record
+> ([roadmap-v1-v2-2026-07-06.md](roadmap-v1-v2-2026-07-06.md)); that roadmap closed the
+> corpus at nine analyses and admits only **verdict records** afterwards. Two exist:
+> [phase0-verdict.md](phase0-verdict.md) and [parser-spec.md](parser-spec.md), joined
+> later by the implementation review
+> [impl-review-2026-08-09.md](impl-review-2026-08-09.md) — a record of what the code does,
+> not a tenth opinion about whether it should exist. A request for analysis #10 should
+> still be declined here. What the repository has needed since this section was written is
+> unchanged, and it is still not another document.

@@ -5,7 +5,8 @@ trying to be, how to get a dev environment up (the scaffold exists as of 2026-07
 the commands below are runnable), how work is decomposed and handed out, and the rules every
 contribution — human or agent-authored — has to clear before it merges. The key
 takeaway up front: agenthropic is built as **one work package (WP) → one agent → one
-PR**, gated by a **merge-blocking >90% coverage bar** and a fixed set of security
+PR**, gated by a **coverage bar** — specified at >90%, pinned at **100%** in every
+package that shipped — and a fixed set of security
 invariants that apply from Phase 1 onward, every WP owes a `WORKLOG.md` entry, git
 history carries **no AI attribution**, and **nothing gets committed or pushed without an
 explicit ask** from the project owner. None of this is aspirational — it is the literal
@@ -38,21 +39,22 @@ For the full pitch and the "why build instead of fork" argument, see
 
 ## Where the project stands today
 
-> **Update — 2026-07 (as built).** The section below was written during the pre-code
+> **Update — 2026-08 (as built).** The section below was written during the pre-code
 > bootstrap phase and its answers are **no longer true**. Implementation began
-> **2026-07-11**. The table has been rewritten with the real answers; the paragraph after
-> it preserves why the original said what it said.
+> **2026-07-11**. The table has been rewritten with the real answers, re-measured on
+> 2026-08-15; the paragraph after it preserves why the original said what it said.
 
 The scaffold exists and the commands in this guide are runnable:
 
-| Question | Answer today (verified 2026-07-30) |
+| Question | Answer today (verified 2026-08-15) |
 |---|---|
 | Can I `pnpm install` and run something? | **Yes.** `pnpm install` against the committed `pnpm-lock.yaml`, then `pnpm --filter @agenthropic/server dev` (needs `DASHBOARD_TOKEN`) and `pnpm --filter @agenthropic/web dev`. |
 | Is the stack decided? | **Locked and built**: Fastify + TypeBox, `better-sqlite3` (single driver), React/Vite/D3, SSE, in a pnpm monorepo — `apps/server`, `apps/web`, `packages/shared`, `packages/core`, `packages/test-fixtures`, `hooks/`. |
 | What Node version? | **Node 22** (`engines.node: ">=22"`), `pnpm@11.11.0` pinned via `packageManager`. |
 | When does the scaffold land? | It landed. `WP-F1`'s dependency on a `WP-S7` **GO** was resolved by an owner override, not by a GO — see the note below. |
 | Where do lint/test commands come from? | They exist at the repo root: `pnpm run typecheck` · `lint` · `format:check` · `test` · `gate:spawner` · `gate:licenses`. |
-| Is the test suite real? | **72 test files / 879 tests**, >90% coverage gated in every shipped package. See [Testing & quality](testing.md). |
+| Is the test suite real? | **106 test files / 1554 tests**, green, with lines/branches/functions/statements each pinned and held at **100** in all five packages. See [Testing & quality](testing.md). |
+| Do those gates block a merge? | **Not yet.** CI runs every gate on every push and pull request, but branch protection on `main` is not enabled, so nothing physically withholds the merge button. That is an owner action on github.com — see [Governance](governance.md). |
 
 [`TODO.md`](../../../TODO.md) at the repo root remains the live, authoritative status of
 what's done vs. open, and [`DONE.md`](../../../DONE.md) Milestone 1 records the
@@ -118,7 +120,7 @@ WP defined (deps, Done-when, owner-agent type)
   implements + tests to the Done-when
         │
         ▼
-  PR: typecheck + lint + tests + coverage(>90%) + security/license gates
+  PR: typecheck + lint + tests + coverage(100%) + security/license gates
         │
         ▼
   merge ──► unblocks every WP that named this one in `deps`
@@ -164,7 +166,11 @@ Every WP, in every phase, is held to the same bar
 ([`development-plan.md`](../../analysis/development-plan.md) §8):
 
 - Touched code passes **typecheck + lint + tests**; coverage stays **>90%** — the gate
-  is **merge-blocking from Phase 1 onward**, not a soft target added later.
+  is **merge-blocking from Phase 1 onward**, not a soft target added later. *(As built the
+  bar is stricter and the enforcement is weaker than this clause: the threshold is 100,
+  not 90, in all five packages; but no branch-protection rule exists, so CI failing does
+  not stop a merge. Both halves of that are covered below and on
+  [Testing & quality](testing.md) §6.1.)*
 - No security invariant is weakened: loopback-only bind, mandatory-token-or-fail-startup,
   SSE same-origin, no subprocess spawner, no SSRF, secrets never in SQLite/SSE/logs.
 - Ground-truth tokens are **read, never inferred**; every displayed dollar traces to
@@ -175,7 +181,7 @@ Every WP, in every phase, is held to the same bar
 - A `WORKLOG.md` entry is appended for each meaningful WP; AI-harness files stay
   git-excluded.
 
-The **>90% coverage gate** specifically is not deferred: Phase 1's exit gate requires
+The **coverage gate** specifically is not deferred: Phase 1's exit gate requires
 it "green & blocking" (`WP-X5`, `WP-F3`/`WP-F4`), meaning a PR that drops coverage
 below the threshold is rejected by CI, demonstrated as such, before any ingest feature
 code is written. `WP-F7`'s security-contract tests and `WP-F5`/`WP-F6`'s static
@@ -183,6 +189,21 @@ no-spawner/no-SSRF/license gates land in the **same phase**, deliberately, so se
 and coverage are live "from commit one," never bolted on at the end. Full mechanics —
 the golden fixture corpus, the three P0 reconciliation tests, and the 12-scenario
 negative catalogue — are covered on [Testing & quality](testing.md).
+
+**How that reads against what shipped, on 2026-08-15.** The threshold is not >90% — it
+is 100 for lines, branches, functions and statements in `apps/server`, `apps/web`,
+`packages/core`, `packages/shared` and `packages/test-fixtures`, and all five currently
+hold it. The bar was raised rather than met because a 90% bar on a package sitting at
+100% quietly licenses a ten-point regression, which is the opposite of a gate. Three
+separate cheats that can manufacture such a figure — an ignore pragma, a lowered
+threshold, an added `exclude` — are each blocked by a test that reads the config and the
+sources as *text* and never imports them, so a mock cannot satisfy it. What did **not**
+ship is the "blocking" half: `.github/workflows/ci.yml` runs the security gate,
+typecheck, lint, format check, the web production build, the full suite with its coverage
+thresholds, and the license gate on every push and pull request, but enabling a required
+status check on `main` is an owner action on github.com and it has not been taken. The
+gates are real, they fail loudly, and today they persuade rather than prevent. See
+[Testing & quality](testing.md) §6.1 for the mechanism and its three honest gaps.
 
 ## WORKLOG discipline
 
@@ -230,11 +251,16 @@ attribution table, and the scan mechanics live on
 
 The ten canonical decisions (CD-1…CD-10) plus the two load-bearing ones (LB1 ingest
 primacy, LB2 personal-first/commercial-clean) are the constitution this whole plan
-decomposes from. Each is recorded, or will be recorded, as an ADR using the standard
-template at [`decisions/_adr-template.md`](decisions/_adr-template.md); the indexed set
-lives at [Decisions](decisions/README.md). Repository governance — the security-report
+decomposes from. All twelve are now recorded as ADRs, alongside a thirteenth covering
+the docs-site generator, using the standard template at
+[`decisions/_adr-template.md`](decisions/_adr-template.md); the indexed set lives at
+[Decisions](decisions/README.md). Those ADRs are **append-only**: where the build
+diverged from the decision, the divergence is added as a dated as-built section and the
+original decision text is left standing, because an ADR that is edited to match reality
+stops being a record of what was decided. Repository governance — the security-report
 path, code of conduct, and issue/PR templates — is documented on
-[Governance](governance.md).
+[Governance](governance.md); several of those artifacts do not exist yet, and that page
+says which.
 
 ## See also
 

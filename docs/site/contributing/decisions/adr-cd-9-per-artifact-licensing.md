@@ -1,6 +1,6 @@
 # ADR-0011: CD-9 — Per-artifact licensing
 
-- **Status:** accepted — CI provenance scan **live and green** (412 packages) as of 2026-07-30; **open blocker:** the project's own `LICENSE` is untracked, so GitHub reports this repository's license as `null` (see the as-built update below)
+- **Status:** accepted — CI provenance scan **live and green** (412 packages) as of 2026-07-30; ~~**open blocker:** the project's own `LICENSE` is untracked, so GitHub reports this repository's license as `null`~~ *(closed 2026-07-30 — `LICENSE` tracked, GitHub reports `MIT`; re-verified 2026-08-15)* (see the as-built updates below)
 - **Date:** 2026-07-03
 - **Deciders:** Ivan Baev (project owner), via the six-lens concept-analysis-v2 workflow
 - **Source:** [`concept-analysis-v2.md` §3, row CD-9](../../../analysis/concept-analysis-v2.md#3-canonical-decision-register-v2)
@@ -42,6 +42,41 @@ is asserted but not published.
 attribution mechanism for `simple10`/`hoangsonww` (a `NOTICE` file, file headers, or a
 credits page) remains unchosen — and remains unexercised, because the
 `hoangsonww`-attributed alert schema is post-1.0 and has not been written.
+
+## As-built update — 2026-08-15
+
+**Verdict: holds; the blocker recorded above is closed.** The `LICENSE` file is now
+tracked in git, and `gh api repos/IvanBBaev/agenthropic --jq .license.spdx_id`
+returns `MIT` — re-verified on 2026-08-15. agenthropic no longer occupies the
+position it condemns in `cast`, `disler` and `nirdiamant`: the grant is published,
+not merely intended. The blocker was open for roughly one day, and it is left visible
+above rather than deleted, because the interesting fact is not that it was fixed but
+that a project whose own licensing page reasons carefully about the difference
+between a README badge and a real grant nearly shipped as a repository with neither.
+
+**The gate itself is unchanged and still green:** `check-licenses: OK (412 installed
+packages, all licenses allowlisted)` on 2026-08-15. Two clarifications the
+2026-07-30 note left loose. First, "a short list of documented per-package
+exceptions" is, concretely, exactly one: `caniuse-lite`, accepted only under
+`CC-BY-4.0`, an attribution-only data file arriving transitively through the Vite
+toolchain. The exception is keyed to the license string and not to the name alone, so
+a relicense of that package turns the gate red rather than passing it through.
+Second, workspace-local `@agenthropic/*` packages are skipped as private, so the 412
+counts third-party code only.
+
+**One over-claim to retire.** The 2026-07-30 note says the gate "runs as
+`gate:licenses` in CI on every push," which is accurate, but this ADR set has
+elsewhere described the CD-9 gate as merge-blocking. It is not: branch protection on
+`main` is not enabled, so a red run is a signal rather than a barrier
+([ADR-0009](adr-cd-7-security-and-coverage-boundary.md)'s 2026-08-15 update covers
+the same gap for the coverage gate). The acceptance criterion — "verified by a CI
+provenance check" — is satisfied on its own wording, since verification is what the
+check performs; enforcement was never this ADR's word, and should not be borrowed
+into it.
+
+**The clean-room half is still discipline, not tooling.** Nothing has changed:
+no source text from any of the six audited projects has been copied in, the
+attribution mechanism remains unchosen, and it remains unowed.
 
 ## Context
 

@@ -3,7 +3,8 @@
 - **Status:** accepted — ~~exact DDL is a Track D implementation deliverable, not yet written~~
   *(DDL written and shipped 2026-07; `apps/server/src/db/migrations.ts`)*; **amended in detail
   2026-07-30** — all tables exist and are written, with named column-level divergences from the
-  sketch below (see the as-built update)
+  sketch below (see the as-built update); **amended again 2026-08-15** — the chain has grown from
+  seven migrations to thirteen and the `orchestration_edges.source` domain has a fifth value
 - **Date:** 2026-07-03
 - **Deciders:** Ivan Baev (project owner), via the six-lens concept-analysis-v2 workflow
 - **Source:** [`concept-analysis-v2.md` §3, row CD-4](../../../analysis/concept-analysis-v2.md#3-canonical-decision-register-v2)
@@ -55,6 +56,48 @@ built) into the pricing function itself.
 list prices, labelled in the migration as "a mechanism proof for the cost engine,
 NOT a billing source," awaiting ratification. The *mechanism* is verified; the
 *numbers* are not.
+
+## As-built update — 2026-08-15
+
+**Verdict: holds; the detail above needs two corrections.** Nothing in the decision
+has been contradicted since 2026-07-30, but two of the facts recorded in that
+section are now out of date, and one of the six new migrations records a process
+failure that this ADR's Consequences section explicitly worried about.
+
+**The chain is thirteen migrations, not seven.** The six added since are
+`token-usage-main-agent-attribution` (8), `ingest-checkpoints` (9),
+`retention-scan-indexes` (10), `model-pricing-seed-convergence` (11),
+`orchestration-edge-endpoint-indexes` (12) and
+`orchestration-edges-legacy-explore-source` (13). Three of them (10, 12, and the
+index half of 13) are pure read-path accelerators whose own comments state the
+contract plainly — "a dropped index costs speed, never truth" — and change no
+result. Migration 9 adds the replay-checkpoint table, which is likewise declared a
+cache rather than a source of dashboard truth: dropping it costs one full replay and
+changes no output. That distinction between tables that hold truth and tables that
+hold work-already-done is worth preserving as the schema grows.
+
+**`orchestration_edges.source` now admits five values, not four.** Migration 13
+rebuilds the table (SQLite cannot `ALTER` a `CHECK`) to add `'legacy_explore'`
+alongside the four structural detection paths. The divergence table above says
+`source` records "which of the four detection mechanisms found the edge"; read that
+as five. The reason the fifth value exists rather than being folded into `'tool_use'`
+is the same provenance-honesty rule the column was created to serve: pre-2.1.71
+bare-`Explore` sidecars are joined by a **name-based heuristic**, not by a structural
+identifier, and an edge found that way is marked as such rather than disguised as one
+that was. That heuristic remains **PROVISIONAL** — no real pre-2.1.71 transcript has
+yet ratified it — and the distinct `source` value is precisely what makes it possible
+to find and re-examine every edge that depended on it.
+
+**Migration 11 is a corrective migration for a forward-only chain that was not
+honoured.** Migration 7's pricing seed was edited **in place after it had already been
+applied** to the operator's database. Because the runner skips by recorded id, that
+database kept the original rows, and under the current code every real-model message
+then failed the `PricingError` halt gate — the cost-trust chain worked exactly as
+designed and turned a silent wrong number into a loud stop. Migration 11 converges
+both histories to the same rows and leaves operator-authored pricing untouched. The
+ADR's Consequences section named "a single, always-forward-only migration chain" as
+the cost of this schema; this is the record of that cost being paid once, in the one
+way it can be — by an additional forward migration, never by editing history.
 
 ## Context
 

@@ -10,6 +10,29 @@ the findings is spelled out here. Read §0 first; it defines every term and rule
 
 **Produced by:** the 2026-07-06 analysis session (Claude Fable 5). Method in §3.
 
+> **Read this before acting on §0 (amendment, 2026-08-15).** This audit was written for a
+> context-free session and its §0 doubles as an operating brief, so two of its rules have
+> to be corrected here rather than left to be discovered. **The code exists.**
+> Implementation began on **2026-07-11** under an explicit owner override of CD-8, so §0.1's
+> "only documentation — zero application code" and §0.3's rule 4 ("no production code, no
+> scaffolding until Gate A is signed **and** WP-S7 reads GO") describe a gate that has been
+> opened. Gate A itself is **partially signed** as of 2026-07-10 — the three decision boxes
+> are signed, the two physical acts are not — so the front-matter's "still unsigned" is half
+> stale and half still true. A session reading rule 4 today should not refuse to work; it
+> should know that the override covered **dispatching only** and relaxed nothing else — not
+> a security invariant, not the `LABEL-ME` ratification (all Phase-0 numbers remain
+> PROVISIONAL), and not the commit rule.
+>
+> Rule 2's parenthetical is also stale: `docs/` is no longer untracked. The
+> rule it decorates — never commit or push without an explicit ask — is unchanged and
+> still binding, as are all of §0.3's security invariants in rule 5, which the built system
+> implements rather than merely promises.
+>
+> Everything else in §0 remains the correct orientation, and the finding registers below
+> are preserved as written. Where a specific finding has since been overtaken, it is noted
+> in place; where it has not, silence means it is still open. The current-truth snapshot
+> for a fresh session lives in the project-state record, not here.
+
 ---
 
 ## 0. How to use this document
@@ -184,6 +207,20 @@ never happened.** These six findings are the single largest consistency debt in 
   It's the merge gate — the exact boundary matters. Pick ≥90% once, sweep all pages.
 - **OPEN-9 — "OPCⁿ"** — define or drop (ADR-0002 left it open; used in two live docs).
 
+> **Status of this register on 2026-08-15.** The nine OPEN items were lifted out of this
+> audit into [open-decisions.md](open-decisions.md), which is now where their current state
+> is maintained; read that file rather than this list when you need to act on one. Most of
+> them have since been **answered by implementation** — the code picked a transport, a port,
+> a hook-auth mechanism, a status vocabulary and a coverage threshold — but answered by
+> implementation is not the same as decided, and none of the sign-off boxes in
+> `open-decisions.md` has been ticked. Two of the items above are also wrong as stated and
+> are corrected there: **OPEN-6** rests on a `verified_on` column that does not exist in the
+> shipped `model_pricing` table, and **OPEN-8**'s premise (a boundary between ">90%" and
+> "≥90%") was overtaken by a 100% threshold — while its "blocks merges" clause turned out
+> to be the unexamined half, and is still false because branch protection is not enabled.
+> **OPEN-1** (retention) and **OPEN-9** (OPCⁿ) remain open in the plain sense: undecided,
+> unowned, and now with more surface area than they had here.
+
 ### 4.3 LOST — substantive source content that never reached the plan of record
 
 From the source-vs-digest audit (full detail in Appendix A):
@@ -353,6 +390,24 @@ persisted edges, tokens × dated price) runs unbroken through all layers; proces
 flawlessly; and the corpus is unusually self-aware — most defects found by this audit
 were already self-flagged in-page, just never resolved.
 
+> **The pyramid is no longer inverted (note added 2026-08-15).** Code exists — a little
+> over 17,000 lines with 106 test files beside it — so the structural diagnosis that opens
+> this section has expired. Two of the three systemic effects it predicted did not survive
+> contact with the build, and one did. Effect 1 is the one that survived, and it survived
+> exactly: the remaining blockers are still human. The spike ran and returned CONDITIONAL
+> GO, Gate A is still only partially signed, and the items nobody but Ivan can perform —
+> hand-labelling the `LABEL-ME` corpus, running the friction log, enabling branch
+> protection — are still the whole of what is outstanding. Effect 2 has reversed direction:
+> the code is now the amending authority, and documentation that disagrees with it is what
+> gets corrected, which is why this note exists. Effect 3, the split between the public
+> story and the strategy, is best judged against the site as it stands today rather than
+> against this paragraph's 2026-07-06 reading of it.
+>
+> The counterweights held. The security invariants are implemented, not merely written
+> down; ground truth is still read from the JSONL and never inferred; and the corpus's
+> habit of flagging its own defects in-page is the reason a build could be reconciled
+> against it at all.
+
 ## 8. Business analysis
 
 - **Market.** The vendor's "no tool exists" thesis is false as written (claude-code-templates
@@ -373,6 +428,17 @@ were already self-flagged in-page, just never resolved.
   single action in the backlog.
 - **Commercial hedge.** LB2 is cheap and well-designed (MIT-clean code, `host_id` in the
   first migration, no RBAC) — and literally void until a LICENSE file exists (PROC-4).
+
+> **Two of these four have moved (note added 2026-08-15).** The commercial hedge is no
+> longer void: an MIT `LICENSE` sits at the repository root, closing PROC-4. The coverage
+> figure in *scale vs capacity* is now 100% rather than ≥90%, which makes the paragraph's
+> point about team-grade process serving a solo owner stronger, not weaker. The *customer*
+> paragraph is untouched by anything that has been built: the friction log was still never
+> run, the dissent is still unanswered, and the "<30 s" figure in the value proposition
+> has **never been measured** — it is an exit gate that has been neither passed nor failed,
+> because nobody has timed it. The *market* paragraph's warning about churning Anthropic
+> internals is the one to keep watching; the parser now defends against layouts it has
+> never seen in the wild, which is preparation, not evidence.
 
 ## 9. Senior-lens reviews
 

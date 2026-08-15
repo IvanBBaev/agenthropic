@@ -6,18 +6,27 @@
 > golden-fixture tests are written against — one place, so the parser is not reconstructed
 > from six scattered `spike/*/README.md` files when the build starts.
 >
-> **This is a design document, not code.** It scaffolds nothing. **CD-8 still binds:** no
-> `package.json` / `src/` is written until Gate A is signed *and* `WP-S7` GO is **ratified
-> by Ivan's human `LABEL-ME.md` sign-off** (the verdict is CONDITIONAL GO, self-check only).
-> Every number below is `PROVISIONAL / self-check` — scored against machine inventories,
-> not human ground truth — until that sign-off lands.
+> **IMPLEMENTED as of 2026-08-15.** This is no longer a proposal on paper. The contract is
+> realised in `packages/core/src/parser/`, persisted by the thirteen migrations in
+> `apps/server/src/db/migrations.ts`, and driven over the real corpus by
+> `apps/server/src/corpus/ingest-corpus.ts`; all fourteen gate items in §3 have code behind
+> them. **Implemented is not measured, certified or ratified**, and this file keeps those
+> axes apart on purpose (§3). Every number below remains `PROVISIONAL / self-check` — scored
+> against machine inventories, not human ground truth — until Ivan's `LABEL-ME.md` sign-off
+> lands, and the WP-S7 verdict it rests on is still CONDITIONAL GO.
+>
+> *Historical note (2026-08-15).* This block used to read "**this is a design document, not
+> code** … **CD-8 still binds**". CD-8 was **overridden by the owner on 2026-07-11** — for
+> dispatching only, recorded in §8 item 1. The override released the scaffold, not the
+> evidence: the security invariants, the LABEL-ME ratification requirement and the
+> never-commit-without-an-explicit-ask rule survive it untouched.
 >
 > **Authority.** Where this document and the pre-spike architecture pages disagree, the
 > spike evidence wins *for the parser mechanics it measured* — but this file does **not**
-> silently rewrite the site docs; §7 lists the exact edits to apply to
-> `ingest-reconciliation.md`, `hooks.md`, `cost-model.md`, `dag-moat.md`, and `data-model.md`
-> **at scaffold time**. Until then those pages keep their "confidence 85 / desktop probe"
-> framing and this file is the newer truth.
+> silently rewrite the site docs; §7 lists the exact edits to fold into
+> `ingest-reconciliation.md`, `hooks.md`, `cost-model.md`, `dag-moat.md`, and
+> `data-model.md`. Those edits were held behind the scaffold gate; that gate opened on
+> 2026-07-11 and they are now due (§7).
 
 ---
 
@@ -76,10 +85,10 @@ normative MUSTs for the production parser.
 | 6 | Sum tokens from **child transcripts**; parent rollup is ≈0% (measured **0.00%**, disjoint `message.id` sets) | ✅ green | S6 | `WP-IN7`, `WP-IN9` |
 | 7 | Legacy 2.1.70 bare-`Explore` fallback | ✅ **implemented (defensive, 2026-08)** — narrowest reading: bare `{agentType:'Explore'}` sidecar (no `toolUseId`/`spawnDepth` keys) joined via a raw top-level `agentId` on a foreign `progress` record, only when every modern anchor misses; edge carries the DISTINCT `legacy_explore` provenance (persisted verbatim). Exercised by synthetic fixture `legacy-bare-explore` (`packages/test-fixtures`); still **absent from corpus**, so the shape stays PROVISIONAL until a real pre-2.1.71 transcript ratifies it; pointer session `site/08871133-82a3-4ae2-8303-781a8761e92a` | S1 | `WP-IN8` (defensive) |
 | 8 | Handle compaction resets (`compact_boundary` + `compactMetadata`, JSONL-native) | ✅ green | S2, S4 | `WP-IN8`, cost |
-| 9 | Concurrency-safe: key on **`session-uuid`**, never slug (two same-slug concurrent sessions must stay two roots) | ✅ green | S2, S5 | `WP-IN8` |
+| 9 | Concurrency-safe: key on **`session-uuid`**, never slug (two same-slug concurrent sessions must stay two roots) | ✅ green — **hardened 2026-08** for the mirror case, one uuid under *several* slugs: enumeration keeps one deterministic ref and records every shadow copy as a `duplicate-session` skip (§4.3) | S2, S5 | `WP-IN8` |
 | 10 | Version-detect / branch-on-shape (not on a version string) | ✅ green | S2 | `WP-IN8` |
 | 11 | Intra-workflow sibling ordering (EMP-1) | ✅ **amended** — see §6.3; original "total order via journal+promptId" is **false**, order is wave-partial only | S5 | dag-moat, UX |
-| **N1** | **`<task-notification>` as a flat join path** — a legacy child-side re-anchor when the parent-side `tool_use` block was evicted | ⚠️ **absent on real data** — **0/1855** edges; retained as a defensive legacy fallback only (its spike "load-bearing" role was fixture-only) | S2; real-data | `WP-IN8` (defensive) |
+| **N1** | **`<task-notification>` as a flat join path** — a legacy child-side re-anchor when the parent-side `tool_use` block was evicted | ✅ **implemented (defensive)** — `extractTaskNotificationToolUseId` in `packages/core/src/parser/parse-session.ts`, persisted as the `task_notification` provenance; **absent from the real corpus (0/1855 edges)**, exercised only by the synthetic fixture `task-notification-recovery` (its spike "load-bearing" role was fixture-only) | S2; real-data | `WP-IN8` (defensive) |
 | **N2** | **`queue-operation` as a hard join schema** for `run_in_background` (queued) `Agent` spawns whose parent `tool_use` block is never materialized | ✅ green — but **marginal: 3/1855** on real data | S3; real-data | `WP-IN8` |
 | **N3** | **Dedup `usage` rows by `message.id`** before summing, and price **per-bucket/per-model** | ✅ **green (reconciled, PROVISIONAL)** — the §5.2 byte-identical premise was false (lines sharing a `message.id` are streaming partials whose `output` grows **and** whose first row may carry a transient fast-mode `model` label), so dedup collapses to the **per-bucket maximum** and settles the `model` to the greatest-`output` row; `UsageConflictError` is reserved for a genuine collision — two distinct models tied at the same max `output`, or any `agentId` clash (§5.2, §8) | S6; real-data | `WP-IN7`, cost |
 
@@ -92,8 +101,27 @@ normative MUSTs for the production parser.
 > (§8) — N3 is now **reconciled** to per-bucket-max collapse **plus** greatest-`output` model
 > settle (§5.2). With both reconciled, a full read-only re-measurement with `usage` **intact**
 > parses **all 141 sessions** end-to-end (**0** `UsageConflictError`, **0** `SubstrateError`,
-> **0** orphan subagents). Corpus-wide gate coverage is now: **11 green (N3 reconciled), 1
-> amended (#11), 2 absent (#7, N1)**.
+> **0** orphan subagents).
+
+> **Two axes, deliberately not collapsed into one number (2026-08-15).** Gate coverage is
+> reported on two independent axes, because a single figure would let "we built it" pass
+> itself off as "the corpus proved it":
+>
+> - **IMPLEMENTED: 14 of 14.** Every row above has code behind it — including #7
+>   (`LEGACY_EXPLORE_EDGE_SOURCE` in `packages/core/src/parser/types.ts`, with
+>   `legacy_explore` added to the `orchestration_edges.source` CHECK by migration 13) and N1
+>   (`extractTaskNotificationToolUseId`, persisted as `task_notification`).
+> - **MEASURED ON THE REAL CORPUS: 11 exercised.** #11 is **amended** — sibling order is
+>   wave-partial, never total (§6.3). #7 and N1 fire **0 times across 1855 subagent
+>   transcripts**; they are exercised only by the synthetic fixtures `legacy-bare-explore`
+>   and `task-notification-recovery` in `packages/test-fixtures`.
+>
+> So the honest one-liner is "14 implemented, 11 measured, 2 defensive-and-unwitnessed, 1
+> amended". **Do not report "14/14 green."** Two of those items are fallbacks whose on-disk
+> shape no real transcript has ever confirmed; their shape stays PROVISIONAL until a genuine
+> pre-2.1.71 transcript ratifies it, and if one ever arrives and disagrees, the fixture is
+> what was wrong. The rest of the caveats stand unchanged: the numbers are self-check, and
+> the LABEL-ME ratification has not happened.
 
 ---
 
@@ -138,17 +166,48 @@ never a substring (item #5):
   - an anchor whose block is gone (compaction-evicted) → re-anchored to main, `source =
     'task_notification'`.
 
-  A **legacy child-side `<task-notification>`** in the child's first record is a final
-  fallback (also → main, `source = 'task_notification'`). No path → **orphan, no edge**
-  (a parent is never fabricated).
+  A **legacy child-side `<task-notification>`** in the child's first record is a further
+  fallback (also → main, `source = 'task_notification'`).
 
-### 4.2 Real-data measurement (PROVISIONAL — LABEL-ME)
+- **Legacy bare-`Explore` last resort** (gate #7, added 2026-08) — when *every* modern
+  anchor above misses and the sidecar is the pre-2.1.71 bare shape (`{agentType:'Explore'}`
+  with no `toolUseId` and no `spawnDepth`), the child is joined via a raw top-level
+  `agentId` on a foreign `progress` record. The resulting edge carries its own provenance
+  value, `source = 'legacy_explore'` — **never `tool_use`**. That distinction is the whole
+  point of the path: this edge was *inferred* from a degraded legacy shape, while a
+  `tool_use` edge was *observed* in a materialised spawn block, and once the two are written
+  to the same column under the same name nothing downstream can ever tell them apart again.
+  A reader who wants to exclude inferred legacy edges from a hierarchy claim must be able to
+  do so with a `WHERE`, not with archaeology.
+
+  No path → **orphan, no edge** (a parent is never fabricated).
+
+**The provenance set is closed at the storage layer.** Migration 13 rebuilds
+`orchestration_edges` with `CHECK (source IN ('tool_use','directory','task_notification',
+'queue_operation','legacy_explore'))` (`apps/server/src/db/migrations.ts`). A sixth join
+path cannot be introduced by a parser edit alone: it needs a migration, which is a
+deliberate speed bump on exactly the change that would otherwise dilute provenance quietly.
+
+### 4.2 Real-data measurement — census of record (PROVISIONAL — LABEL-ME)
+
+> **Census of record (note added 2026-08-15).** This block **supersedes the 2026-07-04 probe
+> census** (17 projects / 117 sessions / 148 flat + ~849 nested agent files) still quoted in
+> `phase0-probe.md` §1, `README.md`, `corpus-audit-2026-07-06.md` §9.5 and `ux0-design.md`
+> §3. Cite this table, not those. Note the unit carefully: **1855 counts subagent
+> TRANSCRIPTS**, one per `agent-<hex>.jsonl` file — the **session** count is **141**, of
+> which **54** have any subagent at all. Conflating the two turns a per-file rate into a
+> per-session claim roughly thirteen times larger than reality.
+
 Measured read-only over **all `~/.claude/projects/*` (20 slugs, 141 sessions, 54 with
-subagents, 1855 subagent transcripts)** — *not* the 5-session spike corpus. Because the
-end-to-end parser currently **throws `UsageConflictError` on every subagent-bearing session**
-(§8, real-data violation of the §5.2 identical-usage assumption), the edge pipeline was
-exercised with `usage` blocks neutralized to isolate reconstruction from the unrelated usage
-gate; edge resolution reads no `usage` field, so this does not perturb it.
+subagents, 1855 subagent transcripts)** — *not* the 5-session spike corpus. At the time of
+this measurement the end-to-end parser still **threw `UsageConflictError` on every
+subagent-bearing session** (§8, a real-data violation of the since-retired §5.2
+identical-usage assumption), so the edge pipeline was exercised with `usage` blocks
+neutralized, isolating reconstruction from the unrelated usage gate; edge resolution reads no
+`usage` field, so this did not perturb it. That conflict has since been **reconciled** (§5.2:
+per-bucket-max collapse plus greatest-`output` model settle) and a re-measurement with
+`usage` **intact** now parses all 141 sessions with the same edge numbers — the neutralized
+run is retained here because it is what the table below was actually taken from.
 
 | Metric | Value |
 |---|---|
@@ -163,6 +222,46 @@ Flat total 284 = 281 `tool_use` + 3 `queue_operation` + 0 `task_notification` + 
 nested total 1571 = all `directory`. The join key is **intentionally cross-file** (a
 `tool_use.id` / sidecar `toolUseId` matching an inline hex in a child file) — which is
 exactly why matching must be on structural id *position*, never a substring grep.
+
+The `legacy_explore` path is not in this table because it contributed **0** edges: nothing
+in the corpus is old enough to reach it (§3).
+
+### 4.3 One session uuid, several slugs — the duplicate-session rule (hardens gate #9)
+
+Gate #9 says: key on the **session uuid**, never the slug. The corpus supplies a case that
+rule alone does not settle — the *same* uuid appearing under **more than one** slug
+directory, which is what a copied or backed-up project dir produces (`~/…/myproj` and
+`~/…/myproj-backup` both holding `<uuid>.jsonl`). Keying on the uuid is still right; the
+question is which of the copies the uuid refers to.
+
+Enumeration answers it before any parsing happens
+(`dedupeSessionRefs` in `apps/server/src/corpus/disk-substrate.ts`): **exactly one ref
+survives per uuid — the one whose `projectSlug` sorts first lexicographically — and every
+losing copy is recorded as a `duplicate-session` skip.** Two properties matter more than the
+choice itself:
+
+- **Deterministic, not mtime-racy.** The winner is a pure function of the slug strings, so it
+  is identical on every tick regardless of `readdir` order. Before this rule the fingerprint
+  map (keyed on session id alone) flip-flopped: whichever copy enumerated last won that pass,
+  so the session re-ingested forever and its `project_slug` visibly flapped in the UI. A
+  choice made by mtime or by directory order would have kept that bug. *(The
+  smallest-slug-wins tiebreak is **PROVISIONAL** — a copied dir usually gains a suffix, so
+  the shortest-sorting slug tends to be the original, but that is a heuristic about naming
+  habits, not a fact about the substrate.)*
+- **Counted, never silently dropped.** The loser is not merged into the winner (that would
+  invent an agent tree spanning two directories) and it is not discarded quietly either. It
+  is emitted as a `SkippedFile` with `reason: 'duplicate-session'`, counted into
+  `filesSkipped` **before** the per-session loop and **regardless of any session filter** —
+  a shadowed copy is a corpus-level fact, not a property of an admitted session — and
+  surfaced cumulatively through the optional `ingestSkips` field of `/api/health`. The
+  relative path in the record names *which* copy lost, so "why is my session attributed to
+  the backup directory?" is an answerable question rather than a mystery.
+
+`duplicate-session` therefore joins the other skip reasons (`oversize`, `symlink`,
+`not-regular-file`, `unreadable`, `empty-agent`, `empty-main`, `non-artifact`) under one
+posture: **a file the ingest declined to read is reported, not forgotten.** A skip counter
+that quietly reads zero while the corpus is being half-ingested is the failure this design
+exists to prevent.
 
 ---
 
@@ -222,12 +321,42 @@ child `message.id` sets are **disjoint** → provably no double-count. Partition
 
 ### 5.4 Pricing must be bucket-and-model-aware (N3)
 88% of corpus tokens are cheap **cache reads** — a flat per-token rate would be wildly
-wrong. Price each of the four buckets (fresh input, output, cache-write-5m, cache-write-1h,
-cache-read) at the model's rate. The spike's **approximate** table (list prices, for a
-mechanism proof — *not* a billing source): opus-4-8 $5/$25, sonnet-5 $3/$15 (list; the
-intro $2/$10 through 2026-08-31 would cut Sonnet ~⅓), fable-5 $10/$50, haiku-4-5 $1/$5 per
-MTok; cache-read ×0.1 of input, cache-write ×1.25 (5m) / ×2.0 (1h). `<synthetic>` = $0. The
-parser MUST **halt loudly on an unknown model id** — never silently price it at $0.
+wrong. Price each of the **five** buckets (fresh input, output, cache-write-5m,
+cache-write-1h, cache-read) at the model's rate. That set of five is single-sourced as the
+`TokenBucket` union in `packages/shared/src/types/rows.ts`, and the `token_usage.bucket` /
+`model_pricing.bucket` CHECK constraints are generated from the same five-member list — so
+"how many buckets are there" has exactly one answer in the codebase. *(The earlier "four"
+in this sentence was a miscount against its own parenthetical; corrected 2026-08-15.)*
+
+The spike's **approximate** table (list prices, for a mechanism proof — *not* a billing
+source): opus-4-8 $5/$25, sonnet-5 $3/$15 (list; the intro $2/$10 through 2026-08-31 would
+cut Sonnet ~⅓), fable-5 $10/$50, haiku-4-5 $1/$5 per MTok; cache-read ×0.1 of input,
+cache-write ×1.25 (5m) / ×2.0 (1h). `<synthetic>` = $0. The parser MUST **halt loudly on an
+unknown model id** — never silently price it at $0.
+
+> **Shipped as the `model_pricing` seed (note added 2026-08-15).** This table is no longer
+> only a spec proposal: migrations 7 and 11 in `apps/server/src/db/migrations.ts` INSERT
+> exactly these rates into `model_pricing (model, bucket, usd_per_mtok, effective_from)`,
+> with the derived multipliers applied per bucket. Three details a reader should not have to
+> reverse-engineer:
+>
+> - **`effective_from = '2026-01-01'`** is a *coverage floor*, not the authoring date.
+>   `computeCostUsd` resolves the newest rate whose `effectiveFrom` is at or before the
+>   message timestamp and **throws when none is effective**; the corpus contains messages
+>   from 2026-07-03, so a floor set at the authoring date would have halted every historical
+>   ingest. One flat mechanism-proof price is applied across the whole observed window.
+> - **The model keys are exact `message.model` byte-strings** (`claude-opus-4-8`,
+>   `claude-sonnet-5`, `claude-fable-5`, `claude-haiku-4-5-20251001`, `<synthetic>`), because
+>   the lookup is a hard exact-string match. Normalising the id on the read side — stripping
+>   the `claude-` prefix or the haiku date suffix — would silently break every real ingest.
+> - **An unpriced model is a `PricingError` halt, not a $0 row.** A dashboard that prices an
+>   unknown model at zero reports a *smaller* bill with no indication that anything is
+>   missing, which is the most expensive kind of quiet lie this project can tell.
+>
+> The rates themselves remain **PROVISIONAL** and unratified; they are frozen against
+> in-place editing by the per-migration sha256 checksum, so changing a price must ship as a
+> **new migration** carrying its own data rather than as a quiet constant edit (that exact
+> edit is how migration 7 once diverged from an already-migrated operator database).
 
 Corpus total (approximate): **≈ $345.91 over 206,001,429 tokens / 3,339 messages**.
 
@@ -242,6 +371,18 @@ Depth-2 parents live **inside** depth-1 agent transcripts, so the parent index m
 none: 2}`, **no depth-3 anywhere**. Deeper trees are therefore *unmeasured*, not *proven
 absent*: the parser must handle depth-N by construction (recursive index), but the ≥95%
 hierarchy bar has only been demonstrated to depth 2.
+
+> **The ≥95% bar currently reports NOT CERTIFIED (note added 2026-08-15).** The gate itself
+> is built — `packages/test-fixtures/src/annotations/` scores parsed parents against labelled
+> ones and prints a verdict — and it is deliberately hard to satisfy. It scores on the
+> **Wilson one-sided 95% lower bound**, not the naive ratio, because the naive ratio is
+> silent about `n`: 3/3 and 300/300 both read "100%" and only one of them is evidence.
+> Solving for a flawless run gives a **minimum of 52 labelled claims**. And it refuses
+> fixture data outright — a `synthetic-by-construction` corpus is marked *NOT ADMISSIBLE*,
+> since machine-authored truth scored against the same machine's parser proves only
+> self-consistency. The hand-labelled `LABEL-ME` corpus does not exist, so the gate has never
+> had an admissible sample and returns **NOT CERTIFIED**. It cannot be closed by an agent:
+> producing the ground truth is Ivan's act.
 
 ### 6.2 Concurrency independence — key on `session-uuid` (gate #9)
 `69ac12d0` (103 agents) and `a362e15d` (57) share slug `-Users-ivanbaev-Development-
@@ -271,10 +412,18 @@ confident nonsense" made concrete — see `ux0-design.md`.)
 
 ---
 
-## 7. Edits to apply to the site docs — at scaffold time, not before
+## 7. Edits to fold into the site docs — the gate has opened
 
-When CD-8 releases and the build starts, fold these spike results into the published
-architecture pages (this file is the source for each edit):
+> **Status (2026-08-15).** This section used to end with "do **not** apply these now". The
+> gate it was waiting for — CD-8 — opened on **2026-07-11** by the owner's override, the
+> code that implements these results has since shipped, and the site-docs lane is applying
+> them. **The edits below are due, not held.** The list itself is kept verbatim so the audit
+> trail survives: this file remains the source each edit must be checked against, and the
+> underlying WP-S7 verdict is still `CONDITIONAL` pending human sign-off, so any page that
+> adopts these results inherits the PROVISIONAL label with them.
+
+Fold these spike results into the published architecture pages (this file is the source for
+each edit):
 
 - **`ingest-reconciliation.md` §"What's undecided"** — move CD-1 (JSONL-primary),
   join-key G0.1b (hard key), and hook catalog G0.2 (`SubagentStart` not a real hook) from
@@ -292,16 +441,21 @@ architecture pages (this file is the source for each edit):
 - **`data-model.md`** — confirm the self-referential `parent_agent_id` index admits agents
   as parents (depth-2 proven, depth-N by construction); note the depth-2 measurement cap.
 
-Do **not** apply these now — they are published-target edits that belong with the code that
-implements them, and the verdict they rest on is still `CONDITIONAL` pending human sign-off.
+Two additions the original list predates, both now shipped and both belonging with the same
+sweep: the fifth edge provenance `legacy_explore` and the migration-13 five-value `source`
+CHECK (§4.1), and the `duplicate-session` enumeration rule with its `/api/health.ingestSkips`
+surface (§4.3).
 
 ---
 
 ## 8. What still gates production code
 
-1. **CD-8** — no `package.json`/`src/` until Gate A signed *and* WP-S7 GO **ratified**.
-   *(Code exists as of 2026-07-11 by explicit owner override of CD-8; this spec remains the
-   contract, and its numbers are still PROVISIONAL pending the LABEL-ME sign-off below.)*
+1. **CD-8 — overridden, not passed.** The original rule was: no `package.json`/`src/` until
+   Gate A is signed *and* WP-S7 GO is **ratified**. On **2026-07-11** Ivan explicitly
+   overrode it and authorised implementation; code has shipped since. The override is
+   narrow — it released *dispatching* only. It did not sign Gate A, did not ratify WP-S7,
+   and did not turn a single PROVISIONAL number below into a fact. This spec stays the
+   contract, and the LABEL-ME sign-off in item 2 is still outstanding.
 2. **The "224/224 (100%)" self-score is WITHDRAWN.** It was scored against 5 synthetic spike
    fixtures encoding anchors that do not match real on-disk shapes; it never measured real
    data. It is replaced by a **real, read-only measurement over all `~/.claude/projects/*`

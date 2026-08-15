@@ -169,6 +169,17 @@ evidence-backed call. It is cheap, throwaway, and read-only.
    a felt need or a cool engineering problem.
 3. **Amend the plan docs** (before any build) with the §6 changes.
 
+> **Two of three, six weeks later (note added 2026-08-15).** Action 1 ran within a day and
+> produced [`phase0-probe.md`](phase0-probe.md); action 3 was applied and is recorded in
+> [`development-plan.md`](development-plan.md) §2b. **Action 2 has never been started.** No
+> friction log exists anywhere in the repository, and no rival dashboard has been installed
+> and lived with. That is not an oversight that time has healed — it is the one item on this
+> list that could not be delegated to an agent, and it is the only one that would have
+> produced evidence about demand rather than feasibility. The build proceeded without it,
+> by owner override of CD-8 on 2026-07-11. Everything the program has learned since is
+> about whether the thing can be built, which was already the question this memo was least
+> worried about.
+
 ## 8. Risk register
 
 | # | Risk | Mitigation |
@@ -198,6 +209,17 @@ cost + Telegram hook scripts against `~/.claude` and redirect the hours.
 security-hardened ports-and-adapters system end to end — that is a legitimate reason, only say
 so, because it changes what "best" means and makes the opportunity-cost argument a _category
 error_ rather than a refutation.
+
+> **The dissent is intact (note added 2026-08-15).** Nothing built since has touched it.
+> The user count is still one, the cost pillar is still free elsewhere, and the DAG still
+> rests on undocumented internals. The conditional kill test in the paragraph above can no
+> longer fire on its own terms — the probe came back clean, and the test is an AND — so what
+> remains is not a test but a judgement, and it is Ivan's. The one thing the six weeks did
+> settle is the final paragraph: the program has in fact been built as a security-hardened
+> ports-and-adapters system end to end, which is exactly the craft objective this section
+> said would change the meaning of "best" if it were ever stated out loud. It still has not
+> been stated. Until it is, the honest reading is that the project proceeded without
+> resolving which of the two reasons it was proceeding for.
 
 ---
 

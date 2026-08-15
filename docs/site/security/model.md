@@ -173,7 +173,13 @@ packages and Definition-of-Done that turn each rule into CI-blocking code).
   > compare hashes both sides to a fixed length *before* `timingSafeEqual`, so the
   > length-mismatch early-return in the sketch — a small length oracle — does not
   > exist in the real code. (3) Startup fails without `DASHBOARD_TOKEN`
-  > (`apps/server/src/config.ts`), exactly as sketched. One deliberate accommodation:
+  > (`apps/server/src/config.ts`), exactly as sketched — and it also fails on a token
+  > that is *present but too short*: `requireDashboardToken` rejects anything under
+  > `MIN_TOKEN_LENGTH = 16` characters with a message naming the minimum. That
+  > second check exists because "mandatory, not opt-in" is only half the property
+  > worth having; `DASHBOARD_TOKEN=x` satisfies "set" while offering no more real
+  > protection than the no-op the rule was written against. Sixteen characters is a
+  > chosen floor, not a measured one. One deliberate accommodation:
   > `/api/stream` also accepts the token as `?token=` because the browser
   > `EventSource` API cannot set headers — and the server redacts that query value
   > from its own logs (`redactTokenInUrl`). The two blocks below are kept as the
@@ -306,6 +312,17 @@ packages and Definition-of-Done that turn each rule into CI-blocking code).
   > "403, token or not"). Loopback origins (`127.0.0.1` and `localhost` on the bound
   > port) are accepted; nothing sends a wildcard CORS header. The transport is SSE
   > per CD-5, exactly as this section says.
+  >
+  > **A request with no `Origin` header at all is allowed**, and that is a decision
+  > rather than an oversight, so it is worth stating both halves. A missing `Origin`
+  > means a non-browser client — `curl`, a Node EventSource polyfill, a health probe —
+  > and those cannot be driven by a hostile web page, which is the entire attack this
+  > rule closes. They are still gated: the token check runs immediately afterwards and
+  > rejects them without a credential. The half that matters is the other one: a
+  > *present* `Origin` must match the server's own loopback origin exactly. Browsers
+  > always send it, so a page in another tab can never reach the stream, token or not.
+  > Treating a missing header as hostile would buy no security and break every
+  > command-line client.
 
 ### 5. No unauthenticated endpoints — read or write
 
@@ -353,11 +370,26 @@ packages and Definition-of-Done that turn each rule into CI-blocking code).
   change to the alerting surface, not just at first ship.
 
   > **As built:** the webhook dispatcher (`WP-A4`) is **not built** — alerting is
-  > post-1.0, entered only via KC-5. Today the server code makes no outbound network
-  > request of any kind, so the SSRF surface this rule guards does not exist yet; the
-  > rule is satisfied by absence. The `WP-F5` static gate is live now, so the moment
-  > an outbound dial is ever introduced it lands under a build-failing scanner, and
-  > the `WP-A4`/`WP-A10` negative tests remain the Done-when for that future work.
+  > post-1.0, entered only via KC-5. Today the server process makes no outbound network
+  > request of any kind: nothing under `apps/server/src` or `packages/*/src` calls
+  > `fetch`, imports `node:http`/`node:https`, or reaches an HTTP client, and the
+  > server's runtime dependencies are Fastify, TypeBox and `better-sqlite3` — none of
+  > which dials out on its own. (`fetch` does appear in `apps/web/src/api.ts`, which is
+  > the browser bundle calling this server's own relative `/api` paths, and in
+  > `scripts/time-to-understand.mjs`, a local measurement script; neither is the server
+  > process and neither takes a URL from ingested data.) So the SSRF surface this rule
+  > guards does not exist yet, and **the rule is satisfied by absence rather than by
+  > enforcement.**
+  >
+  > **No automated check currently defends it.** `WP-F5`
+  > (`scripts/check-no-spawner.mjs`) scans for the subprocess family, wide binds,
+  > WebSocket-server patterns and dynamic evaluation — it has **no pattern for
+  > outbound HTTP**, so an added `fetch()` or `node:https` import would pass it. An
+  > earlier version of this note claimed the gate would catch such a dial; that was
+  > wrong, and it contradicted §3's own accurate enumeration of what the gate covers.
+  > The `WP-A4`/`WP-A10` negative tests remain the Done-when for the future dispatcher,
+  > and anything that introduces an outbound client before then is caught by code
+  > review alone.
 
 ### 7. Remote access via tunnel only
 
@@ -429,10 +461,20 @@ packages and Definition-of-Done that turn each rule into CI-blocking code).
   > `apps/server/test/backup.test.ts` on every test run — though note the honest
   > distinction: that is a *test-exercised* restore; an operator-level restore drill
   > against real data is a release-checklist item (`WP-X9`), not something CI can
-  > prove. Of the adjacent hardening: hook-payload **redaction** is built
-  > (`WP-IN14`, applied before the idempotency key is computed, so raw secrets never
-  > reach the stored envelope or its hash), while the **retention TTL** (`WP-D10`) is
-  > not built yet.
+  > prove. The backup itself is no longer merely a capability: an in-process daily
+  > timer runs it (see
+  > [Scheduling, as built](../operations/backup-restore.md#scheduling-as-built)),
+  > because a backup routine nothing ever calls is not a backup either. Its cadence,
+  > expiry window and keep-minimum are PROVISIONAL constants, not ratified policy.
+  >
+  > Of the adjacent hardening: hook-payload **redaction** is built (`WP-IN14`, applied
+  > before the idempotency key is computed, so raw secrets never reach the stored
+  > envelope or its hash). **Retention** has split into two halves with different
+  > truth values: backup-file expiry runs as part of each backup pass, while the
+  > database-row sweeper exists as built, tested code whose policy is deliberately
+  > blank and whose runner is called from nothing but its own tests. Nothing is being
+  > deleted from the database today, and nothing will be until the window is ratified
+  > (OPEN-1) and a caller is wired.
 
 ## CI gates enforcing this
 
@@ -452,20 +494,40 @@ CI-observable condition:
 | 8. `ANTHROPIC_API_KEY` isolation | *(none needed — `WP-X11` deleted per best-path §6.3)* | No experimental stub exists; the key never enters the dashboard env (CD-10) | — |
 | 9. WAL + tested restore | `WP-D2`, `WP-F8`, `WP-X9` | Pragma assertion on connect; restore actually exercised; release-checklist line item | 1/6 |
 | License/provenance for any borrowed pattern | `WP-F6` | Non-allowlisted dependency license → CI red | 1 |
-| Coverage floor for all of the above | `WP-F3`, `WP-X5` | Merge-blocking **>90%** coverage gate, live from Phase 1 | 1 |
+| Coverage floor for all of the above | `WP-F3`, `WP-X5` | Merge-blocking **>90%** coverage gate, live from Phase 1 — *as built: the thresholds are 100, see the note below* | 1 |
 
 > **As built (what is verifiably wired today).** `.github/workflows/ci.yml` runs, in
-> order: typecheck, lint, format check, tests (the >90% floor is enforced as
-> `thresholds: { lines/branches/functions/statements: 90 }` in the per-package Vitest
-> configs, so the test step itself fails under 90%), the no-spawner/no-wide-bind/
-> no-eval gate (`gate:spawner`), and the license gate (`gate:licenses`). The rule 1/2/4/5
-> contract tests exist (`security-contract.test.ts`) and run inside the test step. Rows
-> 6's negative test is moot until the dispatcher exists (see rule 6), and row 9's
-> "restore exercised" is test-level (see rule 9). One honest caveat the workflow file
-> itself states: making CI **merge-blocking** requires a GitHub branch-protection rule,
-> which is an owner action on github.com and cannot be verified from the repository —
-> so "CI runs these gates" is proven, "a red gate blocks merge" is configuration this
-> page cannot attest.
+> this order: **the `gate:spawner` security gate first**, then typecheck, lint, format
+> check, the web production build (`pnpm --filter @agenthropic/web build`), the test
+> suite, and finally the license gate (`gate:licenses`). The ordering is deliberate and
+> stated in the workflow's own comment: the security gate is the cheapest check in the
+> file and the only one guarding an invariant the project cannot walk back, so a change
+> that breaks it is told so in seconds rather than after a full test run. The web build
+> is its own step because unit tests exercise modules under the Vitest transform — a
+> change that only breaks `vite build` would otherwise merge green and first fail at
+> release time.
+>
+> **The coverage floor is 100, not 90.** All four Vitest configs
+> (`apps/server`, `apps/web`, `packages/core`, `packages/shared`) set
+> `thresholds: { lines, branches, functions, statements: 100 }`, so the test step
+> itself fails below that. The configs carry their own justification, and it is the
+> reason the number moved rather than a boast: *"a 90% bar on a package sitting at
+> 100% licenses a ten-point regression to pass in silence, which is the opposite of a
+> gate."* Nor is the figure bought with suppressions — `src/**` contains zero
+> `v8 ignore` directives, and `apps/server/test/coverage-honesty.test.ts` fails the
+> build if one appears. When `server.ts` carried a genuinely unreachable `??` arm that
+> held branches at 99, the arm was **deleted**, not suppressed: an ignore pragma would
+> have removed both arms of the operator from the denominator and bought a cosmetic
+> 100. CD-7's ">90%" remains the ratified floor; 100 is where the code actually sits
+> and therefore where the gate is pinned.
+>
+> The rule 1/2/4/5 contract tests exist (`security-contract.test.ts`) and run inside the
+> test step. Row 6's negative test is moot until the dispatcher exists (see rule 6), and
+> row 9's "restore exercised" is test-level (see rule 9). One honest caveat the workflow
+> file itself states: making CI **merge-blocking** requires a GitHub branch-protection
+> rule, which is an owner action on github.com and cannot be verified from the
+> repository — so "CI runs these gates" is proven, "a red gate blocks merge" is
+> configuration this page cannot attest.
 
 The canonical decision tying all of this together is **CD-7** in
 `docs/analysis/concept-analysis-v2.md`: "Security + the coverage gate are boundary
@@ -497,18 +559,24 @@ bar**: none of the nine rules was relaxed, and the KC kill-checkpoint calendar i
 
 As built today:
 
-- **Running and test-proven:** loopback-or-fail bind, mandatory-token-or-fail-startup,
-  the global timing-safe token gate on every route, same-origin-before-auth on
-  `/api/stream` (SSE per CD-5), WAL + `foreign_keys` asserted on every connection,
-  online backup with an integrity-checked restore path, hook-payload redaction before
-  the idempotency key, and the no-spawner/no-wide-bind/no-eval and license static
-  gates running in CI.
+- **Running and test-proven:** loopback-or-fail bind, mandatory-token-or-fail-startup
+  (including the 16-character minimum), the global timing-safe token gate on every
+  route, same-origin-before-auth on `/api/stream` (SSE per CD-5), WAL +
+  `foreign_keys` asserted on every connection, online backup with an
+  integrity-checked restore path *and* a daily in-process schedule that fires it,
+  hook-payload redaction before the idempotency key, and the
+  no-spawner/no-wide-bind/no-eval and license static gates running in CI.
 - **Satisfied by absence:** no subprocess surface, no outbound dial of any kind (the
   webhook dispatcher does not exist yet), no `ANTHROPIC_API_KEY` anywhere in the tree.
-- **Still design, not code:** the webhook sink and Telegram relay (post-1.0, KC-5),
-  the retention TTL (`WP-D10`), and the operator-level restore drill (`WP-X9`,
-  release checklist). Whether CI is *merge-blocking* is a GitHub branch-protection
-  setting this repository cannot attest.
+- **Built but deliberately inert:** the `WP-D10` retention sweeper. The mechanism,
+  its protected-table list, its journal receipt and its bounded runs are all code with
+  tests; the policy is blank and the runner is wired into nothing, so no row is being
+  deleted. This is a *chosen* state, not an unfinished one — the retention window has
+  not been ratified (OPEN-1), and shipping a default guess would delete real data on
+  an unowned number.
+- **Still design, not code:** the webhook sink and Telegram relay (post-1.0, KC-5) and
+  the operator-level restore drill (`WP-X9`, release checklist). Whether CI is
+  *merge-blocking* is a GitHub branch-protection setting this repository cannot attest.
 - **Operational rules unchanged:** tunnel-only remote access (rule 7) remains a
   procedure, not a unit test — see [remote access](remote-access.md).
 
@@ -527,9 +595,13 @@ exceptions named honestly above.
   rule 7.
 - [Backup & restore](../operations/backup-restore.md) — WAL, backup, tested restore,
   and retention/redaction in depth (rule 9).
+- [Troubleshooting](../operations/troubleshooting.md) — how to read `/api/health`
+  (itself behind the rule 2/5 token gate, so a probe needs the token) and the corpus
+  containment violation that shuts the server down rather than skipping past it.
 - [Licensing & provenance](../contributing/licensing.md) — the clean-room-vs-attribution
   rule (CD-9) behind the `cast` pattern note in rule 2.
-- [Testing & quality](../contributing/testing.md) — the merge-blocking coverage gate
+- [Testing & quality](../contributing/testing.md) — the coverage gate (thresholds at
+  100, enforced by the test step; merge-blocking still depends on branch protection)
   and the negative-test catalogue that backs rules 3, 5, and 6.
 - [Roadmap](../guide/roadmap.md) — where Phase 0's hard stop and Phase 1's security
   spine sit in the overall build sequence.

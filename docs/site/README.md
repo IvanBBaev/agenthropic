@@ -13,12 +13,23 @@ later without touching page content.
 > existed**. Implementation began **2026-07-11** (by explicit owner override of the CD-8
 > no-code-before-Phase-0 gate), so pages that describe agenthropic as "pre-code" or
 > "bootstrap phase" are design history, not current truth. What runs today: the
-> loopback-bound, token-gated Fastify server; the SQLite/WAL substrate with a migration
-> runner; JSONL corpus ingest with replay-on-startup; the persisted subagent DAG; the cost
-> engine (compaction repricing + delegation savings); the hook receiver; the SSE realtime
-> hub; the read API; and all four dashboard views (live status, session tree, global DAG,
-> cost/Sankey). **72 test files / 879 tests pass**, with coverage gated >90% in every
-> shipped package (`packages/test-fixtures` is a deliberate, documented exclusion).
+> loopback-bound, token-gated Fastify server; the SQLite/WAL substrate with thirteen
+> migrations and a daily backup timer; JSONL corpus ingest with replay-on-startup and
+> tail-follow polling that re-reads only new bytes; the persisted subagent DAG; the cost
+> engine (compaction repricing + delegation savings); the hook receiver and its installer;
+> the status watchdog that ages an unobserved agent to `unknown`; the SSE realtime hub; the
+> read API; and all four dashboard views (live status, session tree, global DAG,
+> cost/Sankey) plus a per-session cost-analysis panel. Retention is **mechanism-built,
+> policy-unset** — the default is a no-op and nothing prunes.
+>
+> Test figures, re-measured 2026-08-15 on the working tree: **106 test files / 1554 tests**,
+> with **100% statements, branches, functions and lines** enforced in **all five** packages —
+> `packages/test-fixtures` is no longer an exclusion, it is inside the gate. Two things that
+> figure does not mean: the thresholds fail the CI run but do not yet *block a merge* (that
+> needs a branch-protection rule on `main`, an owner action, still unset at the last
+> recorded check), and coverage of the code is not accuracy of the output — the
+> hierarchy-accuracy exit gate still reports **NOT CERTIFIED at n = 0** because no session
+> has been hand-labeled.
 >
 > Three things are **not** true of the running system, and every affected page below now
 > says so: there are only **four real hooks** (`UserPromptSubmit`, `Stop`, `SubagentStop`,
@@ -30,19 +41,29 @@ later without touching page content.
 >
 > Two honesty caveats stand across the whole corpus: the Phase-0 spike numbers remain
 > **PROVISIONAL** until ratified against a hand-labeled corpus, and the v1.0 "<30s to
-> understand a session" usability claim is **unmeasured**. Kill checkpoints **KC-0 and KC-1
-> both passed unmet** — work continues by explicit owner override, not because the gates
-> were satisfied. See [`guide/roadmap.md`](guide/roadmap.md) for the full checkpoint record.
+> understand a session" usability claim is **unmeasured** — nobody has ever timed it. Kill
+> checkpoints **KC-0 and KC-1 both passed unmet** — work continues by explicit owner
+> override, not because the gates were satisfied. See [`guide/roadmap.md`](guide/roadmap.md)
+> for the full checkpoint record.
 >
 > Amendment convention (how pages are corrected without erasing the design record):
-> [`STYLE-GUIDE.md`](STYLE-GUIDE.md) § "As-built amendments".
+> [`STYLE-GUIDE.md`](STYLE-GUIDE.md) § "As-built amendments". This block is the single
+> amendment blockquote that convention allows; its contents are refreshed in place as the
+> tree moves, most recently on **2026-08-15**.
 
-> **On the generator.** Still deferred (`DOC-P1` / ADR-0013) — but the corpus **does**
-> publish: `.github/workflows/pages.yml` renders it with the stock GitHub Pages Jekyll
+> **On the generator.** Still deferred (`DOC-P1` / ADR-0013) — but the corpus **is wired to
+> publish**: `.github/workflows/pages.yml` renders it with the stock GitHub Pages Jekyll
 > builder, adding zero dependencies. Its source root is `docs/`, not `docs/site/`, because
 > the site tree cross-links heavily into `../analysis/` and `../due-diligence/`. **Pages is
-> not yet enabled on the repository** (Settings → Pages → Source: "GitHub Actions" — an
-> owner action), so the deploy job fails by design rather than pretending to succeed.
+> still not enabled on the repository**, so no site is live and every run of that workflow
+> fails at the Configure Pages step. The fix is a one-time owner action (Settings → Pages →
+> Source: "GitHub Actions"). It cannot be automated away: the workflow does pass
+> `enablement: true`, but a workflow's `GITHUB_TOKEN` may only deploy to a Pages site that
+> already exists — creating one needs repository-administration rights the token
+> deliberately never has. Two runs proved it with `Create Pages site failed. Error:
+> Resource not accessible by integration`. Failing loudly there is the intended behaviour;
+> a job that "succeeded" while deploying nowhere would be worse. Until the click happens,
+> read this corpus in the repository.
 
 ## Site map
 

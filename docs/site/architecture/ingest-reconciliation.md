@@ -40,10 +40,13 @@ tests that gate every merge from Phase 3 onward.
 >   the cross-source idempotency key (§5) and the separate Normalizer/Projection stages
 >   (`WP-IN6`/`WP-IN7`, §4) were **never built**. Idempotency-keyed `events_raw` exists
 >   and is append-only (trigger-enforced) — for the hook leg.
-> - **Change detection is an lstat fingerprint** (`rel:size:mtime` per session file,
->   in-memory), not a durable byte/line tail offset (§6). Any change triggers an
->   **idempotent whole-session re-ingest**; a restart's first watcher tick *is* the
->   replay (§7). Determinism comes from the parse being pure and the writes being
+> - **Change detection is an lstat fingerprint** (`size:mtime` for the main transcript
+>   plus one `rel:size:mtime` entry per subagent artifact), not a durable byte/line tail
+>   offset (§6). It is in-memory by default, with an **opt-in persisted checkpoint**
+>   (`ingest_checkpoints`, migration 9) that shortens a restart without being allowed to
+>   change what a restart produces (§6.1). Any change triggers an **idempotent
+>   whole-session re-ingest**; a restart's first watcher tick *is* the replay (§7).
+>   Determinism comes from the parse being pure and the writes being
 >   upserts/INSERT-OR-IGNORE, not from a persisted offset.
 > - **CD-1 is intact**: hooks contribute **liveness only, never structure** — no hook
 >   ever creates an agent, an edge, or a token row. Hook deliveries are normalized into a
@@ -155,9 +158,10 @@ on the optimistic hook existing.
 
 > **As built:** the prediction held — `SubagentStart` does not exist. The hooks installer ships
 > exactly **four** real lifecycle hooks (`UserPromptSubmit`, `Stop`, `SubagentStop`,
-> `PreCompact`), and the edge derivation never needed any of them: all four
+> `PreCompact`), and the edge derivation never needed any of them: all five
 > `orchestration_edges` join paths (`tool_use`, `directory`, `queue_operation`,
-> `task_notification`) come from the JSONL parser alone.
+> `task_notification`, and the pre-2.1.71 `legacy_explore` fallback) come from the JSONL
+> parser alone.
 
 ## 4. The substrate that makes either verdict safe: `events_raw` + deterministic projection
 
@@ -273,17 +277,123 @@ Tokens are copied **verbatim** off this tail — never re-derived, never estimat
 the mechanical enforcement of the ground-truth-tokens invariant at the one place tokens enter
 the system at all (DESIGN §3; concept-analysis-v2 §5, Strengths).
 
-> **As built: no tail-follow, no durable offsets.** `WP-IN5` shipped as a **polling corpus
-> watcher** (default interval 3 s, `PROVISIONAL`; deliberately polling rather than
-> `fs.watch`) with an **in-memory lstat fingerprint** per session file
-> (`relative-path:size:mtime`). Any fingerprint change triggers an **idempotent whole-session
-> re-ingest** — the file is re-parsed from the start and re-projected in one transaction. This
-> is the first bullet's "re-read on restart, rely on idempotent writes to de-dupe" branch,
-> chosen deliberately: session transcripts are small enough that a full re-parse is cheap, and
-> the double-replay P0 test (§10) proves the de-dupe rather than assuming it. The trade is
-> honest — a restart re-ingests rather than resumes, so recovery costs a full pass over the
-> corpus (the watcher's first tick), never data loss. The verbatim-tokens rule is unchanged:
-> the parser copies `usage` counts as-is, and per-message dedupe happens before summation.
+> **As built: no byte offsets — a fingerprint, in memory by default and optionally
+> persisted.** `WP-IN5` shipped as a **polling corpus watcher** (default interval 3 s,
+> `PROVISIONAL`; deliberately polling rather than `fs.watch`, because polling is
+> deterministic and immune to the platform-specific event coalescing that loses appends).
+> Change detection is an **lstat fingerprint per session**: the main transcript's
+> `size:mtime` plus one `relative-path:size:mtime` entry per subagent artifact, sorted, with
+> no file content read at all. Any fingerprint change triggers an **idempotent whole-session
+> re-ingest** — the session is re-parsed and re-projected in one transaction. This is the
+> first bullet's "re-read, rely on idempotent writes to de-dupe" branch, chosen deliberately:
+> the double-replay P0 test (§10) proves the de-dupe rather than assuming it. The
+> verbatim-tokens rule is unchanged: the parser copies `usage` counts as-is, and per-message
+> dedupe happens before summation.
+
+### 6.1 The checkpoint that makes a restart cheap without making it trusting
+
+The fingerprint map lives in process memory, so a restart starts blank and every session
+counts as changed. That is correct, and on a small corpus it is also free — but on the
+measured corpus (12.80 GiB across 1855 sessions) a full cold replay projects to roughly
+**137 s of boot-time work**, paid again on every restart, for sessions whose bytes have not
+moved in months.
+
+Migration 9 added `ingest_checkpoints` and the watcher grew an **optional** `checkpoints`
+dependency: supply it and the fingerprint map is hydrated from the database on the first
+tick, so an unchanged session is not merely ingested-and-ignored — it is never read from
+disk at all, because the runner applies its session filter before building any substrate.
+Omit it, and the watcher behaves exactly as it always did.
+
+The optionality is the design, not a hedge. **The unconditional full replay is the fail-safe
+path and stays the default**, and it is the path the P0 double-replay proof exercises. Around
+that, four rules keep the cache from ever becoming an answer:
+
+- **Scope.** Checkpoints are keyed by a sha-256 of the *resolved* corpus root, so a different
+  root can never be mistaken for the same corpus — and no absolute path (which on this
+  machine encodes the user's home directory and project names) is persisted.
+- **Revision.** Every row carries `REPLAY_CHECKPOINT_REVISION` (currently `1`), a stamp of
+  the ingest semantics that produced the projection. Bumping it when the parser, the cost
+  engine or the projected schema changes invalidates every checkpoint at once, instead of
+  letting a code change quietly leave stale rows in place. It is a constant in code precisely
+  so the bump shows up in a diff.
+- **Proof of projection.** A checkpoint is honored only while its session still has a row in
+  `sessions`; the lookup joins on that existence. A checkpoint may therefore never be the
+  reason a session is invisible — restore an older backup, delete a row by hand, and the
+  session re-ingests exactly as it would have.
+- **Degrade, never crash.** Every statement is wrapped: an absent, corrupt or unwritable
+  checkpoint table yields an empty map — a full replay — never an exception into the ingest
+  loop.
+
+And what is deliberately *not* trusted is the fingerprint on its own: only a session this
+process successfully projected in that pass is checkpointed. A failed or quarantined session
+is never written, so a restart always hands it a fresh retry budget.
+
+### 6.2 Reading the corpus without being tricked by it
+
+The corpus is user-writable data on the same machine, so the read layer treats it as
+untrusted input rather than as its own filesystem. Files are opened `O_RDONLY | O_NOFOLLOW`
+and the open descriptor is re-checked with `fstat` — closing the window between "we checked
+this path" and "we read this file"; directory entries are examined with `lstat`, never
+`stat`, so a symlink is seen as a symlink instead of as whatever it points at. Every resolved
+path must still sit under the corpus root.
+
+The two error classes that come out of this layer are deliberately different in kind:
+
+- **`OversizeError` and ordinary I/O hazards are per-file skips.** They are counted and
+  reported as a `SkippedFile` with a reason (`oversize`, `symlink`, `not-regular-file`,
+  `unreadable`, `empty-agent`, `empty-main`, `non-artifact`, `duplicate-session`) — the run
+  continues. A file that cannot be read honestly is announced, never silently dropped.
+- **`ContainmentError` aborts the entire run.** A traversal-shaped entry name or a path that
+  escapes the root is not a damaged file, it is a *crafted* corpus, and the only safe response
+  to that is to stop touching the corpus rather than to skip one entry and keep going. The
+  watcher stops itself permanently and surfaces it through `onFatal`, which the composition
+  root turns into a loud non-zero exit.
+
+One more whole-run abort exists, for a related reason: an **unreadable corpus root**. Returning
+an empty summary there would report a root the runner could not even list as a quiet, fully
+ingested corpus — a confident lie about the entire corpus. It throws instead, and the watcher's
+tick catch turns it into an honest `read-error` outcome that retries next poll.
+
+The read caps are bounds, not truths, and are labelled as such: `DEFAULT_MAX_FILE_BYTES` is
+64 MiB and `DEFAULT_MAX_DEPTH` is 4 (real artifacts reach depth 3 under a session directory),
+both **PROVISIONAL (LABEL-ME)** — chosen to be comfortably above anything observed, not
+derived from a measured distribution.
+
+### 6.3 The tail read, and a cache that can cost speed but never answers
+
+Live transcripts are append-only in practice, yet every watcher pass re-read each changed
+file in full, which makes a poll cost O(total corpus bytes) instead of O(new bytes). A
+decorator over the filesystem port now serves `.jsonl` reads from a byte-offset cache, using
+a confined tail read that keeps the same `O_NOFOLLOW` + `fstat` guarantees as a full read.
+Its cap applies to the **whole file**, not to the requested slice, so an oversize file cannot
+be smuggled in one tail at a time.
+
+Three anchors make "cached read ≡ full read" a property rather than a hope:
+
+- **Only complete lines are cached.** A region is cached only up to the last `0x0A`. Because
+  `0x0A` cannot occur inside a multi-byte UTF-8 sequence, decoding chunks split at newline
+  boundaries is byte-for-byte equivalent to decoding the whole file. The torn remainder after
+  the last newline — possibly half a character — is re-decoded fresh on every call and never
+  cached, so it decodes together with its completion once the writer finishes the line.
+- **An overlap window is re-read and compared** on every incremental read, so an in-place
+  rewrite that happens to grow the file is detected instead of silently mis-served. Any
+  divergence — the file shrank, the overlap bytes differ — drops the entry and falls back to
+  a full read.
+- **Any error from the inner filesystem drops the entry and propagates untouched**, so the
+  decorator is invisible to every error-handling arm above it.
+
+Its tuning constants — `OVERLAP_BYTES` 4096, `MAX_CACHE_BYTES` 128 MiB, `MAX_CACHE_ENTRIES`
+512 — are all **PROVISIONAL (LABEL-ME)**.
+
+### 6.4 One session id, one session — the duplicate-session rule
+
+A session uuid can appear under more than one project-slug directory (the same session
+recorded against two slugs). Enumeration keeps exactly **one** ref for it, chosen
+deterministically by the smallest-sorting `projectSlug`, and records every other copy as a
+`duplicate-session` skip. Two details are load-bearing: the losers are reported **before** the
+per-session loop, and **regardless of any session filter** — a shadowed copy is a corpus-level
+fact, not a property of an admitted ref, so it must not become invisible just because the
+watcher is only looking at changed sessions this pass.
 
 ## 7. Replay-on-startup
 
@@ -310,7 +420,73 @@ achievable at all: **"replay-from-fixtures needs a deterministic durable source"
 > Because the parse is pure and every write is an upsert/`INSERT OR IGNORE`, running it twice
 > leaves the projected tables identical — the double-replay P0 test (§10) asserts exactly
 > this. Determinism is delivered by purity + idempotent writes rather than by
-> replaying an `events_raw` log of JSONL envelopes (which does not exist, §4).
+> replaying an `events_raw` log of JSONL envelopes (which does not exist, §4). With
+> checkpoints enabled (§6.1) the *work* of that first tick shrinks to the sessions whose
+> bytes moved; the *result* is identical either way, which is the whole reason the
+> checkpoint is allowed to exist.
+
+### 7.1 The order inside one session is itself a decision
+
+For a single session the pipeline is fixed, and each boundary is there for a reason:
+
+```
+parseSession → computeCostUsd (the HALT GATE) → normalizeSession → projectSession
+```
+
+**Cost is computed before any write.** An unknown model id throws `PricingError` while the
+database is still untouched, so an unpriceable substrate can never leave a partial session,
+agent or usage row behind. The alternative — write first, price later — would have produced
+exactly the silent zero-dollar rows the cost model refuses to emit (see
+[cost model](../architecture/cost-model.md)).
+
+**The two steps after the gate are the `WP-IN6`/`WP-IN7` pair, and the split survived even
+though the stages did not.** `normalizeSession` is pure — no database, no clock, no I/O — and
+decides the row shapes, the parent-first agent ordering the self-referential foreign key
+demands, and which parent references must be nulled, all as a value that can be asserted in a
+test without a database. `projectSession` does nothing but write that value inside **one
+transaction**, stamping each edge from an injected clock. A session commits whole or not at
+all.
+
+**`ingestSession` never rethrows.** Every failure path collapses into an outcome with
+`ok: false` and a human-readable reason, which is what lets the corpus runner isolate one
+poisoned session — a non-JSON line, an unpriceable model, a build that yields nothing — and
+count it without sinking the rest of the corpus. The runner still wraps the call in its own
+try/catch as belt-and-braces.
+
+### 7.2 What one tick reports
+
+A pass used to return a summary or `null`, which merged "the corpus is fully checkpointed and
+quiet" with "there is no corpus root" and with "the root could not be read". That is the same
+collapse of distinct facts the dashboard forbids for agent status, where `unknown` is never
+`null` — so the tick now returns a seven-armed outcome, six of whose arms carry no summary at
+all but are six *different* facts:
+
+| Outcome | What it means |
+|---|---|
+| `ingested` | A pass ran and ingested the changed sessions (carries the summary). |
+| `unchanged` | A pass ran; every session on disk matched its committed fingerprint. |
+| `no-corpus-root` | No corpus root resolved — not configured, or gone. Fingerprints reset. |
+| `overlapped` | A re-entrant call arrived while a pass was in flight; this call did nothing. |
+| `stopped` | The watcher was already stopped; polling is over. |
+| `read-error` | Transient I/O trouble; the pass was skipped and retries next tick. |
+| `containment-halt` | A `ContainmentError` escaped; the watcher stopped itself, for good. |
+
+Per-session failures inside a pass have their own posture. A fingerprint is committed only
+for a session that did not fail, so a failed session stays "changed" and is retried next
+tick — committing unconditionally once made failure *terminal*, leaving the dashboard silently
+empty while `/api/health` still reported "ok". Retries are bounded: after
+`MAX_INGEST_ATTEMPTS` (3) consecutive failures against the **same** fingerprint the session is
+quarantined, which works by committing its fingerprint and thereby stopping the retry loop. It
+is re-admitted with a fresh budget as soon as its file changes **or the pricing table
+changes** — the canonical cure for a halt-gate failure is seeding the missing pricing row, and
+that row has to unblock the watcher without a restart.
+
+Every failure is reported through a single seam, so a silent dashboard always has a matching
+report: session id, a 1-based `attempt` count, a `willRetry` flag that goes false at
+quarantine, and a **sanitized** reason. Sanitizing means absolute paths collapse to `<path>`
+(they encode the user's home directory and project names), all whitespace collapses to single
+spaces so a reason can never forge a second log line, and the result is capped at 300
+characters. An ordinary halt-gate refusal survives that treatment verbatim.
 
 ## 8. Reconciliation precedence & backfill (CD-3)
 
@@ -492,13 +668,20 @@ dependency edge in the build graph, not a note in a README (development-plan §1
 > **As built**, the Phase-2 row reads differently in two places: the collapse-to-one-row gate
 > holds for the **hook leg** (a duplicate hook delivery lands zero new rows, §5); and
 > "resumes at the persisted offset" was replaced by **fingerprint change → idempotent
-> whole-session re-ingest** (§6) — same zero-loss/zero-dup outcome, different mechanism. The
-> unknown-`event_type`-stored-not-crashed gate holds as written. The Phase-3 row's substance
-> is built: the three P0 tests exist (§10), the missing-`Stop` watchdog is live (§8), and
-> `PreCompact` repricing runs compaction-aware with the delta≈0 invariant (see
-> [cost model](../architecture/cost-model.md)). Note also that the CD-8 hard stop described
-> here was ultimately crossed by **explicit owner override on 2026-07-11**, not by a ratified
-> `WP-S7` GO — which is why the spike numbers stay `PROVISIONAL`.
+> whole-session re-ingest** (§6) — same zero-loss/zero-dup outcome, different mechanism, with
+> the optional `ingest_checkpoints` table (§6.1) recovering the *speed* the persisted offset
+> was meant to buy without inheriting its trust assumptions. The
+> unknown-`event_type`-stored-not-crashed gate holds as written. Three of the Phase-3 row's
+> four items are built: the three P0 tests exist (§10), the missing-`Stop` watchdog is live
+> (§8), and `PreCompact` repricing runs compaction-aware with the delta≈0 invariant (see
+> [cost model](../architecture/cost-model.md)). **The fourth is not met, and the row is
+> therefore not satisfied** — "hierarchy ≥95% vs. the labeled corpus" has never been scored,
+> because the labeled corpus does not exist yet (the `LABEL-ME` trees are still blank
+> templates); the gate reports `NOT CERTIFIED` at `n = 0` against a required `n ≥ 52`. Two
+> smaller readings also need correcting: the P0 tests are **CI-failing, not merge-blocking**
+> as §10 words it, because `main` carries no branch-protection rule; and the CD-8 hard stop
+> described here was ultimately crossed by **explicit owner override on 2026-07-11**, not by
+> a ratified `WP-S7` GO — which is why the spike numbers stay `PROVISIONAL`.
 
 ## What's undecided
 
@@ -509,9 +692,15 @@ dependency edge in the build graph, not a note in a README (development-plan §1
 >   Implementation began 2026-07-11 by explicit owner override of CD-8; the spike numbers
 >   remain `PROVISIONAL` until ratified against the hand-labeled corpus.
 > - **Join key (G0.1b)** — resolved as a **hard key**: the parser keys on the
->   `Agent`/`Workflow` `tool_use` spawns and joins edges through four deterministic paths
->   (`tool_use`, `directory`, `queue_operation`, `task_notification`); the desktop probe
->   measured 0.000% depth-1 orphans and 100% usage attribution. No confidence-scored
+>   `Agent`/`Workflow` `tool_use` spawns and joins edges through four deterministic
+>   structural paths (`tool_use`, `directory`, `queue_operation`, `task_notification`); the
+>   desktop probe measured 0.000% depth-1 orphans and 100% usage attribution. A fifth path,
+>   `legacy_explore`, was added for pre-2.1.71 transcripts whose `Explore` sidecars carry no
+>   `toolUseId` — it is tried only after all four structural paths miss, requires two
+>   independent signals to agree, and carries its own `source` label so a consumer can always
+>   tell inference from observation. It is **implemented but not measured**: the shape is
+>   absent from the available corpus, so it is exercised by fixtures only and stays
+>   `PROVISIONAL` until a real pre-2.1.71 transcript ratifies it. No confidence-scored
 >   heuristic ships — an unresolvable row stays honestly `NULL` and an orphan gets **no**
 >   edge, never a guessed one.
 > - **Hook catalog (G0.2)** — verified: four real hooks (`UserPromptSubmit`, `Stop`,
@@ -519,14 +708,22 @@ dependency edge in the build graph, not a note in a README (development-plan §1
 > - **Missing-`Stop` late-arrival rule** — built (§8): the watchdog flips stale non-terminal
 >   agents to `unknown`, and a later re-ingest upserts the status the JSONL evidence
 >   supports.
-> - **Retention / redaction / huge-payload** — partially resolved: payload **redaction is
+> - **Retention / redaction / huge-payload** — partially resolved. Payload **redaction is
 >   built at ingest** (key-name matching plus credential-shape masking, applied *before* the
->   idempotency key), with the exact policy pending owner sign-off; the retention TTL sweeper
->   and the huge-payload threshold are **not built** and remain open.
+>   idempotency key), with the exact policy pending owner sign-off. Retention is now split
+>   cleanly: the **mechanism exists** (a policy-driven prune with a protected-table list that
+>   only ever allows `events` and `token_usage` to be touched, a bounded rows-per-run cap, and
+>   a `NO_RETENTION` default that is a byte-identical no-op), while the **policy — which TTL,
+>   for which table — is still unset and owner-owned**, so `WP-D10` is not done. The
+>   huge-payload threshold remains open. See [the data model](../architecture/data-model.md)
+>   for the table-by-table detail.
 > - **Hook-POST authentication** — answered: the hook receiver sits behind the same
->   mandatory-token gate as every other endpoint, and the installer writes hook commands that
->   reference `${DASHBOARD_TOKEN}` by shell expansion — the token never lands verbatim in
->   `~/.claude` scripts.
+>   mandatory-token gate as every other endpoint, and the installed hook command never puts
+>   the token on any command line. The value is imported into curl from the environment with
+>   `--variable '%DASHBOARD_TOKEN'` and expanded *inside* curl, after argv parsing, by
+>   `--expand-header` — so neither the hook shell's argv nor curl's own argv ever carries it,
+>   and the token never lands verbatim in `~/.claude` scripts. See
+>   [hook ingestion](../architecture/hooks.md) for the mechanism and its curl version floor.
 
 This page documents a contract that is fixed (CD-2, CD-3, idempotency, replay) wrapped around
 a decision that was, when this was written, explicitly **not** fixed yet (CD-1). Being precise
@@ -568,8 +765,8 @@ about which was which at the time:
   uncertainty, and `SubagentStop` handling.
 - [The DAG moat](../architecture/dag-moat.md) — dual-path `orchestration_edges` derivation and
   the outage-rebuild story in full.
-- [Cost model](../architecture/cost-model.md) — how `token_usage`'s compaction baseline and
-  the `PreCompact` reprice test build on the JSONL-authoritative token precedence in §8.
+- [Cost model](../architecture/cost-model.md) — how compaction-aware repricing and its
+  delta≈0 invariant build on the JSONL-authoritative token precedence in §8.
 - [Testing](../contributing/testing.md) — the golden fixture corpus and the P0 test harness in
   full.
 - [Decisions (ADRs)](../contributing/decisions/README.md) — CD-1, CD-2, CD-3, and CD-8 as

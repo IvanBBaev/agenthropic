@@ -1,6 +1,6 @@
 # ADR-0010: CD-8 — Phase 0 is a throwaway GO/NO-GO feasibility spike
 
-- **Status:** accepted, then **OVERRIDDEN by the owner on 2026-07-11** — the hard ❌-stop gate ("no production code until green") was bypassed, **not** satisfied; spike numbers remain PROVISIONAL (LABEL-ME) pending ratification. See the as-built update below.
+- **Status:** accepted, then **OVERRIDDEN by the owner on 2026-07-11** — the hard ❌-stop gate ("no production code until green") was bypassed, **not** satisfied; spike numbers remain PROVISIONAL (LABEL-ME) pending ratification. **Re-checked 2026-08-15 — no part of the override has been retired: `WP-S7` still has not run.** See the as-built updates below.
 - **Date:** 2026-07-03
 - **Deciders:** Ivan Baev (project owner), via the six-lens concept-analysis-v2 workflow
 - **Source:** [`concept-analysis-v2.md` §3, row CD-8](../../../analysis/concept-analysis-v2.md#3-canonical-decision-register-v2)
@@ -76,6 +76,30 @@ architecture was validated *after* being committed to, by tests the same author
 wrote, on fixtures rather than a hand-labelled corpus — which is better than
 EXPANDED's "validate at the Phase-4 UI walkthrough," and worse than what CD-8
 specified.
+
+## As-built update — 2026-08-15
+
+Two things to record, and neither of them improves this ADR's standing.
+
+**First, a narrowing.** "Three merge-blocking P0 proofs" should be read as "three
+CI-failing P0 proofs". They run on every push and pull request and fail the run; nothing
+withholds a merge, because `main` is not branch-protected (`404 Branch not protected`,
+verified 2026-08-15). See [the standing correction](README.md#a-standing-correction-merge-blocking).
+
+**Second, and more to the point for an ADR about a gate that was overridden: no part of the
+override has been retired.** `WP-S7` has still not run. `WP-S3` / G0.1b has still not been
+run as a formal probe. No hand-labelled corpus exists, so the ≥95% hierarchy criterion
+still has nothing to measure against and the exit gate still refuses to certify rather than
+reporting a number it cannot defend. Every Phase-0 figure remains **PROVISIONAL** and
+**LABEL-ME**.
+
+The evidence base *has* grown since 2026-07-30 — the coverage bar is now 100 across five
+packages ([ADR-0009](adr-cd-7-security-and-coverage-boundary.md)), the P0 proofs still
+hold, and six further migrations have landed without disturbing them. But it has grown in
+the same direction it already pointed: more tests, written by the same author, against
+fixtures rather than the ratified paired-capture corpus this ADR asked for. That is worth
+having and it is not what was specified. **An override does not become a pass by ageing
+well.**
 
 ## Context
 

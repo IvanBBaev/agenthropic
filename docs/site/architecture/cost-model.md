@@ -149,6 +149,14 @@ specifically because its bucketing is production-grade (DESIGN §4):
 > `agent_id` is nullable, but there is no post-write backfill pass: attribution happens
 > **inside the parser** via the hard join (parser-spec §5.1), before any row is
 > written, and a `NULL` means genuinely unattributable.
+>
+> One column in that DDL does nothing, and is documented rather than quietly implied to
+> work: **`is_compaction_baseline` is dead** (implementation review 2026-08-09, finding
+> L-7). The writer inserts a literal `0` into it and no read path anywhere consults it —
+> compaction is handled entirely by the repricer over parsed boundaries ([§6](#6-compaction-baseline-repricing)),
+> not by a flag on a row. It survives because dropping a column costs a full table
+> rebuild for no behavioral gain; what it must not do is mislead a reader into thinking a
+> baseline flag is what makes compaction repricing work.
 
 The source docs name these three dimensions as rate-changing without enumerating their
 literal values or exact column types — that detail is schema work not yet written
@@ -216,12 +224,20 @@ enforces it. Two honest departures from the CD-4 sketch:
 
 - **`verified_on` was not built.** The re-verification stamp lives in the seed's
   source comment and its PROVISIONAL label, not in a column.
-- **The seed rates are approximate list prices, floor-dated** (a single
-  `effective_from` for all seeded rows), with cache buckets derived from the input
-  rate (`cache_read` = 0.1×, `cache_write_5m` = 1.25×, `cache_write_1h` = 2.0×) and a
-  `'<synthetic>'` model priced at zero so synthetic rows never halt pricing. The seed
-  is **PROVISIONAL** — the model IDs were checked against the real corpus, the dollar
-  figures were not independently verified.
+- **The seed rates are approximate list prices, floor-dated** — a single
+  `PRICING_SEED_EFFECTIVE_FROM` (`2026-01-01`) for every seeded row, deliberately earlier
+  than the oldest transcript on disk so no historical message can fall off the front of
+  the dated lookup — with cache buckets derived from the input rate (`cache_read` = 0.1×,
+  `cache_write_5m` = 1.25×, `cache_write_1h` = 2.0×) and a `'<synthetic>'` model priced at
+  zero so synthetic rows never halt pricing. The seed is **PROVISIONAL**: the model ids
+  were checked against the real corpus (2026-07-13), the dollar figures were not
+  independently verified.
+- **A later migration converged the seed rather than editing it.** An applied migration is
+  immutable — the runner records a content checksum per migration and refuses to start if
+  one changed — so widening the seed's coverage required migration 11 to re-apply it
+  idempotently, with the seed values duplicated inside that migration so its own checksum
+  covers them. [The data model](../architecture/data-model.md) carries the full seed table,
+  the coverage counts it was verified against, and the migration-checksum mechanism.
 
 **What is genuinely undecided:** the *authoritative dated source* for these rates and
 the *refresh cadence* that keeps the staleness-fails-CI test honest as the model lineup
@@ -331,15 +347,37 @@ Phase-0 question (`G0.2b`, concept-analysis-v2 §7, question 4). Until that prob
 treat "compaction reprices correctly" as the target contract, not a confirmed
 implementation mechanism.
 
-> **Resolved as built: the JSONL branch won.** Compaction boundaries are detected in
-> the parsed transcript substrate itself — no hook-time snapshot exists, and the
-> `PreCompact` hook contributes a liveness timestamp only. Baseline rows are flagged
-> with `token_usage.is_compaction_baseline = 1`, and the repricer
-> (`packages/core/src/cost/compaction-repricing.ts`) prices segments against preserved
-> baselines with a tested invariant that segmenting introduces no drift (the delta
-> against the unsegmented total is ~0). One genuinely open sub-question is documented
-> in the code rather than hidden: whether a usage row landing exactly *at* a boundary
-> belongs to the closing or opening segment.
+> **Resolved as built: the JSONL branch won.** Compaction boundaries are detected in the
+> parsed transcript substrate itself — no hook-time snapshot exists, and the `PreCompact`
+> hook contributes a liveness timestamp only. Note that no row is *flagged* as a baseline:
+> `token_usage.is_compaction_baseline` is a dead column ([§2](#2-token_usage-bucketed-by-whatever-changes-the-rate)),
+> and the whole mechanism lives in the repricer
+> (`packages/core/src/cost/compaction-repricing.ts`), which cuts each transcript's usage
+> stream at its own boundaries and prices the segments.
+
+Three segmentation rules are settled, and one of them was open when this page was first
+written:
+
+- **Boundaries are per-transcript.** A boundary with a `null` agent id cuts only the main
+  agent's usage stream; a boundary carrying an agent hex cuts only that subagent's stream
+  (compaction mid-agent).
+- **A usage row timestamped exactly *at* a boundary belongs to the segment the boundary
+  opens** — the boundary record precedes the usage that follows it. This is the sub-question
+  the earlier text left open; it is now decided, in code and in test.
+- **Every transcript that carries usage or boundaries emits all `boundaryCount + 1`
+  segments, empty ones included**, so a reset that recorded no priced usage stays visible
+  instead of vanishing from the breakdown.
+
+The result deliberately exposes both figures — `naiveUsd` (the boundary-blind single-pass
+sum, which is exactly `computeCostUsd`) and `repricedUsd` (the sum of per-segment costs) —
+so that their difference is inspectable rather than assumed. **That difference is the exit
+gate.** On a complete, correctly deduped substrate the per-message usage rows are ground
+truth and cost is linear over them, so `deltaUsd` *must* be ~0 within floating-point
+epsilon. A materially nonzero delta means rows were lost or double-assigned during
+segmentation; it is a loud mispricing signal, never something to average away. What the
+segmented view buys over the naive sum is not a different total but the breakdown: where
+each context reset falls, the `preTokens` baseline it preserved, and how much spend belongs
+to each cache lineage.
 
 ## 7. Delegation-savings: quantifying Haiku/Sonnet routing
 
@@ -391,6 +429,34 @@ draft placement of "delegation-savings tile" as a standalone Phase 4 item; treat
 > never be reported as a measured number), agents whose model cannot be established are
 > listed in `skippedAgentIds` rather than priced against a guess, and `'<synthetic>'`
 > rows keep their own (zero-rate) model instead of being re-priced at top tier.
+
+**Which model counts as "top tier" is answered per subagent, not globally.** The plan left
+this free; the implementation resolves it in three steps. An explicit `topTierModel` wins —
+the caller names the routing alternative being measured, and the API exposes it as an
+optional query parameter on `GET /api/sessions/:id/cost-analysis`. Otherwise the model is
+*derived* from the subagent's nearest ancestor that actually has usage: walk `parentAgentId`
+upward (main-agent usage carries a `null` agent id) behind a defensive cycle guard, and take
+that ancestor's settled model — the model of its greatest-`output` usage row, following the
+message-id dedup convention. And if the ancestor chain yields no model at all — an orphan, a
+dangling parent pointer, a cycle — that subagent has **no observable routing decision**, so
+it is excluded from the sums and named in `skippedAgentIds`. That is the same refusal the
+rest of the system makes: the number omitted is more useful than a number invented.
+
+The estimate label is earned rather than decorative. The hypothetical carries the subagent's
+actual cache-read/cache-write profile over unchanged, but had the work truly run inline the
+parent's cache lineage would have differed in both directions — more cache reads over a
+bigger prefix, no separate context warm-up, possibly earlier compaction — and no ground truth
+for that counterfactual exists anywhere in the substrate.
+
+> **Known arithmetic caveat (implementation review 2026-08-09, finding L-8).** The
+> `max(0, …)` clamp is applied **per agent** before summing, so the reported total is the sum
+> of non-negative per-agent terms, not `max(0, Σ hypothetical − Σ actual)`. The two differ
+> whenever some delegation cost *more* than its top-tier equivalent would have: those agents
+> contribute 0 instead of a negative offset, which makes the headline figure
+> optimism-leaning by construction. This matches the plan's "conservative
+> `max(0, sonnetEquiv − actualHaiku)`" wording read per-term, and it is recorded here rather
+> than silently reconciled — the per-agent breakdown is served alongside the total precisely
+> so a reader can do the other arithmetic.
 
 **A named risk, and its mitigation.** concept-analysis-v2 flags this metric directly as
 a vanity-metric risk: "delegation-savings risks being a vanity metric unless the
@@ -490,7 +556,10 @@ written, with the as-built resolution appended to each item:
 - **The compaction-baseline mechanism** (whether JSONL carries usable pre/post markers,
   or the baseline must be snapshotted at hook time) is a Phase-0 probe
   (`G0.2b`), not yet answered — see [§6](#6-compaction-baseline-repricing).
-  *Resolved:* boundaries are parsed from the JSONL substrate; no hook-time snapshot.
+  *Resolved:* boundaries are parsed from the JSONL substrate; no hook-time snapshot. The
+  once-open boundary tie-break is decided too — a row timestamped at a boundary belongs to
+  the segment that boundary opens — and the `deltaUsd ≈ 0` reconciliation invariant is the
+  gate that keeps the segmentation honest.
 - **The exact `token_usage` and `model_pricing` DDL** (column names, types, indices) is
   not written anywhere in the source docs yet; the sketches in [§2](#2-token_usage-bucketed-by-whatever-changes-the-rate)
   and [§3](#3-model_pricing-a-dated-table-not-a-hardcoded-constant) are illustrative,
@@ -516,8 +585,8 @@ written, with the as-built resolution appended to each item:
 - [Data model](../architecture/data-model.md) — full annotated DDL for `agents`,
   `sessions`, `events_raw`/`events`, `token_usage`, `orchestration_edges`.
 - [Ingest & reconciliation](../architecture/ingest-reconciliation.md) — the
-  reconciliation precedence (CD-3) that governs how `token_usage.agent_id` gets
-  backfilled.
+  reconciliation precedence (CD-3) behind `token_usage.agent_id`, and the pipeline order
+  that makes pricing a halt gate before any write.
 - [The DAG moat](../architecture/dag-moat.md) — the sibling persisted-data-fact
   artifact (`orchestration_edges`) built on the same `events_raw` substrate.
 - [Security model](../security/model.md) — loopback bind, mandatory token, same-origin

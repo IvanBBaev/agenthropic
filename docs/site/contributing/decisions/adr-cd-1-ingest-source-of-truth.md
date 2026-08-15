@@ -1,6 +1,6 @@
 # ADR-0003: CD-1 — Ingest source of truth, decided by the Phase-0 diff
 
-- **Status:** accepted — JSONL-primary branch **built and holding** (see the as-built update below); ~~formal Phase-0 spike pending~~ *(the `WP-S7` gate this ADR depends on was overridden by the owner on 2026-07-11, not passed — see [ADR-0010](adr-cd-8-phase-0-spike.md))*
+- **Status:** accepted — JSONL-primary branch **built and holding** (see the as-built update below); ~~formal Phase-0 spike pending~~ *(the `WP-S7` gate this ADR depends on was overridden by the owner on 2026-07-11, not passed — see [ADR-0010](adr-cd-8-phase-0-spike.md))*; **amended 2026-08-15** — the P0 proof cited below is CI-failing, not merge-blocking (`main` is not branch-protected)
 - **Date:** 2026-07-03
 - **Deciders:** Ivan Baev (project owner), via the six-lens concept-analysis-v2 workflow
 - **Source:** [`concept-analysis-v2.md` §3, row CD-1](../../../analysis/concept-analysis-v2.md#3-canonical-decision-register-v2)
@@ -59,6 +59,21 @@ satisfied. Ingest was built under an owner override of that gate; see
 [ADR-0010](adr-cd-8-phase-0-spike.md)'s as-built update. The technical branch this
 ADR selects was independently borne out by the P0 proofs; the gate that was supposed
 to select it was bypassed.
+
+## As-built update — 2026-08-15
+
+**Verdict: unchanged; one claim narrowed.** The P0 DAG-rebuild proof
+(`apps/server/test/p0/p0-dag-rebuild.test.ts`) is described above as **merge-blocking**.
+The half of that which is true is the important half: the test runs in CI on every push and
+pull request, and it fails the run if appending hook events changes the DAG dump — so a
+regression that let hooks write structure could not pass quietly. The half that is not true
+is the enforcement: `main` is not branch-protected (`404 Branch not protected`, verified
+2026-08-15), so a red run is a signal rather than a withheld merge. See
+[the standing correction](README.md#a-standing-correction-merge-blocking).
+
+Neither the four-hooks finding nor the absence of `SubagentStart` has changed, and neither
+has the procedural caveat: `WP-S7` never ran, and nothing since has retroactively satisfied
+the gate this ADR's own criterion names.
 
 ## Context
 

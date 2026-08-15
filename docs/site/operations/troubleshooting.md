@@ -17,6 +17,12 @@ are now running, test-proven code. See the as-built update in the status block b
 and the per-section notes; the original design-intent text is kept as the record of
 what was committed before any code existed.)*
 
+Sections 1-4 are those four design commitments, each annotated with what actually
+shipped. Sections 5-7 are newer and of a different kind: they are an **as-built
+operator reference** — how to read `/api/health`, how to read the ingest log when a
+transcript is skipped or a session is quarantined, and what retention is and is not
+deleting today. They describe code that exists and were written from it.
+
 ## Status of this page
 
 > **Bootstrap phase, no code shipped.** Consistent with
@@ -381,6 +387,177 @@ the Phase-0 golden-corpus gate**, not yet described as a distinct operational
 remediation — this is explicitly one of the facts this page cannot source beyond what
 is stated above (see [Open items](#open-items-not-yet-built)).
 
+## 5. Reading `/api/health`
+
+`/api/health` is the first thing to look at when the dashboard seems wrong, and it is
+built on a rule worth understanding before you read a response: **a field that cannot
+be answered honestly is omitted, never faked.**
+
+The endpoint sits behind the same auth gate as every other `/api/*` route, so a probe
+needs the token:
+
+```bash
+curl -s -H "Authorization: Bearer $DASHBOARD_TOKEN" http://127.0.0.1:4317/api/health
+```
+
+Two fields are always present — `status`, which is the literal `"ok"`, and
+`schemaVersion`. Everything else is optional:
+
+| Field | Present when | What it means |
+|---|---|---|
+| `ingestSkips` | the server was built with ingest wiring | Cumulative per-reason counts of files the corpus reader declined to read, since boot (§6). An empty object means "wired, and nothing has been skipped". |
+| `ingest` | the server was built with ingest wiring | `"replaying"` between the loopback bind and the end of the startup replay pass, `"idle"` afterwards. |
+| `lastTickDurationMs` | at least one watcher pass has *finished* | Wall-clock duration of the last completed corpus pass. |
+| `crossSessionUsageCollisions` | the ownership-rule seam is wired | Messages skipped since boot because another session had already ingested them. A genuine `0` **is** reported here. |
+
+The omissions carry information, and it is not the information a zero would carry.
+`lastTickDurationMs` is the clearest case: the server code comments that *"no pass
+yet" and "no seam" both OMIT the field — never a fake number*, because a reported `0`
+reads as "the poll is instantaneous", which is the wrong fact in both situations. So
+if you are watching poll duration climb toward the poll interval and the field simply
+is not there, the answer is "no pass has completed yet", not "the pass took no time".
+
+`crossSessionUsageCollisions` shows the same rule from the other side. When the seam
+exists, a real zero is reported, because zero collisions is a fact worth stating; when
+the seam does not exist the field disappears, because the server genuinely does not
+know. The response schema is declared with `additionalProperties: false`, so a field
+you do not recognise is a bug rather than an undocumented extra.
+
+A subtlety worth internalising: `status` stays `"ok"` while `ingest` is `"replaying"`.
+That is deliberate. A replaying server is healthy — it is answering requests — it is
+just not yet current. If you probe health during a restart and act on `status` alone,
+you will conclude the dashboard's numbers are final when the corpus is still being
+re-read.
+
+Two things you might expect on health are **deliberately not there**:
+
+- **Per-session ingest failures.** Health answers "is this process serving requests".
+  One poisoned session does not make an otherwise healthy server degraded, and
+  reporting it here would make health lie in the other direction — red for a condition
+  the server is correctly surviving. Failures go to the server log and to the SSE
+  stream every connected client is already listening on (§6).
+- **Backup state.** A failed backup logs and waits for the next tick; nothing on
+  `/api/health` reports whether the last backup succeeded. See
+  [Scheduling, as built](backup-restore.md#scheduling-as-built) — the honest way to
+  check is to look at the backup directory.
+
+## 6. Reading the ingest log — skips, quarantines and the one fatal
+
+The corpus reader never silently drops a file. Every transcript it declines to read is
+counted and logged, because a skipped transcript means that session's dollar totals
+are **frozen at whatever was last ingested** — a number that looks perfectly normal
+and is quietly wrong. Making the skip loud is the whole point.
+
+There are eight skip reasons, and they fall into two groups:
+
+| Reason | Group | What happened |
+|---|---|---|
+| `oversize` | read hazard | The file is larger than the per-file read cap (64 MiB, PROVISIONAL) and was deliberately not read. |
+| `symlink` | read hazard | The path is (or was swapped to) a symlink; the open uses `O_NOFOLLOW`, so it failed with `ELOOP` rather than following the link out of the corpus. |
+| `not-regular-file` | read hazard | The open descriptor turned out to be a directory or a character device — a TOCTOU re-check on the *open* file, not on the path. |
+| `unreadable` | read hazard | Any other filesystem error (`EACCES`, `EIO`, …); the `code` is carried in the log line. |
+| `empty-agent` | shape | A subagent artifact with no parseable content. |
+| `empty-main` | shape | A main transcript with no parseable content. |
+| `non-artifact` | shape | A file under a session directory that is not a transcript artifact at all. |
+| `duplicate-session` | enumeration | The same session UUID was found under more than one project slug; one deterministic reference is kept and the rest are recorded here. |
+
+Two log-line shapes carry them, and both are worth knowing verbatim because they are
+what you grep for:
+
+```
+corpus ingest: skipped <relative/path.jsonl> (<reason>[, <ERRNO>]) - this session's records are NOT in the dashboard totals.
+corpus watcher: <n> file(s) skipped this pass; skips since boot: oversize=2, unreadable=1.
+```
+
+Both are **rate-limited to one line per five minutes** per distinct
+`(file, reason, code)` — and likewise for the per-pass aggregate. That is not
+log-tidying for its own sake: a permanently oversize transcript is re-skipped on every
+poll tick, and one line every three seconds is exactly how an operator learns to
+ignore a log. The counters behind the aggregate never rate-limit; they are the
+`ingestSkips` object on `/api/health` (§5), so the cumulative truth is always
+available even if you missed the lines.
+
+**A session that fails to ingest** is a different event from a skipped file, and gets
+its own line:
+
+```
+corpus ingest failure: session <id> (attempt 2/3, will retry): <sanitized reason>
+corpus ingest failure: session <id> (attempt 3/3, quarantined until the session changes): <sanitized reason>
+```
+
+The retry budget is three consecutive attempts against the same file fingerprint;
+after that the session is quarantined and will not be retried **until its bytes
+change**. The verdict in the parentheses is the useful half — `will retry` means the
+watcher intends another pass, `quarantined` means it does not. The same report is
+published on the SSE stream, so the dashboard can show it without log access, and the
+reason is sanitized before it leaves the watcher: no absolute path, no transcript
+content, no hook payload, length-capped.
+
+**Corpus-wide trouble logs only on transitions**, never every tick:
+
+```
+corpus watcher: the corpus could not be read (<reason>) - the dashboard is stale until this clears.
+corpus watcher: no corpus root resolved - nothing to ingest until one appears.
+corpus watcher: the corpus is readable again - resuming normal ingest.
+```
+
+Entering trouble logs once, recovering logs once, and a steady state — healthy or
+troubled — is silent. If you are diagnosing a stale dashboard, the absence of a recent
+line means nothing has *changed*; scroll back for the entering-trouble line.
+
+Note the distinction the code insists on: an **unreadable corpus root is not an empty
+corpus**. A root whose listing fails says nothing at all about what it holds, so no
+caller is allowed to treat it as "no sessions" — doing so would prune fingerprints and
+answer "session not found" with total confidence about something the server does not
+know. A root that has genuinely vanished (`ENOENT`) is the other case, and that one
+really does hold no sessions.
+
+**The one hard stop.** Every hazard above is survivable and gets swallowed into a skip
+or a failure report. Exactly one condition is not: a path that resolves *outside* the
+canonical corpus root — a traversal or symlink escape. That means a crafted or
+compromised corpus, so the server logs and exits non-zero rather than skipping past
+it:
+
+```
+FATAL: corpus containment violation - path "<candidate>" escapes the corpus root "<root>". A crafted or compromised corpus is a stop-everything signal; shutting down.
+```
+
+If you see this line, do not restart the server until you know why a path under
+`~/.claude/projects` pointed somewhere else. The replay summary will carry a matching
+`halted by a containment violation - see the FATAL line above` line; that is one
+incident reported twice, not two.
+
+## 7. Retention — what is deleting your data (almost nothing)
+
+The short answer, as of this writing: **nothing prunes the database.** The retention
+mechanism is built and tested, but its policy is deliberately unset and its runner is
+called from nothing but its own tests. The only retention that reaches a live path is
+backup-file expiry, which runs as part of the daily backup pass. The full account,
+including why the mechanism refuses to touch `events_raw` at all, is on
+[backup & restore §4](backup-restore.md#4-retention-policy).
+
+What belongs *here* is the operational residue, because it is the part that will
+surprise someone reading dollar totals after a prune eventually runs.
+
+`token_usage` is re-derived from the JSONL corpus, so it is tempting to assume a prune
+is harmless — the data comes back on the next replay. It does not, reliably, and it
+can come back more than once. A restart does **not** re-read unchanged transcripts: a
+replay checkpoint is honoured while the session's row exists, and the prune never
+touches that table. Two consequences, pointing in opposite directions:
+
+- **An idle session's pruned rows stay gone.** Nothing re-reads its transcript, so the
+  reclaim is durable and every dollar total covering that window is permanently lower.
+  The only record of what was removed is the retention journal receipt.
+- **A changed session's pruned rows come back.** Its fingerprint no longer matches, so
+  it is re-read in full and the pruned rows are resurrected from the JSONL. A later
+  prune removes and journals the same dollars again — which means summing journal
+  receipts can **over-count** what retention actually took off the books.
+
+Which side yields — invalidating the affected checkpoints inside the prune
+transaction, or excluding pruned windows on re-ingest — is an open decision (OPEN-1).
+Until it is made, both behaviours above are the shipped truth, and this page states
+them rather than picking the more comfortable one.
+
 ## Why remediation deepens once the code lands
 
 This section was written before any code existed; the "concretely blocked" list it
@@ -443,6 +620,12 @@ been designed or built, and none was surfaced as needed (§4).
   `orchestration_edges`; no runtime detection or operator-facing remediation mechanism
   is described in any source in scope for this page (§4). *(Still open — the schema
   key shipped, but no runtime detection or remediation was built.)*
+- **Retention vs. replay checkpoints is undecided (OPEN-1).** Whether a prune
+  invalidates the affected replay checkpoints, or re-ingest excludes pruned windows,
+  has not been chosen; until it is, an idle session's pruned rows stay gone and a
+  changed session's come back (§7). The retention window, the redacted-field list and
+  the backup cadence numbers are all likewise **unratified** — they exist as
+  PROVISIONAL defaults in code, not as policy.
 - **This page's target links** — [security model](../security/model.md),
   [threat model](../security/threat-model.md),
   [backup & restore](backup-restore.md),

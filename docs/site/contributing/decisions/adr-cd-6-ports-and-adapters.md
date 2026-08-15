@@ -1,6 +1,6 @@
 # ADR-0008: CD-6 — Ports & adapters: the named port set
 
-- **Status:** accepted, **amended in practice 2026-07-30** — the ports/adapters principle holds (pure core, no DB imports, fakes everywhere); the named port set shipped as four seams, not ten (see the as-built update below)
+- **Status:** accepted, **amended in practice 2026-07-30** — the ports/adapters principle holds (pure core, no DB imports, fakes everywhere); the named port set shipped as ~~four~~ *(five, as of 2026-08-15)* seams, not ten (see the as-built updates below)
 - **Date:** 2026-07-03
 - **Deciders:** Ivan Baev (project owner), via the six-lens concept-analysis-v2 workflow
 - **Source:** [`concept-analysis-v2.md` §3, row CD-6](../../../analysis/concept-analysis-v2.md#3-canonical-decision-register-v2)
@@ -47,6 +47,31 @@ cost named below was paid down by not building the interfaces that had exactly o
 implementation and no test seam to gain. The four ports that survived are the four
 that a fake actually plugs into. The second-runtime portability claim is therefore
 **unproven** — plausible from the parser's purity, but nothing has been ported.
+
+## As-built update — 2026-08-15
+
+**Verdict: holds; a fifth seam has since been named.** `RetentionPort`
+(`apps/server/src/retention/port.ts:42`) joins the four listed above, and it was
+named for exactly the reason the 2026-07-30 amendment gives for the others: a fake
+plugs into it. It exposes a policy and a single `run(options?)` returning a report,
+with the SQLite-backed adapter in `runner.ts`, a clock injection point, and a
+`dryRun` mode that measures without deleting. The port file itself carries no
+database import, so `WP-D1`'s stated criterion holds for this seam too.
+
+The seam is worth recording here rather than only in [ADR-0012](adr-cd-10-scope-secrets-retention.md)
+because it is the clearest case in the codebase of a port carrying a *policy*
+distinction rather than only a *driver* distinction. Its report has a `configured`
+flag whose whole purpose is to keep two very different facts apart: "retention ran
+and found nothing to delete" and "retention is not configured at all." Collapsing
+those into a single empty report would be the kind of plausible-looking summary this
+project refuses to produce. The default policy makes every call a reported no-op, so
+wiring the port up anywhere does not, by itself, delete anything — the mechanism
+exists and the policy remains unset pending OPEN-1/2/3.
+
+Nothing else in the port set has changed: `Normalizer`/`Projection`, `AlertSink`,
+`HookSource`, `StoragePort`, `PricingProvider` and `CostEngine` still have no named
+interface, and the second-runtime portability claim is still **unproven** — no
+non-Claude-Code adapter has been attempted.
 
 ## Context
 

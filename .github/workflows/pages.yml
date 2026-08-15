@@ -19,20 +19,31 @@
 #   - jekyll-readme-index: docs/site/README.md becomes /site/index.html
 #   - jekyll-titles-from-headings + the default Primer theme
 #
-# Pages enablement: the `enablement: true` input below makes configure-pages
-# turn Pages on via the API (build type "workflow") on the first run, using the
-# `pages: write` permission this workflow already holds - so the one-time
-# Settings -> Pages click is no longer required. It is idempotent: on every
-# later run Pages is already enabled and the step is a no-op. It is NOT a
-# silent success path - if the token is ever denied the call, the step still
-# fails loudly rather than deploying nowhere.
+# Pages enablement is an OWNER ACTION, not something this workflow can do.
+# An earlier revision of this comment claimed the `enablement: true` input below
+# removes the one-time Settings -> Pages click. That claim was wrong and the
+# workflow proved it twice (runs 31318246506 and 31879212583):
 #
-# What this changes for the repository: the FIRST push of this workflow to main
-# flips the repo's has_pages to true and publishes docs/ at the project's
-# github.io URL. That is a deliberate, owner-sanctioned public surface, and the
-# only one: the application itself stays bound to 127.0.0.1 (ADR-0013).
-# docs/ai/ is git-excluded and never present in the CI checkout, so no local-only
-# harness file can reach the published site.
+#   Get Pages site failed. Error: Not Found
+#   Create Pages site failed. Error: Resource not accessible by integration
+#
+# `pages: write` lets a workflow DEPLOY to an existing Pages site; it does not
+# let the default GITHUB_TOKEN CREATE one. Creation needs a token with repo
+# administration rights, which a workflow token deliberately never has.
+#
+# So: until the owner sets Settings -> Pages -> Source: "GitHub Actions" once
+# (equivalently, `gh api -X POST repos/<owner>/agenthropic/pages -f
+# build_type=workflow` with an admin-scoped token), every run of this workflow
+# fails at the Configure Pages step. That failure is honest - it fails loudly
+# rather than deploying nowhere - but it is a red run on main until the click
+# happens. The input is kept because it is idempotent once Pages exists, and
+# because the denial message above names the cause better than a bare 404.
+#
+# What the click changes for the repository: it flips has_pages to true and
+# publishes docs/ at the project's github.io URL. That is a deliberate public
+# surface, and the only one: the application itself stays bound to 127.0.0.1
+# (ADR-0013). docs/ai/ is git-excluded and never present in the CI checkout, so
+# no local-only harness file can reach the published site.
 name: Docs site (GitHub Pages)
 
 on:
@@ -57,13 +68,14 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Configure Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
         with:
-          # Enables Pages on first run instead of failing with "Get Pages site
-          # failed ... Not Found" (run 30528892265). Idempotent thereafter.
+          # No-op once the owner has enabled Pages; before that it fails with
+          # "Resource not accessible by integration" rather than a bare 404.
+          # See the enablement note in the header - this cannot self-serve.
           enablement: true
 
       - name: Add build-time site scaffolding (runner workspace only, never committed)
@@ -103,7 +115,7 @@ jobs:
           destination: ./_site
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
 
   deploy:
     needs: build
@@ -114,4 +126,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

@@ -17,8 +17,12 @@ important limit of what that CI gate can and cannot prove
 [§3](../../analysis/concept-analysis-v2.md) CD-9; development-plan
 [`WP-F5`/`WP-F6`](../../analysis/development-plan.md)).
 
-> **Update — 2026-07 (as built).** Both gates named in §6 exist and are wired into
-> the root `package.json`, so the CD-9 mechanism below is live rather than planned:
+> **Update — 2026-08 (as built; both gates re-run locally on 2026-08-15).** Both
+> gates named in §6 exist, are wired into the root `package.json`, and run as named
+> steps in [`.github/workflows/ci.yml`](https://github.com/IvanBBaev/agenthropic/blob/main/.github/workflows/ci.yml),
+> so the CD-9 mechanism below is live rather than planned. The two figures quoted
+> here are a dated measurement of the tree as it stood on 2026-08-15, not constants —
+> both move with every dependency change and every added file.
 >
 > - **`WP-F6` — `pnpm run gate:licenses`** → [`scripts/check-licenses.mjs`](https://github.com/IvanBBaev/agenthropic/blob/main/scripts/check-licenses.mjs).
 >   It enumerates every installed dependency in the workspace (prod + dev) via
@@ -27,16 +31,37 @@ important limit of what that CI gate can and cannot prove
 >   `0BSD`, `BlueOak-1.0.0`, `CC0-1.0`, `Unlicense`, `Python-2.0` — with SPDX
 >   expressions resolved properly (an `OR` passes if any branch is allowlisted, an
 >   `AND` requires every part). There is exactly one documented per-package
->   exception: `caniuse-lite` under `CC-BY-4.0`, an attribution-only data file
->   pulled in transitively by the Vite toolchain. The scan currently passes over
->   **412 packages**. §7's open question — "which SPDX identifiers are on the
->   allowlist" — is answered by that file; it is no longer undecided.
-> - **`WP-F5` — `pnpm run gate:spawner`** → `scripts/check-no-spawner.mjs`, scanning
->   174 files across 4 roots for `child_process`/`exec`/`spawn` reachability.
->   Sanctioned exceptions must carry an inline `spawner-gate-allow` marker, and the
->   only one in the repository is the license scanner's own fixed-argv
+>   exception, and it is keyed to an exact license string rather than to the package
+>   name alone: `caniuse-lite` is accepted under `CC-BY-4.0` **and nothing else**,
+>   an attribution-only data file pulled in transitively by the Vite toolchain — if
+>   that package ever relicenses, the exception stops matching and the gate goes red
+>   rather than waving it through. Workspace-local `@agenthropic/*` packages are
+>   skipped as private, so the count is of third-party code only:
+>   `check-licenses: OK (412 installed packages, all licenses allowlisted)`. The
+>   first open question in [What's undecided](#whats-undecided) — "which SPDX
+>   identifiers are on the allowlist" — is answered by that file; it is no longer
+>   undecided.
+> - **`WP-F5` — `pnpm run gate:spawner`** → `scripts/check-no-spawner.mjs`:
+>   `check-no-spawner: OK (235 files scanned across 4 roots + repo-root config;
+>   1 allowlisted)`. Its scope is wider than the work-package title suggests — it
+>   walks `apps/`, `packages/`, `scripts/` and `hooks/` in full (source, tests, and
+>   package-root config such as `vite.config.ts`, which is exactly where a dev-server
+>   bind would be widened) plus the repo-root config files, and it forbids four
+>   families of pattern, not one: the whole subprocess API surface, dynamic code
+>   evaluation, wide network binds, and WebSocket servers. Sanctioned exceptions must
+>   carry an inline `spawner-gate-allow` marker, and the only one in the repository is
+>   the license scanner's own fixed-argv
 >   `execFileSync('pnpm', ['licenses', 'list', '--json'])` — no shell, no
->   interpolation.
+>   interpolation. One file is allowlisted wholesale, the gate script itself, because
+>   it defines every forbidden pattern as a literal; that allowlisting is printed on
+>   every run rather than applied silently.
+>
+> **Neither gate is physically merge-blocking.** Both run in CI on every push and
+> pull request, and both fail the workflow correctly when violated — but branch
+> protection on `main` is not enabled, so a red run does not prevent a merge. Where
+> §6 below says the license gate is "merge-blocking," read that as the intended
+> configuration, not the current one; see
+> [governance](governance.md) for the open owner action.
 >
 > **§4's undecided attribution mechanism has not been decided, because nothing has
 > triggered it.** No source text from any of the six audited projects has been
@@ -259,15 +284,21 @@ Phase 1 — Foundation, security spine, storage, ports
 
 Done-when, verbatim from the work-package catalog: **"A non-allowlisted dependency
 license makes CI red"** (development-plan [`WP-F6`](../../analysis/development-plan.md)).
-This is a **dependency-license allowlist scan** over `package.json`/the pnpm
-lockfile: every npm package the monorepo actually depends on must resolve to a
-license on an allowlist (permissive licenses such as MIT/Apache-2.0/BSD would be
-the obvious candidates given the project's own MIT posture, but the specific
-allowlist is not enumerated anywhere in the source docs — see
-[What's undecided](#whats-undecided)). If a dependency's declared license falls
-outside that allowlist, the build fails. This is the automatable half of CD-9: it
-protects the codebase from **accidentally pulling in a restrictively-licensed npm
-package as a dependency**.
+This is a **dependency-license allowlist scan** over the installed dependency
+graph: every npm package the monorepo actually depends on must resolve to a license
+on an allowlist. If a dependency's declared license falls outside that allowlist,
+the build fails. This is the automatable half of CD-9: it protects the codebase from
+**accidentally pulling in a restrictively-licensed npm package as a dependency**.
+
+As built, the scan reads the installed tree rather than the manifest — it shells out
+once to `pnpm licenses list --json`, which reports what is actually on disk after
+resolution, so a restrictive license arriving through a transitive dependency is
+caught even though no `package.json` in this repository names it. The allowlist is
+the eleven permissive identifiers quoted in the update note at the top of this page,
+and SPDX expressions are evaluated rather than string-matched: `MIT OR GPL-3.0`
+passes on its MIT branch, `MIT AND CC-BY-4.0` does not pass unless both halves are
+allowlisted. That the allowlist is now a concrete, readable list in a committed file
+is the substantive change since this section was first written.
 
 ### `WP-F5` — Static no-spawner + no-SSRF gate (the adjacent security gate)
 
@@ -275,14 +306,26 @@ Done-when: **"Planting a `child_process` import in `apps/server` makes CI red"**
 (development-plan [`WP-F5`](../../analysis/development-plan.md)). This gate is
 listed alongside `WP-F6` in the task scope because it is the concrete enforcement
 that the one MIT-attributed, wholesale-copyable project — `hoangsonww` — cannot
-smuggle its RCE spawner in alongside its Telegram provider: a static grep/AST check
-over `apps/server` fails the build the moment any `child_process` import appears,
-regardless of which file introduced it or why (see [security model, rule
+smuggle its RCE spawner in alongside its Telegram provider: a static pattern scan
+fails the build the moment any `child_process` import appears, regardless of which
+file introduced it or why (see [security model, rule
 3](../security/model.md#3-never-a-browser-driven-subprocess--claude-spawner)). It
 is a security gate first and a provenance gate second — but because the one
 artifact this project *does* copy wholesale (`hoangsonww`'s webhook code) sits one
 file away from the exact route this gate exists to forbid, it functions as part of
 the same per-artifact scoping discipline that CD-9 describes.
+
+The shipped gate is broader than that Done-when in both scope and coverage. It scans
+`apps/`, `packages/`, `scripts/` and `hooks/` rather than `apps/server` alone, it
+includes tests and package-root config files rather than `src/` only, and it forbids
+dynamic evaluation, wide network binds and WebSocket servers alongside the
+subprocess family. It is also honest in its own source comments about what a regex
+scanner can and cannot do: it stops the idiomatic ways a spawner could be
+reintroduced during ordinary development, and it explicitly does not claim to stop a
+developer who is deliberately obfuscating with runtime-assembled strings or
+char-code arrays. Those are left to the runtime loopback guard and to code review.
+The gate is defence-in-depth, not the last line — the same limits-of-tooling
+reasoning §6's closing subsection applies to `WP-F6`.
 
 ### Phase and release gates that reference both
 
@@ -314,10 +357,20 @@ enforces the clean-room *copying* rule (it doesn't — that's discipline)"**
   descriptions this project works from are themselves short, abstract prose
   (a sentence or two per pattern), not the original source.
 
-In short: the CI gate is real and merge-blocking, but it enforces the
-**dependency-license** half of CD-9 mechanically; the **clean-room-authorship**
-half of CD-9 is enforced by the documented workflow in §3, not by a script. Both
-halves are required for CD-9 to hold; neither substitutes for the other.
+In short: the CI gate is real, and it enforces the **dependency-license** half of
+CD-9 mechanically; the **clean-room-authorship** half of CD-9 is enforced by the
+documented workflow in §3, not by a script. Both halves are required for CD-9 to
+hold; neither substitutes for the other.
+
+There is a second, smaller over-claim worth retiring in the same breath, because
+this page made it too. "Merge-blocking" was the word used here, and as of 2026-08-15
+it is not accurate: `gate:licenses` runs on every push and pull request and exits
+non-zero on a disallowed license, but with no branch-protection rule on `main` a red
+workflow is a red mark, not a closed door. The mechanism is built and correct; the
+enforcement switch is an owner action on github.com that has not been taken. Until it
+is, read every "the gate blocks X" sentence in this documentation set as a statement
+of design intent — the gate reliably *tells* you, and a human still has to act on
+what it says.
 
 ## 7. Why this is load-bearing: LB2
 
@@ -362,27 +415,35 @@ docs").
 
 ## What's undecided
 
-This is a design-basis page, not a shipped-CI-config page — several mechanics are
-named as a rule but not yet a concrete implementation. Stated explicitly:
+Two of the four items listed here when this page was written have since been
+decided by being built, and are recorded below as answered rather than deleted, so
+that the shape of the original uncertainty stays visible. Two remain genuinely open.
 
-- **The dependency-license allowlist itself** (which SPDX identifiers `WP-F6`
-  accepts — MIT/Apache-2.0/BSD-\*/ISC are the obvious permissive candidates given
-  the project's own posture, but no source doc enumerates the list) is not yet
-  written.
-- **The specific tool/technique behind `WP-F6`** (an off-the-shelf
-  license-checker package vs. a hand-rolled script over the pnpm lockfile) is not
-  named in any source document — `WP-F6`'s Done-when specifies the observable
-  behavior ("a non-allowlisted dependency license makes CI red"), not the
-  implementation.
+- ~~**The dependency-license allowlist itself**~~ — **decided by implementation.**
+  The eleven accepted SPDX identifiers and the single `caniuse-lite` exception are
+  enumerated in `scripts/check-licenses.mjs` and quoted in the update note at the top
+  of this page. The original concern was that no source document named the list; the
+  list is now source code, which is the strongest form the answer could take.
+- ~~**The specific tool/technique behind `WP-F6`**~~ — **decided by implementation:**
+  a hand-rolled script over `pnpm licenses list --json`, not an off-the-shelf
+  license-checker. That choice was never argued out in a design document, so treat it
+  as a fact about what exists rather than as a ratified decision; the trade-off it
+  makes — one more file to maintain, one fewer dependency in a repository whose whole
+  premise is auditability — is legible from the file itself.
 - **The attribution mechanism for `simple10`/`hoangsonww`** (a root `NOTICE` /
   `THIRD-PARTY-NOTICES` file, per-file header comments, or a credits section in
-  [contributing: overview](index.md)) is not specified anywhere in the source
-  material.
+  [contributing: overview](index.md)) is still not specified anywhere in the source
+  material — and, as the update note at the top explains, still not owed: no source
+  text from either project has been copied into this repository. The decision is
+  deferred, not skipped; the moment MIT-licensed source is pasted in, the obligation
+  activates and the mechanism has to be chosen before that commit lands.
 - **Whether the provenance scan ever grows beyond dependency licenses** — e.g., a
   future check that greps for verbatim string matches against the all-rights-reserved
   repositories' source — is not proposed anywhere in the source docs; §6 above is
   explicit that today's `WP-F6` is dependency-license-only, and the
-  clean-room-authorship half of CD-9 relies on discipline, not tooling.
+  clean-room-authorship half of CD-9 relies on discipline, not tooling. Nothing in
+  the shipped gates changes that: `check-no-spawner.mjs` grew in scope, but it looks
+  for security patterns, never for provenance.
 
 ## See also
 
@@ -399,8 +460,9 @@ named as a rule but not yet a concrete implementation. Stated explicitly:
   (`WP-A2`) marked "clean-room-safe, hoangsonww-attributed."
 - [Contributing: overview](index.md) — dev setup, PR flow, and the one-WP-one-agent
   model this licensing rule is checked against at PR time.
-- [Contributing: testing & quality](testing.md) — the merge-blocking coverage gate
-  that runs alongside `WP-F5`/`WP-F6` in CI.
+- [Contributing: testing & quality](testing.md) — the coverage gate that runs
+  alongside `WP-F5`/`WP-F6` in CI, specified at >90% and shipped at 100, and subject
+  to the same branch-protection caveat as the gates on this page.
 - [Contributing: governance](governance.md) — the PR-template checklist item that
   points back to this page.
 - [Decisions (ADRs)](decisions/README.md) — the full ADR index; the LB-2 ADR

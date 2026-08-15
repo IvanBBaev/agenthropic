@@ -15,7 +15,9 @@ auth check that gates every request arriving on that socket (`DESIGN.md` §8).
 > server it describes now exists. Implementation began 2026-07-11: the server binds
 > `127.0.0.1` with **no configuration path to any other host** (the bind host is a
 > constant in `apps/server/src/config.ts`, deliberately not an environment variable),
-> refuses to start without `DASHBOARD_TOKEN`, and listens on port **4317** by default
+> refuses to start without `DASHBOARD_TOKEN` — or with one shorter than 16
+> characters, see [below](#the-token-requirement-does-not-relax-over-a-tunnel) — and
+> listens on port **4317** by default
 > (`DASHBOARD_PORT` overrides it). Substitute `4317` for `<port>` in every command
 > below and the procedures apply as written. The token travels as an
 > `Authorization: Bearer <token>` header — with one accommodation: the SSE stream
@@ -208,6 +210,19 @@ headers; the server redacts the query value from its logs). See
 [security model](model.md) rule 2's as-built note. This page's guarantee is
 unchanged: the outcome is identical regardless of which tunnel option carried the
 request.
+
+> **As built — the token has a minimum length.** "Mandatory, not opt-in" turned out
+> to be too weak a bar on its own, because `DASHBOARD_TOKEN=x` satisfies it while
+> offering roughly the protection of the no-op the rule was written against. The
+> server therefore refuses to start unless the token is at least **16 characters**
+> (`MIN_TOKEN_LENGTH` in `packages/shared/src/security/index.ts`), and the failure
+> is a startup refusal rather than a warning, so a too-short token cannot be
+> discovered later by an attacker instead of sooner by the operator. Sixteen is a
+> chosen floor, not a measured one — it is long enough that a token has to come from
+> a generator rather than from typing, which is the actual behaviour being enforced.
+> Generate one with `openssl rand -hex 32` or equivalent; this matters more, not
+> less, once a tunnel is in play, since the tunnel widens who can attempt the
+> guess.
 
 ## Choosing between the two
 

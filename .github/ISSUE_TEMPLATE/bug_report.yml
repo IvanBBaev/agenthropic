@@ -1,0 +1,152 @@
+name: Bug report
+description: Something in agenthropic behaves incorrectly - wrong data, a crash, a view that will not load.
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file this.
+
+        **Do not report a security vulnerability here.** If the issue is a security
+        problem - a widened bind, an auth bypass, a token leak, a corpus path escape -
+        follow [SECURITY.md](https://github.com/IvanBBaev/agenthropic/blob/main/SECURITY.md)
+        instead and keep the details out of this public tracker.
+
+        There is no released version, so "which version" means "which commit of `main`".
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw, as concretely as you can put it.
+      placeholder: The session tree view shows no edges for a session that clearly had subagents.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Include the commands you ran and the endpoint or view involved.
+      placeholder: |
+        1. DASHBOARD_TOKEN=... pnpm --filter @agenthropic/server dev
+        2. pnpm --filter @agenthropic/web dev
+        3. Open http://127.0.0.1:5173 and select session ...
+        4. ...
+    validations:
+      required: true
+
+  - type: input
+    id: commit
+    attributes:
+      label: Commit
+      description: Output of `git rev-parse --short HEAD`. There are no releases, so this is the version.
+      placeholder: 2f8d103
+    validations:
+      required: true
+
+  - type: input
+    id: node-version
+    attributes:
+      label: Node version
+      description: Output of `node --version`. The project requires Node 22 or newer.
+      placeholder: v22.14.0
+    validations:
+      required: true
+
+  - type: input
+    id: pnpm-version
+    attributes:
+      label: pnpm version
+      description: Output of `pnpm --version`. The repo pins pnpm via the `packageManager` field.
+      placeholder: 11.11.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Linux
+        - Windows (WSL)
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: hooks-installed
+    attributes:
+      label: Were the lifecycle hooks installed via `node hooks/install.mjs`?
+      description: >-
+        Hooks are the only terminal signal the dashboard has. Without them ingest only
+        ever writes `working`, an agent ages to `unknown` when the watchdog window
+        elapses, and nothing ever reads `completed` - which is intended behaviour, not a
+        bug.
+      options:
+        - 'Yes - installed with hooks/install.mjs'
+        - 'No - hooks are not installed'
+        - 'Hooks are installed, but hand-written rather than generated'
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: health
+    attributes:
+      label: '`GET /api/health` response body'
+      description: >-
+        The endpoint is token-gated like every other route, so fetch it with
+        `curl -s -H "Authorization: Bearer $DASHBOARD_TOKEN" http://127.0.0.1:4317/api/health`
+        (use your own `DASHBOARD_PORT` if you changed it) - and paste only the JSON
+        response, never the command with your literal token in it. The body carries
+        `status` and `schemaVersion`, plus `ingest`, `ingestSkips`, `lastTickDurationMs`
+        and `crossSessionUsageCollisions` when those readings exist. A missing field
+        means "not measured yet", which is itself useful information here.
+      render: json
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Server log lines
+      description: >-
+        Lines printed by the server around the failure - corpus replay summaries, ingest
+        failures, skip lines, or the FATAL line if the process exited. Scrub anything you
+        do not want public.
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Screenshots of the view, browser console errors, corpus size, whatever else seems relevant.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Before you submit
+      description: >-
+        Your transcripts contain your own prompts and whatever your sessions read or
+        wrote. This tracker is public.
+      options:
+        - label: I have not pasted my `DASHBOARD_TOKEN` (or any other credential) anywhere in this report.
+          required: true
+        - label: I have not pasted raw transcript content from `~/.claude/projects`; if a transcript was involved I described its shape instead.
+          required: true
+        - label: This is not a security vulnerability. If it is, I will follow SECURITY.md instead.
+          required: true
