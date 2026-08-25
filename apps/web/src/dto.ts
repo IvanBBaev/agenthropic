@@ -10,6 +10,8 @@
  * declaration output. Import DTO types from THIS module everywhere in the app.
  */
 export type {
+  AggregateDelegationSavingsDto,
+  AggregateSavingsSkipDto,
   AgentDelegationSavingsDto,
   AgentNodeDto,
   AgentStatus,

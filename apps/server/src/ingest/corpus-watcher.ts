@@ -108,6 +108,29 @@ export interface IngestFailureReport {
 }
 
 /**
+ * How much of the corpus this process is currently NOT carrying.
+ *
+ * A failed session has no rows, so every dollar figure the read API computes
+ * silently omits its spend — and omits it in the direction that flatters,
+ * because a total that is missing sessions always looks SMALLER, never larger.
+ * A per-failure log line and an SSE event announce the moment it happens, but
+ * neither survives a page reload, so a dashboard opened afterwards presents an
+ * incomplete total as a complete one. This is the standing number that closes
+ * that gap.
+ *
+ * Two figures rather than one because they mean different things to a reader:
+ * `failing` will be retried on the next pass and may resolve itself, while
+ * `quarantined` will NOT be retried until the session's bytes change or the
+ * pricing table does — that one needs a human.
+ */
+export interface IngestExclusions {
+  /** Sessions whose latest ingest attempt failed; includes the quarantined. */
+  readonly failing: number;
+  /** Subset of `failing` whose retry budget is spent (see MAX_INGEST_ATTEMPTS). */
+  readonly quarantined: number;
+}
+
+/**
  * Make an arbitrary error message safe to log and to broadcast over SSE:
  * absolute paths (which on this machine encode the user's home directory and
  * project names) collapse to `<path>`, all whitespace collapses to single
@@ -238,6 +261,11 @@ export interface CorpusWatcher {
   start(): void;
   /** Stop polling permanently (clearInterval). Idempotent; wired into server close. */
   stop(): void;
+  /**
+   * How many sessions the corpus has that this process could not ingest — the
+   * spend every dollar total is currently missing. See {@link IngestExclusions}.
+   */
+  exclusions(): IngestExclusions;
 }
 
 /**
@@ -245,11 +273,20 @@ export interface CorpusWatcher {
  * fingerprints is what "the pricing table did not change" means to the
  * watcher, so it hangs on every field cost resolution reads and on nothing
  * else (not row order, not object identity across reloads).
+ *
+ * NUL separates the fields because it is the one byte a model id, a bucket or
+ * an ISO timestamp can never contain, so no pair of distinct rows can collide
+ * on a concatenation. It is spelled `\0` rather than typed as a raw byte for a
+ * reason worth keeping: a literal NUL in the source makes the whole file
+ * BINARY to grep, ripgrep and `git diff`, which silently skip it - the file
+ * stops being searchable and its diffs stop being reviewable, while compiling
+ * and testing exactly as before.
  */
 export function pricingContentFingerprint(pricing: readonly PricingEntry[]): string {
   return pricing
     .map(
-      (entry) => `${entry.model} ${entry.bucket} ${String(entry.usdPerMtok)} ${entry.effectiveFrom}`,
+      (entry) =>
+        `${entry.model}\0${entry.bucket}\0${String(entry.usdPerMtok)}\0${entry.effectiveFrom}`,
     )
     .sort()
     .join('\n');
@@ -520,5 +557,25 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
     }, deps.intervalMs);
   }
 
-  return { tick, start, stop };
+  /**
+   * Read straight off the retry budget rather than off a counter maintained
+   * alongside it. `attempts` is already the exact set of sessions whose latest
+   * pass failed: `settlePass` deletes an entry the moment a session succeeds,
+   * `pruneMissing` drops sessions that left the disk, and a pricing change or a
+   * vanished corpus root clears it wholesale. A parallel counter would have to
+   * mirror all four of those and would drift the first time one was forgotten -
+   * and a drifted count here is worse than none, because it would assert
+   * coverage the database does not have.
+   */
+  function exclusions(): IngestExclusions {
+    let quarantined = 0;
+    for (const { count } of attempts.values()) {
+      if (count >= MAX_INGEST_ATTEMPTS) {
+        quarantined += 1;
+      }
+    }
+    return { failing: attempts.size, quarantined };
+  }
+
+  return { tick, start, stop, exclusions };
 }

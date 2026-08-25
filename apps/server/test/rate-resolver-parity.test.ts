@@ -14,13 +14,22 @@
  *     the SQL rollup reports $0 with every token surfaced as unpriced.
  *
  * The two resolvers agree exactly when every stored `effective_from` is
- * byte-comparable against every `occurred_at` — true for the migration seed's
- * bare-date form ('2026-01-01', a prefix of every same-date ISO string) and
- * for uniformly formatted full timestamps. They DIVERGE on mixed string
- * forms of the same instant; those cases are pinned in the "known
- * divergence" block below rather than asserted as parity, so today's truth
- * stays visible and any fix to either resolver flips this file and forces a
- * conscious graduation of the pinned case into the parity table.
+ * byte-comparable against every `occurred_at`. Both halves of that are now true
+ * by construction, and BOTH halves were needed — canonicalizing one operand of
+ * a two-operand comparison fixes half a bug:
+ *   - migration 14 canonicalizes `model_pricing.effective_from` to
+ *     `YYYY-MM-DDTHH:mm:ss.sssZ`, the one form whose lexicographic order
+ *     matches the clock (three divergences graduated);
+ *   - migration 15 does the same for `token_usage.occurred_at` (the last
+ *     divergence, `offset-form-occurred-at`, graduated).
+ * Values in EVERY case are still inserted through raw SQL in whatever spelling
+ * the case names — the point is that a writer who knows nothing about the
+ * canonical form cannot store a non-canonical value, on either column.
+ *
+ * DIVERGENT_CASES is consequently empty. It is kept, with its machinery and an
+ * explicit emptiness assertion, because it is the file's honest place to park
+ * the next divergence found: a pin records today's wrong answer, which is how
+ * this file distinguishes "fixed" from "the expectation was edited".
  *
  * Both resolvers read the same stored `model_pricing` rows: the SQL path
  * resolves in the CTE, the core path via `loadPricing` — exactly the two
@@ -83,13 +92,49 @@ const PARITY_CASES: readonly ParityCase[] = [
     core: { kind: 'priced', usd: 10 },
   },
   {
-    // The production seed shape (migration 7 writes '2026-01-01'): a bare date
-    // is a strict prefix of every same-date ISO form, so it is byte-wise <=
-    // all of them — the one full-parity form for effective_from today.
+    // The production seed shape (migration 7 writes '2026-01-01'). Migration
+    // 14 stores it as '2026-03-01T00:00:00.000Z', byte-equal to the usage
+    // timestamp here — so the boundary is inclusive on both resolvers.
     name: 'bare-date-effective-from',
     rates: [{ usdPerMtok: 10, effectiveFrom: '2026-03-01' }],
     occurredAt: '2026-03-01T00:00:00.000Z',
     core: { kind: 'priced', usd: 10 },
+  },
+  {
+    // GRADUATED from DIVERGENT_CASES by migration 14 (M-21). Before it, the
+    // plain-Z effective_from was stored verbatim and 'Z' sorts above '.', so
+    // as text it was NOT <= the millisecond occurred_at of the SAME instant
+    // (the form Claude Code JSONL actually writes): core priced, the API
+    // showed $0 + unpriced. Stored canonically the two strings are equal.
+    name: 'same-instant-ef-plain-oa-millis',
+    rates: [{ usdPerMtok: 10, effectiveFrom: '2026-03-01T00:00:00Z' }],
+    occurredAt: '2026-03-01T00:00:00.000Z',
+    core: { kind: 'priced', usd: 10 },
+  },
+  {
+    // GRADUATED (M-21). An offset-form effective_from (02:00+02:00 = midnight
+    // Z) precedes the usage by 30 minutes as an instant but sorted AFTER it as
+    // text. Migration 14 converts it to its UTC instant at write time, so the
+    // stored text now sorts the way the clock does.
+    name: 'offset-form-effective-from',
+    rates: [{ usdPerMtok: 10, effectiveFrom: '2026-03-01T02:00:00+02:00' }],
+    occurredAt: '2026-03-01T00:30:00Z',
+    core: { kind: 'priced', usd: 10 },
+  },
+  {
+    // GRADUATED (M-21) — the dangerous one. At a rate change whose new row was
+    // plain-Z and whose usage is the millisecond form of the SAME boundary
+    // instant, the text comparison rejected the new row and silently priced at
+    // the OLD rate: $10 presented where the halt gate had approved $30,
+    // flagged by nothing. Both spellings now store canonically, so both
+    // resolvers pick the new rate.
+    name: 'rate-change-boundary-mixed-forms',
+    rates: [
+      { usdPerMtok: 10, effectiveFrom: '2026-01-01T00:00:00Z' },
+      { usdPerMtok: 30, effectiveFrom: '2026-06-01T00:00:00Z' },
+    ],
+    occurredAt: '2026-06-01T00:00:00.000Z',
+    core: { kind: 'priced', usd: 30 },
   },
   {
     name: 'rate-change-usage-between-rows',
@@ -110,6 +155,21 @@ const PARITY_CASES: readonly ParityCase[] = [
     ],
     occurredAt: '2026-06-01T00:00:00Z',
     core: { kind: 'priced', usd: 30 },
+  },
+  {
+    // GRADUATED from DIVERGENT_CASES by migration 15 (M-21, second operand).
+    // `effective_from` canonicalization alone could not reach this one: the
+    // usage is an hour AFTER the rate starts as an instant
+    // (2026-02-28T20:00-05:00 = 2026-03-01T01:00Z), but its '2026-02-…' prefix
+    // sorted BELOW the rate's '2026-03-…', so the CTE found no applicable rate
+    // and the API reported $0 + unpriced where core priced $10. Migration 15
+    // rewrites `token_usage.occurred_at` to the canonical instant at write
+    // time, so both operands of `effective_from <= occurred_at` now sort the
+    // way the clock does and the two resolvers agree.
+    name: 'offset-form-occurred-at',
+    rates: [{ usdPerMtok: 10, effectiveFrom: '2026-03-01T00:00:00Z' }],
+    occurredAt: '2026-02-28T20:00:00-05:00',
+    core: { kind: 'priced', usd: 10 },
   },
   {
     // Usage one second before the first rate exists: core halts, the API
@@ -140,43 +200,17 @@ interface DivergentCase extends ResolverCase {
  * combination on which the text comparison and the epoch-ms comparison order
  * the same instants differently. Deleting an entry here without moving it
  * into PARITY_CASES is buying the green, not fixing the bug.
+ *
+ * The three mixed-`effective_from` entries this block used to hold were
+ * graduated into PARITY_CASES by migration 14, which canonicalizes that column
+ * at write time; `offset-form-occurred-at`, the OTHER operand of the same
+ * comparison, followed via migration 15. The block is therefore EMPTY, and
+ * empty is the honest state to leave it in rather than deleting the machinery:
+ * the next divergence found gets pinned here, and the emptiness assertion
+ * below fails loudly the day someone empties it by editing an expectation
+ * instead of by fixing a resolver.
  */
-const DIVERGENT_CASES: readonly DivergentCase[] = [
-  {
-    // Same instant, but 'Z' sorts above '.', so as text the plain-Z
-    // effective_from is NOT <= the millisecond occurred_at (the form Claude
-    // Code JSONL actually writes). Core prices; the API shows $0 + unpriced.
-    name: 'same-instant-ef-plain-oa-millis',
-    rates: [{ usdPerMtok: 10, effectiveFrom: '2026-03-01T00:00:00Z' }],
-    occurredAt: '2026-03-01T00:00:00.000Z',
-    core: { kind: 'priced', usd: 10 },
-    sql: { costUsd: 0, unpricedTokens: TOKENS },
-  },
-  {
-    // Offset-form effective_from (02:00+02:00 = midnight Z): as an instant it
-    // precedes the usage by 30 minutes, as text it sorts after it. Core
-    // prices; the API shows $0 + unpriced.
-    name: 'offset-form-effective-from',
-    rates: [{ usdPerMtok: 10, effectiveFrom: '2026-03-01T02:00:00+02:00' }],
-    occurredAt: '2026-03-01T00:30:00Z',
-    core: { kind: 'priced', usd: 10 },
-    sql: { costUsd: 0, unpricedTokens: TOKENS },
-  },
-  {
-    // The dangerous direction: at a rate change whose new row is plain-Z and
-    // whose usage is millisecond-form of the SAME boundary instant, the text
-    // comparison rejects the new row and silently prices at the OLD rate —
-    // dollars the ingest halt gate never approved, flagged by nothing.
-    name: 'rate-change-boundary-mixed-forms',
-    rates: [
-      { usdPerMtok: 10, effectiveFrom: '2026-01-01T00:00:00Z' },
-      { usdPerMtok: 30, effectiveFrom: '2026-06-01T00:00:00Z' },
-    ],
-    occurredAt: '2026-06-01T00:00:00.000Z',
-    core: { kind: 'priced', usd: 30 },
-    sql: { costUsd: 10, unpricedTokens: 0 },
-  },
-];
+const DIVERGENT_CASES: readonly DivergentCase[] = [];
 
 /** Runs core's resolver over one case, catching only its documented refusal. */
 function resolveWithCore(
@@ -255,6 +289,16 @@ describe('rate-resolver parity: core epoch-ms vs API lexicographic SQL (M-21)', 
     temp.cleanup();
   });
 
+  it('stores every rate canonically, whatever spelling the fixture wrote (M-21)', () => {
+    // The premise the parity cases rest on: these rows went in through raw
+    // SQL in five different spellings, and came out in one.
+    const stored = temp.db.prepare('SELECT effective_from FROM model_pricing').pluck().all();
+    expect(stored.length).toBeGreaterThan(0);
+    for (const value of stored) {
+      expect(value).toBe(new Date(value as string).toISOString());
+    }
+  });
+
   describe('agreement cases', () => {
     for (const parityCase of PARITY_CASES) {
       it(`${parityCase.name}: both resolvers give the same answer`, () => {
@@ -277,6 +321,15 @@ describe('rate-resolver parity: core epoch-ms vs API lexicographic SQL (M-21)', 
   });
 
   describe('known divergence, pinned until the resolvers are reconciled', () => {
+    it('has no unreconciled divergence left to pin', () => {
+      // The assertion the header promises. It is not decoration: it is the
+      // difference between "M-21 is closed" and "the last pin was quietly
+      // deleted". Adding an entry above turns this red on purpose - a pin is
+      // a record of a wrong answer we are living with, and living with one
+      // silently is the failure mode this whole file exists to prevent.
+      expect(DIVERGENT_CASES).toHaveLength(0);
+    });
+
     for (const divergentCase of DIVERGENT_CASES) {
       it(`${divergentCase.name}: SQL still disagrees with core exactly as documented`, () => {
         const core = resolveWithCore(divergentCase, pricing);

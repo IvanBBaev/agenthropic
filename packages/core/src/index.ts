@@ -16,7 +16,12 @@ export type {
   DelegationSavingsResult,
 } from './cost/delegation-savings';
 export { groupSiblingsIntoWaves, DEFAULT_WAVE_THRESHOLD_MS } from './dag/waves';
-export { parseSession, SubstrateError, classifyRelativePath } from './parser/parse-session';
+export {
+  parseSession,
+  peekSubstrateSessionId,
+  SubstrateError,
+  classifyRelativePath,
+} from './parser/parse-session';
 export { extractCompactionBoundaries } from './parser/compaction';
 export type { CompactionBoundary } from './parser/compaction';
 export type { TokenBuckets, UsageRow, DedupedUsage, PricingEntry, SiblingWave } from './types';

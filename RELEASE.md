@@ -287,9 +287,10 @@ scan."**
 
 ## 7. Version, tag, release notes
 
-- [ ] Bump `version` in the root [`package.json`](package.json) from `0.1.0` to
-      `1.0.0` (workspace packages are `private` and unpublished; the root version is
-      the release version).
+- [ ] Bump `version` in the root [`package.json`](package.json) from `0.3.0` to
+      `1.0.0`, and keep the five workspace `package.json` files on the same number
+      (they are `private` and unpublished; the root version is the release version,
+      and the root tarball is documentation only - see its `files` list).
 - [ ] Update `DONE.md` with the v1.0 milestone entry (it is the milestone record the
       release notes derive from).
 - [ ] **[HUMAN] Release commit and tag** — commits and pushes happen only on the

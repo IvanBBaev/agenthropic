@@ -70,7 +70,17 @@ export function createTailCachingFs(inner: CorpusFs, options: TailCacheOptions =
   // Map preserves insertion order; re-inserting on every hit makes it an LRU.
   const cache = new Map<string, CacheEntry>();
   let totalBytes = 0;
-  const decoder = new TextDecoder();
+  // `ignoreBOM: true` is REQUIRED for the "cached read ≡ full read" anchor above,
+  // and its name is the opposite of what it does: the default (`false`) makes the
+  // decoder *interpret* a leading U+FEFF as a byte-order mark and DELETE it, while
+  // `true` makes it pass the code point through as ordinary text. The port this
+  // wraps reads with `readFileSync(fd, 'utf8')` (node-corpus-fs.ts), which keeps
+  // the BOM. Decoding it away here would make the cached read differ from the
+  // uncached one by exactly one leading character — and the split is silent: the
+  // watcher ingests a BOM-led session fine through this cache, while any /api/*
+  // route falls back to a bare `nodeCorpusFs()` and throws a SubstrateError on the
+  // very same file, 500-ing that session's reads permanently.
+  const decoder = new TextDecoder('utf-8', { ignoreBOM: true });
 
   function dropEntry(absPath: string): void {
     const entry = cache.get(absPath);

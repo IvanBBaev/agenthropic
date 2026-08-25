@@ -565,13 +565,42 @@ export async function start(
   // rather than in the writer so /api/health can report the running total; an
   // ingest-less boot honestly reports zero, exactly as skipCounters does.
   let crossSessionUsageCollisions = 0;
+  // M-15/M-18: ONE tail-caching read port, shared by the ingest watcher and the
+  // cost-analysis substrate provider below. The byte-offset cache is per
+  // DECORATOR INSTANCE, so a provider with its own instance re-read every
+  // transcript in full (up to 64 MiB, synchronously, on the request thread) on
+  // every click; sharing the watcher's instance means a cost-analysis lookup
+  // reads only the bytes appended since the last poll pass.
+  //
+  // Sharing is safe — each claim is checked against corpus/tail-cache.ts:
+  //  - No interleaving: Node is single-threaded and both `readJsonl` and the
+  //    watcher pass are fully synchronous (no `await` inside), so no caller can
+  //    observe a half-updated entry.
+  //  - No time-based staleness: an entry is never trusted on age. EVERY read
+  //    re-reads the overlap window and falls back to a full read when the file
+  //    shrank or the overlap bytes differ, so a shared entry is verified against
+  //    the file for the second caller exactly as for the first.
+  //  - No containment or cap weakening: the cache stores bytes, not decisions.
+  //    `nodeCorpusFs.readFileTailConfined` re-opens with `O_NOFOLLOW` and
+  //    re-applies the CALLER'S OWN `maxBytes` via fstat on every call, cache hit
+  //    included — so a shared entry can never serve one caller a file that
+  //    exceeds another caller's `OversizeError` limit. (Both callers here use
+  //    `DEFAULT_READ_LIMITS` anyway: neither passes a `limits` override.)
+  //  - Shared budget costs speed only: the 128 MiB / 512-entry LRU caps are now
+  //    shared, so the two paths can evict each other's entries. An evicted entry
+  //    is a full read — the same read the bare adapter always did.
+  //  - Errors are not shared state: any throw drops the entry and propagates
+  //    untouched, so one path's EACCES leaves nothing behind for the other.
+  // Built unconditionally (not inside the ingest branch): with ingest off the
+  // provider is the sole user and still gets the repeat-click benefit.
+  const corpusFs = createTailCachingFs(nodeCorpusFs());
   if (config.ingestEnabled) {
     watcher = createCorpusWatcher({
       db,
       // M-15: incremental transcript reads — a poll pass costs O(new bytes),
       // not O(corpus bytes). The decorator only ever falls back to the same
       // full read the bare adapter would have done.
-      fs: createTailCachingFs(nodeCorpusFs()),
+      fs: corpusFs,
       // A RESOLVER, not a snapshot: the watcher re-reads the pricing table
       // every pass, so seeding a missing model row unblocks parked sessions
       // without a restart (review M-2).
@@ -634,6 +663,11 @@ export async function start(
     });
   }
 
+  // Captured into a const so the seam below can be narrowed: `watcher` is a
+  // `let` assigned inside the ingest-enabled branch, and TypeScript's narrowing
+  // of a mutable binding does not survive into a closure.
+  const ingestWatcher = watcher;
+
   const app = buildServer({
     token: config.token,
     schemaVersion: currentSchemaVersion(db),
@@ -650,12 +684,24 @@ export async function start(
     tickDurationMs: () => lastTickDurationMs,
     // M-18: spend that a resume/fork replay deliberately did not re-count.
     usageCollisions: () => crossSessionUsageCollisions,
+    // How much of the corpus the dollar figures are NOT computed from. A
+    // session ingest cannot finish contributes no rows at all, so every total
+    // silently omits its spend - and omits it in the flattering direction,
+    // since a total missing sessions is always too small. Wired only when the
+    // watcher exists: with ingest off there is nothing to exclude, and the
+    // fields stay absent rather than reporting a zero nobody measured.
+    ingestExclusions: ingestWatcher === null ? undefined : () => ingestWatcher.exclusions(),
     // WP-C4/C5: compaction repricing and delegation savings need the raw
     // substrate (boundaries are not persisted), so the cost-analysis route gets
     // a read-only corpus seam. Same env hygiene as the watcher - config is the
     // single source of truth for the root.
     substrateProvider: createSubstrateProvider({
       env: { CLAUDE_PROJECTS_DIR: config.corpusRoot ?? undefined },
+      // M-18 residue: the WATCHER'S tail-caching port, not a fresh one. The
+      // slug hint below removed the O(corpus) enumeration per request; this
+      // removes the O(file bytes) synchronous re-read that remained. See the
+      // sharing-safety argument at `corpusFs`.
+      fs: corpusFs,
       // Persisted-slug hint (review M-13): lets the provider try the session's
       // recorded project directory first instead of scanning every slug.
       slugOf: (id) => getSessionProjectSlug(db, id),

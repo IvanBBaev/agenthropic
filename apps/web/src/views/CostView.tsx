@@ -12,11 +12,21 @@
  *     the labels name the boundary instead of assuming the local timezone;
  *   - M-8: a "top agent burners" table ranking the served DAG nodes by token
  *     burn, so the biggest agent/subagent burner is readable without hovering
- *     SVG <title> tooltips (which keyboard and AT users cannot reach at all).
+ *     SVG <title> tooltips (which keyboard and AT users cannot reach at all);
+ *   - M-10: those windows are cut against the app's shared clock (clock.ts)
+ *     rather than a per-render `Date.now()`, so a tab left open across UTC
+ *     midnight rolls over instead of presenting yesterday's totals under a
+ *     label that says today.
  */
 import { useEffect, useState } from 'react';
-import { fetchCostSummary, fetchGlobalDag } from '../api';
-import type { CostSummaryDto, GlobalDagDto } from '../dto';
+import { fetchAggregateSavings, fetchCostSummary, fetchGlobalDag } from '../api';
+import { useNowMs } from '../clock';
+import type {
+  AggregateDelegationSavingsDto,
+  AggregateSavingsSkipDto,
+  CostSummaryDto,
+  GlobalDagDto,
+} from '../dto';
 import { agentTypeLabel, formatTokens, formatUsd, projectLabel, shortId } from '../format';
 import { describeCostFlow } from './chart-summary';
 import { computeCostWindows } from './cost-windows';
@@ -60,6 +70,13 @@ type BurnersState =
   | { readonly kind: 'loading' }
   | { readonly kind: 'error'; readonly message: string }
   | { readonly kind: 'ready'; readonly dag: GlobalDagDto };
+
+// Same reasoning for the M-9 aggregate: a third endpoint, a third state
+// machine, so a failure there costs this view one section and nothing else.
+type SavingsState =
+  | { readonly kind: 'loading' }
+  | { readonly kind: 'error'; readonly message: string }
+  | { readonly kind: 'ready'; readonly aggregate: AggregateDelegationSavingsDto };
 
 function flowNodeClass(node: FlowNode): string {
   return node.colorIndex !== null ? `flow-node cat-${node.colorIndex}` : 'flow-node flow-neutral';
@@ -131,12 +148,148 @@ function BurnersPanel({ dag }: { readonly dag: GlobalDagDto }) {
   );
 }
 
+/** `1 session` / `2 sessions`. One branch, reused by all the scope copy. */
+function plural(count: number, noun: string): string {
+  return `${String(count)} ${noun}${count === 1 ? '' : 's'}`;
+}
+
+/**
+ * Wording for a skip reason, so the exclusion table never publishes a raw enum.
+ * A lookup rather than a ternary chain: a reason added to the DTO then fails
+ * the type check here instead of silently rendering the wrong sentence.
+ */
+const SKIP_REASON_LABEL: Record<AggregateSavingsSkipDto['reason'], string> = {
+  unpriceable: 'No dated price',
+  'undated-usage': 'Usage row carries no date',
+};
+
+/**
+ * M-9 (aggregate half): the delegation-savings counterfactual summed across the
+ * corpus, so the "was delegating worth it?" question has an answer that is not
+ * one session at a time.
+ *
+ * Three honesty rules, all of them visible on screen rather than only in the
+ * payload:
+ *  1. it is an ESTIMATE - the cache profile of a run that never happened is not
+ *     observable - hence the `~` prefixes and the badge, exactly like the
+ *     per-session panel;
+ *  2. it states its own SCOPE. An aggregate quietly computed over a subset is a
+ *     lie, so the copy names how many sessions were priced, how many delegated
+ *     at all, and how many exist - and says out loud that a session with no
+ *     subagent is a measured zero rather than a gap;
+ *  3. anything it could not price is NAMED, never dropped and never counted as
+ *     $0 - by session id, with the reason the server gave. When the server caps
+ *     that list, the cap is stated and the COUNT stays authoritative.
+ *
+ * The figures are what the included sessions' SUBAGENTS cost, not what those
+ * sessions cost; the labels say so, because naming it wrong would turn a
+ * subtotal into an apparent session total.
+ */
+function AggregateSavingsPanel({
+  aggregate,
+}: {
+  readonly aggregate: AggregateDelegationSavingsDto;
+}) {
+  const subagentsSeen = aggregate.subagentsPriced + aggregate.subagentsSkipped;
+  return (
+    <>
+      <p className="muted" data-testid="aggregate-savings-basis">
+        Rebuilt from the stored usage rows, not from a re-read of the transcripts - so it moves with
+        the database, exactly like every other figure on this page.
+      </p>
+      <div className="kpis" aria-label="aggregate delegation savings">
+        <div className="kpi" data-testid="kpi-aggregate-savings">
+          <span className="kpi-label">Saved by delegating</span>
+          <span className="kpi-value">~ {formatUsd(aggregate.savingsUsd)}</span>
+          <span className="muted kpi-note">
+            estimated over {plural(aggregate.sessionsPriced, 'session')}
+          </span>
+        </div>
+        <div className="kpi" data-testid="kpi-aggregate-actual">
+          <span className="kpi-label">Subagent spend, actual</span>
+          <span className="kpi-value">{formatUsd(aggregate.actualUsd)}</span>
+          <span className="muted kpi-note">measured</span>
+        </div>
+        {/*
+          Scoped in the LABEL, not only in the surrounding prose. Its sibling
+          says "Subagent spend", so a bare "Without delegation" next to it reads
+          as the counterfactual for the whole corpus - the one number on this
+          panel a reader could take for a session-wide total. It is the same
+          subagents-only counterfactual the session view calls "Same work, no
+          delegation"; naming it the same way in both places is what stops the
+          two views from looking like two different quantities.
+        */}
+        <div className="kpi" data-testid="kpi-aggregate-hypothetical">
+          <span className="kpi-label">Same work, no delegation</span>
+          <span className="kpi-value">~ {formatUsd(aggregate.hypotheticalUsd)}</span>
+          <span className="muted kpi-note">
+            {aggregate.hypotheticalModels.length === 0
+              ? 'estimated, subagents only'
+              : `estimated, subagents only, on ${aggregate.hypotheticalModels.join(', ')}`}
+          </span>
+        </div>
+      </div>
+      <p className="muted" data-testid="aggregate-savings-scope">
+        Scope: {plural(aggregate.sessionsPriced, 'session')} priced of{' '}
+        {plural(aggregate.sessionsWithSubagents, 'session')} that recorded a subagent, out of{' '}
+        {plural(aggregate.sessionsTotal, 'session')} in the database. A session with no subagent had
+        nothing to delegate and contributes a measured zero, not a gap.{' '}
+        {aggregate.subagentsSkipped > 0 &&
+          `${plural(aggregate.subagentsSkipped, 'subagent')} of ${String(subagentsSeen)} inside the priced sessions had no resolvable top-tier model and ${aggregate.subagentsSkipped === 1 ? 'is' : 'are'} left out - never guessed at. `}
+        {aggregate.untypedAgents > 0 &&
+          `${plural(aggregate.untypedAgents, 'agent row')} in the database carry no recorded type and count as neither main agent nor subagent here.`}
+      </p>
+      {aggregate.skippedSessionCount > 0 && (
+        <>
+          <p className="empty-state" data-testid="aggregate-savings-skipped">
+            <span className="status-unknown">?</span>{' '}
+            {plural(aggregate.skippedSessionCount, 'session')} could not be priced and{' '}
+            {aggregate.skippedSessionCount === 1 ? 'is' : 'are'} excluded from the figures above
+            rather than counted as $0.
+          </p>
+          <table className="data-table" aria-label="sessions excluded from the delegation estimate">
+            <thead>
+              <tr>
+                <th>Session</th>
+                <th>Reason</th>
+                <th>Detail</th>
+              </tr>
+            </thead>
+            <tbody>
+              {aggregate.skippedSessions.map((skip) => (
+                <tr key={skip.sessionId}>
+                  <td>
+                    <code>{shortId(skip.sessionId)}</code>
+                  </td>
+                  <td>{SKIP_REASON_LABEL[skip.reason]}</td>
+                  <td>{skip.detail}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {aggregate.skippedSessionCount > aggregate.skippedSessions.length && (
+            <p className="muted" data-testid="aggregate-savings-sample-note">
+              Showing {aggregate.skippedSessions.length} of {aggregate.skippedSessionCount} excluded
+              sessions - the list is a bounded sample, the count is authoritative.
+            </p>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
 export function CostView({ token, onAuthRejected }: ViewProps) {
   const [state, setState] = useState<CostState>({ kind: 'loading' });
   const [burners, setBurners] = useState<BurnersState>({ kind: 'loading' });
+  const [savings, setSavings] = useState<SavingsState>({ kind: 'loading' });
   // Per-session analysis (WP-C4/C5) reads transcripts off disk, so it is opt-in
   // per session rather than fetched for every row of the summary.
   const [analysedSessionId, setAnalysedSessionId] = useState<string | null>(null);
+  // M-10: the reading that cuts the UTC windows below. It has to be read here,
+  // above the early returns, because it is a hook - and it ticks, so this view
+  // re-renders when the day boundary moves under a long-open tab.
+  const nowMs = useNowMs();
 
   useEffect(() => {
     const controller = new AbortController();
@@ -168,6 +321,21 @@ export function CostView({ token, onAuthRejected }: ViewProps) {
     return () => controller.abort();
   }, [token, onAuthRejected]);
 
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetchAggregateSavings(token, controller.signal).then((result) => {
+      if (controller.signal.aborted) return;
+      if (result.kind === 'unauthorized') {
+        onAuthRejected();
+      } else if (result.kind === 'error') {
+        setSavings({ kind: 'error', message: result.message });
+      } else {
+        setSavings({ kind: 'ready', aggregate: result.data });
+      }
+    });
+    return () => controller.abort();
+  }, [token, onAuthRejected]);
+
   if (state.kind === 'loading') {
     return (
       <section aria-label="cost summary">
@@ -192,12 +360,13 @@ export function CostView({ token, onAuthRejected }: ViewProps) {
   // is a different fact from "usage exists but none of it is priced", and the
   // copy must not let a $0.00 headline be read as the second.
   const nothingRecorded = summary.totals.tokens === 0 && summary.totals.unpricedTokens === 0;
-  // Date.now() is read per render and this view has neither a timer nor an
-  // SSE-driven refetch, so on a tab left open across UTC midnight the "today"
-  // boundary is only as fresh as the last render. That staleness class is
-  // already on record as review item M-10 (the frozen relative-time labels);
-  // the fix is a shared clock tick there, not a windows-local special case.
-  const windows = computeCostWindows(summary.perDay, Date.now());
+  // M-10, closed: the boundary rides the shared clock, so a tab left open
+  // across UTC midnight rolls the window over within one tick instead of
+  // labelling yesterday's total "today". Label and figures are cut from the
+  // SAME reading, so the two can never name different days. What the tiles do
+  // NOT claim is freshness of the DATA: the perDay rows are as old as the last
+  // summary fetch, exactly as they are one minute after any other render.
+  const windows = computeCostWindows(summary.perDay, nowMs);
 
   return (
     <section aria-label="cost summary">
@@ -231,6 +400,37 @@ export function CostView({ token, onAuthRejected }: ViewProps) {
         )}
       </div>
 
+      {/*
+        The gap `unpricedTokens` cannot express. Unpriced tokens are rows the
+        database HAS but cannot price; these are sessions whose bytes it could
+        not carry, so part or all of their spend is in no figure on this page -
+        and the omission only ever makes the totals look SMALLER. Rendered only
+        when the server actually reported a nonzero count: `coverage` is absent
+        when no ingest seam is wired, and a "0 sessions excluded" reassurance
+        nobody measured would be the same lie in the opposite direction.
+
+        WORDED to what the number actually supports. `sessionsExcluded` is
+        `IngestExclusions.failing`, the size of the watcher's retry-budget map -
+        i.e. sessions whose LATEST pass failed, which is not the same as
+        sessions that were never ingested. One that ingested cleanly and only
+        failed on a later append still has all its earlier rows in the database
+        and its earlier spend in these totals; only the newest turns are absent.
+        Claiming its spend is "missing from every figure" would be an overclaim
+        in the honest direction, which is still an overclaim - a banner that
+        overstates a gap gets discounted, and then it fails to be believed on
+        the session that really did produce nothing. The lower-bound conclusion
+        is the part that holds for both cases, so it is the part asserted.
+      */}
+      {summary.coverage !== undefined && summary.coverage.sessionsExcluded > 0 && (
+        <p className="truncation-banner" data-testid="coverage-banner">
+          {`${plural(summary.coverage.sessionsExcluded, 'session')} could not be ingested on the latest pass, so ${
+            summary.coverage.sessionsExcluded === 1 ? 'its' : 'their'
+          } spend is incomplete or absent in every figure on this page - these totals are a lower bound, not a complete one.`}
+          {summary.coverage.sessionsQuarantined > 0 &&
+            ` ${String(summary.coverage.sessionsQuarantined)} of those will not be retried until the corpus or the pricing table changes (usually a model with no price row).`}
+        </p>
+      )}
+
       <div className="kpis" aria-label="recent windows">
         <div className="kpi" data-testid="kpi-today">
           <span className="kpi-label">Today (UTC)</span>
@@ -263,6 +463,21 @@ export function CostView({ token, onAuthRejected }: ViewProps) {
         {windows.unknownDay.tokens > 0 &&
           `${formatTokens(windows.unknownDay.tokens)} tokens carry no timestamp and sit outside every window (listed as "unknown" below).`}
       </p>
+
+      <h2>
+        Delegation savings, whole corpus{' '}
+        <span className="badge-estimate" data-testid="aggregate-estimate-badge">
+          estimate
+        </span>
+      </h2>
+      {savings.kind === 'loading' && <p className="muted">Loading delegation savings…</p>}
+      {savings.kind === 'error' && (
+        <p className="empty-state">
+          <span className="status-error">✕</span> Could not load delegation savings:{' '}
+          {savings.message}
+        </p>
+      )}
+      {savings.kind === 'ready' && <AggregateSavingsPanel aggregate={savings.aggregate} />}
 
       <h2>Cost flow</h2>
       {flow.hasFlow ? (

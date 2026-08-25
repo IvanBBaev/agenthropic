@@ -942,6 +942,66 @@ describe('parseSession — loud SubstrateError failures', () => {
   });
 });
 
+// --- diagnostics: the reported line is the FILE's line (review L-6) ----------
+// Blank lines are dropped while parsing, so a record's index in the array is
+// not its line in the file. Every `file:line` in a SubstrateError must point at
+// the line a human sees when they open that file, or the diagnostic sends them
+// to the wrong record.
+
+describe('parseSession — SubstrateError line numbers survive blank lines', () => {
+  it('reports the real file line of a sessionId contradiction', () => {
+    const input = substrate([
+      {
+        path: 'session.jsonl',
+        lines: [
+          '', // 1
+          jline({ sessionId: 'A', type: 'user', timestamp: '2026-01-01T00:00:00.000Z' }), // 2
+          '', // 3
+          '', // 4
+          jline({ sessionId: 'B', type: 'user', timestamp: '2026-01-01T00:00:01.000Z' }), // 5
+        ],
+      },
+    ]);
+    // The contradicting record is the 2nd RECORD but the 5th LINE.
+    expect(() => parseSession(input)).toThrow('session.jsonl:5: sessionId contradiction');
+  });
+
+  it('reports the real file line of an inline agentId / filename hex disagreement', () => {
+    const input = substrate([
+      {
+        path: 'subagents/agent-abcd1234.jsonl',
+        lines: [
+          jline({
+            sessionId: 's',
+            agentId: 'abcd1234',
+            type: 'user',
+            timestamp: '2026-01-01T00:00:00.000Z',
+          }), // 1
+          '', // 2
+          '   ', // 3 (whitespace-only counts as blank)
+          jline({
+            sessionId: 's',
+            agentId: 'wronghex',
+            type: 'user',
+            timestamp: '2026-01-01T00:00:01.000Z',
+          }), // 4
+        ],
+      },
+    ]);
+    // The offending record is the 2nd RECORD but the 4th LINE.
+    expect(() => parseSession(input)).toThrow(
+      'subagents/agent-abcd1234.jsonl:4: inline agentId "wronghex" does not equal filename hex "abcd1234"',
+    );
+  });
+
+  it('reports the real file line of a non-JSON line after blanks', () => {
+    const input = substrate([
+      { path: 'session.jsonl', lines: ['', '{"ok":true}', '', 'not json {'] },
+    ]);
+    expect(() => parseSession(input)).toThrow('session.jsonl:4: line is not valid JSON');
+  });
+});
+
 // --- additional real join-path branches -------------------------------------
 // The four documented resolution paths below have no coverage from the shipped
 // fixtures (a workflow dispatched BY a subagent, the parent-side async

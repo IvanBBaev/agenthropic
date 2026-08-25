@@ -15,6 +15,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchSessions } from '../api';
+import { useNowMs } from '../clock';
 import type { SessionSummaryDto } from '../dto';
 import { formatRelativeTime, formatTokens, formatUsd, projectLabel, shortId } from '../format';
 import {
@@ -28,15 +29,6 @@ import type { ViewProps } from './types';
 
 /** Page size for the board snapshot (server max is far above this). */
 export const SESSION_LIMIT = 50;
-
-/**
- * Relative-time labels re-render on this cadence. A quiet stream re-renders
- * nothing on its own, so a per-render Date.now() would freeze "just now" on
- * screen for hours. 30 s sits well inside formatRelativeTime's coarsest
- * boundary (the 90 s "just now" window), so a label is never more than one
- * bucket stale.
- */
-export const CLOCK_INTERVAL_MS = 30_000;
 
 /**
  * Shape of an `ingest-failed` payload the board can render. The frame rides
@@ -95,7 +87,12 @@ export function LiveView({ token, sse, onAuthRejected }: ViewProps) {
   // until dismissed or superseded by a successful ingest - never toast-and-gone.
   const [failures, setFailures] = useState<readonly IngestFailureNotice[]>([]);
   const [unreadableFailures, setUnreadableFailures] = useState(0);
-  const [nowMs, setNowMs] = useState(() => Date.now());
+  // M-10: the recency labels move on the app's SHARED clock (see clock.ts)
+  // rather than a per-render Date.now(). A quiet stream re-renders nothing on
+  // its own, so a per-render reading froze "just now" on screen for hours; and
+  // sharing the tick with the cost view's UTC windows means no two panels can
+  // disagree about what "now" is.
+  const nowMs = useNowMs();
   // Mirror of the latest board so SSE handlers patch the current snapshot
   // even before React re-renders between two quick events.
   const boardRef = useRef<BoardState>(board);
@@ -118,15 +115,6 @@ export function LiveView({ token, sse, onAuthRejected }: ViewProps) {
     });
     return () => controller.abort();
   }, [token, reload, onAuthRejected, applyBoard]);
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setNowMs(Date.now());
-    }, CLOCK_INTERVAL_MS);
-    return () => {
-      clearInterval(timer);
-    };
-  }, []);
 
   useEffect(() => {
     const unsubscribeIngest = sse.subscribe('session-ingested', (event) => {

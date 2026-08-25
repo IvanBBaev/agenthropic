@@ -7,10 +7,13 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-Nothing has been released yet, so every change below is unreleased. There are no
-version tags in this repository.
-
 ## [Unreleased]
+
+## [0.3.0] - 2026-08-25
+
+First versioned release of the source tree. agenthropic is run from a clone, not
+installed from a registry: no code ships on npm, and the package published under
+this name carries documentation only. v1.0 remains the target for 2026-12-01.
 
 ### Added
 
@@ -70,8 +73,8 @@ version tags in this repository.
 
 Things a reader might reasonably expect here and will not find:
 
-- No released version and no git tag. The root `package.json` still reads `0.1.0`; the release checklist bumps it to `1.0.0` at release time.
-- No npm package. Every workspace package is marked `private` and unpublished.
+- No git tag. The version is `0.3.0` across the workspace; the release checklist bumps it to `1.0.0` at release time, and tagging has not been done for any version.
+- No code on npm. The root package is publishable so that the name is held, but its tarball is `README`, `LICENSE`, `CHANGELOG` and `SECURITY` only - there is no `bin`, no build output and nothing to run. Every `@agenthropic/*` workspace package stays `private` and unpublished.
 - No published documentation site. The GitHub Pages workflow exists and uses only official actions, but Pages has never been enabled on the repository, so every run has failed at `configure-pages`. Turning it on is a one-time owner action in the repository settings.
 - No alerting and no webhooks. The alert port, rules engine and notification sinks are deliberately v2 work and are not on the v1.0 path.
 - Retention is implemented but nothing runs it. There is no timer and no HTTP entry point, on purpose, until the retention policy values are signed off; the default policy is a byte-identical no-op that opens no transaction.

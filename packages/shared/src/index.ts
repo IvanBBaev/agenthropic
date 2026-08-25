@@ -52,6 +52,7 @@ export {
   ModelCostSchema,
   DailyCostSchema,
   SessionCostSchema,
+  CostCoverageSchema,
   CostSummaryResponseSchema,
   TokenBucketsSchema,
   CompactionBoundarySchema,
@@ -59,6 +60,10 @@ export {
   CompactionAnalysisSchema,
   AgentDelegationSavingsSchema,
   DelegationSavingsSchema,
+  MAX_AGGREGATE_SKIPPED_SAMPLE,
+  AggregateSavingsSkipReasonSchema,
+  AggregateSavingsSkipSchema,
+  AggregateDelegationSavingsSchema,
   CostAnalysisSchema,
 } from './schemas/cost';
 export type {
@@ -66,6 +71,7 @@ export type {
   ModelCostDto,
   DailyCostDto,
   SessionCostDto,
+  CostCoverageDto,
   CostSummaryDto,
   TokenBucketsDto,
   CompactionBoundaryDto,
@@ -73,6 +79,9 @@ export type {
   CompactionAnalysisDto,
   AgentDelegationSavingsDto,
   DelegationSavingsDto,
+  AggregateSavingsSkipReason,
+  AggregateSavingsSkipDto,
+  AggregateDelegationSavingsDto,
   CostAnalysisDto,
 } from './schemas/cost';
 export {

@@ -265,6 +265,26 @@ describe('SessionCostAnalysis', () => {
     expect(rows[1]?.textContent).toContain('claude-opus-4');
   });
 
+  it('labels the two levels for the slice they measure, not as session dollars', async () => {
+    // Both sums run over subagents only. Labelled "Actual" / "Without
+    // delegation" they read as session totals, and a reader comparing $0.50
+    // against the session cost shown elsewhere concludes money went missing.
+    // The saving is unaffected either way - the main agent's spend is equal in
+    // both worlds and cancels - so the fix is the label, never the arithmetic.
+    fetchMock.mockResolvedValue(jsonResponse(200, richAnalysis()));
+    renderPanel();
+    await screen.findByTestId('session-analysis');
+
+    const kpis = screen.getByLabelText('delegation savings');
+    expect(kpis.textContent).toContain('Delegated work, actual');
+    expect(kpis.textContent).toContain('Same work, no delegation');
+    expect(kpis.textContent).toContain('subagents only');
+
+    const scope = screen.getByTestId('delegation-scope').textContent ?? '';
+    expect(scope).toContain('delegated turns only');
+    expect(scope).toContain('same with or without delegation');
+  });
+
   it('reports the subagents excluded from the estimate rather than guessing at them', async () => {
     fetchMock.mockResolvedValue(jsonResponse(200, richAnalysis()));
     renderPanel();
@@ -306,6 +326,63 @@ describe('SessionCostAnalysis', () => {
     renderPanel();
     await screen.findByTestId('no-delegation');
     expect(screen.queryByRole('table', { name: 'delegation savings per agent' })).toBeNull();
+  });
+
+  it('withholds the figures when every subagent was skipped, instead of showing $0.00', async () => {
+    // The state that reads as a measurement but is a total gap: subagents DID
+    // run, none of them could be priced, so all three sums are 0. Rendered like
+    // any other session that would claim delegation saved nothing - and the
+    // empty state below would claim no subagent ran at all. Both are false.
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        200,
+        costAnalysis({
+          delegationSavings: {
+            actualUsd: 0,
+            hypotheticalUsd: 0,
+            savingsUsd: 0,
+            perAgent: [],
+            skippedAgentIds: ['a-1', 'a-2'],
+            isEstimate: true,
+          },
+        }),
+      ),
+    );
+    renderPanel();
+
+    const gap = await screen.findByTestId('delegation-unpriceable');
+    expect(gap.textContent).toContain('delegated to 2 subagents');
+    expect(gap.textContent).toContain('cannot be estimated at all');
+    // The three $0.00 KPIs and the "no subagent ran" line must both be gone,
+    // and the footnote about exclusions has no estimate left to footnote.
+    expect(screen.queryByLabelText('delegation savings')).toBeNull();
+    expect(screen.queryByTestId('savings-kpi')).toBeNull();
+    expect(screen.queryByTestId('delegation-scope')).toBeNull();
+    expect(screen.queryByTestId('no-delegation')).toBeNull();
+    expect(screen.queryByTestId('skipped-agents')).toBeNull();
+  });
+
+  it('speaks of a single unpriceable subagent in the singular', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        200,
+        costAnalysis({
+          delegationSavings: {
+            actualUsd: 0,
+            hypotheticalUsd: 0,
+            savingsUsd: 0,
+            perAgent: [],
+            skippedAgentIds: ['a-1'],
+            isEstimate: true,
+          },
+        }),
+      ),
+    );
+    renderPanel();
+
+    const gap = await screen.findByTestId('delegation-unpriceable');
+    expect(gap.textContent).toContain('delegated to 1 subagent,');
+    expect(gap.textContent).toContain('resolved for it,');
   });
 
   it.each([

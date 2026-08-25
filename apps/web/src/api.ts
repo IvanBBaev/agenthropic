@@ -6,6 +6,7 @@
  * message.
  */
 import type {
+  AggregateDelegationSavingsDto,
   CostAnalysisDto,
   CostSummaryDto,
   GlobalDagDto,
@@ -174,6 +175,19 @@ export function fetchCostSummary(
 ): Promise<ApiResult<CostSummaryDto>> {
   const query = topN !== undefined ? `?topN=${String(topN)}` : '';
   return getJson<CostSummaryDto>(`/api/cost/summary${query}`, token, signal);
+}
+
+/**
+ * GET /api/cost/delegation-savings (M-9) - the corpus-wide delegation-savings
+ * estimate. Database-backed like the summary above, so its failure surface is
+ * the narrow one (400/500); an unpriceable session does NOT fail the request,
+ * it is reported inside the payload's scope counters.
+ */
+export function fetchAggregateSavings(
+  token: string,
+  signal?: AbortSignal,
+): Promise<ApiResult<AggregateDelegationSavingsDto>> {
+  return getJson<AggregateDelegationSavingsDto>('/api/cost/delegation-savings', token, signal);
 }
 
 /**

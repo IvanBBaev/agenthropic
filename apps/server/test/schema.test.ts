@@ -211,7 +211,10 @@ describe('Phase-1 schema', () => {
         effective_from: string;
       }>;
       expect(rows).toHaveLength(25); // 5 models x 5 buckets
-      expect(rows.every((r) => r.effective_from === '2026-01-01')).toBe(true);
+      // Migration 14 canonicalises every effective_from to the full UTC instant, so the
+      // column's lexicographic order is its chronological order — the ordering the rate
+      // resolver's `effective_from <= occurred_at` + `ORDER BY ... DESC LIMIT 1` assumes.
+      expect(rows.every((r) => r.effective_from === '2026-01-01T00:00:00.000Z')).toBe(true);
 
       const rate = (model: string, bucket: string): number | undefined =>
         rows.find((r) => r.model === model && r.bucket === bucket)?.usd_per_mtok;
@@ -242,7 +245,12 @@ describe('Phase-1 schema', () => {
           "SELECT effective_from FROM model_pricing WHERE model = 'claude-sonnet-5' AND bucket = 'input' ORDER BY effective_from",
         )
         .all() as Array<{ effective_from: string }>;
-      expect(rows.map((r) => r.effective_from)).toEqual(['2026-01-01', '2026-09-01']);
+      // The bare date goes in verbatim above; migration 14's AFTER trigger rewrites it in
+      // place, so what comes back out is canonical regardless of how it was spelled.
+      expect(rows.map((r) => r.effective_from)).toEqual([
+        '2026-01-01T00:00:00.000Z',
+        '2026-09-01T00:00:00.000Z',
+      ]);
 
       // Same (model, bucket, effective_from) triple is rejected by the PK.
       expect(() => insert.run('claude-sonnet-5', 'input', 2.5, '2026-09-01')).toThrow(

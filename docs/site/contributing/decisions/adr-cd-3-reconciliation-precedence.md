@@ -34,7 +34,8 @@ ground truth. The P0 token-reconciliation proof asserts Σ `token_usage` per ses
 against an **independently written in-test reader** — a second implementation, not a
 re-run of the same code — and it is merge-blocking. The `UNIQUE (message_id, bucket)`
 key is what makes the sum exact rather than approximately right; naive row summation
-over-counts by ≈2.4× (parser-spec §5.2).
+over-counts by **~2.4–2.7×** — a `PROVISIONAL` single-corpus range, not a constant
+(parser-spec §5.2).
 
 **The two-phase attribution did not happen, and did not need to.** The Decision
 below allows `token_usage.agent_id` to be NULL at first write and backfilled later.
@@ -74,9 +75,19 @@ protected`, verified 2026-08-15); see
 [the standing correction](README.md#a-standing-correction-merge-blocking).
 
 Nothing else here has moved. The `UNIQUE (message_id, bucket)` key still does the work that
-keeps the sum exact rather than approximately right, naive row summation still over-counts
-by ≈2.4×, the two-phase backfill is still unnecessary because a session is parsed before
-anything is written, and the parser thresholds are still **PROVISIONAL (LABEL-ME)**.
+keeps the sum exact rather than approximately right, naive row summation still over-counts,
+the two-phase backfill is still unnecessary because a session is parsed before anything is
+written, and the parser thresholds are still **PROVISIONAL (LABEL-ME)**.
+
+**One number above was quoted too narrowly.** Earlier revisions of this page — and of four
+sibling pages — cited the over-count as "≈2.4×". The source (parser-spec §5.2) reports a
+**range, ~2.4–2.7×**, measured once on one corpus: 8,540 raw usage rows collapsing to 3,339
+deduped messages is 2.56×, and ≈$900 of phantom spend against ≈$346 of real spend is 2.60×.
+Quoting only the bottom of the range as though it were the figure understated it, and in one
+place sat next to the very row counts that contradict it. Corrected in place here and in
+`adr-cd-4`, `architecture/cost-model.md` and `architecture/data-model.md`. The range is
+`PROVISIONAL` regardless: another corpus will give another number, and only the *direction*
+is what the `UNIQUE` constraint is built on.
 
 ## Context
 

@@ -12,6 +12,8 @@ import { fingerprintSession } from '../../src/corpus/fingerprint';
 import {
   ContainmentError,
   DEFAULT_READ_LIMITS,
+  type CorpusFs,
+  type LstatInfo,
   type ReadLimits,
   type SessionRef,
 } from '../../src/corpus/fs-port';
@@ -106,6 +108,28 @@ describe('fingerprintSession', () => {
     const fs = fsOver({ [SESSION]: dir({ subagents: dir({}) }) });
 
     expect(fingerprintSession(fs, refFor(SESSION), LIMITS)).toBe('main:absent');
+  });
+
+  it('does not descend a symlinked `<uuid>/` session dir (the same gate as the walk)', () => {
+    // `lstat` reports on the FINAL component only, so `<uuid>/subagents` answers
+    // for the link TARGET while `<uuid>` is the symlink. The fingerprint has to
+    // apply the same gate as the substrate walk, from the same definition: were
+    // it to track files the walk refuses to ingest, every change under the link
+    // target would re-trigger an ingest that can never make the two agree.
+    const base = fsOver({
+      [`${SESSION}.jsonl`]: file('m', { size: 1, mtimeMs: 1 }),
+      [SESSION]: dir({ subagents: dir({ 'agent-1.jsonl': file('a', { size: 2, mtimeMs: 2 }) }) }),
+    });
+    const sessionDirAbs = join(ROOT, SLUG, SESSION);
+    const hostile: CorpusFs = {
+      ...base,
+      lstat(absPath: string): LstatInfo {
+        const st = base.lstat(absPath);
+        return absPath === sessionDirAbs ? { ...st, isSymbolicLink: true } : st;
+      },
+    };
+
+    expect(fingerprintSession(hostile, refFor(SESSION), LIMITS)).toBe('main:1:1');
   });
 
   it('treats a main path that is a symlink as absent (it would never be ingested)', () => {

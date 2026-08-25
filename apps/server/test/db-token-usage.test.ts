@@ -93,7 +93,12 @@ describe('insertTokenUsageRows (WP-D8 / LONG token_usage matrix)', () => {
       model: 'claude-sonnet-4-6',
       session_id: sessionId,
       is_compaction_baseline: 0,
-      occurred_at: '2026-07-11T10:00:05Z',
+      // M-21: stored CANONICALLY, not verbatim. The fixture supplies
+      // '2026-07-11T10:00:05Z' at second precision; the write path rewrites it
+      // to millisecond precision so lexicographic order over this column and
+      // chronological order coincide - which is what the priced CTE's
+      // `mp.effective_from <= tu.occurred_at` assumes of BINARY-collated text.
+      occurred_at: '2026-07-11T10:00:05.000Z',
     });
 
     // A main-transcript row carries `agentId: null` in core (the substrate has
@@ -408,6 +413,86 @@ describe('insertTokenUsageRows (WP-D8 / LONG token_usage matrix)', () => {
 
       expect(ownerOf(temp.db, 'msg-fork-own')).toBe(FORK_SESSION);
       expect(ownerOf(temp.db, 'msg-shared')).toBe(sessionId);
+    });
+  });
+
+  /**
+   * M-21, write side. The stored form of `occurred_at` is load-bearing, not
+   * cosmetic: the priced CTE compares it to `model_pricing.effective_from` as
+   * BINARY-collated TEXT, so a spelling whose lexicographic order disagrees
+   * with its clock order makes the API report tokens as unpriced that core
+   * priced. These cases pin the canonicalization at the only place a JSONL
+   * timestamp enters the database.
+   */
+  describe('canonical occurred_at on the way in', () => {
+    function storedTimes(): unknown[] {
+      return temp.db
+        .prepare('SELECT DISTINCT occurred_at FROM token_usage ORDER BY occurred_at')
+        .pluck()
+        .all();
+    }
+
+    function usageAt(messageId: string, timestamp: string): DedupedUsage {
+      return {
+        messageId,
+        model: 'claude-opus-4-6',
+        timestamp,
+        agentId: null,
+        usage: { input: 1, output: 2, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 },
+      };
+    }
+
+    it('stores every accepted spelling as the instant it denotes', () => {
+      insertTokenUsageRows(temp.db, sessionId, [
+        // The pinned defect: an hour AFTER 2026-03-01T00:00:00Z as an instant,
+        // but its '2026-02-...' prefix sorts below it as text.
+        usageAt('offset', '2026-02-28T20:00:00-05:00'),
+        usageAt('second-precision', '2026-03-01T09:30:00Z'),
+        usageAt('bare-date', '2026-03-02'),
+        usageAt('already-canonical', '2026-03-03T00:00:00.000Z'),
+      ]);
+      expect(storedTimes()).toEqual([
+        '2026-03-01T01:00:00.000Z',
+        '2026-03-01T09:30:00.000Z',
+        '2026-03-02T00:00:00.000Z',
+        '2026-03-03T00:00:00.000Z',
+      ]);
+    });
+
+    it('replaying a non-canonical timestamp still performs zero UPDATEs', () => {
+      // Why canonicalization happens BEFORE binding: the upsert guard compares
+      // `occurred_at IS NOT excluded.occurred_at`, so binding the raw value
+      // would make every replay of a second-precision timestamp look like a
+      // change and quietly break idempotence.
+      const rows = [usageAt('offset', '2026-02-28T20:00:00-05:00')];
+      expect(insertTokenUsageRows(temp.db, sessionId, rows)).toEqual({
+        inserted: 5,
+        corrected: 0,
+        crossSessionCollisions: 0,
+      });
+      expect(insertTokenUsageRows(temp.db, sessionId, rows)).toEqual({
+        inserted: 0,
+        corrected: 0,
+        crossSessionCollisions: 0,
+      });
+    });
+
+    it('halts on a timestamp that denotes no unambiguous instant', () => {
+      // A usage timestamp is never guessed and never dropped to NULL - NULL
+      // would make the row permanently unpriceable AND invisible to retention.
+      expect(() =>
+        insertTokenUsageRows(temp.db, sessionId, [usageAt('vague', '2026-03-01 09:30')]),
+      ).toThrow(/occurred_at "2026-03-01 09:30" is not an unambiguous instant/);
+      expect(() =>
+        insertTokenUsageRows(temp.db, sessionId, [usageAt('local', '2026-03-01T09:30:00')]),
+      ).toThrow(/never guessed/);
+      // A day the pattern allows but the calendar does not: both parsers roll
+      // it into March rather than failing, filing the spend under a day that
+      // never happened.
+      expect(() =>
+        insertTokenUsageRows(temp.db, sessionId, [usageAt('feb30', '2026-02-30T00:00:00Z')]),
+      ).toThrow(/not an unambiguous instant/);
+      expect(storedTimes()).toEqual([]);
     });
   });
 });

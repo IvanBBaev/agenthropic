@@ -74,16 +74,23 @@ const WORKFLOW_DIR_RE = /^wf_/;
 
 type FileClassification =
   | { kind: 'main' | 'journal' | 'other' }
-  | { kind: 'meta'; hex: string | undefined }
+  | { kind: 'meta'; hex: string }
   | { kind: 'agent'; hex: string; workflowId: string | undefined };
 
 function classifyFile(relativePath: string): FileClassification {
   const basename = relativePath.slice(relativePath.lastIndexOf('/') + 1);
 
-  if (basename.endsWith('.meta.json')) {
+  // A sidecar is `agent-<hex>.meta.json` and NOTHING else. Matching the bare
+  // `.meta.json` suffix instead would classify a stray `notes.meta.json` as a
+  // hexless sidecar, which the disk adapter then admits as an artifact and
+  // feeds to the JSONL line parser — one hand-written note file would throw a
+  // SubstrateError and take its whole session's ingest down with it. Anchoring
+  // on the full pattern keeps the hex a guaranteed `string` (review L-5).
+  const metaHex = AGENT_META_RE.exec(basename)?.[1];
+  if (metaHex !== undefined) {
     // Carry the hex of an `agent-<hex>.meta.json` sidecar so its parent anchor
     // (`toolUseId`) can be joined to the child transcript by hex.
-    return { kind: 'meta', hex: AGENT_META_RE.exec(basename)?.[1] };
+    return { kind: 'meta', hex: metaHex };
   }
 
   if (AGENT_FILE_RE.test(basename)) {
@@ -122,21 +129,40 @@ export function classifyRelativePath(
 
 // --- Line parsing -----------------------------------------------------------
 
+/**
+ * One decoded JSONL record together with the 1-based line it came from in the
+ * ORIGINAL file. The line travels with the record because blank lines are
+ * dropped during parsing: the record's position in the array is NOT its
+ * position in the file, so every downstream `file:line` diagnostic would drift
+ * by the number of preceding blank lines if it reported an array index
+ * (review L-6). A parser error is read by a human opening that exact file at
+ * that exact line, so the number has to be the file's, not the array's.
+ */
+interface ParsedRecord {
+  readonly value: unknown;
+  readonly line: number;
+}
+
 interface ParsedFile {
   relativePath: string;
   classification: FileClassification;
-  records: unknown[];
+  records: ParsedRecord[];
+}
+
+/** Drops the line provenance for the consumers that only reason about values. */
+function recordValues(records: readonly ParsedRecord[]): unknown[] {
+  return records.map((record) => record.value);
 }
 
 /** Parses one file's lines to JSON, throwing loudly (with file + line) on any non-JSON line. */
-function parseFile(relativePath: string, lines: readonly string[]): unknown[] {
-  const records: unknown[] = [];
+function parseFile(relativePath: string, lines: readonly string[]): ParsedRecord[] {
+  const records: ParsedRecord[] = [];
   lines.forEach((line, index) => {
     if (line.trim() === '') {
       return; // Tolerate blank lines (e.g. a trailing newline from the disk adapter).
     }
     try {
-      records.push(JSON.parse(line));
+      records.push({ value: JSON.parse(line), line: index + 1 });
     } catch (error) {
       throw new SubstrateError(
         `${relativePath}:${index + 1}: line is not valid JSON (${String(error)})`,
@@ -198,20 +224,20 @@ const LEGACY_EXPLORE_AGENT_TYPE = 'Explore';
 function deriveSessionId(files: readonly ParsedFile[]): string {
   let sessionId: string | undefined;
   for (const file of files) {
-    file.records.forEach((rawRecord, index) => {
-      const record = asRecord(rawRecord);
+    for (const parsed of file.records) {
+      const record = asRecord(parsed.value);
       const value = asString(record?.['sessionId']);
       if (value === undefined) {
-        return;
+        continue;
       }
       if (sessionId === undefined) {
         sessionId = value;
       } else if (sessionId !== value) {
         throw new SubstrateError(
-          `${file.relativePath}:${index + 1}: sessionId contradiction ("${sessionId}" vs "${value}") — a session must key on one session-uuid`,
+          `${file.relativePath}:${parsed.line}: sessionId contradiction ("${sessionId}" vs "${value}") — a session must key on one session-uuid`,
         );
       }
-    });
+    }
   }
   if (sessionId === undefined) {
     throw new SubstrateError('substrate carries no sessionId on any record');
@@ -219,11 +245,47 @@ function deriveSessionId(files: readonly ParsedFile[]): string {
   return sessionId;
 }
 
+/**
+ * The session id a substrate DECLARES, read without parsing the whole thing and
+ * without ever throwing — the same "first `sessionId` found, in substrate file
+ * order" rule {@link deriveSessionId} settles on, which is why it lives beside
+ * it: two places deciding "which session is this?" must not be able to drift.
+ *
+ * It exists for one caller (review L-4): the corpus runner needs to compare the
+ * id a file's RECORDS claim against the session uuid its FILENAME claims BEFORE
+ * handing the substrate to the writer, because after the write the rows have
+ * already fused onto the wrong session.
+ *
+ * Deliberately total: a non-JSON line, a non-object record and a record with no
+ * `sessionId` are all skipped rather than raised. Every one of those is a real
+ * condition {@link parseSession} decides on (loudly, for the first), and a
+ * pre-flight check that threw would turn its caller's cross-check into a second
+ * place that can fail a session. `null` means "this substrate declares no
+ * session id" — an abstention, never an assertion of disagreement.
+ */
+export function peekSubstrateSessionId(substrate: SessionSubstrate): string | null {
+  for (const file of substrate.files) {
+    for (const line of file.lines) {
+      let value: unknown;
+      try {
+        value = JSON.parse(line);
+      } catch {
+        continue; // blank or non-JSON line: parseSession is the one that judges it
+      }
+      const sessionId = asString(asRecord(value)?.['sessionId']);
+      if (sessionId !== undefined) {
+        return sessionId;
+      }
+    }
+  }
+  return null;
+}
+
 // --- Agent-file collection (hex uniqueness + inline agentId agreement) -------
 
-function firstObjectRecord(records: readonly unknown[]): JsonRecord | undefined {
-  for (const rawRecord of records) {
-    const record = asRecord(rawRecord);
+function firstObjectRecord(records: readonly ParsedRecord[]): JsonRecord | undefined {
+  for (const parsed of records) {
+    const record = asRecord(parsed.value);
     if (record !== undefined) {
       return record;
     }
@@ -251,19 +313,19 @@ function collectAgentFiles(files: readonly ParsedFile[]): AgentFile[] {
 
     // Every inline agentId must agree with the filename hex (parser-spec 5.1:
     // attribution is a hard field-read, not a heuristic).
-    file.records.forEach((rawRecord, index) => {
-      const inline = asString(asRecord(rawRecord)?.['agentId']);
+    for (const parsed of file.records) {
+      const inline = asString(asRecord(parsed.value)?.['agentId']);
       if (inline !== undefined && inline !== hex) {
         throw new SubstrateError(
-          `${file.relativePath}:${index + 1}: inline agentId "${inline}" does not equal filename hex "${hex}"`,
+          `${file.relativePath}:${parsed.line}: inline agentId "${inline}" does not equal filename hex "${hex}"`,
         );
       }
-    });
+    }
 
     agentFiles.push({
       hex,
       workflowId,
-      records: file.records,
+      records: recordValues(file.records),
       firstRecord: firstObjectRecord(file.records),
     });
   }
@@ -279,7 +341,7 @@ function collectAgentFiles(files: readonly ParsedFile[]): AgentFile[] {
 function collectSidecars(files: readonly ParsedFile[]): Map<string, AgentSidecar> {
   const sidecars = new Map<string, AgentSidecar>();
   for (const file of files) {
-    if (file.classification.kind !== 'meta' || file.classification.hex === undefined) {
+    if (file.classification.kind !== 'meta') {
       continue;
     }
     const record = firstObjectRecord(file.records);
@@ -667,7 +729,7 @@ export function parseSession(substrate: SessionSubstrate): ParsedSession {
 
   const mainRecords = files
     .filter((file) => file.classification.kind === 'main')
-    .flatMap((file) => file.records);
+    .flatMap((file) => recordValues(file.records));
   const hasMain = mainRecords.length > 0;
 
   const transcripts: Transcript[] = [];

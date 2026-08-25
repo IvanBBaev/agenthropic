@@ -20,6 +20,11 @@ dated price — token counts are read from the JSONL, never inferred).
 
 ## Quickstart
 
+> **On npm:** the `agenthropic` package publishes documentation only — no code, no
+> `bin`, nothing to run. agenthropic is a self-hosted app you clone and run from
+> source, so `npm install agenthropic` will not give you a dashboard. The package
+> exists to hold the name; the instructions below are the actual install.
+
 Requires **Node 22+** and **pnpm** (the repo pins `pnpm@11.11.0` via `packageManager`,
 so `corepack enable` is enough).
 
@@ -76,10 +81,11 @@ hook can never create, delete or re-parent a node in the DAG.
 
 ## Status
 
-🚧 **It works locally. It is not released.** There is no tag, no published package
-and no binary: the workspace is `private: true` at version `0.1.0`, and the only way
-to run it is the Quickstart above, from a checkout. Nothing below describes a
-download.
+🚧 **It works locally. It is not released.** There is no tag and no binary; the
+version is `0.3.0`, every `@agenthropic/*` workspace package is `private` and
+unpublished, and the `agenthropic` package on npm ships documentation only. The
+only way to run it is the Quickstart above, from a checkout. Nothing below
+describes a download.
 
 What actually runs today — checked against the code, not against the plan — is the
 loopback-bound, token-gated server; the SQLite substrate with thirteen migrations and

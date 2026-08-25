@@ -90,7 +90,7 @@ Both High findings are closed:
 | M-13 | closed | Persisted-slug hint lets a late `SubagentStop` reconcile against the agent row |
 | M-14 | closed | Duplicate session uuid across slugs recorded as a `duplicate-session` skip — parser-spec §4.3 |
 | M-15 | partial | A tail-read path and a `lastTickDurationMs` health field shipped; **whether the synchronous full-fingerprint pass is gone was not verified** |
-| M-16 | closed | Boot ingest moved after listen; `/api/health.ingest` reports `replaying` / `idle` |
+| M-16 | **closed but incomplete** | Boot ingest moved after listen and `/api/health.ingest` reports `replaying` / `idle` — but the replay is synchronous, so the endpoint cannot answer for most of that window. Measured below. |
 | M-18 | partial | `crossSessionUsageCollisions` exposed on health under this item's number; the endpoint's re-enumeration cost was **not re-measured** |
 | M-20 | closed | Daily backups wired in the composition root, not only as a manual drill |
 | M-22 | partial | CI now runs a **web production build**; the production *run* path was not verified |
@@ -105,6 +105,196 @@ above them was work an agent could do and did; M-24 and M-25 are the findings th
 **cannot be closed by writing code**, and they are precisely the ones that gate the
 project's honesty claims — an uncertified accuracy number and an unenforced quality
 bar. Fourteen fixes have not moved them by one inch.
+
+## Second amendment (2026-08-22)
+
+Same method as above, and for the same reason the table above is left untouched
+rather than rewritten in place. This section records only what moved after
+2026-08-15.
+
+**Read this before trusting either table.** The body of this report is a dated
+2026-08-09 snapshot, and it has now caused two misreadings in one session: the
+body's M-1 text (line 338) describes gate #7 as unimplemented, when it had in
+fact already shipped — `LEGACY_EXPLORE_EDGE_SOURCE`
+(`packages/core/src/parser/types.ts`), the branch-5 fallback
+(`packages/core/src/parser/parse-session.ts`), migration 13's five-value
+`source` CHECK, and parser-spec §3's `✅ implemented (defensive, 2026-08)` row.
+The 2026-08-15 table had it right. **Where the body and an amendment disagree,
+the amendment wins, and where an amendment says "not re-verified" the only
+authority is the tree itself.**
+
+| # | Status (2026-08-22) | What changed |
+|---|---|---|
+| M-10 | closed | `apps/web/src/clock.ts` — one module-level `useSyncExternalStore` clock, one reference-counted `setInterval` shared by every consumer, cached reading refreshed on the 0→1 subscribe transition so a remount after an idle gap cannot read a stopped value. `LiveView` and `CostView` both read `useNowMs()`; the per-view timer and the duplicated `CLOCK_INTERVAL_MS` are gone. `CLOCK_INTERVAL_MS = 30_000` is PROVISIONAL against the review's 30–60 s guidance |
+| M-18 | closed | The residue named in the first table is wired: `apps/server/src/index.ts` hoists a single `createTailCachingFs(nodeCorpusFs())` above the ingest branch and hands the same decorator to both the watcher and `createSubstrateProvider`. `apps/server/test/api-substrate-shared-fs.test.ts` asserts exactly one decorator exists process-wide, that boot replay warmed it, and that a cost-analysis request reads through it as a **tail** read with no full `.jsonl` read |
+| M-21 | partial — pricing half closed | Migration **14** (`model-pricing-canonical-effective-from`) rewrites every `model_pricing.effective_from` to the canonical `YYYY-MM-DDTHH:mm:ss.sssZ` instant and installs 4 triggers (2 `BEFORE` guards that `RAISE(ABORT)`, 2 `AFTER` rewrites) so the column's lexicographic order is its chronological order — the ordering the SQL resolver's `effective_from <= occurred_at` + `ORDER BY … DESC LIMIT 1` had been silently assuming. Three of four pinned divergences in `apps/server/test/rate-resolver-parity.test.ts` graduated to `PARITY_CASES`, including the one where core priced $30 and the API reported $10. **One survivor stays pinned:** `offset-form-occurred-at` — that divergence is on `token_usage.occurred_at`, written verbatim by ingest, so it needs the write path |
+| M-19 | **documented and guarded — NOT closed; now the largest measured cost in the system** | `getCostSummary` still scans all of `token_usage` on every request. The L-26 run below measures one `GET /api/cost/summary` at real corpus scale as **15.62 s of blocked event loop**, per click — roughly 100× one fingerprint sweep tick. What shipped is honesty, not a fix: an explicit "read this before recording the finding as closed" block on `getCostSummary`, an addendum to the `costSummaryStateKey` docstring stating that false invalidation is the norm under ingest, and `apps/server/test/api-cost-summary-equivalence.test.ts`, which mutates the ledger five ways and after each one asserts the served summary still equals a cache-cold direct scan. Every sound narrowing of the cache key turned out to be a write-side seam; the one in-process option (`PRAGMA data_version`) moves only on *other-connection* commits, and ingest shares the handle, so it would have served stale dollars |
+| M-9 | still partial | The half the first table could not verify — an **aggregate** delegation-saved figure — is still absent. The rest of M-9 is in fact done: `cost-windows.ts` supplies the today/this-week KPIs and every `SessionsView` row carries an `analyse` button, so the "only top-5 sessions are analysable" clause no longer holds |
+| M-1 | closed (correcting the body, not the first table) | See the paragraph above; the first table was already right |
+
+One design error in this report's own improvement plan is worth recording, since
+acting on it would have shipped wrong dollars. Bucket 2 item 4 proposes a
+`(session, model, day)` rollup for M-19. That grain is **unsound**: when a
+`model_pricing.effective_from` falls mid-day, two rows sharing that key resolve
+*different* rates, and 1000 tok @ $1 + 1000 tok @ $9 is not 2000 tok at either
+rate. Any rollup must pin the **resolved rate** and store **tokens** — never a
+dollar figure that outlives the rate that produced it.
+
+### L-26 measurement, and the M-17 verdict it settles (2026-08-22)
+
+Bucket 2 item 5 asked for event-loop-delay and concurrent-inject contention
+phases in `apps/server/bench/corpus-scale.ts`, precisely so item 6 (M-17) could
+be decided "from measurement, not speculation". Both phases now exist and were
+run. The benchmark was run twice at **real corpus scale** — 1590 sessions
+discovered, 10.97 GiB, 7.16 M `token_usage` rows — rather than answering M-17
+from a linear projection.
+
+Two defects in the new instrumentation were found and fixed before any number
+was trusted, and both matter to anyone reading a loop-delay figure here again:
+
+- **`monitorEventLoopDelay` needs a seed.** The first sampler firing after
+  `enable()` only records a timestamp, so a synchronous block starting
+  immediately after `enable()` is invisible. The first run printed `11.1 ms`
+  for a cold replay that blocked the loop for **22.5 s**. Fixed with a sleep on
+  both sides (seed + settle).
+- **`app.inject` starves libuv timers.** Inject never touches a socket, so it
+  resolves entirely on microtasks/`nextTick`; a dense inject loop never reaches
+  the timers phase. A probe drove 53 649 injects in 1 s with a 100 ms
+  `setInterval` that fired **zero** times. Fixed with a `setImmediate` yield
+  between requests, outside the measured interval.
+
+Measured at real scale, the blocking costs order like this — and the ordering,
+not any single figure, is the finding:
+
+| What | Blocked event loop | Trigger |
+|---|---|---|
+| `GET /api/cost/summary` | **15.62 s** | every click (M-19) |
+| cold replay | **341.7–370.1 s** | every boot (M-16) |
+| `GET /api/dag/global` | **3.62 s** | every click |
+| `GET /api/sessions` | 489.7 ms | every click |
+| one fingerprint sweep tick | **148–178 ms** | every 3 s (M-17) |
+
+**M-17 verdict: do not build the fingerprint shortlist now.** The sweep is
+linear and cheap — 0.08 ms/session at 172 sessions, 0.09 ms/session at 1590, a
+constant per-session cost across a 9.2× range. At real scale it is a 4.9–5.2%
+duty cycle, and its effect on in-flight reads is ~0.8 ms at p99 (6.7 → 7.5 ms,
+worst observed 24.0 ms). At small corpus size the effect is **below the
+run-to-run noise**: across four runs the p99 delta was +1.4, +0.1, −4.2, −1.1 ms
+— the sign is not stable, and in two runs the ticking window was *faster* than
+the quiescent one. On a 100 ms-blocked-loop criterion the shortlist becomes
+worth building at roughly **1100–1250 sessions**. One `CostView` load blocks the
+loop about **100× longer** than one tick.
+
+One incidental result confirms M-17 named the right cost centre: at real scale
+an *incremental* tick (135.5 ms, one session grew by one record) is **cheaper**
+than a warm tick (148.0 ms), so accepting the changed session vanishes into the
+noise and essentially the whole tick **is** the sweep.
+
+When M-17 does come up, two risk-free levers come before a shortlist: the poll
+interval is a PROVISIONAL constant (3 s → 10 s drops the duty cycle from ~5% to
+~1.5% for a one-constant change — **a product decision about liveness latency,
+so it is Ivan's to make, not an agent's**), and the stat sweep can move to a
+worker thread (`lstat`/`readdir` need no better-sqlite3), which removes the
+stall without touching discovery correctness.
+
+**The per-directory mtime cut is unsound and must not be built.** A directory's
+mtime changes when an entry is created, deleted or renamed — **not** when an
+existing file inside it is appended to. Appending to
+`<uuid>/subagents/<child>.jsonl` moves that file's mtime and leaves
+`subagents/` untouched. That is exactly the live case this product exists to
+show: the subagent writes while the parent transcript sits still. The cut would
+silently miss live subagent growth — the worst possible failure mode for a
+dashboard whose claim is that the subagent tree is a data fact. The saving it
+buys is 148–156 ms per poll. If a shortlist is ever built it must be `fs.watch`
+as a **hint layer over** a periodic full sweep (Node's recursive watch drops
+events silently under load, especially on macOS and network filesystems), never
+a replacement, and never a directory mtime cut.
+
+Honest limits of these numbers, stated by the run itself: the OS page cache was
+warm (both corpora had just been written), so the sweep figures are an
+**under**estimate; there is no seam separating the sweep's cost from the rest of
+a tick, so warm tick is a proxy; `app.inject` cannot measure a request that
+*arrives* mid-stall, so for that case the honest number is the event-loop max
+(156–178 ms), not the request p99; and the fixtures pin one
+subagent-files-per-session shape, so a corpus with deeper subagent trees costs
+more at the same session count.
+
+### M-16 is closed but incomplete: the boot health probe cannot answer
+
+The cold-replay row above was checked against the server rather than assumed to
+be a property of the benchmark harness, because a 341.7–370.1 s figure only
+matters if the *real* boot path has the same shape. It does:
+
+- The listen-before-replay ordering M-16 asked for is genuinely implemented —
+  `app.listen` and `enforceLoopbackOrExit` at `apps/server/src/index.ts:721-722`
+  run before the replay tick at `:744`.
+- The replay tick is **fully synchronous**. `watcher.tick()` is called without
+  `await` and returns a value, and `apps/server/src/corpus/ingest-corpus.ts`
+  contains no `async`/`await` at all — the whole pass is one uninterrupted
+  stretch of JavaScript. The event-loop *max* the bench reports is therefore a
+  single contiguous gap, not a sum of many.
+- The code already knows this. The comment at `:728-730` yields one macrotask
+  before the tick, "so connections accepted during the bind are answered
+  ('replaying') before the synchronous replay blocks the event loop".
+
+That yield does what it claims and no more: it drains what was already accepted
+at the instant of bind. A probe that connects one second *into* the replay is
+accepted by the kernel backlog and then waits — at real corpus scale for the
+better part of six minutes, and even in the smaller run in the same series for
+22.5 s. So the observable boot behaviour is a socket that accepts and never
+answers, which for a health probe is worse than connection-refused: refused
+fails fast and is unambiguous, accepted-and-silent hangs until the client's own
+timeout and is indistinguishable from a wedged server.
+
+The `ingestPhase` state (`:553`, `:676`) is correct and the endpoint is wired;
+the phase simply is not reachable during almost all of the window it exists to
+describe. Whatever closes this is a change to *how the replay runs* — chunking
+it across macrotasks, or moving it off the main loop — not a change to the
+health endpoint, which is already right. Nothing here is a regression: M-16
+improved on replay-before-listen, and this is the next layer of the same
+problem, now measured.
+
+### The validation corpus is a rolling window, so corpus-measured figures expire
+
+Chased down while checking an unexplained discrepancy in a lane report, and it
+turns out to matter well beyond the number that surfaced it.
+
+`docs/analysis/parser-spec.md` cites **141 sessions** (20 slugs, 54 with
+subagents, 1855 subagent transcripts) in eight places, including its headline
+validation claims — 1855/1855 edge reconstruction, "parses all 141 sessions
+end-to-end, 0 `UsageConflictError`, 0 `SubstrateError`", and the 2-of-141 →
+0-of-141 pricing-settle result. Measured on this machine on **2026-08-22**:
+
+| | parser-spec | today |
+|---|---|---|
+| slugs | 20 | 21 |
+| main transcripts | 141 | **51** |
+| all `.jsonl` incl. subagents | ~1996 | 2551 |
+
+The oldest main transcript in `~/.claude/projects` today is dated **2026-07-24**
+— about four weeks back. Main transcripts fell while subagent transcripts rose,
+which is what a **rolling retention window** over an increasingly
+subagent-heavy workload looks like. Whether the older ones aged out or were
+cleaned up by hand is not something this repo can determine, and it does not
+change either consequence:
+
+1. **Every corpus-measured figure in the doc corpus is perishable and must
+   carry its measurement date.** The parser-spec numbers above cannot be
+   reproduced today — not because anything regressed, but because the corpus
+   they describe is gone. They are historical results, and re-running the same
+   validation now answers a different question. No figure quoted from
+   `~/.claude/projects` should ever again be written without its date and its
+   slug/session counts beside it.
+2. **The JSONL corpus is not an archive, so it is not a universal recovery
+   path.** The design rests on JSONL being ground truth (CD-1), and rebuilding
+   the DB from JSONL is the obvious answer to almost any ingest bug. That answer
+   only reaches back as far as the window. Past its edge, the dashboard's own
+   SQLite is the *only* record of that spend — which raises the stakes on
+   backups and makes the retention values (OPEN-1/2/3) a question about what
+   history is permanently lost, not merely about disk use.
+
+Nothing here is a code defect and nothing needs fixing today. It is a standing
+correction to how this project's measured claims should be read and written.
 
 ---
 

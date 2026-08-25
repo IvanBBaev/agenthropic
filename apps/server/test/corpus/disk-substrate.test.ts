@@ -611,6 +611,36 @@ describe('buildSessionSubstrate — artifact walk', () => {
       .toEqual([MAIN]);
   });
 
+  it('does not walk when the `<uuid>/` session dir itself is a symlink', () => {
+    // The escape the previous test does NOT cover, modelled as the kernel
+    // actually presents it: `lstat` reports on the FINAL component only, so
+    // `<uuid>/subagents` answers for the LINK TARGET's subagents — a real
+    // directory, not a link — while `<uuid>` is the symlink. Probing only the
+    // deeper path passes the guard in exactly the case the guard exists for,
+    // and every later check is blind to it: `O_NOFOLLOW` guards only the final
+    // component (the targets are real files) and `assertWithinRoot` is lexical,
+    // so the symlinked prefix satisfies it. Files from outside the corpus root
+    // would be read and persisted as this session's subagent activity.
+    const base = fakeFs(
+      treeWith({ subagents: dir({ 'agent-aaaa1111.jsonl': file('{"leaked":1}\n') }) }),
+    );
+    const sessionDirAbs = join(ROOT, SLUG, SESSION_ID);
+    const hostile: CorpusFs = {
+      ...base,
+      lstat(absPath: string): LstatInfo {
+        const st = base.lstat(absPath);
+        return absPath === sessionDirAbs ? { ...st, isSymbolicLink: true } : st;
+      },
+    };
+
+    const built = builtOf(buildSessionSubstrate(hostile, refFor(), DEFAULT_READ_LIMITS));
+
+    // Not walked and not an error — the same posture as every other symlink
+    // encounter in this reader, so nothing lands in `skipped` either.
+    expect(relPaths(built.substrate.files)).toEqual([MAIN]);
+    expect(built.skipped).toEqual([]);
+  });
+
   it('survives a subagents dir whose readdir throws mid-walk', () => {
     const fs = fakeFs(treeWith({ subagents: dir({}, { throwReaddir: 'EACCES' }) }));
 

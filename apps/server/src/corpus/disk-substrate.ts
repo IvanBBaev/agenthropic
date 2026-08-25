@@ -26,7 +26,6 @@ import {
   OversizeError,
   errnoCodeOf,
   type CorpusFs,
-  type LstatInfo,
   type ReadLimits,
   type SessionEnumeration,
   type SessionRef,
@@ -36,15 +35,16 @@ import {
 } from './fs-port';
 import {
   assertWithinRoot,
+  isRealDir,
   isSafeEntryName,
   isSessionUuid,
+  resolveSubagentsDir,
   splitTranscriptLines,
   toPosix,
+  tryLstat,
 } from './corpus-paths';
 
 const JSONL_SUFFIX = '.jsonl';
-/** Only this immediate child of `<uuid>/` is walked — never the session dir root. */
-const SUBAGENTS_DIR = 'subagents';
 
 /** Map a caught read hazard to its {@link SkipReason}. */
 function reasonFor(err: unknown): SkipReason {
@@ -56,21 +56,6 @@ function reasonFor(err: unknown): SkipReason {
     return 'symlink';
   }
   return 'unreadable';
-}
-
-/** lstat, returning `null` instead of throwing when the entry is gone/unreadable. */
-function tryLstat(fs: CorpusFs, absPath: string): LstatInfo | null {
-  try {
-    return fs.lstat(absPath);
-  } catch {
-    return null;
-  }
-}
-
-/** True when `absPath` is a real directory (a symlinked dir returns false — never followed). */
-function isRealDir(fs: CorpusFs, absPath: string): boolean {
-  const st = tryLstat(fs, absPath);
-  return st !== null && st.isDirectory && !st.isSymbolicLink;
 }
 
 /**
@@ -331,8 +316,12 @@ export function buildSessionSubstrate(
   }
 
   // Producer 2 — nested subagent artifacts, confined to `<uuid>/subagents/**`.
-  const subagentsAbs = join(ref.sessionDirAbs, SUBAGENTS_DIR);
-  if (isRealDir(fs, subagentsAbs)) {
+  // `resolveSubagentsDir` vets `<uuid>/` itself as well as `subagents/`: the
+  // session dir is synthesised from the transcript stem rather than read off
+  // disk, so it is the one component enumeration never lstat'ed, and a symlink
+  // there is followed by the kernel before any check here would see it.
+  const subagentsAbs = resolveSubagentsDir(fs, ref.sessionDirAbs);
+  if (subagentsAbs !== null) {
     walkArtifacts(fs, ref.sessionDirAbs, subagentsAbs, 1, limits, state);
   }
 

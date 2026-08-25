@@ -1,12 +1,38 @@
 {
   "name": "agenthropic",
-  "version": "0.1.0",
-  "private": true,
+  "version": "0.3.0",
+  "description": "Self-hosted, local-first dashboard for observing Claude Code agent and subagent activity - persisted subagent DAG and dollar-accurate cost attribution, read from the JSONL transcripts.",
+  "keywords": [
+    "claude-code",
+    "observability",
+    "dashboard",
+    "subagents",
+    "token-cost",
+    "self-hosted",
+    "local-first"
+  ],
+  "homepage": "https://github.com/IvanBBaev/agenthropic#readme",
+  "bugs": "https://github.com/IvanBBaev/agenthropic/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/IvanBBaev/agenthropic.git"
+  },
+  "license": "MIT",
+  "author": "Ivan Baev",
   "type": "module",
   "packageManager": "pnpm@11.11.0",
   "engines": {
     "node": ">=22"
   },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "SECURITY.md"
+  ],
   "scripts": {
     "typecheck": "tsc -b",
     "lint": "eslint .",

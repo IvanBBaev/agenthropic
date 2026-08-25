@@ -12,6 +12,7 @@
 import type { FastifyError, FastifyPluginAsync } from 'fastify';
 import { Type, type TypeBoxTypeProvider } from '@fastify/type-provider-typebox';
 import {
+  AggregateDelegationSavingsSchema,
   ApiErrorSchema,
   CostAnalysisSchema,
   CostSummaryResponseSchema,
@@ -39,6 +40,7 @@ import { loadPricing } from '../db/pricing';
 import type { SubstrateLookup, SubstrateProvider } from './substrate-provider';
 import {
   countSessions,
+  getAggregateDelegationSavings,
   getCostSummary,
   getGlobalDag,
   getSessionDetail,
@@ -55,6 +57,17 @@ export interface ApiRoutesOptions {
    * instead of guessing at a corpus location.
    */
   readonly substrateProvider?: SubstrateProvider;
+  /**
+   * How much of the corpus is missing from the database right now, for the
+   * `coverage` disclosure on /api/cost/summary. A function, not a snapshot: the
+   * set shrinks the moment a price is seeded or a half-written transcript is
+   * completed, and a value captured at wiring time would keep asserting a
+   * staleness that has already been fixed.
+   *
+   * Optional because a DB-only server has no ingest to ask; the field is then
+   * omitted rather than reported as zero (see {@link CostCoverageSchema}).
+   */
+  readonly ingestExclusions?: () => { readonly failing: number; readonly quarantined: number };
 }
 
 /** Capped limit/offset pagination - /api/sessions and /api/sessions/:id/events. */
@@ -320,7 +333,60 @@ export const apiRoutes: FastifyPluginAsync<ApiRoutesOptions> = async (app, optio
         },
       },
     },
-    async (request) => getCostSummary(db, request.query.topN),
+    async (request) => {
+      const summary = getCostSummary(db, request.query.topN);
+      // Attached here rather than inside getCostSummary: the query answers
+      // "what do the stored rows say", and what ingest could NOT store is not
+      // knowable from those rows - by construction, a session that failed to
+      // ingest left none behind. Keeping the seam at the route means the query
+      // stays a pure read and the disclosure stays honest about its source.
+      const exclusions = options.ingestExclusions?.();
+      return exclusions === undefined
+        ? summary
+        : {
+            ...summary,
+            coverage: {
+              sessionsExcluded: exclusions.failing,
+              sessionsQuarantined: exclusions.quarantined,
+            },
+          };
+    },
+  );
+
+  // M-9 (aggregate half): the same WP-C5 counterfactual as the per-session
+  // route, summed across the corpus. It reads STORED ROWS, not transcripts —
+  // the per-session route parses one session on demand, which does not scale to
+  // a dashboard KPI over every session. Deliberately NO 422 arm: a corpus-wide
+  // figure that refuses because one session out of hundreds names an unpriceable
+  // model would be useless exactly when it matters, so an unpriceable session is
+  // excluded from the sums and NAMED in `skippedSessions` (with the pricing
+  // error), alongside the scope counters that say how much of the corpus the
+  // figure actually covers. `isEstimate` stays a literal true in the DTO.
+  //
+  // Registered inside this plugin, which buildServer registers inside the app
+  // scope carrying the global `onRequest` auth hook — so this route is
+  // Bearer-gated exactly like its neighbours, with no per-route code (see the
+  // 401 test in api-aggregate-savings.test.ts).
+  typed.get(
+    '/api/cost/delegation-savings',
+    {
+      schema: {
+        querystring: CostAnalysisQuerySchema,
+        response: {
+          200: AggregateDelegationSavingsSchema,
+          400: ApiErrorSchema,
+          500: ApiErrorSchema,
+        },
+      },
+    },
+    async (request) => {
+      const { topTierModel } = request.query;
+      return getAggregateDelegationSavings(
+        db,
+        loadPricing(db),
+        topTierModel === undefined ? {} : { topTierModel },
+      );
+    },
   );
 
   typed.get(

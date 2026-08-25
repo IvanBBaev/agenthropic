@@ -56,6 +56,35 @@ export const SessionCostSchema = Type.Object(
 
 export type SessionCostDto = Static<typeof SessionCostSchema>;
 
+/**
+ * How much of the corpus the figures alongside it are actually computed from.
+ *
+ * `unpricedTokens` already discloses the tokens present in the database that
+ * carry no dollar figure. This discloses the opposite and larger gap: sessions
+ * that are not in the database AT ALL, because ingest could not read or price
+ * them. Their tokens are in neither `tokens` nor `unpricedTokens` - nothing in
+ * a total computed from stored rows can hint that they exist, and the omission
+ * is one-directional, since a total missing sessions is always too SMALL.
+ *
+ * Omitted (not zeroed) when the server has no ingest seam wired: "we did not
+ * ask" and "we asked and the answer is none" are different facts, and a zero
+ * would assert the second while meaning the first.
+ */
+export const CostCoverageSchema = Type.Object(
+  {
+    /** Sessions whose latest ingest attempt failed; includes `sessionsQuarantined`. */
+    sessionsExcluded: Type.Integer({ minimum: 0 }),
+    /**
+     * Subset that will NOT be retried until the session's bytes or the pricing
+     * table change - the ones that need a human, typically a missing price.
+     */
+    sessionsQuarantined: Type.Integer({ minimum: 0 }),
+  },
+  { additionalProperties: false },
+);
+
+export type CostCoverageDto = Static<typeof CostCoverageSchema>;
+
 /** `GET /api/cost/summary` response. */
 export const CostSummaryResponseSchema = Type.Object(
   {
@@ -63,6 +92,7 @@ export const CostSummaryResponseSchema = Type.Object(
     perModel: Type.Array(ModelCostSchema),
     perDay: Type.Array(DailyCostSchema),
     topSessions: Type.Array(SessionCostSchema),
+    coverage: Type.Optional(CostCoverageSchema),
   },
   { additionalProperties: false },
 );
@@ -167,6 +197,91 @@ export const DelegationSavingsSchema = Type.Object(
 );
 
 export type DelegationSavingsDto = Static<typeof DelegationSavingsSchema>;
+
+/**
+ * Cap on the `skippedSessions` SAMPLE carried by the corpus-wide estimate.
+ * The authoritative figure is `skippedSessionCount`, which is never capped -
+ * the array is a readable sample so a corpus with thousands of unpriceable
+ * sessions cannot turn one KPI request into a multi-megabyte payload.
+ */
+export const MAX_AGGREGATE_SKIPPED_SAMPLE = 20;
+
+/** Why one session was left out of the corpus-wide estimate. */
+export const AggregateSavingsSkipReasonSchema = Type.Union([
+  /** Some model/bucket/date in the session has no `model_pricing` row. */
+  Type.Literal('unpriceable'),
+  /** Some stored usage row has no timestamp, so no dated rate can be chosen. */
+  Type.Literal('undated-usage'),
+]);
+
+export type AggregateSavingsSkipReason = Static<typeof AggregateSavingsSkipReasonSchema>;
+
+export const AggregateSavingsSkipSchema = Type.Object(
+  {
+    sessionId: Type.String(),
+    reason: AggregateSavingsSkipReasonSchema,
+    /** Human-readable cause (e.g. the pricing error naming the model). */
+    detail: Type.String(),
+  },
+  { additionalProperties: false },
+);
+
+export type AggregateSavingsSkipDto = Static<typeof AggregateSavingsSkipSchema>;
+
+/**
+ * `GET /api/cost/delegation-savings` - the M-9 corpus-wide delegation-savings
+ * estimate. Same counterfactual as `DelegationSavingsSchema` (and the same
+ * `isEstimate: true` label), summed across every session that recorded a
+ * subagent.
+ *
+ * Two honesty rules are encoded in the shape rather than left to the caller:
+ *
+ *   1. `basis` names where the numbers came from. `'stored-usage-rows'` means
+ *      the sum was rebuilt from the `token_usage` / `agents` tables, NOT by
+ *      re-reading the transcripts the per-session route parses. The two agree
+ *      row for row on an ingested session (proved by
+ *      `api-aggregate-savings-equivalence.test.ts`); they can only diverge
+ *      where the database itself lacks the rows - see the endpoint docs.
+ *   2. The scope counters are mandatory, not optional extras. An aggregate
+ *      quietly computed over a subset is a lie, so every session that was
+ *      excluded is counted in `skippedSessionCount` (with a bounded sample in
+ *      `skippedSessions`), every subagent the estimator could not resolve is
+ *      counted in `subagentsSkipped`, and the sessions that legitimately
+ *      contribute nothing are derivable as
+ *      `sessionsTotal - sessionsWithSubagents` - they are a measured $0, not
+ *      a gap.
+ */
+export const AggregateDelegationSavingsSchema = Type.Object(
+  {
+    /** What the included sessions' subagents actually cost. */
+    actualUsd: Type.Number({ minimum: 0 }),
+    /** What that same work would have cost on the top-tier model instead. */
+    hypotheticalUsd: Type.Number({ minimum: 0 }),
+    savingsUsd: Type.Number({ minimum: 0 }),
+    isEstimate: Type.Literal(true),
+    basis: Type.Literal('stored-usage-rows'),
+    /** Every session row in the database, delegating or not. */
+    sessionsTotal: Type.Integer({ minimum: 0 }),
+    /** Sessions with at least one persisted subagent - the estimate's universe. */
+    sessionsWithSubagents: Type.Integer({ minimum: 0 }),
+    /** Of those, the ones actually summed into the figures above. */
+    sessionsPriced: Type.Integer({ minimum: 0 }),
+    skippedSessionCount: Type.Integer({ minimum: 0 }),
+    /** Bounded sample of the skipped sessions (see MAX_AGGREGATE_SKIPPED_SAMPLE). */
+    skippedSessions: Type.Array(AggregateSavingsSkipSchema),
+    /** Subagents that carry a resolved counterfactual model in the sums. */
+    subagentsPriced: Type.Integer({ minimum: 0 }),
+    /** Subagents excluded for want of a top-tier model - never guessed. */
+    subagentsSkipped: Type.Integer({ minimum: 0 }),
+    /** Agent rows with a NULL `type`: outside the estimate, counted out loud. */
+    untypedAgents: Type.Integer({ minimum: 0 }),
+    /** Distinct models the counterfactual was priced against, sorted. */
+    hypotheticalModels: Type.Array(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export type AggregateDelegationSavingsDto = Static<typeof AggregateDelegationSavingsSchema>;
 
 /** `GET /api/sessions/:id/cost-analysis` response (WP-C4 + WP-C5 over one session). */
 export const CostAnalysisSchema = Type.Object(

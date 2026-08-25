@@ -5,6 +5,7 @@
  * or the real ~/.claude tree.
  */
 import type {
+  AggregateDelegationSavingsDto,
   AgentDelegationSavingsDto,
   AgentNodeDto,
   CompactionSegmentDto,
@@ -136,6 +137,35 @@ export function costSummary(overrides: Partial<CostSummaryDto> = {}): CostSummar
     perModel: [],
     perDay: [],
     topSessions: [],
+    ...overrides,
+  };
+}
+
+/**
+ * `GET /api/cost/delegation-savings` (M-9, aggregate half). Like the
+ * per-session builder below, `isEstimate` and `basis` are schema literals a
+ * fixture may not flip - and the default is the HONEST empty shape: an empty
+ * corpus, every counter zero, so a test that forgets to set a scope counter
+ * cannot accidentally render a dollar figure with a fabricated denominator.
+ */
+export function aggregateSavings(
+  overrides: Partial<AggregateDelegationSavingsDto> = {},
+): AggregateDelegationSavingsDto {
+  return {
+    actualUsd: 0,
+    hypotheticalUsd: 0,
+    savingsUsd: 0,
+    isEstimate: true,
+    basis: 'stored-usage-rows',
+    sessionsTotal: 0,
+    sessionsWithSubagents: 0,
+    sessionsPriced: 0,
+    skippedSessionCount: 0,
+    skippedSessions: [],
+    subagentsPriced: 0,
+    subagentsSkipped: 0,
+    untypedAgents: 0,
+    hypotheticalModels: [],
     ...overrides,
   };
 }

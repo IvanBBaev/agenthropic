@@ -17,6 +17,18 @@
  *   3. incremental tick - one session grows by one record, then a tick. This is
  *                         the live-use path: the cost of noticing real work.
  *   4. API reads        - the read paths a human hits after the data lands.
+ *   5. event-loop delay - how long a tick actually BLOCKS the loop, sampled
+ *                         with `monitorEventLoopDelay` around the cold replay
+ *                         and around the warm tick separately (review L-26).
+ *                         The old "duty cycle" line is a derived proxy: it
+ *                         divides wall time by the poll interval and says
+ *                         nothing about whether anything was waiting.
+ *   6. read contention  - the same read paths driven CONCURRENTLY while ticks
+ *                         run on the real poll interval, against an identical
+ *                         quiescent window, so the latency a human actually
+ *                         pays during a poll is measured and not inferred
+ *                         (review L-26). Phase 4 runs after every tick has
+ *                         finished, i.e. on a server that is doing nothing.
  *
  * SAFETY: the corpus is synthesised into a throwaway `mkdtemp` directory and
  * the real `~/.claude/projects` is asserted to be somewhere else before a
@@ -42,6 +54,7 @@
  *     measurement; `--sessions=1855` measures the whole thing for real.
  *
  * Usage:  pnpm --filter @agenthropic/server bench [-- --sessions=1855]
+ *         [--contention-ms=24000] [--concurrency=4] [--tick-every-ms=3000]
  */
 import { createHash } from 'node:crypto';
 import {
@@ -56,7 +69,8 @@ import {
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
-import { performance } from 'node:perf_hooks';
+import { monitorEventLoopDelay, performance, type IntervalHistogram } from 'node:perf_hooks';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { getFixture, listFixtures, type Fixture } from '@agenthropic/test-fixtures';
 import { createSubstrateProvider } from '../src/api/substrate-provider';
 import { DEFAULT_POLL_INTERVAL_MS } from '../src/config';
@@ -101,6 +115,57 @@ const DEFAULT_RECORD_BYTES = 4100;
 const DISK_SAFETY_FRACTION = 0.25;
 
 const BENCH_TOKEN = 'bench-token-0123456789abcdef';
+
+/**
+ * Sampling period of the `monitorEventLoopDelay` histogram, in ms (review
+ * L-26). PROVISIONAL: 10 ms is Node's own default and is two orders of
+ * magnitude below the tick durations this harness expects to see, so it
+ * resolves a stall without turning the sampler itself into load. It is a
+ * FLOOR on what can be observed: a stall shorter than one sampling period may
+ * never be sampled, which is the right bias here - this benchmark exists to
+ * catch stalls that a human would notice, not to count microseconds.
+ */
+const LOOP_DELAY_RESOLUTION_MS = 10;
+
+/**
+ * How long to let the event loop turn on EACH side of a measured phase, in ms.
+ * PROVISIONAL, and load-bearing in both directions - the first version of this
+ * phase reported an 11 ms stall for a cold replay that blocked the loop for
+ * 22.5 s, because it did neither:
+ *
+ *  - BEFORE the phase (seed): the sampler records the gap between consecutive
+ *    firings, so its FIRST firing after `enable()` only stores a timestamp and
+ *    records nothing. Enable immediately before a synchronous block and that
+ *    first firing is the one that happens after the block - the whole stall is
+ *    swallowed as the seed. One turn of the loop before the phase starts costs
+ *    the seed firing against idle time instead.
+ *  - AFTER the phase (settle): while `watcher.tick()` blocks, the sampler (a
+ *    libuv timer) cannot fire at all, so the stall is only RECORDED once the
+ *    loop turns again. Disabling without yielding throws it away.
+ *
+ * 50 ms is five sampling periods on each side - enough for the seed firing and
+ * for the overdue one that carries the stall, short enough not to pad the run.
+ */
+const LOOP_DELAY_SETTLE_MS = 50;
+
+/**
+ * Default length of each read-load window, in ms. PROVISIONAL: eight poll
+ * intervals, so a window contains seven to eight real ticks. Fewer than that
+ * and the "under tick load" tail rests on three or four stalls, which is too
+ * thin to carry a recommendation; eight keeps the two windows (quiescent +
+ * contended) to under a minute of the run. The printed tick count is the
+ * honest denominator either way - read it before trusting the tail.
+ */
+const DEFAULT_CONTENTION_MS = 8 * DEFAULT_POLL_INTERVAL_MS;
+
+/**
+ * Default number of concurrent inject drivers. PROVISIONAL: this dashboard is
+ * a single-human, single-browser tool, and one open view fires a handful of
+ * requests at once (list + detail + tree + health chip). Four keeps requests
+ * genuinely in flight across a tick without turning the phase into a load test
+ * of Fastify's own throughput, which is not the question L-26 asks.
+ */
+const DEFAULT_CONCURRENCY = 4;
 
 /**
  * The exact `message.model` byte-strings the pricing seed knows, weighted by
@@ -403,6 +468,243 @@ async function timeAsync<T>(
   return { ms: performance.now() - started, value };
 }
 
+/**
+ * One reading of an event-loop-delay histogram, in ms (review L-26). `samples`
+ * travels with the numbers on purpose: a synchronous phase blocks the sampler
+ * for its whole duration, so the histogram behind a multi-second stall may hold
+ * a handful of values - `max` is then the measurement and `mean` is close to
+ * meaningless. A mean over four samples must not be read as a mean over four
+ * hundred, so the count is printed next to it every time.
+ */
+interface LoopDelay {
+  readonly samples: number;
+  readonly meanMs: number;
+  readonly p99Ms: number;
+  readonly maxMs: number;
+}
+
+/** Histogram values are nanoseconds; every field is converted, none is invented. */
+function readLoopDelay(histogram: IntervalHistogram): LoopDelay {
+  return {
+    samples: histogram.count,
+    meanMs: histogram.mean / 1e6,
+    p99Ms: histogram.percentile(99) / 1e6,
+    maxMs: histogram.max / 1e6,
+  };
+}
+
+function fmtLoopDelay(loop: LoopDelay): string {
+  if (loop.samples === 0) {
+    // Not a zero. A histogram with no samples measured nothing, and printing
+    // "0.0 ms" for it would be the exact fabrication this project refuses.
+    return 'not measured (no samples)';
+  }
+  return (
+    `${String(loop.samples).padStart(6)} samples   ` +
+    `mean ${fmtMs(loop.meanMs).padStart(9)}   ` +
+    `p99 ${fmtMs(loop.p99Ms).padStart(9)}   ` +
+    `max ${fmtMs(loop.maxMs).padStart(9)}`
+  );
+}
+
+/**
+ * Run a synchronous phase with an event-loop-delay histogram around it (L-26).
+ * Neither await is optional and neither is counted in `ms` - see
+ * {@link LOOP_DELAY_SETTLE_MS} for what each one is for and for the wrong
+ * number this reported without them.
+ */
+async function timeWithLoopDelay<T>(
+  fn: () => T,
+): Promise<{ readonly ms: number; readonly value: T; readonly loop: LoopDelay }> {
+  const histogram = monitorEventLoopDelay({ resolution: LOOP_DELAY_RESOLUTION_MS });
+  histogram.enable();
+  await sleep(LOOP_DELAY_SETTLE_MS); // seed the sampler; see the constant's doc
+  const started = performance.now();
+  const value = fn();
+  const ms = performance.now() - started;
+  await sleep(LOOP_DELAY_SETTLE_MS); // let the overdue sample record the stall
+  histogram.disable();
+  return { ms, value, loop: readLoopDelay(histogram) };
+}
+
+/** Latency distribution of one set of requests, in ms. */
+interface LatencyStats {
+  readonly count: number;
+  readonly p50Ms: number;
+  readonly p95Ms: number;
+  readonly p99Ms: number;
+  readonly maxMs: number;
+}
+
+/**
+ * Nearest-rank percentiles over the raw samples. No interpolation: with a few
+ * hundred samples an interpolated p99 invents a value that no request actually
+ * observed, and every number this harness prints has to be one that happened.
+ */
+function latencyStats(samples: readonly number[]): LatencyStats | null {
+  if (samples.length === 0) {
+    return null; // nothing ran; the caller prints "not measured", never zeros
+  }
+  const sorted = [...samples].sort((a, b) => a - b);
+  const at = (p: number): number => {
+    const rank = Math.ceil((p / 100) * sorted.length) - 1;
+    const index = Math.min(sorted.length - 1, Math.max(0, rank));
+    return sorted[index] ?? Number.NaN;
+  };
+  return {
+    count: sorted.length,
+    p50Ms: at(50),
+    p95Ms: at(95),
+    p99Ms: at(99),
+    maxMs: sorted[sorted.length - 1] ?? Number.NaN,
+  };
+}
+
+function fmtStats(stats: LatencyStats | null): string {
+  if (stats === null) {
+    return 'not measured (no requests)';
+  }
+  return (
+    `${fmtMs(stats.p50Ms).padStart(10)} ${fmtMs(stats.p95Ms).padStart(10)} ` +
+    `${fmtMs(stats.p99Ms).padStart(10)} ${fmtMs(stats.maxMs).padStart(10)}`
+  );
+}
+
+/** One read-load window: the same driver, with ticks running or without them. */
+interface LoadWindow {
+  readonly label: string;
+  readonly wallMs: number;
+  readonly requests: number;
+  readonly nonOk: number;
+  /** Cadence the window ASKED for, or null if it was quiescent by design. */
+  readonly tickEveryMs: number | null;
+  readonly ticks: number;
+  readonly tickDurationsMs: readonly number[];
+  readonly loop: LoopDelay;
+  readonly samples: readonly number[];
+  readonly overall: LatencyStats | null;
+  readonly perRoute: ReadonlyArray<readonly [string, LatencyStats | null]>;
+}
+
+type BenchServer = ReturnType<typeof buildServer>;
+type BenchWatcher = ReturnType<typeof createCorpusWatcher>;
+type Route = readonly [label: string, url: string];
+
+/**
+ * Drive `concurrency` concurrent `app.inject` loops for `durationMs`, optionally
+ * with `watcher.tick()` firing on the real poll interval underneath them (review
+ * L-26). Run once WITHOUT ticks and once WITH them and the difference between
+ * the two distributions is the latency a poll costs a human - which no phase of
+ * this harness measured before, because every read it timed ran on a server
+ * that had already finished ticking.
+ *
+ * Routes rotate round-robin across the drivers rather than being sharded per
+ * driver, so both windows issue the same mix even if a slow route ends up with
+ * fewer completions.
+ *
+ * The `setImmediate` yield between requests is NOT padding and must not be
+ * removed. `app.inject` never touches a socket: it completes entirely on the
+ * microtask/`process.nextTick` queues, which libuv drains without ever reaching
+ * its timers phase. A tight inject loop therefore starves every timer in the
+ * process - measured here at 53 649 injects in one second with a
+ * `setInterval(…, 100)` firing ZERO times. The first version of this phase hit
+ * exactly that and reported a "contended" window containing no ticks at all.
+ * Yielding through the check phase lets the loop reach its timers each turn (the
+ * same probe: 9 firings of the same interval), which is also what a real HTTP
+ * request does - it arrives through the poll phase rather than skipping it.
+ *
+ * KNOWN CEILING on what these percentiles can show: the drivers live on the same
+ * blocked loop as the server, so while a tick runs no new inject can be issued.
+ * Only requests already in flight when the tick fires pay for it - at most
+ * `concurrency` of them per tick. A real client's request arrives in the socket
+ * buffer during the stall and waits the whole of it out, so the event-loop-delay
+ * max, not this p99, is the honest figure for a request that arrives mid-tick.
+ */
+async function driveLoadWindow(opts: {
+  readonly label: string;
+  readonly app: BenchServer;
+  readonly headers: Record<string, string>;
+  readonly routes: readonly Route[];
+  readonly durationMs: number;
+  readonly concurrency: number;
+  /** Poll cadence for the background ticker, or null for a quiescent window. */
+  readonly tickEveryMs: number | null;
+  readonly watcher: BenchWatcher;
+}): Promise<LoadWindow> {
+  const perRoute = new Map<string, number[]>();
+  for (const [label] of opts.routes) {
+    perRoute.set(label, []);
+  }
+  const samples: number[] = [];
+  const tickDurationsMs: number[] = [];
+  let nonOk = 0;
+  let cursor = 0;
+
+  const histogram = monitorEventLoopDelay({ resolution: LOOP_DELAY_RESOLUTION_MS });
+  histogram.enable();
+  await sleep(LOOP_DELAY_SETTLE_MS); // seed the sampler; see LOOP_DELAY_SETTLE_MS
+  const startedAt = performance.now();
+  const deadline = startedAt + opts.durationMs;
+
+  // A tick is fully synchronous (better-sqlite3), so this interval callback
+  // blocks the loop for exactly as long as a real poll does - which is the
+  // whole point: the in-flight injects cannot be served while it runs.
+  const ticker =
+    opts.tickEveryMs === null
+      ? null
+      : setInterval(() => {
+          const tickStarted = performance.now();
+          opts.watcher.tick();
+          tickDurationsMs.push(performance.now() - tickStarted);
+        }, opts.tickEveryMs);
+
+  const driver = async (): Promise<void> => {
+    while (performance.now() < deadline) {
+      const route = opts.routes[cursor % opts.routes.length];
+      cursor += 1;
+      if (route === undefined) {
+        return; // no routes configured; nothing to measure
+      }
+      const [label, url] = route;
+      const started = performance.now();
+      const response = await opts.app.inject({ method: 'GET', url, headers: opts.headers });
+      const elapsed = performance.now() - started;
+      samples.push(elapsed);
+      perRoute.get(label)?.push(elapsed);
+      if (response.statusCode !== 200) {
+        nonOk += 1;
+      }
+      // Outside the timed span: it is the harness handing the loop back, not
+      // part of the request. See this function's doc for why it is mandatory.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+  };
+
+  await Promise.all(Array.from({ length: opts.concurrency }, () => driver()));
+  const wallMs = performance.now() - startedAt;
+  if (ticker !== null) {
+    clearInterval(ticker);
+  }
+  // Same reason as timeWithLoopDelay: the last tick's stall is only recorded
+  // once the loop turns again.
+  await sleep(LOOP_DELAY_SETTLE_MS);
+  histogram.disable();
+
+  return {
+    label: opts.label,
+    wallMs,
+    requests: samples.length,
+    nonOk,
+    tickEveryMs: opts.tickEveryMs,
+    ticks: tickDurationsMs.length,
+    tickDurationsMs,
+    loop: readLoopDelay(histogram),
+    samples,
+    overall: latencyStats(samples),
+    perRoute: [...perRoute].map(([label, values]) => [label, latencyStats(values)] as const),
+  };
+}
+
 function fmtMs(ms: number): string {
   return ms >= 1000 ? `${(ms / 1000).toFixed(2)} s` : `${ms.toFixed(1)} ms`;
 }
@@ -468,6 +770,11 @@ async function main(): Promise<void> {
   const projectCount = intArg(argv, 'projects', DEFAULT_PROJECTS);
   const records = intArg(argv, 'records', DEFAULT_RECORDS);
   const bytesPerRecord = intArg(argv, 'record-bytes', DEFAULT_RECORD_BYTES);
+  const contentionMs = intArg(argv, 'contention-ms', DEFAULT_CONTENTION_MS);
+  const concurrency = intArg(argv, 'concurrency', DEFAULT_CONCURRENCY);
+  // Defaults to the product's real poll interval; overridable so the same
+  // harness can answer "what if we polled faster" without editing the bench.
+  const tickEveryMs = intArg(argv, 'tick-every-ms', DEFAULT_POLL_INTERVAL_MS);
   const keep = argv.includes('--keep');
 
   const workDir = mkdtempSync(join(tmpdir(), 'agenthropic-bench-'));
@@ -528,8 +835,12 @@ async function main(): Promise<void> {
     },
   });
 
-  const cold = time(() => watcher.tick());
-  const warm = time(() => watcher.tick());
+  // Each phase gets its OWN histogram (review L-26): a single histogram spanning
+  // both would report one stall distribution for two phases whose costs differ
+  // by an order of magnitude, and the cold replay's tail would bury the warm
+  // tick's - which is the number the steady-state question actually turns on.
+  const cold = await timeWithLoopDelay(() => watcher.tick());
+  const warm = await timeWithLoopDelay(() => watcher.tick());
 
   // Grow a session near the middle of the corpus so the incremental tick pays
   // the full enumeration walk before it reaches the one changed file.
@@ -562,6 +873,44 @@ async function main(): Promise<void> {
     const shot = await timeAsync(() => app.inject({ method: 'GET', url, headers: auth }));
     reads.push({ label, ms: shot.ms, note: `HTTP ${String(shot.value.statusCode)}` });
   }
+
+  // L-26: the read paths under concurrent load, with and without ticks running.
+  // The expensive whole-corpus routes (/api/sessions, /api/cost/summary,
+  // /api/dag/global - 0.35 s, 1.2 s and 0.52 s respectively in the sequential
+  // phase above) are deliberately NOT in this mix. Every route here is
+  // synchronous SQL on one shared loop, so putting a 350 ms query in the
+  // rotation makes every OTHER request in the window queue behind it: the first
+  // version of this phase did exactly that and printed one identical
+  // distribution for all four routes, in which a 12 ms tick was invisible. The
+  // sequential phase already reports what those routes cost on their own; this
+  // phase exists to isolate the tick, so it uses only routes whose own work is
+  // smaller than a tick. /api/health is in it precisely because its handler does
+  // almost nothing: any latency it shows is queueing, not work of its own.
+  const loadRoutes: readonly Route[] = [
+    ['GET /api/health', '/api/health'],
+    ['GET /api/sessions/:id', `/api/sessions/${target.sessionId}`],
+    ['GET /api/sessions/:id/tree', `/api/sessions/${target.sessionId}/tree`],
+  ];
+  const loadWindow = {
+    app,
+    headers: auth,
+    routes: loadRoutes,
+    durationMs: contentionMs,
+    concurrency,
+    watcher,
+  };
+  // Quiescent FIRST, so the contended window's baseline is a window this same
+  // process just ran, not a single-shot number from a different phase.
+  const quiescentLoad = await driveLoadWindow({
+    ...loadWindow,
+    label: 'quiescent (no ticks)',
+    tickEveryMs: null,
+  });
+  const contendedLoad = await driveLoadWindow({
+    ...loadWindow,
+    label: `under ticks every ${String(tickEveryMs)} ms`,
+    tickEveryMs,
+  });
 
   const summary = tickSummary(cold.value);
   const rows = tableSizes(db);
@@ -599,7 +948,10 @@ async function main(): Promise<void> {
     {
       label: 'warm tick (unchanged)',
       ms: warm.ms,
-      note: `${perSession(warm.ms)} - ${dutyCycle}% of a ${String(DEFAULT_POLL_INTERVAL_MS)} ms poll`,
+      // The duty cycle is a PROXY, not an impact measurement (review L-26): it
+      // says what fraction of the interval is spent working, not what that work
+      // does to anything waiting. The measured answer is two sections below.
+      note: `${perSession(warm.ms)} - ${dutyCycle}% of a ${String(DEFAULT_POLL_INTERVAL_MS)} ms poll (proxy)`,
     },
     {
       label: 'incremental tick (1 changed)',
@@ -611,9 +963,104 @@ async function main(): Promise<void> {
     console.log(`  ${row.label.padEnd(30)} ${fmtMs(row.ms).padStart(10)}   ${row.note}`);
   }
 
-  console.log('\n## api reads');
+  console.log('\n## api reads (sequential, quiescent server - no tick in flight)');
   for (const row of reads) {
     console.log(`  ${row.label.padEnd(30)} ${fmtMs(row.ms).padStart(10)}   ${row.note}`);
+  }
+
+  // L-26. What a tick does to the event loop, measured rather than derived.
+  console.log(
+    `\n## event-loop delay (monitorEventLoopDelay, ${String(LOOP_DELAY_RESOLUTION_MS)} ms resolution)`,
+  );
+  console.log('  a tick is synchronous, so it blocks the sampler while it runs: max is the stall.');
+  // Reading this table wrong is easy, so the table says how to read it. Node
+  // records the whole gap between two firings of its sampling timer, the
+  // sampler's own period included, so an idle loop never reads 0.
+  console.log(
+    `  every sample includes the sampler's own ${String(LOOP_DELAY_RESOLUTION_MS)} ms period, so an idle loop reads about` +
+      ` ${String(LOOP_DELAY_RESOLUTION_MS)} ms:`,
+  );
+  console.log("  subtract the resolution before comparing a max against a phase's wall time.");
+  console.log(
+    `  mean sits near that floor whenever the phase is short next to the ${String(LOOP_DELAY_SETTLE_MS)} ms settle window.`,
+  );
+  for (const [label, loop] of [
+    ['cold replay (startup)', cold.loop],
+    ['warm tick (unchanged)', warm.loop],
+    ['read window, no ticks', quiescentLoad.loop],
+    ['read window, ticking', contendedLoad.loop],
+  ] as ReadonlyArray<readonly [string, LoopDelay]>) {
+    console.log(`  ${label.padEnd(24)} ${fmtLoopDelay(loop)}`);
+  }
+
+  // L-26. The contention phase: the same driver twice, ticks on and off.
+  console.log('\n## api reads under tick load (concurrent)');
+  console.log(
+    `  shape: ${String(concurrency)} concurrent inject drivers x ${fmtMs(contentionMs)} per window, ` +
+      'routes round-robin:',
+  );
+  console.log(`         ${loadRoutes.map(([label]) => label).join(', ')}`);
+  // The ceiling on how far these percentiles can be trusted, printed next to
+  // them so the two tables cannot be read against each other by mistake. A
+  // blocked loop blocks the drivers too, so an inject cannot be ISSUED during a
+  // stall - only a request already in flight when the tick fires pays for it,
+  // and with `concurrency` drivers that is at most `concurrency` requests per
+  // tick. A real HTTP request has no such courtesy: it lands in the kernel's
+  // socket buffer mid-stall and waits the whole thing out.
+  console.log('  these percentiles cover requests already IN FLIGHT when a tick fires;');
+  console.log('  for what a request ARRIVING mid-tick would wait, read the event-loop max above.');
+  for (const window of [quiescentLoad, contendedLoad]) {
+    // A window that asked for ticks and got none is an instrumentation failure,
+    // not a result, and must never read as one - the first version of this phase
+    // silently printed "no ticks" for both windows and looked like a clean run.
+    const tickNote =
+      window.ticks === 0
+        ? window.tickEveryMs === null
+          ? 'no ticks (quiescent by design)'
+          : '! 0 ticks fired - NOT a contended measurement'
+        : `${String(window.ticks)} ticks, ` +
+          `${fmtMs(Math.min(...window.tickDurationsMs))}-${fmtMs(Math.max(...window.tickDurationsMs))} each`;
+    console.log(
+      `  ${window.label.padEnd(30)} ${String(window.requests).padStart(6)} requests over ` +
+        `${fmtMs(window.wallMs)}   ${tickNote}` +
+        (window.nonOk === 0 ? '' : `   ! ${String(window.nonOk)} non-200`),
+    );
+    if (window.tickEveryMs !== null && window.ticks > 0) {
+      // Expected count, so a ticker that fired but was throttled by the load is
+      // visible as such rather than being read as a full-cadence window.
+      const expected = Math.floor(window.wallMs / window.tickEveryMs);
+      console.log(
+        `  ${''.padEnd(30)} ${String(window.ticks)} of ~${String(expected)} ticks the cadence allows in that window`,
+      );
+    }
+  }
+  console.log(
+    `  ${''.padEnd(30)} ${'p50'.padStart(10)} ${'p95'.padStart(10)} ` +
+      `${'p99'.padStart(10)} ${'max'.padStart(10)}`,
+  );
+  console.log(`  ${'all routes, no ticks'.padEnd(30)} ${fmtStats(quiescentLoad.overall)}`);
+  console.log(`  ${'all routes, ticking'.padEnd(30)} ${fmtStats(contendedLoad.overall)}`);
+  const quiescentOverall = quiescentLoad.overall;
+  if (quiescentOverall !== null) {
+    // How many requests the tick actually hurt, counted rather than inferred
+    // from a percentile: a request slower than everything the quiescent window
+    // produced at p99 is one the poll plausibly delayed.
+    const delayed = contendedLoad.samples.filter((ms) => ms > quiescentOverall.p99Ms).length;
+    const share =
+      contendedLoad.requests === 0
+        ? 'n/a'
+        : `${((delayed / contendedLoad.requests) * 100).toFixed(2)}%`;
+    console.log(
+      `  ${'requests past quiescent p99'.padEnd(30)} ${String(delayed).padStart(10)}   ` +
+        `${share} of the ticking window (${fmtMs(quiescentOverall.p99Ms)} threshold)`,
+    );
+  }
+  const perRouteQuiescent = new Map(quiescentLoad.perRoute);
+  for (const [label, stats] of contendedLoad.perRoute) {
+    console.log(
+      `  ${`${label} (no ticks)`.padEnd(30)} ${fmtStats(perRouteQuiescent.get(label) ?? null)}`,
+    );
+    console.log(`  ${`${label} (ticking)`.padEnd(30)} ${fmtStats(stats)}`);
   }
 
   console.log('\n## storage');
@@ -657,6 +1104,13 @@ async function main(): Promise<void> {
     console.log(`  ${'corpus'.padEnd(30)} ${fmtBytes(onDisk * scale).padStart(10)}`);
     console.log(`  ${'cold replay (startup)'.padEnd(30)} ${fmtMs(cold.ms * scale).padStart(10)}`);
     console.log(`  ${'warm tick (per poll)'.padEnd(30)} ${fmtMs(warm.ms * scale).padStart(10)}`);
+    // The measured stall is the tick's synchronous span, so it scales on the
+    // same (linear, unproven) assumption as the tick itself - and it is the
+    // figure that decides whether a poll is felt by anything waiting (L-26).
+    console.log(
+      `  ${'warm tick stall (loop delay)'.padEnd(30)} ${fmtMs(warm.loop.maxMs * scale).padStart(10)}` +
+        (warm.loop.samples === 0 ? '   (nothing measured to project from)' : ''),
+    );
     console.log(`  ${'database on disk'.padEnd(30)} ${fmtBytes(bytes * scale).padStart(10)}`);
     console.log(
       `  ${'warm duty cycle'.padEnd(30)} ` +

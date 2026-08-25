@@ -37,6 +37,7 @@ import { computeCostFlow, toFlowLink, toFlowNode } from '../src/views/layout/cos
 import type { AgentStatus, SessionStatusCountsDto } from '../src/dto';
 import {
   agentNode,
+  aggregateSavings,
   costSummary,
   globalDag,
   jsonResponse,
@@ -93,15 +94,18 @@ function routeSessionFetch(options: { list?: Response; tree?: Response } = {}): 
 }
 
 /**
- * The cost view rides two endpoints since M-8 (summary + the burners' DAG
- * slice), so a blanket mockResolvedValue would feed the summary to both.
- * Route the DAG request to a real DAG payload; everything else gets the
- * summary under test.
+ * The cost view rides three endpoints since M-9 (summary + the burners' DAG
+ * slice + the aggregate delegation savings), so a blanket mockResolvedValue
+ * would feed the summary to all three. Route the DAG and savings requests to
+ * their own payloads; everything else gets the summary under test.
  */
 function routeCostFetch(summary: Response): void {
   fetchMock.mockImplementation((url: string) => {
     if (url.includes('/api/dag/global')) {
       return Promise.resolve(jsonResponse(200, globalDag()));
+    }
+    if (url.includes('/api/cost/delegation-savings')) {
+      return Promise.resolve(jsonResponse(200, aggregateSavings()));
     }
     return Promise.resolve(summary);
   });

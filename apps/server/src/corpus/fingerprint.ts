@@ -15,26 +15,14 @@
  * re-ingest, which is harmless because ingest is idempotent.
  */
 import { join, relative } from 'node:path';
-import { assertWithinRoot, isSafeEntryName, toPosix } from './corpus-paths';
 import {
-  ContainmentError,
-  type CorpusFs,
-  type LstatInfo,
-  type ReadLimits,
-  type SessionRef,
-} from './fs-port';
-
-/** Only this immediate child of `<uuid>/` is walked — mirrors disk-substrate. */
-const SUBAGENTS_DIR = 'subagents';
-
-/** lstat, returning `null` instead of throwing when the entry is gone/unreadable. */
-function tryLstat(fs: CorpusFs, absPath: string): LstatInfo | null {
-  try {
-    return fs.lstat(absPath);
-  } catch {
-    return null;
-  }
-}
+  assertWithinRoot,
+  isSafeEntryName,
+  resolveSubagentsDir,
+  toPosix,
+  tryLstat,
+} from './corpus-paths';
+import { ContainmentError, type CorpusFs, type ReadLimits, type SessionRef } from './fs-port';
 
 /** Depth-bounded, symlink-skipping stat walk collecting `rel:size:mtime` entries. */
 function collectEntries(
@@ -91,9 +79,11 @@ export function fingerprintSession(fs: CorpusFs, ref: SessionRef, limits: ReadLi
       : `main:${String(main.sizeBytes)}:${String(main.mtimeMs)}`;
 
   const entries: string[] = [];
-  const subagentsAbs = join(ref.sessionDirAbs, SUBAGENTS_DIR);
-  const sub = tryLstat(fs, subagentsAbs);
-  if (sub !== null && sub.isDirectory && !sub.isSymbolicLink) {
+  // Same gate as the substrate walk, from the same definition: a symlinked
+  // `<uuid>/` must not be descended into here either, or the fingerprint would
+  // track files the walk refuses to ingest and re-trigger ingest forever.
+  const subagentsAbs = resolveSubagentsDir(fs, ref.sessionDirAbs);
+  if (subagentsAbs !== null) {
     collectEntries(fs, ref.sessionDirAbs, subagentsAbs, 1, limits, entries);
   }
   entries.sort();

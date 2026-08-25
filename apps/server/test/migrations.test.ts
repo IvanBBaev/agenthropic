@@ -7,7 +7,7 @@ import {
   type Migration,
 } from '../src/db/migrations';
 import { openDatabase, type SqliteDatabase } from '../src/db/connection';
-import { createMigratedTempDb, type TempDb } from './helpers';
+import { createMigratedTempDb, insertSession, type TempDb } from './helpers';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -389,14 +389,413 @@ describe('migration runner (WP-D3)', () => {
     });
 
     it('replaying migration 11 on a fresh database changes nothing', () => {
-      temp = createMigratedTempDb();
-      const before = pricingRows(temp.db);
-      const convergence = migrations.find((m) => m.name === 'model-pricing-seed-convergence');
-      if (convergence === undefined) {
-        throw new Error('migration model-pricing-seed-convergence is missing');
+      // The fixture stops at migration 13 deliberately. Migration 11's upsert
+      // targets (model, bucket, effective_from) using the PRE-canonical seed
+      // spelling; once migration 14 canonicalizes that column at write time,
+      // the conflict target no longer matches the stored row, so the upsert
+      // would insert a duplicate and then collide on the primary key when the
+      // trigger rewrote it. That is the exact trap db/pricing.ts's write path
+      // sidesteps by canonicalizing BEFORE the statement runs, and it cannot
+      // arise in production: the runner never replays an applied migration,
+      // and any database on which 11 can still run predates the triggers.
+      const dir = mkdtempSync(join(tmpdir(), 'agenthropic-mig11-replay-'));
+      const db = openDatabase(join(dir, 'replay.db'));
+      try {
+        runMigrations(
+          db,
+          migrations.filter((m) => m.id < 14),
+        );
+        const before = pricingRows(db);
+        const convergence = migrations.find((m) => m.name === 'model-pricing-seed-convergence');
+        if (convergence === undefined) {
+          throw new Error('migration model-pricing-seed-convergence is missing');
+        }
+        convergence.up(db);
+        expect(pricingRows(db)).toEqual(before);
+      } finally {
+        db.close();
+        rmSync(dir, { recursive: true, force: true });
       }
-      convergence.up(temp.db);
-      expect(pricingRows(temp.db)).toEqual(before);
+    });
+  });
+
+  /**
+   * Review M-21: dated-price resolution exists twice - core compares instants
+   * in epoch milliseconds, the API's priced CTE compares `effective_from <=
+   * occurred_at` as BINARY-collated TEXT. They agree only while the stored
+   * text sorts chronologically, which mixed spellings of one instant break.
+   * Migration 14 makes the column hold ONE canonical spelling,
+   * `YYYY-MM-DDTHH:mm:ss.sssZ`, on both histories: the rows already stored and
+   * every row written afterwards, including by the sqlite3 CLI.
+   */
+  describe('canonical effective_from (migration 14)', () => {
+    const TRIGGERS = [
+      'model_pricing_effective_from_canonical_insert',
+      'model_pricing_effective_from_canonical_update',
+      'model_pricing_effective_from_guard_insert',
+      'model_pricing_effective_from_guard_update',
+    ];
+
+    /** A database migrated to the state right BEFORE migration 14 ran. */
+    function openPreCanonicalDb(dir: string): SqliteDatabase {
+      const db = openDatabase(join(dir, 'pre-canonical.db'));
+      runMigrations(
+        db,
+        migrations.filter((m) => m.id < 14),
+      );
+      return db;
+    }
+
+    function insertRate(
+      db: SqliteDatabase,
+      model: string,
+      usd: number,
+      effectiveFrom: string,
+    ): void {
+      db.prepare(
+        'INSERT INTO model_pricing (model, bucket, usd_per_mtok, effective_from) VALUES (?, ?, ?, ?)',
+      ).run(model, 'input', usd, effectiveFrom);
+    }
+
+    function effectiveFromValues(db: SqliteDatabase, model: string): unknown[] {
+      return db
+        .prepare('SELECT effective_from FROM model_pricing WHERE model = ? ORDER BY effective_from')
+        .pluck()
+        .all(model);
+    }
+
+    it('rewrites the seeded bare dates and installs the write-time triggers on a fresh database', () => {
+      temp = createMigratedTempDb();
+      const stored = temp.db
+        .prepare('SELECT DISTINCT effective_from FROM model_pricing')
+        .pluck()
+        .all();
+      // Migration 7 seeds '2026-01-01'; PRICING_SEED_EFFECTIVE_FROM itself is
+      // frozen (it is hashed into every migration's checksum, so editing it
+      // would brick an operator database), and migration 14 is what makes the
+      // END STATE canonical on both the fresh and the upgraded path.
+      expect(stored).toEqual(['2026-01-01T00:00:00.000Z']);
+
+      // Scoped to migration 14's own trigger family by name, not to the whole
+      // `model_pricing` table: migration 16 hangs the rollup's pricing-recompute
+      // triggers off the same table, and they are asserted exhaustively in their
+      // own block below. The list stays an exact `toEqual` so a trigger going
+      // missing still fails here.
+      const triggers = temp.db
+        .prepare(
+          `SELECT name FROM sqlite_master
+            WHERE type = 'trigger' AND tbl_name = 'model_pricing'
+              AND name LIKE 'model_pricing_effective_from_%'
+            ORDER BY name`,
+        )
+        .pluck()
+        .all();
+      expect(triggers).toEqual(TRIGGERS);
+    });
+
+    it('canonicalizes an operator database written under the ORIGINAL seed and its hand-typed rows', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'agenthropic-mig14-operator-'));
+      const db = openOldSeedDb(join(dir, 'operator.db'));
+      try {
+        // Exactly what the documented cross-connection write path produces: an
+        // operator typing rates into the sqlite3 CLI, in the spellings a human
+        // types. Both denote instants the old text comparison ordered wrongly.
+        insertRate(db, 'my-local-model', 7, '2026-09-01');
+        insertRate(db, 'my-local-model', 9, '2026-10-01T02:00:00+02:00');
+
+        runMigrations(db);
+
+        expect(effectiveFromValues(db, 'my-local-model')).toEqual([
+          '2026-09-01T00:00:00.000Z',
+          '2026-10-01T00:00:00.000Z', // the offset was converted, not stripped
+        ]);
+        // The pre-existing seed rows converged onto the same canonical form a
+        // fresh database gets - the two histories are row-identical.
+        temp = createMigratedTempDb();
+        const rows = pricingRows(db) as Array<{ model: string }>;
+        expect(rows.filter((r) => r.model !== 'my-local-model')).toEqual(pricingRows(temp.db));
+      } finally {
+        db.close();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('collapses two spellings of one instant that carry the SAME rate', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'agenthropic-mig14-collapse-'));
+      const db = openPreCanonicalDb(dir);
+      try {
+        insertRate(db, 'dup-model', 12, '2026-05-01');
+        insertRate(db, 'dup-model', 12, '2026-05-01T00:00:00Z');
+
+        runMigrations(db);
+
+        // No dollar changes, and the composite primary key could not hold both
+        // rows once they spell the instant the same way.
+        expect(
+          db
+            .prepare(
+              `SELECT usd_per_mtok, effective_from FROM model_pricing WHERE model = 'dup-model'`,
+            )
+            .all(),
+        ).toEqual([{ usd_per_mtok: 12, effective_from: '2026-05-01T00:00:00.000Z' }]);
+      } finally {
+        db.close();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('halts, without touching a row, when two spellings of one instant carry DIFFERENT rates', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'agenthropic-mig14-conflict-'));
+      const db = openPreCanonicalDb(dir);
+      try {
+        insertRate(db, 'conflict-model', 12, '2026-05-01');
+        insertRate(db, 'conflict-model', 20, '2026-05-01T00:00:00Z');
+
+        // Which rate was ever in force is unknowable from here; picking either
+        // would invent dollars, so the migration refuses.
+        expect(() => runMigrations(db)).toThrow(/conflicting rates/);
+        expect(currentSchemaVersion(db)).toBe(13);
+        expect(effectiveFromValues(db, 'conflict-model')).toEqual([
+          '2026-05-01',
+          '2026-05-01T00:00:00Z',
+        ]);
+      } finally {
+        db.close();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('halts on a stored value that is not an unambiguous instant', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'agenthropic-mig14-unparseable-'));
+      const db = openPreCanonicalDb(dir);
+      try {
+        // SQLite would read this as a Julian day number and date the rate to
+        // 4707 BC. Guessing is the failure this project refuses: name the row
+        // and stop.
+        insertRate(db, 'bad-model', 4, '2026');
+
+        expect(() => runMigrations(db)).toThrow(
+          /model=bad-model, bucket=input.*not an\s+unambiguous instant/s,
+        );
+        expect(currentSchemaVersion(db)).toBe(13);
+      } finally {
+        db.close();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('halts on a stored date the calendar does not have', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'agenthropic-mig14-nonexistent-day-'));
+      const db = openPreCanonicalDb(dir);
+      try {
+        // Both date parsers roll '2026-02-30' into March 2 rather than
+        // failing, so a typo would silently move the day a rate takes effect.
+        insertRate(db, 'feb30-model', 4, '2026-02-30');
+
+        expect(() => runMigrations(db)).toThrow(/not an\s+unambiguous instant/s);
+        expect(currentSchemaVersion(db)).toBe(13);
+      } finally {
+        db.close();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('canonicalizes and guards writes made afterwards through raw SQL', () => {
+      // The operator's sqlite3 CLI knows nothing about the canonical form -
+      // that is precisely why the invariant lives in the database rather than
+      // in the server's write path.
+      temp = createMigratedTempDb();
+      insertRate(temp.db, 'cli-model', 7, '2026-09-01');
+      insertRate(temp.db, 'cli-model', 8, '2026-10-01T02:00:00+02:00');
+      expect(effectiveFromValues(temp.db, 'cli-model')).toEqual([
+        '2026-09-01T00:00:00.000Z',
+        '2026-10-01T00:00:00.000Z',
+      ]);
+
+      // An UPDATE is guarded and canonicalized the same way as an INSERT...
+      temp.db
+        .prepare(
+          `UPDATE model_pricing SET effective_from = '2026-11-01'
+             WHERE model = 'cli-model' AND effective_from = '2026-09-01T00:00:00.000Z'`,
+        )
+        .run();
+      expect(effectiveFromValues(temp.db, 'cli-model')).toEqual([
+        '2026-10-01T00:00:00.000Z',
+        '2026-11-01T00:00:00.000Z',
+      ]);
+      // ...and a rate correction that does not touch effective_from still works.
+      const corrected = temp.db
+        .prepare(`UPDATE model_pricing SET usd_per_mtok = 9 WHERE model = 'cli-model'`)
+        .run();
+      expect(corrected.changes).toBe(2);
+
+      // A spelling that does not denote one instant is rejected outright.
+      expect(() => insertRate(temp!.db, 'cli-model', 7, '2026-09-01T00:00:00')).toThrow(
+        /must be a bare UTC date or a zoned ISO-8601 instant/,
+      );
+      expect(() =>
+        temp!.db
+          .prepare(`UPDATE model_pricing SET effective_from = 'now' WHERE model = 'cli-model'`)
+          .run(),
+      ).toThrow(/must be a bare UTC date or a zoned ISO-8601 instant/);
+      expect(effectiveFromValues(temp.db, 'cli-model')).toEqual([
+        '2026-10-01T00:00:00.000Z',
+        '2026-11-01T00:00:00.000Z',
+      ]);
+
+      // Two spellings of ONE instant are a duplicate rate, and the primary key
+      // says so loudly instead of storing the instant twice.
+      expect(() => insertRate(temp!.db, 'cli-model', 7, '2026-11-01T00:00:00Z')).toThrow(
+        /UNIQUE|PRIMARY/,
+      );
+    });
+  });
+
+  /**
+   * Migration 15 is the OTHER operand of the same comparison migration 14
+   * fixed. `mp.effective_from <= tu.occurred_at` has two sides, and
+   * canonicalizing one of them fixes only the spellings the operator types;
+   * `token_usage.occurred_at` arrived verbatim from the JSONL. The parity
+   * suite pinned the consequence as `offset-form-occurred-at` - core priced a
+   * row at the rate the halt gate approved while the API reported the same
+   * tokens as unpriced - and this migration is what graduated that pin.
+   */
+  describe('canonical occurred_at (migration 15)', () => {
+    /** A database migrated to the state right BEFORE migration 15 ran. */
+    function openPreCanonicalUsageDb(dir: string): SqliteDatabase {
+      const db = openDatabase(join(dir, 'pre-canonical-usage.db'));
+      runMigrations(
+        db,
+        migrations.filter((m) => m.id < 15),
+      );
+      db.exec(
+        `INSERT INTO sessions (id, project_slug, started_at, last_activity_at, status)
+         VALUES ('sess-oa', 'p', '2026-07-10T00:00:00Z', '2026-07-10T00:00:00Z', 'active')`,
+      );
+      return db;
+    }
+
+    /**
+     * Raw SQL on purpose, and on a pre-15 database on purpose: the point of
+     * the migration is that rows written by a writer that knows nothing about
+     * the canonical form get repaired, so seeding through the canonicalizing
+     * JS path would test nothing.
+     */
+    function insertUsage(db: SqliteDatabase, messageId: string, occurredAt: string): void {
+      db.prepare(
+        `INSERT INTO token_usage
+           (session_id, agent_id, message_id, model, bucket, tokens, is_compaction_baseline, occurred_at)
+         VALUES ('sess-oa', NULL, ?, 'claude-fable-5', 'input', 100, 0, ?)`,
+      ).run(messageId, occurredAt);
+    }
+
+    function occurredAtValues(db: SqliteDatabase): unknown[] {
+      return db.prepare('SELECT occurred_at FROM token_usage ORDER BY message_id').pluck().all();
+    }
+
+    function withPreCanonicalDb(slug: string, body: (db: SqliteDatabase) => void): void {
+      const dir = mkdtempSync(join(tmpdir(), `agenthropic-mig15-${slug}-`));
+      const db = openPreCanonicalUsageDb(dir);
+      try {
+        body(db);
+      } finally {
+        db.close();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+
+    it('rewrites every stored spelling to the one whose text order is its clock order', () => {
+      withPreCanonicalDb('backfill', (db) => {
+        // The pinned defect itself: as an instant this is an hour AFTER
+        // 2026-03-01T00:00:00Z, but its '2026-02-…' prefix sorts BELOW it, so
+        // the priced CTE found no applicable rate at all.
+        insertUsage(db, 'a-offset', '2026-02-28T20:00:00-05:00');
+        // Second-precision, the form the fixtures write.
+        insertUsage(db, 'b-plain', '2026-03-01T09:30:00Z');
+        // A bare UTC date - what a hand-written or legacy row can carry.
+        insertUsage(db, 'c-bare', '2026-03-02');
+        // Already canonical: the loop must leave it exactly alone rather than
+        // rewriting it to an equal value, which is what makes a replay a no-op.
+        insertUsage(db, 'd-canonical', '2026-03-03T00:00:00.000Z');
+
+        runMigrations(db);
+
+        expect(occurredAtValues(db)).toEqual([
+          '2026-03-01T01:00:00.000Z',
+          '2026-03-01T09:30:00.000Z',
+          '2026-03-02T00:00:00.000Z',
+          '2026-03-03T00:00:00.000Z',
+        ]);
+      });
+    });
+
+    it('leaves a NULL occurred_at alone instead of inventing an instant for it', () => {
+      withPreCanonicalDb('null', (db) => {
+        db.prepare(
+          `INSERT INTO token_usage
+             (session_id, agent_id, message_id, model, bucket, tokens, is_compaction_baseline, occurred_at)
+           VALUES ('sess-oa', NULL, 'no-time', 'claude-fable-5', 'input', 100, 0, NULL)`,
+        ).run();
+
+        runMigrations(db);
+
+        expect(occurredAtValues(db)).toEqual([null]);
+      });
+    });
+
+    it('halts on a stored value that is not an unambiguous instant', () => {
+      withPreCanonicalDb('unparseable', (db) => {
+        // SQLite would read a bare '2026' as a Julian day number. A usage
+        // timestamp is never guessed: name the row and stop.
+        insertUsage(db, 'bad', '2026');
+
+        expect(() => runMigrations(db)).toThrow(/id=\d+.*not an unambiguous instant/s);
+        // Nothing was rewritten and the version did not advance - a halted
+        // migration must leave a database exactly where it found it.
+        expect(currentSchemaVersion(db)).toBe(14);
+        expect(occurredAtValues(db)).toEqual(['2026']);
+      });
+    });
+
+    it('halts on a stored date the calendar does not have', () => {
+      withPreCanonicalDb('nonexistent-day', (db) => {
+        // Both date parsers roll '2026-02-30' forward into March rather than
+        // failing, which would file the spend under a day nothing happened on
+        // and expire it from retention on the wrong date.
+        insertUsage(db, 'feb30', '2026-02-30T00:00:00Z');
+
+        expect(() => runMigrations(db)).toThrow(/not an unambiguous instant/s);
+        expect(currentSchemaVersion(db)).toBe(14);
+      });
+    });
+
+    it('makes a non-canonical value unstorable from here on, whatever writes it', () => {
+      temp = createMigratedTempDb();
+      insertSession(temp.db, 'sess-oa');
+      const db = temp.db;
+
+      // The AFTER-INSERT trigger rewrites what raw SQL spells non-canonically,
+      // so the storage invariant does not depend on one module remembering.
+      insertUsage(db, 'raw-offset', '2026-02-28T20:00:00-05:00');
+      expect(occurredAtValues(db)).toEqual(['2026-03-01T01:00:00.000Z']);
+
+      // ...and on UPDATE too, which is the path an operator at the sqlite3 CLI
+      // actually takes.
+      db.prepare(
+        `UPDATE token_usage SET occurred_at = '2026-04-01T06:00:00+02:00' WHERE message_id = 'raw-offset'`,
+      ).run();
+      expect(occurredAtValues(db)).toEqual(['2026-04-01T04:00:00.000Z']);
+
+      // A value that denotes no instant is refused rather than coerced.
+      expect(() => insertUsage(db, 'raw-bad', 'now')).toThrow(
+        /occurred_at must be NULL, a bare UTC date, or a zoned ISO-8601 instant/,
+      );
+      expect(() =>
+        db
+          .prepare(`UPDATE token_usage SET occurred_at = '2026-13-01' WHERE message_id = ?`)
+          .run('raw-offset'),
+      ).toThrow(/occurred_at must be NULL/);
+      expect(occurredAtValues(db)).toEqual(['2026-04-01T04:00:00.000Z']);
     });
   });
 

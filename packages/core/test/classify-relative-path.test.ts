@@ -3,8 +3,9 @@
  * WP-IN5 disk adapter reuses as its artifact allowlist (the anti-drift
  * linchpin). This locks the keep/reject boundary, including the traps a naive
  * substring/extension check would misfile: uppercase names, uppercase hex, a
- * `wf_<id>.json` workflow marker, `agent-<non-hex>.jsonl`, and stray
- * `.txt`/`.js`/`.pdf` companions under `subagents/`.
+ * `wf_<id>.json` workflow marker, `agent-<non-hex>.jsonl`, a `.meta.json` with
+ * no `agent-<hex>` stem, and stray `.txt`/`.js`/`.pdf` companions under
+ * `subagents/`.
  */
 import { describe, expect, it } from 'vitest';
 import { classifyRelativePath } from '../src/index';
@@ -36,6 +37,15 @@ describe('classifyRelativePath (WP-IN5 allowlist contract)', () => {
     ['subagents/agent-ABCD.jsonl', 'other'],
     // a non-hex "hex" segment
     ['subagents/agent-notes.jsonl', 'other'],
+    // review L-5: a `.meta.json` that is NOT `agent-<hex>.meta.json` is not a
+    // sidecar. It used to classify as 'meta' with an undefined hex, so the
+    // adapter admitted a hand-written note file as an artifact and the line
+    // parser then threw on its first non-JSON line, killing the whole session.
+    ['subagents/notes.meta.json', 'other'],
+    ['subagents/agent-.meta.json', 'other'],
+    ['subagents/agent-ABCD.meta.json', 'other'],
+    ['subagents/agent-3fa9c2d1.meta.json.bak', 'other'],
+    ['meta.json', 'other'],
     // a project-root companion that is not a `<uuid>.jsonl` main is still 'main'
     // ONLY structurally (no slash + .jsonl); a non-jsonl root file is 'other'
     ['README.md', 'other'],

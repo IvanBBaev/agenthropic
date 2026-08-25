@@ -18,11 +18,22 @@
  * ingested corpus. The watcher's tick catch turns that throw into an honest
  * read-error outcome and retries next poll.
  *
+ * One check runs BEFORE the writer rather than after it: the session id the
+ * substrate's records declare must equal the uuid the file name declares
+ * (review L-4). A mismatch is a copied/renamed transcript, and a copy that
+ * reaches ingestSession has already fused onto the original session's rows by
+ * the time its outcome could be inspected — so it is refused here and counted
+ * as a per-session failure.
+ *
  * The runner writes ZERO bytes to the corpus and is idempotent end-to-end
  * (ingestSession upserts and INSERT-OR-IGNOREs), so a re-run over an unchanged
  * corpus reports the same ok count with zero new edges / usage rows.
  */
-import type { PricingEntry, SessionSubstrate } from '@agenthropic/core';
+import {
+  peekSubstrateSessionId,
+  type PricingEntry,
+  type SessionSubstrate,
+} from '@agenthropic/core';
 import type { SqliteDatabase } from '../db/connection';
 import type { AgentStatusChangedEvent, SessionIngestedEvent } from '../ingest/ingest-events';
 import { ingestSession, type IngestDeps, type IngestOutcome } from '../ingest/ingest-session';
@@ -81,6 +92,14 @@ export interface CorpusIngestDeps {
    */
   readonly onUsageCollisions?: (collisions: number) => void;
 }
+
+/**
+ * Reason prefix of a refused session-id mismatch (review L-4). A stable,
+ * machine-greppable token in front of the human sentence: the runner reports
+ * this through the ordinary per-session failure channel, so log readers and
+ * tests need one thing to key on.
+ */
+export const SESSION_ID_MISMATCH_REASON = 'session-id-mismatch';
 
 /** One session that failed to ingest, with the surfaced reason. */
 export interface CorpusIngestFailure {
@@ -172,6 +191,34 @@ export function runCorpusIngest(deps: CorpusIngestDeps): CorpusIngestSummary {
 
     if (built.kind === 'no-substrate') {
       sessionsSkipped += 1;
+      continue;
+    }
+
+    // Identity cross-check BEFORE the write (review L-4). The ref's session id
+    // comes from the FILE NAME; the id the writer keys every row on comes from
+    // the RECORDS. Nothing on disk forces those to agree — copy or rename a
+    // transcript and the copy's records still name the original session, so
+    // ingesting it upserts the original session's agents from a second file,
+    // re-fires its dispatch events, and does so again on every tick, forever.
+    // The check has to happen here rather than on the outcome: ingestSession
+    // returns the derived id only AFTER its transaction has committed, at which
+    // point the fusion has already happened. `null` (no record declares an id)
+    // is an abstention and passes through to the parser, which fails it loudly
+    // and honestly on its own terms.
+    const declaredSessionId = peekSubstrateSessionId(built.substrate);
+    if (declaredSessionId !== null && declaredSessionId !== ref.sessionId) {
+      sessionsFailed += 1;
+      failures.push({
+        // Keyed on the REF's id on purpose: the watcher matches failures to the
+        // fingerprint it enumerated, so reporting the declared id here would
+        // leave this file's retry budget untouched and re-read it every tick.
+        sessionId: ref.sessionId,
+        projectSlug: ref.projectSlug,
+        error:
+          `${SESSION_ID_MISMATCH_REASON}: file "${ref.sessionId}.jsonl" carries sessionId ` +
+          `"${declaredSessionId}"; refusing to ingest so a renamed or copied transcript cannot ` +
+          `fuse onto the original session's rows`,
+      });
       continue;
     }
 

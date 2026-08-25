@@ -15,17 +15,22 @@
  *   `orchestration_edges`), never a render-time reconstruction, and the edge
  *   `source` provenance is served verbatim.
  */
-import type {
-  AgentNodeDto,
-  CostSummaryDto,
-  GlobalDagDto,
-  ModelCostDto,
-  OrchestrationEdgeDto,
-  SessionDetailDto,
-  SessionEventsDto,
-  SessionSummaryDto,
-  SessionTreeDto,
+import {
+  MAX_AGGREGATE_SKIPPED_SAMPLE,
+  type AggregateDelegationSavingsDto,
+  type AggregateSavingsSkipDto,
+  type AgentNodeDto,
+  type CostSummaryDto,
+  type GlobalDagDto,
+  type ModelCostDto,
+  type OrchestrationEdgeDto,
+  type SessionDetailDto,
+  type SessionEventsDto,
+  type SessionSummaryDto,
+  type SessionTreeDto,
 } from '@agenthropic/shared';
+import { PricingError, computeDelegationSavings } from '@agenthropic/core';
+import type { DedupedUsage, ParsedAgent, ParsedSession, PricingEntry } from '@agenthropic/core';
 import type { SqliteDatabase } from '../db/connection';
 
 /**
@@ -543,6 +548,12 @@ export interface CostSummaryProbe {
  * False invalidations (e.g. an unrelated `events` INSERT, or a rolled-back
  * write — total_changes counts those too) merely recompute; the design errs
  * only in the never-stale direction.
+ *
+ * That direction is the right one, but be honest about its price: on a server
+ * with ingest running, a false invalidation is the NORM, not the exception —
+ * every poll tick that writes anything at all moves this key. See the M-19 note
+ * in {@link getCostSummary}: this key makes the cache correct, not the read
+ * bounded.
  */
 function costSummaryStateKey(db: SqliteDatabase): string {
   const changes = (db.prepare('SELECT total_changes() AS n').get() as { n: number }).n;
@@ -561,11 +572,50 @@ export function getCostSummary(
   topN: number,
   probe?: CostSummaryProbe,
 ): CostSummaryDto {
-  // One-entry cache behind the self-validating key above: without it, every
-  // /api/cost/summary request re-priced ALL of token_usage — a table whose
-  // retention is deliberately refused (cost history is the product), so the
-  // per-request scan grew linearly with corpus age forever. A hit returns the
-  // SAME DTO object by reference; routes only serialize it, never mutate it.
+  // M-19 — READ THIS BEFORE RECORDING THE FINDING AS CLOSED.
+  //
+  // What this cache IS: a one-entry memo behind the self-validating key above.
+  // It bounds REPEAT reads on a QUIESCENT connection — a dashboard refresh, a
+  // second widget on the same page, any read while nothing is being written.
+  // A hit returns the SAME DTO object by reference; routes only serialize it,
+  // never mutate it.
+  //
+  // What this cache IS NOT: an asymptotic fix. THE ASYMPTOTICS ARE UNCHANGED.
+  // The cold path below still prices and groups ALL of `token_usage` — a table
+  // whose retention is deliberately refused (cost history is the product), so
+  // it grows with corpus age forever — and the key above is invalidated by
+  // `total_changes()`, which moves on essentially every ingest tick and on
+  // every retention pass. On an actively ingesting server nearly every
+  // /api/cost/summary read is therefore still a cold, full scan. The cache
+  // widened the hit window; it did not bound the read.
+  //
+  // Why the key is not simply narrowed here: a narrower key must be
+  // CONSERVATIVE (never miss a change to `token_usage` / `sessions`) and cheap,
+  // and no read-only signal is both.
+  //  - `PRAGMA data_version` moves only for OTHER connections' commits. Ingest
+  //    and retention run on THIS handle, so it is blind to exactly the writes
+  //    that matter — it would serve stale dollars, which is the one failure
+  //    this layer may never have.
+  //  - A per-table write counter WOULD be exact, but it has to be bumped where
+  //    the writes happen (db/token-usage.ts, db/sessions.ts). This module is
+  //    SELECT-only by contract and owns no write-side seam.
+  //  - Every purely read-side detector is itself O(token_usage) AND still
+  //    inexact: the ingest upsert's settle arm UPDATES rows in place, so
+  //    COUNT(*) / MAX(id) cannot see it, and a message-level model settle
+  //    changes per-model attribution without changing SUM(tokens).
+  //
+  // The only variant that actually bounds the read is a PERSISTED
+  // (session, model, bucket, day, tokens) rollup maintained inside the existing
+  // per-session ingest transaction, priced at read time by the same dated
+  // rates. That is a schema + ingest change (db/migrations.ts,
+  // db/token-usage.ts, ingest/project-session.ts), not a read-layer change.
+  // Note the grain: (session, model, DAY) as the review words it is not exactly
+  // repriceable when a `model_pricing.effective_from` falls mid-day — the
+  // bucket must be carried too, and tokens (not dollars) must be what is
+  // stored, or the rollup and a direct scan can disagree.
+  //
+  // test/api-cost-summary-equivalence.test.ts is the standing guard: whatever
+  // this function returns must equal a full uncached scan of the same data.
   const stateKey = costSummaryStateKey(db);
   const cached = costSummaryCache.get(db);
   if (cached !== undefined && cached.stateKey === stateKey && cached.topN === topN) {
@@ -739,5 +789,288 @@ export function getGlobalDag(db: SqliteDatabase, nodeLimit: number): GlobalDagDt
     nodes: nodeRows.map(toAgentNode),
     edges: edgeRows.map(toEdge),
     counts: counts(nodeRows.length, edgeRows.length),
+  };
+}
+
+/* -------------------------------------------------------------------------
+ * M-9 (aggregate half) — corpus-wide delegation savings.
+ *
+ * The per-session route answers the same counterfactual from the JSONL
+ * substrate. This one answers it from the STORED ROWS, and deliberately so:
+ * a KPI on the cost page cannot re-parse every transcript in the corpus on
+ * each cold request, and the DB is the project's declared ground truth for
+ * token counts. Both paths feed the SAME pure `computeDelegationSavings`, so
+ * the only question is whether the reconstruction below is faithful.
+ *
+ * It is, mechanically, for any session ingested by this server:
+ *   - `token_usage` stores a complete (message_id, bucket) matrix — all five
+ *     buckets, zero-token ones included — with the message-level settled
+ *     `model` and `occurred_at` replicated across the five rows, so grouping
+ *     by message_id reproduces a `DedupedUsage` exactly (see db/token-usage.ts);
+ *   - the estimator reads only `{id, type, parentAgentId}` off each agent plus
+ *     the usage rows — never `startedAt`/`endedAt`/`subagentType`/`edges`;
+ *   - the one real translation is the main-agent key (see `mainAgentIds`).
+ * `api-aggregate-savings-equivalence.test.ts` proves it end to end: ingest a
+ * fixture, then assert this function equals the substrate-parsed per-session
+ * figure to the micro-dollar.
+ *
+ * Where the two CAN diverge is where the database itself lacks the rows, and
+ * every such case is either reported or provably zero:
+ *   1. M-12 cross-session `message_id` ownership — when two transcripts (fork
+ *      or resume) carry the same message id, the first-ingested session keeps
+ *      it and the loser's rows are not written at all. The aggregate therefore
+ *      counts that usage once, under the owning session; a per-session
+ *      substrate analysis of the LOSING session counts it too. This one is not
+ *      countable from the DB (the loser leaves no row) — the server's
+ *      cross-session collision counter is the place that fact is surfaced.
+ *   2. Retention prunes `token_usage` but never `agents`, so an old session can
+ *      keep subagents with no usage. Those price to $0 honestly (no rows, no
+ *      cost, no hypothetical) rather than erroring.
+ *   3. A residual-cycle `parent_agent_id` nulled at ingest makes a subagent's
+ *      top-tier model underivable — it self-reports in `subagentsSkipped`.
+ *   4. Sessions on disk that were never ingested are outside `sessionsTotal`
+ *      entirely, exactly as they are for every other DB-backed figure.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * The scan's universe. A session with no persisted subagent cannot contribute
+ * a cent — the estimator sums over `type = 'subagent'` agents only — so it is
+ * left out of the scan and reported as a measured zero
+ * (`sessionsTotal - sessionsWithSubagents`), never as a gap.
+ */
+const DELEGATING_SESSIONS_CTE = `
+  delegating AS (SELECT DISTINCT session_id FROM agents WHERE type = 'subagent')
+`;
+
+interface DelegationAgentRow {
+  readonly id: string;
+  readonly session_id: string;
+  readonly type: ParsedAgent['type'];
+  readonly subagent_type: string | null;
+  readonly parent_agent_id: string | null;
+}
+
+/**
+ * Agents of the delegating sessions. The `type IN (...)` filter is not
+ * cosmetic: the column is nullable and a NULL type has no meaning in the
+ * estimator's tree walk. Such rows are counted separately (`untypedAgents`)
+ * so their exclusion is stated rather than silently applied.
+ */
+const DELEGATION_AGENTS_SQL = `
+  WITH ${DELEGATING_SESSIONS_CTE}
+  SELECT a.id AS id, a.session_id AS session_id, a.type AS type,
+         a.subagent_type AS subagent_type, a.parent_agent_id AS parent_agent_id
+  FROM agents a
+  JOIN delegating d ON d.session_id = a.session_id
+  WHERE a.type IN ('main', 'subagent')
+  ORDER BY a.session_id ASC, a.id ASC
+`;
+
+interface DelegationUsageRow {
+  readonly session_id: string;
+  readonly message_id: string;
+  readonly agent_id: string | null;
+  readonly model: string;
+  readonly occurred_at: string;
+  readonly undated_rows: number;
+  readonly input: number;
+  readonly output: number;
+  readonly cache_read: number;
+  readonly cache_write_5m: number;
+  readonly cache_write_1h: number;
+}
+
+/**
+ * One row per stored message — the DB's own dedup, since ingest already
+ * collapsed each `message.id` to its per-bucket maximum before writing.
+ *
+ * The `MAX()`s over `agent_id`/`model`/`occurred_at` are identities on
+ * anything this server wrote (the writer settles all three at MESSAGE level
+ * and replicates them across the five bucket rows); they exist so a
+ * hand-inserted row set that disagrees resolves deterministically instead of
+ * depending on scan order. `undated_rows` counts the timestamps SQLite cannot
+ * price against — the session carrying any is excluded and named, never priced
+ * from an empty date.
+ */
+const DELEGATION_USAGE_SQL = `
+  WITH ${DELEGATING_SESSIONS_CTE}
+  SELECT
+    tu.session_id AS session_id,
+    tu.message_id AS message_id,
+    MAX(tu.agent_id) AS agent_id,
+    MAX(tu.model) AS model,
+    COALESCE(MAX(tu.occurred_at), '') AS occurred_at,
+    SUM(CASE WHEN tu.occurred_at IS NULL THEN 1 ELSE 0 END) AS undated_rows,
+    SUM(CASE WHEN tu.bucket = 'input' THEN tu.tokens ELSE 0 END) AS input,
+    SUM(CASE WHEN tu.bucket = 'output' THEN tu.tokens ELSE 0 END) AS output,
+    SUM(CASE WHEN tu.bucket = 'cache_read' THEN tu.tokens ELSE 0 END) AS cache_read,
+    SUM(CASE WHEN tu.bucket = 'cache_write_5m' THEN tu.tokens ELSE 0 END) AS cache_write_5m,
+    SUM(CASE WHEN tu.bucket = 'cache_write_1h' THEN tu.tokens ELSE 0 END) AS cache_write_1h
+  FROM token_usage tu
+  JOIN delegating d ON d.session_id = tu.session_id
+  GROUP BY tu.session_id, tu.message_id
+  ORDER BY tu.session_id ASC, tu.message_id ASC
+`;
+
+interface ReconstructedSession {
+  readonly sessionId: string;
+  readonly agents: ParsedAgent[];
+  readonly usage: DedupedUsage[];
+  /** Stored usage rows of this session that carry no timestamp. */
+  undatedRows: number;
+}
+
+/**
+ * Rebuild a `ParsedSession`-shaped value per delegating session, straight off
+ * the stored rows. Module-private on purpose: the placeholder timestamps below
+ * must never reach a DTO.
+ */
+function reconstructDelegatingSessions(db: SqliteDatabase): Map<string, ReconstructedSession> {
+  const sessions = new Map<string, ReconstructedSession>();
+  const entryFor = (sessionId: string): ReconstructedSession => {
+    const existing = sessions.get(sessionId);
+    if (existing !== undefined) return existing;
+    const created: ReconstructedSession = { sessionId, agents: [], usage: [], undatedRows: 0 };
+    sessions.set(sessionId, created);
+    return created;
+  };
+  // Agent ids are a global PRIMARY KEY, so one set spans the whole corpus.
+  // Typed to accept the nullable usage column: `has(null)` is false and the
+  // false arm returns that same null, so the inversion below needs no separate
+  // null guard for usage rows that carry no agent id.
+  const mainAgentIds = new Set<string | null>();
+
+  for (const row of db.prepare(DELEGATION_AGENTS_SQL).all() as DelegationAgentRow[]) {
+    entryFor(row.session_id).agents.push({
+      id: row.id,
+      type: row.type,
+      subagentType: row.subagent_type,
+      parentAgentId: row.parent_agent_id,
+      // NOT measurements, and never presented as any. `computeDelegationSavings`
+      // reads neither field; they exist only to satisfy `ParsedAgent`. Empty
+      // strings rather than a fabricated timestamp, so a future core version
+      // that starts reading them fails loudly instead of pricing a lie.
+      startedAt: '',
+      endedAt: '',
+    });
+    if (row.type === 'main') mainAgentIds.add(row.id);
+  }
+
+  for (const row of db.prepare(DELEGATION_USAGE_SQL).all() as DelegationUsageRow[]) {
+    const entry = entryFor(row.session_id);
+    entry.undatedRows += row.undated_rows;
+    entry.usage.push({
+      messageId: row.message_id,
+      model: row.model,
+      timestamp: row.occurred_at,
+      // The one mandatory translation. Ingest stores the MAIN agent's usage
+      // under that agent's id, while the parser — and therefore the estimator —
+      // keys main-transcript usage as `null`. Without inverting it here, every
+      // subagent whose nearest usage-bearing ancestor is the main agent would
+      // be reported as having no derivable top-tier model.
+      agentId: mainAgentIds.has(row.agent_id) ? null : row.agent_id,
+      usage: {
+        input: row.input,
+        output: row.output,
+        cacheRead: row.cache_read,
+        cacheWrite5m: row.cache_write_5m,
+        cacheWrite1h: row.cache_write_1h,
+      },
+    });
+  }
+  return sessions;
+}
+
+export interface AggregateDelegationSavingsOptions {
+  /** WP-C5 rule-1 routing override, passed straight through to the estimator. */
+  readonly topTierModel?: string;
+}
+
+/**
+ * Corpus-wide delegation savings (M-9). Never refuses on account of one bad
+ * session and never quietly drops one either: a session whose usage cannot be
+ * priced is excluded from the sums AND named in `skippedSessions` with the
+ * pricing error that caused it, so the reader can see the aggregate's true
+ * scope. That follows the house precedent — `getCostSummary` reports
+ * `unpricedTokens` rather than withholding the whole figure — and it is the
+ * only choice that scales: on a corpus of hundreds of sessions, refusing
+ * everything because one names an unknown model would make the KPI useless
+ * exactly when it matters.
+ */
+export function getAggregateDelegationSavings(
+  db: SqliteDatabase,
+  pricing: readonly PricingEntry[],
+  options: AggregateDelegationSavingsOptions = {},
+): AggregateDelegationSavingsDto {
+  const countOf = (sql: string): number => (db.prepare(sql).get() as { n: number }).n;
+  const sessionsTotal = countOf('SELECT COUNT(*) AS n FROM sessions');
+  const untypedAgents = countOf('SELECT COUNT(*) AS n FROM agents WHERE type IS NULL');
+  const sessions = reconstructDelegatingSessions(db);
+  const savingsOptions =
+    options.topTierModel === undefined ? {} : { topTierModel: options.topTierModel };
+
+  let actualUsd = 0;
+  let hypotheticalUsd = 0;
+  let savingsUsd = 0;
+  let sessionsPriced = 0;
+  let subagentsPriced = 0;
+  let subagentsSkipped = 0;
+  const hypotheticalModels = new Set<string>();
+  const skipped: AggregateSavingsSkipDto[] = [];
+
+  for (const entry of sessions.values()) {
+    if (entry.undatedRows > 0) {
+      // Pricing is date-driven; an empty timestamp has no rate, and inventing
+      // one (say, "now") would silently reprice history.
+      skipped.push({
+        sessionId: entry.sessionId,
+        reason: 'undated-usage',
+        detail: `${String(entry.undatedRows)} stored usage row(s) carry no timestamp, so no dated rate applies`,
+      });
+      continue;
+    }
+    try {
+      const result = computeDelegationSavings(
+        {
+          sessionId: entry.sessionId,
+          agents: entry.agents,
+          // The estimator walks `parentAgentId`; it never reads `edges`. An
+          // equivalence test guards that claim against a core change.
+          edges: [],
+          usage: entry.usage,
+        } satisfies ParsedSession,
+        pricing,
+        savingsOptions,
+      );
+      sessionsPriced += 1;
+      actualUsd += result.actualUsd;
+      hypotheticalUsd += result.hypotheticalUsd;
+      savingsUsd += result.savingsUsd;
+      subagentsPriced += result.perAgent.length;
+      subagentsSkipped += result.skippedAgentIds.length;
+      for (const agent of result.perAgent) hypotheticalModels.add(agent.hypotheticalModel);
+    } catch (error) {
+      if (!(error instanceof PricingError)) throw error; // → uniform detail-free 500
+      skipped.push({ sessionId: entry.sessionId, reason: 'unpriceable', detail: error.message });
+    }
+  }
+
+  return {
+    actualUsd,
+    hypotheticalUsd,
+    savingsUsd,
+    isEstimate: true,
+    basis: 'stored-usage-rows',
+    sessionsTotal,
+    sessionsWithSubagents: sessions.size,
+    sessionsPriced,
+    // The COUNT is authoritative and uncapped; the array is a bounded sample so
+    // one KPI request cannot turn a broken corpus into a huge payload.
+    skippedSessionCount: skipped.length,
+    skippedSessions: skipped.slice(0, MAX_AGGREGATE_SKIPPED_SAMPLE),
+    subagentsPriced,
+    subagentsSkipped,
+    untypedAgents,
+    hypotheticalModels: [...hypotheticalModels].sort(byBinary),
   };
 }

@@ -36,6 +36,11 @@ export interface BuildServerOptions {
   readonly heartbeatIntervalMs?: number;
   /** SSE reconnect hint sent as the `retry:` field. */
   readonly sseRetryMs?: number;
+  /**
+   * Per-subscriber outbound backlog above which the stream is dropped, in
+   * bytes. See `MAX_STREAM_BACKLOG_BYTES` for why a bound has to exist.
+   */
+  readonly maxStreamBacklogBytes?: number;
   readonly logger?: boolean;
   /**
    * Open, migrated database handle (WP-U2). When absent, the read API routes
@@ -86,6 +91,21 @@ export interface BuildServerOptions {
    * absent the field is omitted; when it is present, a genuine 0 is reported.
    */
   readonly usageCollisions?: () => number;
+  /**
+   * Sessions the corpus has that ingest could not store, surfaced on
+   * /api/health and as the `coverage` disclosure on /api/cost/summary.
+   *
+   * `reportIngestFailure` argues, correctly, that one poisoned session must not
+   * make `status` anything but 'ok' — a server that is correctly surviving a bad
+   * transcript is healthy. This does not contradict that: `status` stays 'ok'
+   * and the failure is reported as a COUNT, exactly as `ingestSkips` and
+   * `crossSessionUsageCollisions` already are. What the per-failure log line and
+   * SSE event cannot do is answer the question an operator asks later — "is what
+   * I am looking at complete?" — because both are moments, and this is a
+   * standing fact. When absent (a server built without ingest wiring) both
+   * fields are omitted rather than faking a zero.
+   */
+  readonly ingestExclusions?: () => { readonly failing: number; readonly quarantined: number };
 }
 
 const HealthResponseSchema = Type.Object(
@@ -107,11 +127,40 @@ const HealthResponseSchema = Type.Object(
     // Messages skipped by the M-12 ownership rule since boot (review M-18) —
     // spend that IS counted, but under the session that ingested it first.
     crossSessionUsageCollisions: Type.Optional(Type.Integer({ minimum: 0 })),
+    // Sessions whose latest ingest attempt failed — spend that is counted
+    // NOWHERE, so every dollar total is missing it. `status` stays 'ok': the
+    // server is surviving this correctly, it is just not complete.
+    sessionsExcluded: Type.Optional(Type.Integer({ minimum: 0 })),
+    // The subset that will not be retried until the session's bytes or the
+    // pricing table change — the ones needing a human, typically a missing price.
+    sessionsQuarantined: Type.Optional(Type.Integer({ minimum: 0 })),
   },
   { additionalProperties: false },
 );
 
 const STREAM_PATH = '/api/stream';
+
+/**
+ * Ceiling on one subscriber's un-flushed outbound bytes, past which its stream
+ * is closed.
+ *
+ * `raw.write()` on a socket the peer has stopped reading does not fail and does
+ * not block - it buffers, in the server's heap, without limit. A laptop that
+ * suspends mid-stream, a tab throttled to a stop, an SSH tunnel whose far end
+ * died without a FIN: none of these produce a 'close' event, so nothing in the
+ * fan-out ever reaps them, and every subsequent frame is appended to a backlog
+ * for a reader that will never arrive. On a dashboard that fans out an event
+ * per ingest tick, that grows for as long as the process lives. Unbounded
+ * memory held for a dead peer is the failure mode being closed here.
+ *
+ * Dropping is safe precisely because SSE is a reconnecting transport: the
+ * `retry:` field is written before any frame, so a browser that is merely slow
+ * comes back on its own and the read API re-establishes its view. A client
+ * cannot be repaired by holding its backlog - it can only be waited for, and
+ * waiting is what costs the memory. 1 MiB is roughly a thousand event frames
+ * behind: far past "briefly busy", far short of anything a healthy reader hits.
+ */
+const MAX_STREAM_BACKLOG_BYTES = 1024 * 1024;
 
 /** The subset of a request the log serializer reads. */
 interface LoggableRequest {
@@ -176,6 +225,7 @@ export function buildServer(options: BuildServerOptions) {
   const { token, schemaVersion } = options;
   const heartbeatIntervalMs = options.heartbeatIntervalMs ?? 15_000;
   const sseRetryMs = options.sseRetryMs ?? 3_000;
+  const maxStreamBacklogBytes = options.maxStreamBacklogBytes ?? MAX_STREAM_BACKLOG_BYTES;
   const hub = options.hub ?? new RealtimeHub();
 
   const app: FastifyInstance = Fastify({ logger: buildLoggerOptions(options.logger ?? false) });
@@ -233,6 +283,7 @@ export function buildServer(options: BuildServerOptions) {
   typed.get('/api/health', { schema: { response: { 200: HealthResponseSchema } } }, async () => {
     // "No pass yet" and "no seam" both OMIT the field — never a fake number.
     const lastTickDurationMs = options.tickDurationMs?.() ?? null;
+    const exclusions = options.ingestExclusions?.();
     return {
       status: 'ok' as const,
       schemaVersion,
@@ -242,6 +293,12 @@ export function buildServer(options: BuildServerOptions) {
       ...(options.usageCollisions === undefined
         ? {}
         : { crossSessionUsageCollisions: options.usageCollisions() }),
+      ...(exclusions === undefined
+        ? {}
+        : {
+            sessionsExcluded: exclusions.failing,
+            sessionsQuarantined: exclusions.quarantined,
+          }),
     };
   });
 
@@ -259,23 +316,82 @@ export function buildServer(options: BuildServerOptions) {
       'x-accel-buffering': 'no',
     });
     raw.write(`retry: ${sseRetryMs}\n\n`);
+    let closed = false;
+    /**
+     * One frame out, plus the backlog check that bounds a stalled peer.
+     *
+     * The check is AFTER the write, not before: a subscriber is judged on the
+     * backlog it has actually accumulated, so a single large frame is never
+     * refused - it goes out, and only a peer that then fails to drain it is
+     * dropped. Reaping runs through the same `close` as a clean disconnect,
+     * which is what makes the drop complete rather than partial: unsubscribing
+     * alone would stop the frames while leaving the heartbeat timer and the
+     * `activeStreams` entry alive, i.e. a leak in place of a leak.
+     */
+    const write = (chunk: string): void => {
+      raw.write(chunk);
+      if (raw.writableLength > maxStreamBacklogBytes) {
+        // `discardBacklog`, because this is the one caller reaping a peer that
+        // is provably not draining - see `close` for why `end()` cannot free it.
+        close(true);
+      }
+    };
     // Subscribe BEFORE the ': connected' comment goes out: a client that has
     // seen 'connected' is provably subscribed to hub fan-out already.
-    const unsubscribe = hub.subscribe((frame) => {
-      raw.write(frame);
-    });
+    const unsubscribe = hub.subscribe(write);
     raw.write(': connected\n\n');
     const heartbeat = setInterval(() => {
-      raw.write(': heartbeat\n\n');
+      // The heartbeat is the reaper for an IDLE stalled peer: with no events
+      // to fan out, nothing else would ever call `write`, so a dead socket
+      // holding a backlog would sit unexamined until the next ingest tick -
+      // or forever, on a quiet corpus.
+      write(': heartbeat\n\n');
     }, heartbeatIntervalMs);
-    const close = (): void => {
+    /**
+     * Tear one stream down exactly once.
+     *
+     * A function DECLARATION, not a const: `write` above reaps through it and
+     * is defined first, so `close` has to be hoisted into that closure.
+     *
+     * `discardBacklog` decides between the two ways a socket can be released,
+     * and the distinction is the whole point of the backlog bound. `end()`
+     * QUEUES a FIN behind whatever is still unsent; on a peer that has stopped
+     * reading, nothing is ever sent, so the FIN never leaves, the socket stays
+     * open and the buffered frames stay on the heap - the reap would unsubscribe
+     * the stream and reclaim none of the memory it was triggered to reclaim.
+     * `destroy()` drops the buffer and the socket immediately, which is the only
+     * outcome that makes the bound mean anything.
+     *
+     * It is NOT the default. The other two callers are the peer's own 'close'
+     * event - where the socket is already gone and `end()` is simply the tidy
+     * release - and the shutdown sweep, where a peer that IS draining should be
+     * allowed the frames already written to it rather than have them truncated.
+     * Neither has a backlog to discard, so neither pays `destroy()`'s cost.
+     */
+    function close(discardBacklog = false): void {
+      // Idempotent: reaping and the peer's own 'close' event can both fire,
+      // and a second `unsubscribe()` on an already-dropped stream would be a
+      // no-op only by luck of the hub's implementation.
+      if (closed) {
+        return;
+      }
+      closed = true;
       unsubscribe();
       clearInterval(heartbeat);
       activeStreams.delete(close);
-      raw.end();
-    };
+      if (discardBacklog) {
+        raw.destroy();
+      } else {
+        raw.end();
+      }
+    }
     activeStreams.add(close);
-    request.raw.on('close', close);
+    // Wrapped, not passed directly: the 'close' event hands its listener no
+    // arguments today, but a bare `close` would silently start discarding
+    // backlogs the day it hands one a truthy first argument.
+    request.raw.on('close', () => {
+      close();
+    });
   });
 
   app.addHook('onClose', (_instance, done) => {
@@ -291,6 +407,7 @@ export function buildServer(options: BuildServerOptions) {
     void app.register(apiRoutes, {
       db: options.db,
       substrateProvider: options.substrateProvider,
+      ingestExclusions: options.ingestExclusions,
     });
   }
 

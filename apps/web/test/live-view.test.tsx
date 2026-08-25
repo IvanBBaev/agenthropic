@@ -7,12 +7,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import {
-  CLOCK_INTERVAL_MS,
   ingestedSessionId,
   LiveView,
   SESSION_LIMIT,
   toIngestFailureNotice,
 } from '../src/views/LiveView';
+// M-10: the cadence now belongs to the app-wide clock, not to this view.
+import { CLOCK_INTERVAL_MS } from '../src/clock';
 import { createSseClient, type SseClient } from '../src/sse';
 import { deferred, jsonResponse, sessionList, sessionSummary, statusCounts } from './fixtures';
 import { MockEventSource } from './mock-event-source';
@@ -554,6 +555,8 @@ describe('LiveView', () => {
       expect(sessionsCalls()).toHaveLength(1);
     });
 
+    // The board is the only subscriber here, so unmounting it drops the shared
+    // clock's subscriber count to zero and the interval must go with it.
     it('stops the clock on unmount', async () => {
       vi.useFakeTimers();
       fetchMock.mockResolvedValue(jsonResponse(200, sessionList([sessionSummary()])));

@@ -521,12 +521,14 @@ Rationale — updated to the as-built facts:
   (`input`, `output`, `cache_read`, `cache_write_5m`, `cache_write_1h` — parser-spec
   §5.4). The `UNIQUE(message_id, bucket)` constraint is the storage-level dedup
   guarantee: the parser spec (§5.2) measured naive row summation over-counting by
-  roughly 2.4× — 8,540 raw usage rows collapsing to 3,339 — because the same
-  `message_id` recurs across transcript lines. That ratio is a `PROVISIONAL`
-  single-corpus observation from the Phase-0 probe, not a constant; another corpus will
-  give another number. The *direction* is what the schema is built on, and the
-  constraint makes double-counting structurally impossible rather than merely tested
-  against.
+  **~2.4–2.7×** — 8,540 raw usage rows collapsing to 3,339 deduped messages (2.56×), and
+  ≈$900 of phantom spend against ≈$346 of real spend (2.60×) — because the same
+  `message_id` recurs across transcript lines. (Earlier revisions of this page quoted the
+  bottom of that range, "roughly 2.4×", directly beside the 8,540→3,339 counts that
+  contradict it.) The ratio is a `PROVISIONAL` single-corpus observation from the Phase-0
+  probe, not a constant; another corpus will give another number. The *direction* is what
+  the schema is built on, and the constraint makes double-counting structurally impossible
+  rather than merely tested against.
 - **The designed bucket dimensions were dropped, not renamed** — `service_tier`, `speed`,
   and `inference_geo` are simply not present in the real JSONL `usage` records, so
   carrying them `NOT NULL` was impossible without inventing values. Pricing resolves per

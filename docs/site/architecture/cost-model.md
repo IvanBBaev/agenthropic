@@ -128,7 +128,8 @@ specifically because its bucketing is production-grade (DESIGN §4):
 > `input`, `output`, `cache_read`, `cache_write_5m`, `cache_write_1h`. Migration 6
 > (`apps/server/src/db/migrations.ts`) stores one row per `(message_id, bucket)` —
 > long format, `UNIQUE (message_id, bucket)`, because naive row summation over-counts
-> roughly 2.4× (parser-spec §5.2):
+> by **~2.4–2.7×** — a `PROVISIONAL` single-corpus range, not a constant (parser-spec
+> §5.2; earlier revisions of this page quoted only the bottom of it as "roughly 2.4×"):
 >
 > ```sql
 > CREATE TABLE token_usage (

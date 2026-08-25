@@ -441,7 +441,12 @@ files / 1540 tests, 100/100/100/100 in all five packages**. New PROVISIONAL cons
 - [ ] Ground-truth tokens **read, never inferred**; every dollar = tokens × dated price.
 - [ ] No all-rights-reserved code copied (clean-room cast/disler/nirdiamant; attribute
   simple10/hoangsonww) — CI provenance scan enforces it.
-- [ ] Coverage stays **>90%** (merge-blocking from Phase 1) · `WORKLOG.md` entry per
+- [ ] Coverage stays at **100%** on all four axes in all five packages — raised from the
+  CD-7 floor of >90% on 2026-07-30 and pinned in every `vitest.config.ts`. It is
+  **CI-failing, not merge-blocking**: blocking a merge takes a branch-protection rule on
+  `main` and that rule is still unset, so the gate reddens the run without stopping the
+  button. (Earlier revisions of this line said ">90%, merge-blocking from Phase 1" — both
+  halves were wrong.) · `WORKLOG.md` entry per
   meaningful WP (written by the orchestrator) · AI-harness files stay git-excluded ·
   no commits without an explicit ask.
 

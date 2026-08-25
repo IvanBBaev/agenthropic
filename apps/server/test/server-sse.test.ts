@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server';
+import { RealtimeHub, type SessionIngestedEvent } from '../src/realtime/hub';
 import { TEST_TOKEN } from './helpers';
 
 describe('buildServer (WP-U0)', () => {
@@ -10,6 +11,20 @@ describe('buildServer (WP-U0)', () => {
     await app?.close();
     app = undefined;
   });
+
+  /** One well-formed fan-out event; only the id matters to these tests. */
+  function ingested(sessionId: string): SessionIngestedEvent {
+    return {
+      type: 'session-ingested',
+      sessionId,
+      projectSlug: 'proj-x',
+      agentCount: 0,
+      edgesInserted: 0,
+      usageRowsInserted: 0,
+      costUsd: null,
+      occurredAt: '2026-08-25T00:00:00Z',
+    };
+  }
 
   async function listen(options: Parameters<typeof buildServer>[0]): Promise<string> {
     app = buildServer(options);
@@ -94,6 +109,129 @@ describe('buildServer (WP-U0)', () => {
     await new Promise((resolve) => setTimeout(resolve, 30));
     await app!.close();
     app = undefined;
+  });
+
+  /**
+   * Backpressure reaping. `raw.write()` to a peer that has stopped reading
+   * neither fails nor blocks - it buffers in the server's heap forever, and a
+   * suspended laptop or a half-dead tunnel emits no 'close' event to clean up
+   * after. Without a bound, every later frame is appended to a backlog for a
+   * reader that never returns; the process just grows.
+   *
+   * `writableLength` counts the frame just written until libuv's completion
+   * callback fires on a later tick, so a threshold of 0 makes the very first
+   * frame trip the bound - which is exactly the deterministic lever these
+   * tests need, with no dependence on filling a kernel socket buffer.
+   */
+  it('reaps a subscriber whose outbound backlog exceeds the bound', async () => {
+    const hub = new RealtimeHub();
+    const baseUrl = await listen({
+      token: TEST_TOKEN,
+      schemaVersion: 7,
+      hub,
+      heartbeatIntervalMs: 60_000, // parked: the publish below is the trigger
+      maxStreamBacklogBytes: 0,
+    });
+    const response = await fetch(`${baseUrl}/api/stream`, {
+      headers: { authorization: `Bearer ${TEST_TOKEN}` },
+    });
+    const reader = response.body!.getReader();
+    await reader.read(); // subscribed and live
+    expect(hub.subscriberCount).toBe(1);
+
+    hub.publish(ingested('s1'));
+
+    // Dropped through the SAME close path as a clean disconnect: unsubscribing
+    // alone would stop the frames and leave the heartbeat timer running, which
+    // is a leak swapped for a leak rather than a fix.
+    expect(hub.subscriberCount).toBe(0);
+    let done = false;
+    try {
+      while (!done) {
+        done = (await reader.read()).done;
+      }
+    } catch {
+      done = true; // an abrupt termination also proves the drop
+    }
+    expect(done).toBe(true);
+    // The peer's own 'close' now fires on an already-reaped stream; a second
+    // teardown must be a no-op, not a double unsubscribe.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(hub.subscriberCount).toBe(0);
+  });
+
+  /**
+   * The half of the reap that `subscriberCount` cannot see. Unsubscribing stops
+   * the frames; it does not give back the bytes already buffered for a peer
+   * that stopped reading, and those bytes are the entire reason the bound
+   * exists. `end()` cannot give them back either - it QUEUES a FIN behind the
+   * unsent backlog, so on a peer that never drains the FIN never leaves, the
+   * socket stays open and the heap stays occupied. Only `destroy()` drops both.
+   *
+   * Asserted through the one difference a client can observe: `end()` writes
+   * the terminating zero-length chunk and the body ends CLEANLY, while
+   * `destroy()` tears the chunked response down mid-flight and the body read
+   * rejects. A clean end here would therefore mean the server took the path
+   * that reclaims nothing.
+   */
+  it('destroys a reaped peer rather than queueing a FIN behind its backlog', async () => {
+    const hub = new RealtimeHub();
+    const baseUrl = await listen({
+      token: TEST_TOKEN,
+      schemaVersion: 7,
+      hub,
+      heartbeatIntervalMs: 60_000,
+      maxStreamBacklogBytes: 0,
+    });
+    const response = await fetch(`${baseUrl}/api/stream`, {
+      headers: { authorization: `Bearer ${TEST_TOKEN}` },
+    });
+    const reader = response.body!.getReader();
+    await reader.read(); // subscribed and live
+
+    hub.publish(ingested('s1'));
+
+    await expect(
+      (async () => {
+        for (;;) {
+          if ((await reader.read()).done) {
+            return;
+          }
+        }
+      })(),
+    ).rejects.toThrow();
+  });
+
+  it('keeps a client that drains normally, however many frames it is sent', async () => {
+    const hub = new RealtimeHub();
+    const baseUrl = await listen({
+      token: TEST_TOKEN,
+      schemaVersion: 7,
+      hub,
+      heartbeatIntervalMs: 60_000,
+    });
+    const controller = new AbortController();
+    const response = await fetch(`${baseUrl}/api/stream`, {
+      headers: { authorization: `Bearer ${TEST_TOKEN}` },
+      signal: controller.signal,
+    });
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let received = '';
+    while (!received.includes(': connected')) {
+      received += decoder.decode((await reader.read()).value);
+    }
+
+    // A real event stream, at the production bound: nothing here is a backlog.
+    for (let i = 0; i < 25; i += 1) {
+      hub.publish(ingested(`s${String(i)}`));
+    }
+    while (!received.includes('"s24"')) {
+      received += decoder.decode((await reader.read()).value);
+    }
+
+    expect(hub.subscriberCount).toBe(1);
+    controller.abort();
   });
 
   it('does not gate non-API paths with auth (they 404 instead)', async () => {

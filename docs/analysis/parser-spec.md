@@ -85,7 +85,7 @@ normative MUSTs for the production parser.
 | 6 | Sum tokens from **child transcripts**; parent rollup is ≈0% (measured **0.00%**, disjoint `message.id` sets) | ✅ green | S6 | `WP-IN7`, `WP-IN9` |
 | 7 | Legacy 2.1.70 bare-`Explore` fallback | ✅ **implemented (defensive, 2026-08)** — narrowest reading: bare `{agentType:'Explore'}` sidecar (no `toolUseId`/`spawnDepth` keys) joined via a raw top-level `agentId` on a foreign `progress` record, only when every modern anchor misses; edge carries the DISTINCT `legacy_explore` provenance (persisted verbatim). Exercised by synthetic fixture `legacy-bare-explore` (`packages/test-fixtures`); still **absent from corpus**, so the shape stays PROVISIONAL until a real pre-2.1.71 transcript ratifies it; pointer session `site/08871133-82a3-4ae2-8303-781a8761e92a` | S1 | `WP-IN8` (defensive) |
 | 8 | Handle compaction resets (`compact_boundary` + `compactMetadata`, JSONL-native) | ✅ green | S2, S4 | `WP-IN8`, cost |
-| 9 | Concurrency-safe: key on **`session-uuid`**, never slug (two same-slug concurrent sessions must stay two roots) | ✅ green — **hardened 2026-08** for the mirror case, one uuid under *several* slugs: enumeration keeps one deterministic ref and records every shadow copy as a `duplicate-session` skip (§4.3) | S2, S5 | `WP-IN8` |
+| 9 | Concurrency-safe: key on **`session-uuid`**, never slug (two same-slug concurrent sessions must stay two roots) | ✅ green — **hardened 2026-08** for the mirror case, one uuid under *several* slugs: enumeration keeps one deterministic ref and records every shadow copy as a `duplicate-session` skip (§4.3); the mirror-mirror case (a *renamed* copy, whose file name no longer collides but whose records still name the original session) is refused pre-write as `session-id-mismatch` (§4.3) | S2, S5 | `WP-IN8` |
 | 10 | Version-detect / branch-on-shape (not on a version string) | ✅ green | S2 | `WP-IN8` |
 | 11 | Intra-workflow sibling ordering (EMP-1) | ✅ **amended** — see §6.3; original "total order via journal+promptId" is **false**, order is wave-partial only | S5 | dag-moat, UX |
 | **N1** | **`<task-notification>` as a flat join path** — a legacy child-side re-anchor when the parent-side `tool_use` block was evicted | ✅ **implemented (defensive)** — `extractTaskNotificationToolUseId` in `packages/core/src/parser/parse-session.ts`, persisted as the `task_notification` provenance; **absent from the real corpus (0/1855 edges)**, exercised only by the synthetic fixture `task-notification-recovery` (its spike "load-bearing" role was fixture-only) | S2; real-data | `WP-IN8` (defensive) |
@@ -262,6 +262,53 @@ choice itself:
 posture: **a file the ingest declined to read is reported, not forgotten.** A skip counter
 that quietly reads zero while the corpus is being half-ingested is the failure this design
 exists to prevent.
+
+#### The mirror case — one file name, a *different* uuid inside (`session-id-mismatch`)
+
+`dedupeSessionRefs` settles collisions between **file names**. It cannot see the other half
+of the same hazard, because a renamed copy no longer collides: `cp <uuid>.jsonl <other>.jsonl`
+leaves a file whose *name* is new but whose *records* still carry the original `sessionId` on
+every line. Nothing on disk forces a transcript's two identities to agree.
+
+That divergence is not cosmetic. The enumerator keys the ref (and the tail-follow fingerprint)
+on the **file name**; `parseSession` derives the id the writer keys **every row** on from the
+**records**. Ingest the copy and its agents, edges and usage upsert into the *original*
+session from a second file, its dispatch events re-fire, and — because the copy is a distinct
+fingerprint that never reaches a settled state — it does so again on every tick, indefinitely.
+
+**Rule: before any write, the id the substrate's records declare must equal the uuid the file
+name declares. A mismatch is refused; the session is not ingested.** Three details are
+load-bearing:
+
+- **Pre-write, not post-hoc.** The check runs in `runCorpusIngest`
+  (`apps/server/src/corpus/ingest-corpus.ts`) between building the substrate and calling
+  `ingestSession`, using `peekSubstrateSessionId` from `@agenthropic/core` — a total,
+  non-throwing look-ahead that applies the *same* "first `sessionId` found, in substrate file
+  order" rule as `deriveSessionId`, and is pinned to it by a test asserting the two agree on
+  every shipped fixture. Reading the id off the returned `IngestOutcome` instead would be
+  strictly too late: by then the transaction has committed and the fusion has happened.
+- **It abstains rather than guesses.** When *no* record declares a `sessionId`, the peek
+  returns `null` and the session passes through untouched. Silence is not disagreement, and
+  the parser — which fails such a transcript loudly and on its own terms — stays the single
+  component that judges it. No second, cheaper verdict is invented upstream.
+- **Reported per session, keyed on the enumerated id.** The refusal is counted into
+  `sessionsFailed` and pushed onto `summary.failures` with the reason string prefixed
+  `session-id-mismatch` (exported as `SESSION_ID_MISMATCH_REASON`), naming both the file and
+  the id its records carry. That is the per-session channel — the boot replay log, and in the
+  watcher the retry budget, the quarantine-by-fingerprint and the SSE failure event — **not**
+  the per-file `SkipReason` counters of `/api/health.ingestSkips`. The failure is keyed on the
+  **ref's** uuid, because the watcher matches failures against the fingerprints it enumerated;
+  keying it on the declared id would leave the copy's retry budget untouched and re-read it
+  every tick, reintroducing the loop the rule exists to stop. *(Reporting it additionally as a
+  counted `SkipReason` is a one-member extension of the `SkipReason` union in
+  `apps/server/src/corpus/fs-port.ts`; the posture above — declined, never forgotten — is
+  already satisfied by the failure channel.)*
+
+Measured against the corpus available on this machine at the time of writing (21 slugs, 51
+main transcripts, read-only), the rule rejects **nothing**: every main transcript's declared
+`sessionId` equals its file-name stem, and no transcript carries two different `sessionId`
+values. The guard is therefore a containment rule for a hazard that user action creates
+(copy, rename, restore-from-backup), not a correction of anything Claude Code writes.
 
 ---
 

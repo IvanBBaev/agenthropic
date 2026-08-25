@@ -422,6 +422,625 @@ export const migrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    id: 14,
+    name: 'model-pricing-canonical-effective-from',
+    up(db) {
+      // Review M-21 (production half). Dated-price resolution exists twice:
+      // core's `computeCostUsd` compares instants in epoch milliseconds, the
+      // API's priced CTE compares `effective_from <= occurred_at` as
+      // BINARY-collated TEXT and orders candidates by `effective_from DESC`,
+      // also as text. Ingest approves dollars with the first resolver, the
+      // dashboard presents dollars with the second - and they agree only while
+      // the stored text sorts chronologically.
+      //
+      // It did not. Migration 7 seeds the bare-date form ('2026-01-01'), an
+      // operator seeding rates through the sqlite3 CLI writes whatever they
+      // type, and nothing rejected either. With mixed spellings of the same
+      // instant in the table, the text comparison picks a DIFFERENT row than
+      // core does: at a rate change whose new row reads '2026-06-01T00:00:00Z'
+      // and whose usage timestamp reads '2026-06-01T00:00:00.000Z' (the form
+      // Claude Code JSONL actually writes), 'Z' sorts above '.', the new rate
+      // is rejected as not-yet-effective, and the API silently bills the OLD
+      // rate - dollars the halt gate never approved, flagged by nothing.
+      //
+      // The fix is at the source: one canonical spelling,
+      // `YYYY-MM-DDTHH:mm:ss.sssZ` (see db/pricing.ts for why that form and no
+      // other), made true of every row already stored AND of every row written
+      // from here on. The SQL string comparison then holds because the data
+      // cannot spell an instant any other way - not because the seed happened
+      // to pick a prefix-safe form.
+      //
+      // Step 1 - rewrite what is already there. Done in JS, not SQL, so an
+      // unparseable value can HALT with the offending row named instead of
+      // being coerced by SQLite's much laxer date parser (which would read a
+      // zone-less '2026-03-01T00:00:00' as UTC where ECMAScript reads it as
+      // local time, and a bare '2026' as a Julian day number). Guessing a
+      // pricing date silently is the failure class this project refuses.
+      interface StoredRate {
+        readonly model: string;
+        readonly bucket: string;
+        readonly usd_per_mtok: number;
+        readonly effective_from: string;
+      }
+      // Duplicated from db/pricing.ts on purpose: the checksum covers only this
+      // function's own source, so a migration that leaned on a shared helper
+      // would silently change meaning when the helper changed (the convention
+      // migration 11 documents).
+      const acceptedInput =
+        /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])(T([01]\d|2[0-3]):[0-5]\d:[0-5]\d(\.\d{3})?(Z|[+-]([01]\d|2[0-3]):[0-5]\d))?$/;
+      const stored = db
+        .prepare('SELECT model, bucket, usd_per_mtok, effective_from FROM model_pricing')
+        .all() as StoredRate[];
+      const canonical = new Map<string, StoredRate>();
+      for (const row of stored) {
+        // The second test catches a day the pattern allows but the calendar
+        // does not ('2026-02-30'), which both parsers would otherwise roll
+        // silently into the next month.
+        const datePart = row.effective_from.slice(0, 10);
+        const dateRoundTrip = new Date(`${datePart}T00:00:00.000Z`);
+        const isRealDate =
+          !Number.isNaN(dateRoundTrip.getTime()) &&
+          dateRoundTrip.toISOString().slice(0, 10) === datePart;
+        const epochMs =
+          acceptedInput.test(row.effective_from) && isRealDate
+            ? Date.parse(row.effective_from)
+            : Number.NaN;
+        if (Number.isNaN(epochMs)) {
+          throw new Error(
+            `Migration 14: model_pricing row (model=${row.model}, bucket=${row.bucket}) ` +
+              `carries effective_from ${JSON.stringify(row.effective_from)}, which is not an ` +
+              'unambiguous instant. A pricing date is never guessed and never dropped - fix ' +
+              'the row by hand (bare UTC date, or a zoned ISO-8601 timestamp) and re-run.',
+          );
+        }
+        const effectiveFrom = new Date(epochMs).toISOString();
+        const key = `${row.model}\u0000${row.bucket}\u0000${effectiveFrom}`;
+        const existing = canonical.get(key);
+        if (existing !== undefined && existing.usd_per_mtok !== row.usd_per_mtok) {
+          // Two spellings of ONE instant carrying two different rates: which
+          // one was ever in force is unknowable from here, and picking either
+          // would invent dollars. Halt and let a human decide.
+          throw new Error(
+            `Migration 14: model_pricing holds conflicting rates for (model=${row.model}, ` +
+              `bucket=${row.bucket}) at ${effectiveFrom} - ${String(existing.usd_per_mtok)} and ` +
+              `${String(row.usd_per_mtok)} USD/Mtok written under different spellings of the same ` +
+              'instant. Delete the wrong row by hand and re-run; this migration will not choose.',
+          );
+        }
+        // Same instant, same rate, two spellings: collapsing them changes no
+        // dollar, and the composite primary key cannot hold both afterwards.
+        canonical.set(key, { ...row, effective_from: effectiveFrom });
+      }
+      db.exec('DELETE FROM model_pricing');
+      const reinsert = db.prepare(
+        'INSERT INTO model_pricing (model, bucket, usd_per_mtok, effective_from) VALUES (?, ?, ?, ?)',
+      );
+      for (const row of canonical.values()) {
+        reinsert.run(row.model, row.bucket, row.usd_per_mtok, row.effective_from);
+      }
+      // Step 2 - make a non-canonical value unstorable from here on.
+      //
+      // Two guard triggers reject any spelling that does not denote one
+      // unambiguous instant (the GLOB whitelist mirrors
+      // ACCEPTED_EFFECTIVE_FROM_INPUT in db/pricing.ts). The three conditions
+      // after it close the gaps SQLite's lenient date parser leaves in a
+      // pure shape check: `strftime(...) IS NULL` rejects digits that are not
+      // a date at all ('2026-13-45'); re-deriving the date part from itself
+      // rejects a day the calendar does not have ('2026-02-30', which SQLite
+      // would roll into March 2 and price from a day nobody wrote); and the
+      // hour bound rejects 'T24:00:00', the one accepted-looking spelling on
+      // which the two canonicalizers disagree (ECMAScript rolls it into the
+      // next midnight, SQLite prints the hour back as '24'). Two canonicalizing
+      // triggers then rewrite every accepted spelling into the canonical form,
+      // so after any successful write the column holds the canonical form or
+      // the write aborted - the same guarantee a CHECK constraint gives,
+      // reached the one way SQLite allows it to coexist with write-time
+      // normalization (a BEFORE trigger cannot modify NEW, and a CHECK is
+      // evaluated before any AFTER trigger could normalize, so a CHECK could
+      // only REJECT the operator's hand-typed '2026-09-01' - and this is the
+      // one table with a documented cross-connection write path, the operator
+      // seeding rates via the sqlite3 CLI while the server runs).
+      //
+      // The AFTER triggers are recursion-safe both ways: `recursive_triggers`
+      // is off by default, and their WHEN clause is false for the canonical
+      // value they write, so they cannot re-fire even if it is turned on.
+      // A rewrite that collides with an existing row for the same instant
+      // fails the primary key loudly - correct: that is a duplicate rate.
+      db.exec(`
+        CREATE TRIGGER model_pricing_effective_from_guard_insert
+        BEFORE INSERT ON model_pricing
+        WHEN NOT (
+             NEW.effective_from GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+          OR NEW.effective_from GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z'
+          OR NEW.effective_from GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9]Z'
+          OR NEW.effective_from GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9][+-][0-9][0-9]:[0-9][0-9]'
+          OR NEW.effective_from GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][+-][0-9][0-9]:[0-9][0-9]'
+        )
+          OR strftime('%Y-%m-%dT%H:%M:%fZ', NEW.effective_from) IS NULL
+          OR substr(NEW.effective_from, 1, 10)
+             IS NOT strftime('%Y-%m-%d', substr(NEW.effective_from, 1, 10))
+          OR substr(NEW.effective_from, 12, 2) > '23'
+        BEGIN
+          SELECT RAISE(ABORT, 'model_pricing.effective_from must be a bare UTC date or a zoned ISO-8601 instant');
+        END;
+
+        CREATE TRIGGER model_pricing_effective_from_guard_update
+        BEFORE UPDATE OF effective_from ON model_pricing
+        WHEN NOT (
+             NEW.effective_from GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+          OR NEW.effective_from GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z'
+          OR NEW.effective_from GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9]Z'
+          OR NEW.effective_from GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9][+-][0-9][0-9]:[0-9][0-9]'
+          OR NEW.effective_from GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][+-][0-9][0-9]:[0-9][0-9]'
+        )
+          OR strftime('%Y-%m-%dT%H:%M:%fZ', NEW.effective_from) IS NULL
+          OR substr(NEW.effective_from, 1, 10)
+             IS NOT strftime('%Y-%m-%d', substr(NEW.effective_from, 1, 10))
+          OR substr(NEW.effective_from, 12, 2) > '23'
+        BEGIN
+          SELECT RAISE(ABORT, 'model_pricing.effective_from must be a bare UTC date or a zoned ISO-8601 instant');
+        END;
+
+        CREATE TRIGGER model_pricing_effective_from_canonical_insert
+        AFTER INSERT ON model_pricing
+        WHEN NEW.effective_from <> strftime('%Y-%m-%dT%H:%M:%fZ', NEW.effective_from)
+        BEGIN
+          UPDATE model_pricing
+             SET effective_from = strftime('%Y-%m-%dT%H:%M:%fZ', NEW.effective_from)
+           WHERE model = NEW.model
+             AND bucket = NEW.bucket
+             AND effective_from = NEW.effective_from;
+        END;
+
+        CREATE TRIGGER model_pricing_effective_from_canonical_update
+        AFTER UPDATE OF effective_from ON model_pricing
+        WHEN NEW.effective_from <> strftime('%Y-%m-%dT%H:%M:%fZ', NEW.effective_from)
+        BEGIN
+          UPDATE model_pricing
+             SET effective_from = strftime('%Y-%m-%dT%H:%M:%fZ', NEW.effective_from)
+           WHERE model = NEW.model
+             AND bucket = NEW.bucket
+             AND effective_from = NEW.effective_from;
+        END;
+      `);
+    },
+  },
+  {
+    id: 15,
+    name: 'token-usage-canonical-occurred-at',
+    up(db) {
+      // Review M-21 (surviving half). Migration 14 canonicalized ONE operand of
+      // the dated-rate comparison. The comparison has two:
+      //
+      //   mp.effective_from <= tu.occurred_at        -- BINARY-collated TEXT
+      //
+      // Canonicalizing only the left-hand side fixes only the spellings the
+      // OPERATOR types. `token_usage.occurred_at` was still written verbatim
+      // from the JSONL, so a timestamp carrying a UTC offset sorted in a place
+      // unrelated to its position on the clock: '2026-02-28T20:00:00-05:00' is
+      // one hour AFTER '2026-03-01T00:00:00.000Z', but as text it sorts BELOW
+      // it, so the CTE's `ORDER BY effective_from DESC LIMIT 1` found no
+      // effective rate at all and reported the tokens as UNPRICED - while
+      // core's epoch-millisecond resolver priced the very same row at the very
+      // same rate the halt gate approved. test/rate-resolver-parity.test.ts
+      // pinned that as `offset-form-occurred-at`; this migration is what
+      // graduates it.
+      //
+      // Step 1 - rewrite what is already stored. In JS, not SQL, for the reason
+      // migration 14 gives: an unparseable value HALTS naming the offending row
+      // instead of being coerced by SQLite's much laxer date parser. A usage
+      // timestamp is never guessed, and - unlike a pricing date - it is never
+      // dropped to NULL either, because `occurred_at IS NULL` makes a row
+      // permanently unpriceable AND invisible to retention's expiry window.
+      //
+      // Migration 14 also halts on a COLLISION (two spellings of one instant
+      // carrying two different rates), because `effective_from` is part of
+      // model_pricing's primary key. There is no counterpart here and none is
+      // written: `occurred_at` participates in NO uniqueness constraint -
+      // token_usage's only one is UNIQUE(message_id, bucket), which this
+      // rewrite does not touch - so canonicalizing two rows onto the same
+      // instant is simply two rows at the same instant, which the table has
+      // always allowed. A collision branch would be unreachable code asserting
+      // a constraint that does not exist.
+      interface StoredOccurrence {
+        readonly id: number;
+        readonly occurred_at: string;
+      }
+      // Duplicated from db/token-usage.ts on purpose: the checksum covers only
+      // this function's own source, so a migration that leaned on a shared
+      // helper would silently change meaning when the helper changed (the
+      // convention migration 11 documents and migration 14 follows).
+      const acceptedInput =
+        /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])(T([01]\d|2[0-3]):[0-5]\d:[0-5]\d(\.\d{3})?(Z|[+-]([01]\d|2[0-3]):[0-5]\d))?$/;
+      const stored = db
+        .prepare('SELECT id, occurred_at FROM token_usage WHERE occurred_at IS NOT NULL')
+        .all() as StoredOccurrence[];
+      const rewrite = db.prepare('UPDATE token_usage SET occurred_at = ? WHERE id = ?');
+      for (const row of stored) {
+        // The second test catches a day the pattern allows but the calendar
+        // does not ('2026-02-30'), which both parsers would otherwise roll
+        // silently into the next month - filing the spend under a day nothing
+        // happened on and expiring it from retention on the wrong date.
+        const datePart = row.occurred_at.slice(0, 10);
+        const dateRoundTrip = new Date(`${datePart}T00:00:00.000Z`);
+        const isRealDate =
+          !Number.isNaN(dateRoundTrip.getTime()) &&
+          dateRoundTrip.toISOString().slice(0, 10) === datePart;
+        const epochMs =
+          acceptedInput.test(row.occurred_at) && isRealDate
+            ? Date.parse(row.occurred_at)
+            : Number.NaN;
+        if (Number.isNaN(epochMs)) {
+          throw new Error(
+            `Migration 15: token_usage row (id=${String(row.id)}) carries occurred_at ` +
+              `${JSON.stringify(row.occurred_at)}, which is not an unambiguous instant. A usage ` +
+              'timestamp is never guessed and never dropped - fix the row by hand (bare UTC ' +
+              'date, or a zoned ISO-8601 timestamp) and re-run.',
+          );
+        }
+        const canonical = new Date(epochMs).toISOString();
+        if (canonical !== row.occurred_at) {
+          rewrite.run(canonical, row.id);
+        }
+      }
+      // Step 2 - make a non-canonical value unstorable from here on.
+      //
+      // WHY TRIGGERS ARE WARRANTED HERE, and not only the JS canonicalizer that
+      // db/token-usage.ts now applies before binding:
+      //
+      //  - The JS path guards ONE writer. `token_usage` is also written by raw
+      //    SQL from fixtures and benchmarks, and the operator has the same
+      //    sqlite3-CLI access to it that motivated migration 14's triggers.
+      //    Migration 14 established the invariant that the DATA cannot spell an
+      //    instant two ways; an invariant enforced only in one module is not an
+      //    invariant, it is a convention.
+      //  - The parity test that pins this defect seeds `token_usage` through
+      //    raw SQL precisely so that it tests STORAGE, not one writer. A
+      //    JS-only fix would leave it failing and would deserve to.
+      //  - The alternative - a reject-only guard with no rewrite - was
+      //    considered and rejected: it would abort every existing raw-SQL
+      //    writer that spells a timestamp at second precision ('...T10:00:05Z'),
+      //    which is a legal, unambiguous instant. Rejecting an unambiguous
+      //    value teaches nothing; normalizing it removes the failure mode.
+      //
+      // The shape is migration 14's, for migration 14's reason: a CHECK
+      // constraint cannot express this, because a BEFORE trigger cannot modify
+      // NEW and a CHECK is evaluated before any AFTER trigger could normalize -
+      // so a CHECK could only REJECT. Hence a BEFORE guard that rejects what no
+      // canonicalizer could resolve, plus an AFTER trigger that rewrites
+      // everything that survives it. The one difference from migration 14 is
+      // NULL: `occurred_at` is nullable by design (a JSONL line without a
+      // timestamp is stored honestly rather than given an invented one), so
+      // both pairs are explicitly NULL-tolerant.
+      //
+      // The AFTER triggers are recursion-safe both ways: `recursive_triggers`
+      // is off by default, and their WHEN clause is false for the canonical
+      // value they themselves write, so they cannot re-fire even if it is
+      // turned on. The rewrite targets `id = NEW.id` - token_usage's INTEGER
+      // PRIMARY KEY - so it can never touch a second row.
+      const shapeGuard = (column: string): string => `
+             ${column} GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+          OR ${column} GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z'
+          OR ${column} GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9]Z'
+          OR ${column} GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9][+-][0-9][0-9]:[0-9][0-9]'
+          OR ${column} GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][+-][0-9][0-9]:[0-9][0-9]'`;
+      // `strftime(...) IS NULL` rejects digits that are not a date at all
+      // ('2026-13-45'); re-deriving the date part from itself rejects a day the
+      // calendar does not have; the hour bound rejects 'T24:00:00', the one
+      // accepted-looking spelling on which the two canonicalizers disagree
+      // (ECMAScript rolls it into the next midnight, SQLite prints '24' back).
+      const rejects = (column: string): string => `
+        NEW.occurred_at IS NOT NULL AND (
+          NOT (${shapeGuard(column)}
+          )
+          OR strftime('%Y-%m-%dT%H:%M:%fZ', ${column}) IS NULL
+          OR substr(${column}, 1, 10) IS NOT strftime('%Y-%m-%d', substr(${column}, 1, 10))
+          OR substr(${column}, 12, 2) > '23'
+        )`;
+      const abort =
+        "SELECT RAISE(ABORT, 'token_usage.occurred_at must be NULL, a bare UTC date, or a zoned ISO-8601 instant');";
+      const canonicalize = `
+        UPDATE token_usage
+           SET occurred_at = strftime('%Y-%m-%dT%H:%M:%fZ', NEW.occurred_at)
+         WHERE id = NEW.id;`;
+      const notCanonical = `
+        NEW.occurred_at IS NOT NULL
+        AND NEW.occurred_at <> strftime('%Y-%m-%dT%H:%M:%fZ', NEW.occurred_at)`;
+      db.exec(`
+        CREATE TRIGGER token_usage_occurred_at_guard_insert
+        BEFORE INSERT ON token_usage
+        WHEN ${rejects('NEW.occurred_at')}
+        BEGIN
+          ${abort}
+        END;
+
+        CREATE TRIGGER token_usage_occurred_at_guard_update
+        BEFORE UPDATE OF occurred_at ON token_usage
+        WHEN ${rejects('NEW.occurred_at')}
+        BEGIN
+          ${abort}
+        END;
+
+        CREATE TRIGGER token_usage_occurred_at_canonical_insert
+        AFTER INSERT ON token_usage
+        WHEN ${notCanonical}
+        BEGIN
+          ${canonicalize}
+        END;
+
+        CREATE TRIGGER token_usage_occurred_at_canonical_update
+        AFTER UPDATE OF occurred_at ON token_usage
+        WHEN ${notCanonical}
+        BEGIN
+          ${canonicalize}
+        END;
+      `);
+    },
+  },
+  {
+    id: 16,
+    name: 'token-usage-rollup',
+    up(db) {
+      // Review M-19 (write side). `getCostSummary` prices and groups ALL of
+      // `token_usage` on every cold read, and `token_usage` is the one table
+      // whose retention is deliberately refused - cost history IS the product -
+      // so it grows with corpus age forever. The one-entry memo in
+      // api/queries.ts widened the hit window; it did not bound the read, and
+      // its own comment says so.
+      //
+      // This migration installs the persisted rollup that does bound it,
+      // maintained incrementally by the write path. It is a SHADOW table: no
+      // reader is switched onto it here. The cutover is a separate change, and
+      // it must not happen until an equivalence suite exists and is green -
+      // one that compares this table against a direct grouped scan of
+      // `token_usage` after every mutation shape - because the whole value of
+      // this table is that it equals that scan. No such suite exists yet:
+      // `token_usage_rollup` is named nowhere outside this file, so today the
+      // triggers below are asserted by nothing.
+      //
+      // THE GRAIN, and why the review's own wording is wrong.
+      //
+      // The review asks for (session, model, day). That grain is unsound, in
+      // two independent ways:
+      //
+      //  1. The rate is keyed by (model, BUCKET). Input and output tokens of
+      //     one model carry different prices, so a (session, model, day) row
+      //     cannot be repriced from tokens at all.
+      //  2. Even with the bucket carried, a `model_pricing.effective_from` that
+      //     falls MID-DAY splits one (session, model, bucket, day) group across
+      //     two rates. 1000 tokens at $1/Mtok plus 1000 tokens at $9/Mtok is
+      //     not 2000 tokens at either rate, and no arithmetic on the stored
+      //     total recovers the split. The rollup would be quietly wrong exactly
+      //     on the days a price changed - the days an operator looks at.
+      //
+      // So the key pins the RESOLVED PRICING ROW, not merely the day:
+      //
+      //     (session_id, model, bucket, day, rate_effective_from)
+      //
+      // and what is stored is TOKENS, never dollars. A dollar figure would
+      // outlive the rate that produced it: correcting a mistyped `usd_per_mtok`
+      // in place would leave every rolled-up dollar stale with nothing able to
+      // detect it. With tokens plus the resolved `effective_from`, the same
+      // dated rate that prices a raw row prices a rollup row, and an in-place
+      // rate correction needs no recompute at all - it changes the multiplier,
+      // not the grouping.
+      //
+      // `row_count` is carried alongside `tokens` because a group of purely
+      // ZERO-token rows is a real group: this writer fans every message out to
+      // all five buckets, zero-token ones included, and a direct scan therefore
+      // produces a row for them. A rollup row is deleted when its `row_count`
+      // falls to 0 - NEVER when its `tokens` falls to 0, which would silently
+      // drop those groups and make the equivalence proof fail.
+      //
+      // Both key columns that can be absent are given a total, non-NULL
+      // encoding rather than NULL: `day` is 'unknown' when `occurred_at IS
+      // NULL' (the same sentinel getCostSummary already uses), and
+      // `rate_effective_from` is '' when no rate resolves. This is not
+      // cosmetic - SQLite treats NULLs as DISTINCT in a uniqueness constraint,
+      // so a NULL key column would make ON CONFLICT never match and the table
+      // would accumulate one un-mergeable row per event. '' cannot collide with
+      // a real value: migration 14's guard trigger makes '' unstorable in
+      // `model_pricing.effective_from`.
+      //
+      // WITHOUT ROWID: the table IS its primary key, so there is no rowid to
+      // record insertion order. That keeps the file byte-identical under the
+      // double-replay proof regardless of the order in which groups first
+      // appeared.
+      db.exec(`
+        CREATE TABLE token_usage_rollup (
+          session_id          TEXT    NOT NULL,
+          model               TEXT    NOT NULL,
+          bucket              TEXT    NOT NULL,
+          day                 TEXT    NOT NULL,
+          rate_effective_from TEXT    NOT NULL,
+          tokens              INTEGER NOT NULL,
+          row_count           INTEGER NOT NULL,
+          PRIMARY KEY (session_id, model, bucket, day, rate_effective_from)
+        ) WITHOUT ROWID;
+
+        CREATE INDEX idx_token_usage_rollup_model_bucket
+          ON token_usage_rollup(model, bucket);
+      `);
+
+      // Every key expression below wraps BOTH timestamps in
+      // strftime('%Y-%m-%dT%H:%M:%fZ', ...). Migrations 14 and 15 already
+      // guarantee the stored text is canonical, so this looks redundant - it is
+      // not, and it is what makes these triggers safe.
+      //
+      // SQLite does not define the firing order of several triggers on one
+      // event, and migration 15's canonicalizing AFTER INSERT trigger sits on
+      // the same event as the rollup's. If the rollup fired FIRST it would see
+      // `NEW.occurred_at` still in its raw spelling. Deriving the key through
+      // the canonicalizing function makes the key identical under either order,
+      // so nothing here depends on an order SQLite never promised. (It also
+      // survives the nested fire: migration 15's rewrite triggers the rollup's
+      // AFTER UPDATE, whose OLD and NEW canonicalize to the SAME key, so the
+      // subtract and the add cancel exactly.)
+      const canon = (expr: string): string => `strftime('%Y-%m-%dT%H:%M:%fZ', ${expr})`;
+      // The COALESCE fallback covers the one value canonicalization cannot
+      // produce: a non-NULL timestamp that is not a date at all. Migration 15's
+      // guard makes that unstorable through SQL, so it is unreachable in a live
+      // database - but a rollup key expression that could evaluate to NULL
+      // would violate this table's NOT NULL columns and turn unreachable
+      // corruption into an abort, and falling back to the raw text is what
+      // makes the rollup agree with a direct scan even there.
+      const at = (ref: string): string =>
+        `COALESCE(${canon(`${ref}.occurred_at`)}, ${ref}.occurred_at)`;
+      const dayOf = (ref: string): string =>
+        `CASE WHEN ${ref}.occurred_at IS NULL THEN 'unknown'
+              ELSE substr(${at(ref)}, 1, 10) END`;
+      // The same dated-rate resolution the priced CTE performs, reduced to the
+      // winning row's `effective_from`. '' means "no rate was in force" - the
+      // rollup's encoding of the CTE's NULL rate, i.e. unpriced tokens.
+      const rateOf = (ref: string): string =>
+        `COALESCE((
+           SELECT ${canon('mp.effective_from')}
+             FROM model_pricing mp
+            WHERE mp.model = ${ref}.model
+              AND mp.bucket = ${ref}.bucket
+              AND ${ref}.occurred_at IS NOT NULL
+              AND ${canon('mp.effective_from')} <= ${at(ref)}
+            ORDER BY ${canon('mp.effective_from')} DESC
+            LIMIT 1
+         ), '')`;
+      const KEY = 'session_id, model, bucket, day, rate_effective_from';
+      // One signed upsert serves both directions. The subtract arm MUST be an
+      // upsert too, not a bare `UPDATE ... SET tokens = tokens - OLD.tokens`:
+      // the target row is not guaranteed to exist when the subtract runs (see
+      // the nested-fire note above), and a plain UPDATE would silently no-op
+      // and leave the add uncancelled - a double count that nothing would
+      // report.
+      const delta = (ref: string, sign: string): string => `
+          INSERT INTO token_usage_rollup (${KEY}, tokens, row_count)
+          VALUES (
+            ${ref}.session_id, ${ref}.model, ${ref}.bucket,
+            ${dayOf(ref)}, ${rateOf(ref)}, ${sign}${ref}.tokens, ${sign}1
+          )
+          ON CONFLICT (${KEY}) DO UPDATE SET
+            tokens    = token_usage_rollup.tokens + excluded.tokens,
+            row_count = token_usage_rollup.row_count + excluded.row_count;`;
+      // Runs LAST in every body that subtracts, so a group that momentarily
+      // reaches 0 between a subtract and its matching add is not dropped. Keyed
+      // exactly, so it is a primary-key lookup and can never reach another
+      // group.
+      const prune = (ref: string): string => `
+          DELETE FROM token_usage_rollup
+           WHERE session_id = ${ref}.session_id
+             AND model = ${ref}.model
+             AND bucket = ${ref}.bucket
+             AND day = ${dayOf(ref)}
+             AND rate_effective_from = ${rateOf(ref)}
+             AND row_count = 0;`;
+
+      // Step 1 - seed the table from what is already stored. This is the same
+      // expression set the triggers use, phrased as one grouped scan; that the
+      // two agree is the property the cutover's equivalence suite will have to
+      // assert after every mutation. It is not asserted anywhere today - see
+      // the shadow-table note at the top of this migration.
+      db.exec(`
+        INSERT INTO token_usage_rollup (${KEY}, tokens, row_count)
+        SELECT tu.session_id, tu.model, tu.bucket, ${dayOf('tu')}, ${rateOf('tu')},
+               SUM(tu.tokens), COUNT(*)
+          FROM token_usage tu
+         GROUP BY 1, 2, 3, 4, 5;
+      `);
+
+      // Step 2 - keep it exact on every ledger mutation.
+      //
+      // DELETE matters as much as INSERT: retention/prune.ts deletes expired
+      // `token_usage` rows, and an unmaintained rollup would keep reporting
+      // spend that no longer exists. The AFTER DELETE trigger applies the exact
+      // inverse of the delta the INSERT applied, so retention needs no change
+      // and cannot forget. SQLite disables its truncate optimization on a table
+      // that has DELETE triggers, so even an unqualified `DELETE FROM
+      // token_usage` fires per row rather than skipping them.
+      db.exec(`
+        CREATE TRIGGER token_usage_rollup_usage_insert
+        AFTER INSERT ON token_usage
+        BEGIN
+          ${delta('NEW', '')}
+        END;
+
+        CREATE TRIGGER token_usage_rollup_usage_update
+        AFTER UPDATE ON token_usage
+        BEGIN
+          ${delta('OLD', '-')}
+          ${delta('NEW', '')}
+          ${prune('OLD')}
+        END;
+
+        CREATE TRIGGER token_usage_rollup_usage_delete
+        AFTER DELETE ON token_usage
+        BEGIN
+          ${delta('OLD', '-')}
+          ${prune('OLD')}
+        END;
+      `);
+
+      // Step 3 - a pricing change RETROACTIVELY changes the correct answer.
+      //
+      // Inserting a rate whose `effective_from` falls in the middle of a day
+      // that is already rolled up splits an existing group in two; deleting a
+      // rate merges two back into one. The rollup key names the resolved
+      // pricing row, so the affected rows are exactly the (model, bucket) slice
+      // the changed pricing row belongs to.
+      //
+      // OF THE TWO OPTIONS - detect the change and recompute, or key the rollup
+      // so a stale row is DETECTABLE at read time - this takes the first.
+      // Detection-only was rejected because it moves the cost of correctness
+      // onto every reader forever (each read must revalidate) and leaves a
+      // window in which the table is knowingly wrong; the whole point of the
+      // table is that a reader may trust it without checking.
+      //
+      // The recompute is a FULL REBUILD of the slice, not a delta, and that is
+      // deliberate: a full rebuild is IDEMPOTENT, so it is immune to the same
+      // unspecified trigger-order problem as above. Migration 14's
+      // canonicalizing trigger lives on this very table, and these triggers may
+      // fire before or after it - but a rebuild that reads current pricing
+      // produces the same result whenever it runs, and migration 14's rewrite
+      // fires this pair again on its way out.
+      //
+      // The UPDATE trigger is scoped `OF model, bucket, effective_from`: those
+      // are the only columns that can move a rollup key. A `usd_per_mtok`
+      // correction changes the multiplier applied at read time, not the
+      // grouping, so `upsertPricingRate`'s in-place rate update costs nothing.
+      //
+      // Cost note: the rebuild scans `token_usage` filtered by (model, bucket),
+      // which has no covering index. Adding one was considered and declined -
+      // it would tax every ingest write to speed up an operation that happens
+      // when a human changes a price. That trade is the right way round.
+      const recompute = (ref: string): string => `
+          DELETE FROM token_usage_rollup
+           WHERE model = ${ref}.model AND bucket = ${ref}.bucket;
+          INSERT INTO token_usage_rollup (${KEY}, tokens, row_count)
+          SELECT tu.session_id, tu.model, tu.bucket, ${dayOf('tu')}, ${rateOf('tu')},
+                 SUM(tu.tokens), COUNT(*)
+            FROM token_usage tu
+           WHERE tu.model = ${ref}.model AND tu.bucket = ${ref}.bucket
+           GROUP BY 1, 2, 3, 4, 5;`;
+      db.exec(`
+        CREATE TRIGGER token_usage_rollup_pricing_insert
+        AFTER INSERT ON model_pricing
+        BEGIN
+          ${recompute('NEW')}
+        END;
+
+        CREATE TRIGGER token_usage_rollup_pricing_update
+        AFTER UPDATE OF model, bucket, effective_from ON model_pricing
+        BEGIN
+          ${recompute('OLD')}
+          ${recompute('NEW')}
+        END;
+
+        CREATE TRIGGER token_usage_rollup_pricing_delete
+        AFTER DELETE ON model_pricing
+        BEGIN
+          ${recompute('OLD')}
+        END;
+      `);
+    },
+  },
 ];
 
 export interface MigrationRunResult {

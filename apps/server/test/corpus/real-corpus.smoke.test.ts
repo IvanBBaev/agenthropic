@@ -21,6 +21,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { SubstrateFile } from '@agenthropic/core';
 import { resolveCorpusRoot } from '../../src/corpus/corpus-paths';
 import { buildSessionSubstrate, enumerateSessions } from '../../src/corpus/disk-substrate';
+import { fingerprintSession } from '../../src/corpus/fingerprint';
 import {
   DEFAULT_READ_LIMITS,
   type BuiltSubstrate,
@@ -35,11 +36,14 @@ import { dir, file, materializeTree, symlink } from './fake-corpus-fs';
 const SLUG_A = '-Users-dev-Development-agenthropic';
 /** Slug dir B — a bare main transcript, plus an orphan session dir (no main). */
 const SLUG_B = '-Users-dev-Development-kiko';
+/** Slug dir C — a real main transcript whose `<uuid>/` dir is a symlink OUTSIDE the root. */
+const SLUG_C = '-Users-dev-Development-syncrona';
 
 const SESSION_A = '11111111-2222-4333-8444-555555555555';
 const SESSION_B = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
 /** A `<uuid>/` dir with artifacts but NO `<uuid>.jsonl` — must never enumerate. */
 const SESSION_ORPHAN = '99999999-8888-4777-8666-555555555555';
+const SESSION_LINKED = '77777777-6666-4555-8444-333333333333';
 
 const MAIN_A_CONTENT = '{"m":1}\n{"m":2}\n';
 const AGENT_CONTENT = '{"a":1}\n{"b":2}\n';
@@ -61,10 +65,19 @@ beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), 'agenthropic-corpus-smoke-'));
   corpusDir = join(tmpDir, 'corpus');
   const linkTargetAbs = join(tmpDir, 'outside', 'link-target.jsonl');
+  const linkedSessionAbs = join(tmpDir, 'outside', 'linked-session');
 
   materializeTree(tmpDir, {
-    // Outside the corpus root on purpose: the symlink below points HERE.
-    outside: dir({ 'link-target.jsonl': file('{"leaked":true}\n') }),
+    // Outside the corpus root on purpose: the symlinks below point HERE.
+    outside: dir({
+      'link-target.jsonl': file('{"leaked":true}\n'),
+      // A complete session dir living outside the corpus — SLUG_C's `<uuid>/`
+      // is a symlink to it, so `<uuid>/subagents` really does resolve to a
+      // real, readable directory full of real, readable transcripts.
+      'linked-session': dir({
+        subagents: dir({ 'agent-beefcafe.jsonl': file('{"leaked":"subagent"}\n') }),
+      }),
+    }),
     corpus: dir({
       [SLUG_A]: dir({
         [`${SESSION_A}.jsonl`]: file(MAIN_A_CONTENT),
@@ -94,6 +107,12 @@ beforeEach(() => {
         [SESSION_ORPHAN]: dir({
           subagents: dir({ 'agent-c0ffee01.jsonl': file('{"o":1}\n') }),
         }),
+      }),
+      [SLUG_C]: dir({
+        // A REAL main transcript, so the session legitimately enumerates...
+        [`${SESSION_LINKED}.jsonl`]: file('{"m":1}\n'),
+        // ...while its artifact directory is a symlink out of the corpus.
+        [SESSION_LINKED]: symlink(linkedSessionAbs),
       }),
     }),
   });
@@ -151,11 +170,13 @@ describe('resolveCorpusRoot on real disk', () => {
 });
 
 describe('enumerateSessions on real disk', () => {
-  it('finds exactly the two `<uuid>.jsonl` main transcripts across both slugs', () => {
+  it('finds exactly the three `<uuid>.jsonl` main transcripts across the slugs', () => {
     const root = realRoot();
     const refs = refsOf(enumerateSessions(fs, root));
 
-    expect(refs.map((r) => r.sessionId).sort()).toEqual([SESSION_A, SESSION_B].sort());
+    expect(refs.map((r) => r.sessionId).sort()).toEqual(
+      [SESSION_A, SESSION_B, SESSION_LINKED].sort(),
+    );
   });
 
   it('reports the slug basename verbatim with the main and session-dir abs paths', () => {
@@ -273,6 +294,43 @@ describe('buildSessionSubstrate on real disk', () => {
       'subagents/agent-deadbeef.jsonl',
       'subagents/notes.txt',
     ]);
+  });
+
+  it('never descends a `<uuid>/` session dir that is a real symlink out of the corpus', () => {
+    const root = realRoot();
+    const ref = refFor(refsOf(enumerateSessions(fs, root)), SESSION_LINKED);
+    const built = buildSessionSubstrate(fs, ref, DEFAULT_READ_LIMITS);
+
+    if (built.kind !== 'built') {
+      expect.unreachable(`expected a built substrate, got ${built.kind}`);
+    }
+    // This is the one containment hole the rest of the suite cannot reach with
+    // the fake: the fake's path resolver refuses to traverse THROUGH a symlink
+    // node, whereas the kernel does it silently. On real disk
+    // `<uuid>/subagents` here lstats as a genuine directory — not a link — so a
+    // guard that probes only that path passes, and the agent transcript under
+    // the link target gets ingested and persisted as this session's subagent
+    // activity. `O_NOFOLLOW` does not catch it either (the target is a real
+    // file), nor does `assertWithinRoot` (lexical: the symlinked prefix is
+    // textually inside the root). Only lstat'ing `<uuid>/` itself stops it.
+    expect(sortedRelativePaths(built)).toEqual([`${SESSION_LINKED}.jsonl`]);
+    expect(built.skipped).toEqual([]);
+    expect(JSON.stringify(built.substrate.files)).not.toContain('leaked');
+  });
+
+  it('fingerprints a symlinked `<uuid>/` session dir as main-only, so it never re-ingests', () => {
+    const root = realRoot();
+    const ref = refFor(refsOf(enumerateSessions(fs, root)), SESSION_LINKED);
+
+    // Sizes and mtimes come from real disk, so assert the SHAPE: one line, the
+    // main transcript, nothing from beyond the link. A fingerprint that tracked
+    // the link target would move on changes the walk refuses to ingest, and the
+    // watcher would re-ingest that session on every tick, forever.
+    const fingerprint = fingerprintSession(fs, ref, DEFAULT_READ_LIMITS);
+
+    expect(fingerprint.split('\n')).toHaveLength(1);
+    expect(fingerprint.startsWith('main:')).toBe(true);
+    expect(fingerprint).not.toContain('subagents');
   });
 
   it('builds a main-only session with no artifacts and no skips', () => {

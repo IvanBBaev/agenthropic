@@ -594,6 +594,131 @@ describe('createCorpusWatcher', () => {
     });
   });
 
+  /**
+   * `exclusions()` is the honesty seam behind the /api/health and
+   * /api/cost/summary coverage fields. A session ingest cannot finish writes NO
+   * rows, so every dollar total is computed without it - and the omission is
+   * one-directional, since a total missing sessions is always too SMALL. These
+   * tests pin what the counts MEAN, not merely that they move: `failing` is
+   * "excluded right now", `quarantined` is the subset that will not be retried
+   * until a human changes something.
+   */
+  describe('exclusions() reports what the dollar totals are missing', () => {
+    const REASON = 'refusing to price at $0: unknown model id';
+    const ROW: PricingEntry = {
+      model: 'claude-opus-4-6',
+      bucket: 'input',
+      usdPerMtok: 15,
+      effectiveFrom: '2026-01-01T00:00:00Z',
+    };
+
+    it('a corpus that ingests cleanly excludes nothing', () => {
+      const slugTree: MutableTree = {
+        [`${SESSION_A}.jsonl`]: file(MAIN, { mtimeMs: 1 }),
+        [`${SESSION_B}.jsonl`]: file(MAIN, { mtimeMs: 2 }),
+      };
+      const watcher = createCorpusWatcher(makeDeps(slugTree, { ingest: recorder([]) }));
+
+      expect(watcher.exclusions()).toEqual({ failing: 0, quarantined: 0 });
+      expect(ingested(watcher.tick()).sessionsOk).toBe(2);
+      expect(watcher.exclusions()).toEqual({ failing: 0, quarantined: 0 });
+    });
+
+    it('counts a failing session from its first failure, quarantined only once the budget is spent', () => {
+      const slugTree: MutableTree = { [`${SESSION_A}.jsonl`]: file(MAIN, { mtimeMs: 1 }) };
+      const watcher = createCorpusWatcher(
+        makeDeps(slugTree, {
+          ingest: (): IngestOutcome =>
+            outcome({ ok: false, sessionId: null, costUsd: null, error: REASON }),
+        }),
+      );
+
+      // Every attempt before the last one is excluded but still scheduled: the
+      // dashboard must not call a session "needs a human" while the watcher
+      // still intends to retry it on its own.
+      for (let attempt = 1; attempt < MAX_INGEST_ATTEMPTS; attempt += 1) {
+        watcher.tick();
+        expect(watcher.exclusions()).toEqual({ failing: 1, quarantined: 0 });
+      }
+
+      watcher.tick();
+      expect(watcher.exclusions()).toEqual({ failing: 1, quarantined: 1 });
+
+      // Quiet passes must not inflate the count: the session is excluded once,
+      // not once per poll interval.
+      watcher.tick();
+      watcher.tick();
+      expect(watcher.exclusions()).toEqual({ failing: 1, quarantined: 1 });
+    });
+
+    it('counts only the sessions that failed, not the whole corpus', () => {
+      const slugTree: MutableTree = {
+        [`${SESSION_A}.jsonl`]: file(MAIN, { mtimeMs: 1 }),
+        [`${SESSION_B}.jsonl`]: file(MAIN, { mtimeMs: 2 }),
+        [`${SESSION_C}.jsonl`]: file(MAIN, { mtimeMs: 3 }),
+      };
+      const watcher = createCorpusWatcher(
+        makeDeps(slugTree, {
+          ingest: (substrate: SessionSubstrate): IngestOutcome =>
+            substrate.files[0]?.relativePath === `${SESSION_B}.jsonl`
+              ? outcome({ ok: false, sessionId: null, costUsd: null, error: REASON })
+              : outcome(),
+        }),
+      );
+
+      for (let i = 0; i < MAX_INGEST_ATTEMPTS; i += 1) {
+        watcher.tick();
+      }
+
+      expect(watcher.exclusions()).toEqual({ failing: 1, quarantined: 1 });
+    });
+
+    it('drops a session that vanished from the corpus - absent is not excluded', () => {
+      const slugTree: MutableTree = { [`${SESSION_A}.jsonl`]: file(MAIN, { mtimeMs: 1 }) };
+      const watcher = createCorpusWatcher(
+        makeDeps(slugTree, {
+          ingest: (): IngestOutcome =>
+            outcome({ ok: false, sessionId: null, costUsd: null, error: REASON }),
+        }),
+      );
+      watcher.tick();
+      expect(watcher.exclusions()).toEqual({ failing: 1, quarantined: 0 });
+
+      delete slugTree[`${SESSION_A}.jsonl`];
+      watcher.tick();
+
+      // A file the user deleted is missing from the totals for a reason the
+      // dashboard cannot fix, and reporting it forever would make the coverage
+      // figure monotonically worse for no actionable reason.
+      expect(watcher.exclusions()).toEqual({ failing: 0, quarantined: 0 });
+    });
+
+    it('returns to zero once the missing price arrives and the session ingests', () => {
+      const slugTree: MutableTree = { [`${SESSION_A}.jsonl`]: file(MAIN, { mtimeMs: 1 }) };
+      let pricing: readonly PricingEntry[] = [];
+      let healed = false;
+      const watcher = createCorpusWatcher(
+        makeDeps(slugTree, {
+          pricing: () => pricing,
+          ingest: (): IngestOutcome =>
+            healed
+              ? outcome()
+              : outcome({ ok: false, sessionId: null, costUsd: null, error: REASON }),
+        }),
+      );
+      for (let i = 0; i < MAX_INGEST_ATTEMPTS + 2; i += 1) {
+        watcher.tick();
+      }
+      expect(watcher.exclusions()).toEqual({ failing: 1, quarantined: 1 });
+
+      pricing = [ROW];
+      healed = true;
+      expect(ingested(watcher.tick()).sessionsOk).toBe(1);
+
+      expect(watcher.exclusions()).toEqual({ failing: 0, quarantined: 0 });
+    });
+  });
+
   describe('pricingContentFingerprint', () => {
     it('is row-order independent and content sensitive', () => {
       const a: PricingEntry = {

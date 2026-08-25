@@ -145,6 +145,19 @@ export function SessionCostAnalysis({
 
   const { compaction, delegationSavings } = state.analysis;
 
+  // THREE delegation states, not two, because the middle one is a lie when it
+  // is rendered like the others. `perAgent` is empty either because no subagent
+  // ran - nothing to estimate - or because every subagent that DID run was
+  // skipped for an unresolvable top-tier model: everything to estimate, none of
+  // it priceable. The three sums are 0.00 in both cases, so the shared
+  // rendering says "delegation saved you nothing" where the honest answer is
+  // "not known", and the empty state says "no subagent ran" about a session
+  // that delegated. A zero presented as a measurement is worse than a gap.
+  const skippedAgentCount = delegationSavings.skippedAgentIds.length;
+  const noDelegationRan = delegationSavings.perAgent.length === 0 && skippedAgentCount === 0;
+  const allDelegationSkipped = delegationSavings.perAgent.length === 0 && skippedAgentCount > 0;
+  const hasDelegationEstimate = !noDelegationRan && !allDelegationSkipped;
+
   return (
     <div data-testid="session-analysis">
       <h3>Compaction repricing</h3>
@@ -223,39 +236,69 @@ export function SessionCostAnalysis({
         </span>
       </h3>
       <p className="muted">
-        What this session would have cost with no subagents - every delegated turn run on{' '}
-        <strong>the top-tier model</strong> instead. The cache profile of a run that never happened
-        is not observable, so this is a modelled figure, not a measurement.
+        What the <strong>delegated work</strong> would have cost with no subagents - every delegated
+        turn run on <strong>the top-tier model</strong> instead. The cache profile of a run that
+        never happened is not observable, so this is a modelled figure, not a measurement.
       </p>
-      <div className="kpis" aria-label="delegation savings">
-        <div className="kpi">
-          <span className="kpi-label">Actual</span>
-          <span className="kpi-value">{formatUsd(delegationSavings.actualUsd)}</span>
-          <span className="muted kpi-note">measured</span>
-        </div>
-        <div className="kpi">
-          <span className="kpi-label">Without delegation</span>
-          <span className="kpi-value">~ {formatUsd(delegationSavings.hypotheticalUsd)}</span>
-          <span className="muted kpi-note">estimated</span>
-        </div>
-        <div className="kpi" data-testid="savings-kpi">
-          <span className="kpi-label">Saved</span>
-          <span className="kpi-value">~ {formatUsd(delegationSavings.savingsUsd)}</span>
-          <span className="muted kpi-note">estimated</span>
-        </div>
-      </div>
-      {delegationSavings.skippedAgentIds.length > 0 && (
+      {/*
+        SCOPE, stated because the two levels are NOT session totals. Both sums
+        run over subagents only: the main agent's own turns are identical in
+        both worlds (the routing decision never touched them), so they cancel
+        in the difference and are deliberately in neither figure. That makes
+        "Saved" exactly right and the two levels smaller than this session's
+        cost - so they are labelled for the slice they measure. An earlier
+        version labelled them "Actual" and "Without delegation", which read as
+        session dollars and invited the reader to compare a subagent-only sum
+        against the session total two panels up and conclude money was missing.
+      */}
+      {hasDelegationEstimate && (
+        <>
+          <p className="muted" data-testid="delegation-scope">
+            Both levels below cover the delegated turns only. The main agent&apos;s own spend is in
+            neither, because it is the same with or without delegation - which is why it cancels out
+            and leaves the saving unaffected.
+          </p>
+          <div className="kpis" aria-label="delegation savings">
+            <div className="kpi">
+              <span className="kpi-label">Delegated work, actual</span>
+              <span className="kpi-value">{formatUsd(delegationSavings.actualUsd)}</span>
+              <span className="muted kpi-note">measured, subagents only</span>
+            </div>
+            <div className="kpi">
+              <span className="kpi-label">Same work, no delegation</span>
+              <span className="kpi-value">~ {formatUsd(delegationSavings.hypotheticalUsd)}</span>
+              <span className="muted kpi-note">estimated, subagents only</span>
+            </div>
+            <div className="kpi" data-testid="savings-kpi">
+              <span className="kpi-label">Saved</span>
+              <span className="kpi-value">~ {formatUsd(delegationSavings.savingsUsd)}</span>
+              <span className="muted kpi-note">estimated</span>
+            </div>
+          </div>
+        </>
+      )}
+      {/* Only meaningful alongside an estimate. When EVERY subagent was skipped
+          there is no estimate for them to be excluded from, so that case gets
+          its own message below instead of this footnote to nothing. */}
+      {skippedAgentCount > 0 && hasDelegationEstimate && (
         <p className="empty-state" data-testid="skipped-agents">
-          <span className="status-unknown">?</span> {delegationSavings.skippedAgentIds.length}{' '}
-          {delegationSavings.skippedAgentIds.length === 1 ? 'subagent is' : 'subagents are'}{' '}
-          excluded from this estimate: no top-tier model could be resolved for{' '}
-          {delegationSavings.skippedAgentIds.length === 1 ? 'it' : 'them'}, and a guess would be
-          worse than a gap.
+          <span className="status-unknown">?</span> {skippedAgentCount}{' '}
+          {skippedAgentCount === 1 ? 'subagent is' : 'subagents are'} excluded from this estimate:
+          no top-tier model could be resolved for {skippedAgentCount === 1 ? 'it' : 'them'}, and a
+          guess would be worse than a gap.
         </p>
       )}
-      {delegationSavings.perAgent.length === 0 ? (
+      {noDelegationRan ? (
         <p className="empty-state" data-testid="no-delegation">
           No subagent ran in this session, so there was nothing to delegate.
+        </p>
+      ) : allDelegationSkipped ? (
+        <p className="empty-state" data-testid="delegation-unpriceable">
+          <span className="status-unknown">?</span> This session delegated to {skippedAgentCount}{' '}
+          {skippedAgentCount === 1 ? 'subagent' : 'subagents'}, but no top-tier model could be
+          resolved for {skippedAgentCount === 1 ? 'it' : 'any of them'}, so the saving cannot be
+          estimated at all. The figures are withheld rather than shown as $0.00, which would read as
+          &quot;delegation saved nothing&quot; - a measurement this session does not support.
         </p>
       ) : (
         <table className="data-table" aria-label="delegation savings per agent">
