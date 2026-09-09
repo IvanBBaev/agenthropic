@@ -105,8 +105,27 @@ PROVISIONAL), Ivan's two physical KC acts, or no-commit-without-an-explicit-ask.
   proven at the sqlite3 prompt before fixing: an unfiltered priced CTE made paging
   price all 752k usage rows (627 ms → 9 ms byte-identical), and the cost summary ran
   that scan four times → one rollup. The projection it produced — warm tick 3.6% duty
-  cycle, **cold replay ~137 s over the real 1855-session corpus** — is recorded as a
-  product risk feeding OPEN-1/2/3, answered meanwhile by persisted replay checkpoints.
+  cycle, **cold replay ~137 s** — is recorded as a product risk feeding OPEN-1/2/3,
+  answered meanwhile by persisted replay checkpoints. **Corrected 2026-09-01:** that
+  line used to say "over the real **1855-session** corpus". `1855` counts **subagent
+  transcripts**, not sessions — the census of record (`docs/analysis/parser-spec.md`
+  §4.2) is **141 sessions** — so the ~137 s was extrapolated onto a target roughly 13x
+  the real session count. The bench now runs at census scale and has **measured** cold
+  replay at **39.92 s and 34.87 s over 996.4 MiB / 141 sessions** (Node v22.23.2,
+  darwin arm64), as one synchronous event-loop stall. **Resolved 2026-09-01: the ~137 s
+  is retired as wrong, not carried as "unverified"** — unverified means we do not know,
+  and we now know. This line used to refuse to rescale the projection into the
+  measurement, on the grounds that 12.80 GiB and 0.97 GiB describe different corpora.
+  That refusal was right, and is exactly what kept the question answerable. What settled
+  it was provenance, not rescaling: the 12.80 GiB was never measured either. It implies
+  12.80 GiB / 1855 = **7.0659 MiB** per session; the measured corpus gives
+  996.4 MiB / 141 = **7.0667 MiB**. Two supposedly independent quantities do not agree to
+  **0.011%** by chance — it is one clone size multiplied by two different session counts,
+  i.e. the same 13x transcripts-for-sessions error expressed in bytes rather than counts,
+  which is why it survived the round of corrections that fixed the counts. Corrected, the
+  projection targeted **the exact scale since measured**, so the two are directly
+  comparable: it overstated cold replay by **3.43-3.92x**. The product risk is unchanged
+  at either scale.
 - **Web honesty audit: 11 violations, each fixed test-first.** Two real crashes (an
   unrecognised status word took out both D3 views; the live board painted `NaN` from a
   missing bucket) and nine confident lies in copy — `null` slug as "no project", an
@@ -139,6 +158,225 @@ PROVISIONAL), Ivan's two physical KC acts, or no-commit-without-an-explicit-ask.
   passing, 100/100/100/100 in all five packages** — server 731, web 232, core 193,
   test-fixtures 90, shared 72. Test count rose 879 → 1318 across the span.
 
+### 2026-09-01 → 2026-09-02 · The v1.0 exit gate goes 3-of-5 to 5-of-5 — by first disproving it
+
+- **The gate was tested end-to-end for the first time, and two of the five daily questions
+  failed.** `apps/server/test/p0/p0-five-daily-questions.test.ts` boots a real server over a
+  real corpus (`materializeCorpus` → `runCorpusIngest` → `buildServer`) and asks every question
+  over HTTP with a Bearer token. Until it existed, the ✅ marks had been assembled from
+  server-side and UI-side unit tests separately, with **no test that booted a server and asked
+  anything**. Q4 and Q5 turned red the moment one did.
+- **WP-U10 — Q4's "failed" half had no producer.** `status = 'error'` was declared in four
+  places (the SQLite `CHECK` constraint, the `AgentStatus` union, an `error_count` SUM, a DTO
+  field) and **written by nothing in `src/`**. Every consumer was correct, every test passed,
+  and 100% coverage on all four axes could not see it — coverage measures whether written code
+  RAN, never whether a declared value is ever PRODUCED. The dashboard had a column that was
+  structurally always zero, so a crashed agent was indistinguishable from an idle one. Closed
+  by `packages/core/src/parser/agent-outcome.ts` (classifier) plus `ERROR_CAUSES` in
+  `apps/server/src/ingest/normalize-session.ts` (promotion), driven end-to-end by a new
+  `agent-outcome-errors` fixture. The **discriminating** assertion is the sibling one: two
+  errored spawns on the same parent record must land on *different* statuses
+  (`terminated_early` → `'error'`, `user_interrupt` → `'unknown'`), because flattening the
+  five observed causes into one bucket would be a fresh lie in place of the old one.
+- **WP-U11 — Q5 had no endpoint.** "What changed across sessions" required the caller to stitch
+  `/api/dag/global` with `/api/cost/summary` `perDay` client-side. Closed by `GET /api/changes`
+  (`apps/server/src/api/routes.ts:449`), auth-gated like every other route.
+- **The corpus figures behind WP-U10 were wrong on the board and right in the code.** `TODO.md`
+  claimed "30 error terminals in four causes"; `agent-outcome.ts` had said "33 in five" since
+  it was written. Re-verified over 2633 transcripts / 442,140 records: **ok 1369 / error 33** —
+  19 `concurrency_limit`, 7 `user_interrupt`, 3 `permission_failed`, 2 `dispatch_unavailable`,
+  2 `terminated_early`. The board's scan had collected `Task`/`Agent` spawns but not `Workflow`
+  ones, which made `permission_failed` look like a bucket invented without a corpus behind it.
+  Recorded as a dated **ERRATUM**, not a silent edit. The `ok` count moved 1243 → 1369 with
+  corpus growth; **the error count and the cause set did not move at all**, so the five causes
+  are a property of how agents fail rather than of what was on disk in July.
+- **A near-miss worth keeping.** The first re-verification returned "36" by asking whether a
+  failed tool result *mentioned* a subagent — precisely the tool-level `is_error` heuristic
+  `agent-outcome.ts` names as forbidden ("a failed grep and a missing file are not a failed
+  agent"), which swept in 15 `Exit code 1` Bash results. It was one substring away from being
+  reported as a correction to a docstring that was already correct. A wrong denominator
+  announces itself; a wrong **predicate** returns a plausible number in the right units.
+- **`eslint .` was reporting on files that are not in the repo** — 5 warnings, all from a stale
+  187 MB `.claude/worktrees/…` copy. `.claude/` is harness-local and git-excluded, so the noise
+  described files that will never be committed while masking any real warning in files that
+  will. `.claude/**` added to the ignores in `eslint.config.mjs`; lint is now **0 warnings**.
+- **Full gate, real numbers (2026-09-02, verified by a run under the pinned Node 22 — not
+  relayed from an agent's report):** typecheck · lint · format:check · `gate:spawner` ·
+  `gate:licenses` all exit 0 · **2032 tests in 126 files passing, 100/100/100/100 in all five
+  packages** — server 1213, web 387, core 251, test-fixtures 101, shared 80. Test count rose
+  1318 → 2032 since 2026-08-09.
+- **Toolchain trap, recorded because it cost a wasted debugging pass:** the shell default
+  `node` on this machine is **v26**, `better-sqlite3` is compiled for Node 22, and a v26 run
+  fabricates a large cascade of unrelated failures that reads exactly like real breakage. Every
+  run above was made under `v22.23.2`. The repo still pins nothing (**NODE-PIN**, open).
+
+### 2026-09-02 · The 5-of-5 audited by mutation testing — two of the five ticks did not survive
+
+- **The exit gate was attacked instead of re-run.** A falsification lane injected deliberate
+  defects at the exact sites each of the five daily questions claims to verify. Two assertions
+  turned out to be **unable to fail**, both by the same mechanism that hid WP-U10: an arm of the
+  code with no producer in the fixture.
+- **The dated price was decorative.** `apps/server/test/p0/harness.ts` seeded a *single* pricing
+  epoch, so `ORDER BY effective_from DESC` and `ASC` select the same row — the end-to-end proof
+  of "every dollar = tokens × **dated** price" never exercised the dating. Fixed by seeding a
+  superseded, **strictly dominated** 7 USD/Mtok 2019 rate behind the live 1 USD/Mtok 2020 one:
+  never the right answer for any row, and 7× off, so no rounding tolerance can absorb a wrong
+  pick. `DESC` → `ASC` now turns **Q5 red** at `apps/server/src/api/queries.ts:59` and **Q2 red**
+  at `apps/server/src/db/migrations.ts:917`. The split also documented itself: `/api/cost/summary`
+  is served from the `token_usage_rollup` materialization, `/api/changes` from the API's own
+  `pricedCte`. Dated-price resolution is implemented **three** times in this repo; the P0 gate
+  had been exercising none of them *as dated*.
+- **`/api/changes`'s `'updated'` label had no producer.** Every fixture session is minutes long
+  and they sit in two tight clusters, so both windows the test asked for contained only sessions
+  that also *started* inside them. Swapping the `'new'` and `'updated'` arms
+  (`queries.ts:1563`) passed green. Fixed by **deriving** a third window at the midpoint of the
+  earliest session that measurably spans time — not hard-coding a date that rots when a fixture
+  moves — plus per-row `change`-map equality across all three windows, a
+  `new + updated + unknown == total` partition check, and explicit anti-vacuity assertions that
+  both labels actually occur.
+- **Both remedies were null-hypothesis tested.** Restore the old fixture/test text, keep the
+  mutation: **6 passed (6)** in each case. So the new kills belong to the new assertions and not
+  to some pre-existing check that would have caught the defect anyway. Without that control the
+  audit would have been indistinguishable from the thing it was auditing.
+- **A published mutation result of my own was withdrawn.** The previous entry recorded M17 (drop
+  `'error'` from the sticky arm of `AGENT_STATUS_CASE`) as a kill on "1 failed | 12 passed". The
+  baseline was already **red**: my own test passed `parentAgentId: ROOT_ID` while `beforeEach`
+  seeds only the session, so SQLite threw `FOREIGN KEY constraint failed` with *and* without the
+  mutation. Seeded the parent, re-ran honestly — M17 kills **exactly one** test across the whole
+  1214-test server suite. **A mutation kill is only valid if the baseline is green first**, and
+  that rule is now written down because breaking it produced a plausible-looking number.
+- **"Real corpus" was the wrong word on the board.** The exit-gate line said the P0 proof runs
+  "real corpus → real `runCorpusIngest` → real `buildServer`". In this repo "real corpus" means
+  `~/.claude/projects`, which P0 has never touched. Everything downstream of the files *is* real
+  — no stubs, no fakes, no in-memory shortcut — but the proof covers 8 curated, all-parseable
+  fixture sessions and says nothing about the 141-session / 996.4 MiB census. Corrected in place
+  with a dated note stating both halves.
+- **The dead-value sweep found three more, all verified before being written down** — and none
+  patched silently, because two are contract decisions: **WP-U12** seven `*Row` interfaces in
+  `packages/shared` with zero importers that also **contradict the schema** (`AgentRow` says
+  `started_at`/`ended_at` against `first_seen_at`/`last_seen_at`; `TokenUsageRow` describes a
+  *wide* row against a *tall* table) — a type nobody imports can never fail a typecheck;
+  **WP-U13** `agents.outcome_cause` written by ingest and read by nothing, the exact mirror of
+  WP-U10; **WP-U14** the realtime schema assertion `Value.Check(RealtimeEventSchema, event)`,
+  which cannot fail on shape because the union's third arm accepts any `{type: string, payload:
+  object}` — a tautological assertion sitting inside the suite meant to catch tautologies.
+- **The corpus figure moved a third time, and the important half did not.** Re-measured over
+  **2693 transcripts / 461,334 records, 0 unparseable**: **ok 1421 / error 33**, causes
+  19 / 7 / 3 / 2 / 2. `ok` has gone 1243 → 1369 → 1421 across three scans in two days — corpus
+  growth, nothing else — while the error count and the five causes have not moved at all. That
+  stability is the finding: the causes are a property of how agents fail, not of what was on disk.
+- **Full gate, my own run under `v22.23.2` (not relayed):** typecheck · lint · format:check ·
+  `gate:spawner` (262 files, 1 allowlisted) · `gate:licenses` (412 packages) all exit 0 ·
+  **2035 tests in 126 files, 100/100/100/100 in all five packages** — server 1214, web 387,
+  core 253, test-fixtures 101, shared 80.
+
+### 2026-09-02 · WP-U12 closed — and the closure corrected the plan that opened it
+
+- **The seven dead `*Row` interfaces are gone, and so are three type aliases the board had
+  called load-bearing.** `packages/shared/src/types/rows.ts` declared six string unions and
+  seven interfaces that claimed, in their own docstring, to be "the cross-package data
+  contracts" that "every workspace consumes". All seven interfaces had **zero importers**;
+  two had drifted into contradicting the schema they claimed to mirror (`AgentRow` declaring
+  `started_at`/`ended_at` against `first_seen_at`/`last_seen_at`; `TokenUsageRow` describing a
+  *wide* row against a *tall* `token_usage` table). Four of the names were meanwhile redeclared
+  locally, and correctly, at their point of use — which is exactly why the originals were free
+  to rot. A type nobody imports can never fail a typecheck.
+- **The interesting half is what the fix found out about the plan.** TODO.md's action read
+  "delete the seven interfaces, keep the six type aliases — they are load-bearing (`AgentStatus`
+  63 references, `OrchestrationEdgeSource` 17, `AgentType` 10, …)". Three of the six were not
+  load-bearing and those counts were not references to that file. `index.ts` re-exported
+  `AgentStatus`, `AgentType` and `OrchestrationEdgeSource` **explicitly** from `./schemas/common`
+  while also carrying `export type * from './types/rows'` — and **an explicit re-export shadows a
+  star re-export**. Every consumer outside the package already resolved to `schemas/common`; the
+  copies in `rows.ts` were reachable only from inside that one file. The number had been produced
+  by counting **name occurrences and calling them references** — substring, not resolution: the
+  identical error this board already records twice, committed by the same hand that wrote the
+  warnings. Two independent declarations of one union with nothing holding them in step is drift
+  waiting to happen; they happened to still agree, which is luck, not a guarantee.
+- **What shipped.** `types/rows.ts` → `types/enums.ts`, holding only the three unions that are
+  genuinely load-bearing and genuinely have no schema of their own — `AgentOutcomeCause`,
+  `TokenBucket`, `RawEventSource`. `schemas/common.ts` is now the single declaration of the other
+  three, and the better one, being derived from the runtime TypeBox validator rather than sitting
+  beside it. Two importers updated (`index.ts:1`, `ports/event-store.ts:7`). **The index line is
+  now an explicit named re-export rather than `export type *`** — the star export is what let a
+  duplicate declaration hide in plain sight, so with every export named the next duplicate is a
+  compile error instead of a silent shadow. A stale `dist/src/types/rows.d.ts` orphaned by
+  incremental `tsc -b` was removed too; it is gitignored, untracked and regenerated, but it had
+  already fooled one grep during this very change.
+- **Gates, real numbers, all five packages green and unmoved:** typecheck · lint · format:check
+  exit 0; `gate:spawner` OK (262 files, 1 allowlisted); `gate:licenses` OK (412 packages);
+  **2035 tests in 126 files, all passing, 100% on all four axes everywhere**. `packages/shared`
+  coverage counters are byte-identical before and after (83/18/8/83) — the deleted code
+  contributed **zero** runtime statements, which is the measurement that confirms it was dead
+  rather than merely quiet.
+
+### 2026-09-02 · WP-U14 test half — the assertion that could not fail now fails on demand
+
+- **The tautology is gone, and it was hiding two worse things.** `realtime-bridge.test.ts:104`
+  asserted `Value.Check(RealtimeEventSchema, event)` on an event that lands on the union's
+  catch-all arm — and `GenericRealtimeEventSchema` accepts **any** `{type: string, payload:
+  object}`, so the check could not see one thing about the payload it was nominally validating.
+  While replacing it: the check was applied **only** to that catch-all event. The two events with
+  real typed arms — `session-ingested` and `agent-status-changed`, where a union check has genuine
+  bite (`additionalProperties: false`, a literal `type`, integer minimums) — were asserted with
+  `toEqual`/`toMatchObject` alone and **never met the shared schema at all**. The teeth were
+  everywhere the check was not.
+- **The fix names the arm.** `acceptingArms(event)` returns which of the three arms accept an
+  event, in a fixed order, so "some arm said yes" becomes "exactly this arm said yes and the other
+  two refused" — a claim that fails if any arm is loosened or a typed event decays onto the
+  catch-all. The generic-arm case additionally carries a **negative control**: hoisting
+  `occurredAt` out of the payload must be refused by all three arms, which is the one thing that
+  arm genuinely enforces and the only thing that gives the positive assertion any weight.
+- **Verified by mutation — baseline green first, `realtime.ts` restored byte-identical (`cmp -s`)
+  after every run.** Generic arm `additionalProperties: false → true`: the **old** form was re-run
+  as a scratch test under the mutation and **passed** — the tautology is measured, not asserted —
+  while the new form dies with `expected [ 'generic' ] to deeply equal []`.
+  `SessionIngestedEventSchema.agentCount` `Integer → String`: dies with `expected [] to deeply
+  equal [ 'session-ingested' ]`. `previousStatus` `nullable(…) → AgentStatusSchema`: **survived
+  the first repair**, because `toMatchObject({previousStatus: null})` passes just as well against
+  a schema that forbids the null; killed only after the null-previous-status test got its own arm
+  assertion. That third one is the finding worth keeping — the repair was itself incomplete, and
+  nothing but the mutation would have said so.
+- **Not closed, and not an agent's to close:** whether `GenericRealtimeEventSchema` should exist
+  at all, and whether `ingest-failed` deserves a typed arm. That is a CD-5 transport-contract
+  question — what an unknown event type over SSE is allowed to mean — and it stays on the board.
+- **Gates:** typecheck · lint · format:check exit 0; `gate:spawner` OK (262 files, 1 allowlisted);
+  `gate:licenses` OK (412 packages); **2035 tests / 126 files, all passing, 100% on all four axes
+  in all five packages**, coverage counters unmoved.
+
+### 2026-09-03 · WP-U13 API half — the column ingest wrote for nobody now reaches the wire
+
+- **`outcomeCause` is a served field, not just a stored one.** It is a required, nullable property
+  on `AgentNodeDto` (`packages/shared/src/schemas/graph.ts`) and is selected and mapped by **both**
+  node readers in `apps/server/src/api/queries.ts` — `getSessionTree` and the global-DAG query.
+  NULL is served as NULL: "no outcome was observed" is not a claim that the agent succeeded, and
+  the causes stay distinct on the wire exactly as the column holds them.
+- **The board said "the five causes"; there are six.** Migration 17's CHECK
+  (`apps/server/src/db/migrations.ts:1096-1097`) admits `unclassified` alongside the five named in
+  the census, and an API union that dropped it would have rejected rows the database can legally
+  hold — a 500 on serialization for data that is entirely valid. The count in the finding was
+  copied from the *census* (which only ever observed five) and read as if it were the *schema*.
+- **The union had no runtime validator at all** — only a hand-written alias in
+  `packages/shared/src/types/enums.ts`. Adding a TypeBox schema beside it would have rebuilt the
+  WP-U12 defect one week after closing it: two declarations of one name, one shadowed and dead. So
+  the declaration was **moved, not copied** — `schemas/common.ts` owns `AgentOutcomeCauseSchema`
+  and derives the type from it; `enums.ts` records why it left. All eight import sites resolve
+  through `@agenthropic/shared`, so no consumer changed.
+- **Proved by mutation, not by coverage** (baseline green first; `queries.ts` restored
+  byte-identical with `cmp -s` after every run). The seeds give each agent a *different* cause and
+  leave both mains NULL, so a reader that hard-coded a constant or derived the cause from `status`
+  cannot produce the expected list. Mapper → `null`: **killed**, both endpoints. Dropping
+  `ag.outcome_cause` from the session-tree SELECT: **killed**, and *only* `api-sessions` failed.
+  Dropping it from the global-DAG SELECT: **killed**, and *only* `api-dag` failed. Each SELECT
+  list has its own witness — neither hides behind the other's coverage.
+- **Not closed, and not an agent's to close:** whether a ~2-agent `error` bucket justifies any
+  dashboard surface at all. Nothing in the web app reads `outcomeCause` yet, and this closure
+  deliberately did not invent a place for it. The UI half stays on the board as Ivan's.
+- **Gates, my own run under `v22.23.2`:** typecheck · lint · format:check exit 0; `gate:spawner`
+  OK (262 files, 1 allowlisted); `gate:licenses` OK (412 packages); **2040 tests / 126 files, all
+  passing, 100% on all four axes in all five packages** (shared's statement count moved 83 → 84 —
+  the one new schema line — and nothing else moved).
+
 ### Still open, and owned by Ivan — not by any agent
 - ~~**Everything above is UNCOMMITTED.**~~ **Closed 2026-07-30** — committed and pushed
   as `9b6c6b3` on Ivan's explicit instruction (198 files, +27 133 / −1 113). CI is
@@ -150,14 +388,25 @@ PROVISIONAL), Ivan's two physical KC acts, or no-commit-without-an-explicit-ask.
 - **LABEL-ME ratification** — until the hand-labeled corpus exists, the Phase-0 numbers
   stay PROVISIONAL and the hierarchy ≥95% gate cannot be signed by machine.
 - ~~LICENSE tracking~~ **closed 2026-07-30** — tracked in `9b6c6b3`; GitHub now reports
-  `MIT` instead of `license: null`. ~~Enabling GitHub Pages~~ **closed in the workflow
-  2026-08-07** — `actions/configure-pages` now runs with `enablement: true`, so the
-  first push to `main` switches Pages on itself (verify the run goes green). Still
-  open: **branch protection on `main`**, without which CD-7's "coverage blocks merges"
-  is not physically enforced.
+  `MIT` instead of `license: null`. ~~Enabling GitHub Pages~~ **closed 2026-08-25** — and
+  not the way the 2026-08-07 entry here claimed: `enablement: true` on
+  `actions/configure-pages` could never switch Pages on, because `pages: write` authorises
+  deploying to an existing site and not creating one. Three runs died proving it. Pages was
+  created by an owner-credentialled `POST …/pages -f build_type=workflow`, run
+  `32863218759` was re-run and went green, and the site serves at
+  <https://ivanbbaev.github.io/agenthropic/>. ~~Branch protection on `main`~~ **closed
+  2026-08-25** — `main` requires the `ci` check and refuses force-pushes and deletion, so
+  CD-7's "coverage blocks merges" is physically enforced against a contributor.
+  `enforce_admins` is deliberately off: one maintainer whose normal mode is a direct push
+  would otherwise be locked out, so for Ivan the gate stays a red run rather than a barrier.
 - **Retention policy VALUES (OPEN-1/2/3).** The WP-D10 mechanism is built and tested;
-  the actual retention windows are a product decision informed by the ~137 s cold-replay
-  projection, and only Ivan sets them. Until then the server runs `NO_RETENTION`.
+  the actual retention windows are a product decision informed by the cold-replay cost —
+  **measured** 34.87–39.92 s at census scale (141 sessions, 996.4 MiB, 2026-09-01). The
+  ~137 s projection that used to be quoted here is retired, not weighed alongside it: it
+  overstated the same scale by 3.43-3.92x (see above) — and only Ivan sets them. Note what
+  the measured band still does **not** establish: it was measured over a *synthetic* corpus
+  whose per-session size is 3.7x below the real one, so it transfers as a lower bound rather
+  than a figure (**BENCH-SHAPE**). Until then the server runs `NO_RETENTION`.
 - **"<30s to understand a session" is unmeasured.** The protocol and log template now
   exist (`docs/measurement/time-to-understand-protocol.md`), but only Ivan can sit in
   front of a real corpus with a stopwatch; an agent cannot sign a usability claim.

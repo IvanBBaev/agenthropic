@@ -151,10 +151,76 @@ describe('/api/cost/summary (WP-U4)', () => {
     }
   });
 
-  it('maps an internal query failure to the uniform 500 shape without leaking details', async () => {
-    temp.db.exec('DROP TABLE token_usage');
+  /**
+   * Every internal failure of this route must reach the client as the same
+   * opaque envelope. Asserted on the RAW payload as well as the parsed body,
+   * because a leak would arrive as extra text (a SQL fragment, a table name, a
+   * stack frame) that a shape assertion on `{ error }` alone would not see.
+   */
+  async function expectUniform500(): Promise<void> {
     const response = await app.inject({ method: 'GET', url: '/api/cost/summary', headers: AUTH });
     expect(response.statusCode).toBe(500);
     expect(response.json()).toEqual({ error: 'Internal server error.' });
+    // The vocabulary of the three throws below, plus the words a stack or a
+    // SQLite message would carry. None of it may cross the HTTP boundary.
+    for (const secret of [
+      'token_usage_rollup',
+      'model_pricing',
+      'SELECT',
+      'SQLITE',
+      'no such table',
+      'refusing',
+      'canonicalization',
+      'effective_from',
+      'stack',
+      '.ts:',
+    ]) {
+      expect(response.payload).not.toContain(secret);
+    }
+  }
+
+  it('maps an internal query failure to the uniform 500 shape without leaking details', async () => {
+    // The fault is injected into the table this read is actually bound to.
+    // Before M-19 this test dropped `token_usage`; the cutover made that a
+    // no-op for /api/cost/summary, so the test would have passed with a 200
+    // while claiming to prove a 500. `token_usage_rollup` is what the read
+    // scans, and dropping it exercises the documented NO FALLBACK contract:
+    // there is deliberately no "scan the ledger instead" arm, so the request
+    // must fail loudly rather than serve a silently different number.
+    temp.db.exec('DROP TABLE token_usage_rollup');
+    await expectUniform500();
+  });
+
+  it('refuses, opaquely, when the rollup names a pricing row that is gone', async () => {
+    // Torn invariant, arm one: a rollup row carrying a `rate_effective_from`
+    // no `model_pricing` row can satisfy. Costing it at $0 would present real
+    // priced spend as unpriced, so the read throws - and the client sees only
+    // the uniform envelope.
+    const torn = temp.db
+      .prepare(
+        `UPDATE token_usage_rollup
+            SET rate_effective_from = '2999-01-01T00:00:00.000Z'
+          WHERE rate_effective_from <> ''`,
+      )
+      .run();
+    // Guards the guard: a fault that injected nothing would leave a passing
+    // 200 masquerading as this test's premise.
+    expect(torn.changes).toBeGreaterThan(0);
+    await expectUniform500();
+  });
+
+  it('refuses, opaquely, when two pricing rows mean the same instant', async () => {
+    // Torn invariant, arm two: two `model_pricing` rows that canonicalize to
+    // one instant. A SQL LEFT JOIN would emit the rollup row twice and double
+    // its dollars in silence; the JS rate map makes it a throw. Reaching it
+    // requires dropping migration 14's canonicalizing trigger first - through
+    // SQL alone the second row collides on the primary key instead.
+    temp.db.exec(`
+      DROP TRIGGER model_pricing_effective_from_canonical_insert;
+      INSERT INTO model_pricing (model, bucket, usd_per_mtok, effective_from) VALUES
+        ('claude-fable-5', 'input', 10, '2026-02-01T00:00:00.000Z'),
+        ('claude-fable-5', 'input', 99, '2026-02-01');
+    `);
+    await expectUniform500();
   });
 });

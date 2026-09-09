@@ -494,7 +494,7 @@ CI-observable condition:
 | 8. `ANTHROPIC_API_KEY` isolation | *(none needed — `WP-X11` deleted per best-path §6.3)* | No experimental stub exists; the key never enters the dashboard env (CD-10) | — |
 | 9. WAL + tested restore | `WP-D2`, `WP-F8`, `WP-X9` | Pragma assertion on connect; restore actually exercised; release-checklist line item | 1/6 |
 | License/provenance for any borrowed pattern | `WP-F6` | Non-allowlisted dependency license → CI red | 1 |
-| Coverage floor for all of the above | `WP-F3`, `WP-X5` | Merge-blocking **>90%** coverage gate, live from Phase 1 — *as built: the thresholds are 100, see the note below* | 1 |
+| Coverage floor for all of the above | `WP-F3`, `WP-X5` | Merge-blocking **>90%** coverage gate, live from Phase 1 — *as built: the thresholds are 100, and "merge-blocking" holds for anyone who is not the repository owner; see the note below* | 1 |
 
 > **As built (what is verifiably wired today).** `.github/workflows/ci.yml` runs, in
 > this order: **the `gate:spawner` security gate first**, then typecheck, lint, format
@@ -523,11 +523,29 @@ CI-observable condition:
 >
 > The rule 1/2/4/5 contract tests exist (`security-contract.test.ts`) and run inside the
 > test step. Row 6's negative test is moot until the dispatcher exists (see rule 6), and
-> row 9's "restore exercised" is test-level (see rule 9). One honest caveat the workflow
-> file itself states: making CI **merge-blocking** requires a GitHub branch-protection
-> rule, which is an owner action on github.com and cannot be verified from the
-> repository — so "CI runs these gates" is proven, "a red gate blocks merge" is
-> configuration this page cannot attest.
+> row 9's "restore exercised" is test-level (see rule 9).
+>
+> This paragraph used to end on an honest caveat — that making CI **merge-blocking**
+> requires a GitHub branch-protection rule, an owner action on github.com that the
+> repository itself could not attest — and that was true until **2026-08-25**. It is no
+> longer. `main` is branch-protected: the required status check is the context `ci`
+> (lowercase — the job id in `.github/workflows/ci.yml`; the workflow's display name `CI`
+> is not the context), and force-pushes to `main` and deletion of `main` are refused for
+> everyone. So a red gate now does withhold the merge button — **from a contributor**. It
+> does not withhold it from the repository owner, because `enforce_admins` is deliberately
+> off: agenthropic has exactly one maintainer whose normal working mode is a direct push
+> to `main`, and turning admin enforcement on would lock the sole maintainer out of their
+> own repository. That is a stated design choice, not an oversight and not an item still
+> to be done. Attest it from a shell:
+>
+> ```
+> gh api repos/IvanBBaev/agenthropic/branches/main/protection \
+>   --jq '{contexts: .required_status_checks.contexts, enforce_admins: .enforce_admins.enabled}'
+> → {"contexts":["ci"],"enforce_admins":false}
+> ```
+>
+> The canonical write-up of the exemption and of every claim it re-reads is
+> [the standing correction](../contributing/decisions/README.md#a-standing-correction-merge-blocking).
 
 The canonical decision tying all of this together is **CD-7** in
 `docs/analysis/concept-analysis-v2.md`: "Security + the coverage gate are boundary
@@ -576,7 +594,12 @@ As built today:
   an unowned number.
 - **Still design, not code:** the webhook sink and Telegram relay (post-1.0, KC-5) and
   the operator-level restore drill (`WP-X9`, release checklist). Whether CI is
-  *merge-blocking* is a GitHub branch-protection setting this repository cannot attest.
+  *merge-blocking* was, until **2026-08-25**, a GitHub branch-protection setting this
+  repository could not attest; it can now — `main` requires the `ci` check, so a red run
+  withholds the merge button from a contributor and not from the repository owner
+  (`enforce_admins` is deliberately off, because the sole maintainer works by direct push
+  to `main` and would otherwise be locked out of his own repository). See
+  [the standing correction](../contributing/decisions/README.md#a-standing-correction-merge-blocking).
 - **Operational rules unchanged:** tunnel-only remote access (rule 7) remains a
   procedure, not a unit test — see [remote access](remote-access.md).
 
@@ -601,7 +624,8 @@ exceptions named honestly above.
 - [Licensing & provenance](../contributing/licensing.md) — the clean-room-vs-attribution
   rule (CD-9) behind the `cast` pattern note in rule 2.
 - [Testing & quality](../contributing/testing.md) — the coverage gate (thresholds at
-  100, enforced by the test step; merge-blocking still depends on branch protection)
-  and the negative-test catalogue that backs rules 3, 5, and 6.
+  100, enforced by the test step; merge-blocking for anyone who is not the repository
+  owner since `main` became branch-protected on 2026-08-25, the owner being deliberately
+  exempt) and the negative-test catalogue that backs rules 3, 5, and 6.
 - [Roadmap](../guide/roadmap.md) — where Phase 0's hard stop and Phase 1's security
   spine sit in the overall build sequence.

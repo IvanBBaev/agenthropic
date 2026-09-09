@@ -11,7 +11,7 @@
  *
  * Two corpora are scored, and they are never blended:
  *
- * - `annotations/synthetic/` - the seven shipped fixtures, whose hierarchy is
+ * - `annotations/synthetic/` - the eight shipped fixtures, whose hierarchy is
  *   true by construction. Scoring them proves the tooling works end to end and
  *   that the parser reproduces every join path including gate item 4. It proves
  *   nothing about reality: the "truth" was written by the same side as the
@@ -129,8 +129,8 @@ describe('hierarchy gate - synthetic fixture corpus', () => {
 
   it('reproduces the by-construction hierarchy exactly, and says its n out loud', () => {
     emit(renderCorpusReport(score));
-    expect(score.claimed).toBe(9);
-    expect(score.correct).toBe(9);
+    expect(score.claimed).toBe(11);
+    expect(score.correct).toBe(11);
     expect(score.wrong).toBe(0);
     expect(score.abstained).toBe(0);
     expect(score.unlabeled).toBe(0);

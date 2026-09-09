@@ -35,11 +35,15 @@ is no longer true — see the update immediately below.)*
 > **Test figures, re-measured 2026-08-15:** **106 test files / 1554 tests**, with **100%
 > statements, branches, functions and lines** enforced in **all five** packages —
 > `packages/test-fixtures` was folded into the gate rather than left outside it. Two
-> things that does not mean. It is not merge-*blocking*: a red run is not a blocked
-> button until a branch-protection rule exists on `main`, which is an owner action and was
-> still unset at the last recorded check. And covering the code is not measuring the
-> output — the hierarchy-accuracy exit gate reports **NOT CERTIFIED at n = 0** because no
-> session has been hand-labeled.
+> things that does not mean. It is not *unconditionally* merge-blocking: `main` has been
+> branch-protected since **2026-08-25** and requires the `ci` check, so a red run does
+> withhold the merge button — from a contributor, and not from the repository owner,
+> because `enforce_admins` is deliberately off (agenthropic has one maintainer whose normal
+> mode is a direct push to `main`, and turning admin enforcement on would lock the sole
+> maintainer out of their own repository). The full note is the
+> [standing correction](../contributing/decisions/README.md#a-standing-correction-merge-blocking).
+> And covering the code is not measuring the output — the hierarchy-accuracy exit gate
+> reports **NOT CERTIFIED at n = 0** because no session has been hand-labeled.
 >
 > **Three corrections to the prose below.** (1) **Four hooks, not twelve.** The installer
 > registers `UserPromptSubmit`, `Stop`, `SubagentStop` and `PreCompact`; **`SubagentStart`
@@ -204,8 +208,12 @@ idea is borrowed from and why forking was rejected, is on
 > **As built, the moat proper is real; the two conveniences are not.** Both hard
 > capabilities ship: the persistent cross-session DAG (`agents` +
 > `orchestration_edges`, the latter keyed by `instance`/`host_id`) and
-> dollar-cost attribution including delegation savings. Three P0 proofs guard them and
-> block merges: Σ `token_usage` equals the JSONL as checked by an independently written
+> dollar-cost attribution including delegation savings. Three P0 proofs guard them and,
+> since **2026-08-25**, block the merge button for anyone who is not the repository owner —
+> `main` requires the `ci` check, while `enforce_admins` stays off by design so the sole
+> maintainer is not locked out of their own repository
+> ([standing correction](../contributing/decisions/README.md#a-standing-correction-merge-blocking)).
+> The proofs: Σ `token_usage` equals the JSONL as checked by an independently written
 > reader inside the test; a double replay produces a byte-identical database; the DAG
 > rebuilds from JSONL alone after a simulated outage, with hooks proven liveness-only
 > (appending them leaves the DAG dump unchanged). **Telegram alerting is not built** —
@@ -290,6 +298,8 @@ intentionally does not resolve, see the [FAQ](faq.md).
 
 ## See also
 
+- [Running agenthropic](running.md) — the operator run book: the one-command start on a
+  single loopback port, every environment variable, the hooks, and troubleshooting.
 - [The moat — why build](the-moat.md) — the five absent capabilities, in full, and
   why forking an existing project was rejected.
 - [Comparison vs the field](comparison.md) — agenthropic against the baseline and the

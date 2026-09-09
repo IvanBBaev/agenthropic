@@ -2,6 +2,15 @@
  * Shared EventSource test double. Mirrors the browser API surface the SSE
  * wrapper touches: constructor(url), onopen/onerror, addEventListener,
  * readyState, close(). Test-side helpers: open(), fail(), emit().
+ *
+ * AMENDED 2026-09-03 (LV-2): frames now carry `lastEventId`, which the double
+ * previously left empty for every frame. The server numbers every frame it
+ * publishes (`id: <n>` in apps/server/src/realtime/hub.ts) and keeps no replay
+ * buffer, so that number is the only evidence a client has that frames went
+ * missing - a double that cannot express it cannot test for it. The id is
+ * OPTIONAL and sticky in the way the SSE spec makes it sticky: a frame emitted
+ * without one inherits the last id seen, exactly as a browser EventSource
+ * reports it, so every existing call site keeps its current behaviour.
  */
 export class MockEventSource {
   static instances: MockEventSource[] = [];
@@ -25,6 +34,8 @@ export class MockEventSource {
   onmessage: ((event: MessageEvent) => void) | null = null;
 
   private readonly listeners = new Map<string, Set<(event: MessageEvent) => void>>();
+  /** Last `id:` seen on the wire; sticky across frames that carry none. */
+  private lastEventId = '';
 
   constructor(url: string) {
     this.url = url;
@@ -58,17 +69,24 @@ export class MockEventSource {
     this.onerror?.();
   }
 
-  /** Deliver a frame; non-string data is JSON-stringified into the payload. */
-  emit(type: string, data: unknown): void {
+  /**
+   * Deliver a frame; non-string data is JSON-stringified into the payload.
+   * `id` is the server's frame number (`id: <n>` on the wire); omit it and the
+   * frame inherits the last id seen, as the SSE spec requires.
+   */
+  emit(type: string, data: unknown, options: { id?: string } = {}): void {
     const payload = typeof data === 'string' ? data : JSON.stringify(data);
-    const event = new MessageEvent(type, { data: payload });
-    for (const listener of [...(this.listeners.get(type) ?? [])]) listener(event);
-    if (type === 'message') this.onmessage?.(event);
+    this.deliver(type, payload, options.id);
   }
 
   /** Deliver a frame whose `data` is passed through untouched (e.g. non-string). */
-  emitRaw(type: string, data: unknown): void {
-    const event = new MessageEvent(type, { data });
+  emitRaw(type: string, data: unknown, options: { id?: string } = {}): void {
+    this.deliver(type, data, options.id);
+  }
+
+  private deliver(type: string, data: unknown, id: string | undefined): void {
+    if (id !== undefined) this.lastEventId = id;
+    const event = new MessageEvent(type, { data, lastEventId: this.lastEventId });
     for (const listener of [...(this.listeners.get(type) ?? [])]) listener(event);
     if (type === 'message') this.onmessage?.(event);
   }

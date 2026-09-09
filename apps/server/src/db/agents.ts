@@ -12,7 +12,7 @@
  * `status` is the ONE column the upsert does not simply overwrite - see the
  * CASE in {@link upsertAgent}.
  */
-import type { AgentStatus, AgentType } from '@agenthropic/shared';
+import type { AgentOutcomeCause, AgentStatus, AgentType } from '@agenthropic/shared';
 import type { AgentStatusChangedEvent } from '../ingest/ingest-events';
 import type { SqliteDatabase } from './connection';
 
@@ -30,6 +30,12 @@ export interface AgentUpsert {
   readonly parentAgentId: string | null;
   readonly firstSeenAt: string | null;
   readonly lastSeenAt: string | null;
+  /**
+   * The observed run outcome, or `null` when the substrate carried none. Like
+   * an observed terminal it is EVIDENCE, so the upsert never erases a recorded
+   * cause with a later `null` (see {@link upsertAgent}).
+   */
+  readonly outcomeCause: AgentOutcomeCause | null;
 }
 
 /** One non-terminal agent row projected for the WP-IN12 watchdog decision. */
@@ -120,15 +126,24 @@ export function upsertAgent(db: SqliteDatabase, row: AgentUpsert): AgentUpsertRe
   const existing = db.prepare('SELECT 1 FROM agents WHERE id = ?').get(row.id);
   db.prepare(
     `INSERT INTO agents
-       (id, session_id, type, subagent_type, status, parent_agent_id, first_seen_at, last_seen_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       (id, session_id, type, subagent_type, status, parent_agent_id, first_seen_at,
+        last_seen_at, outcome_cause)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        type            = excluded.type,
        subagent_type   = excluded.subagent_type,
        status          = ${AGENT_STATUS_CASE},
        parent_agent_id = excluded.parent_agent_id,
        first_seen_at   = excluded.first_seen_at,
-       last_seen_at    = excluded.last_seen_at`,
+       last_seen_at    = excluded.last_seen_at,
+       -- COALESCE, not overwrite: an outcome is a one-time OBSERVATION of a
+       -- parent-side spawn result. That result lives in the PARENT transcript,
+       -- which compaction can evict while the child transcript survives, so a
+       -- later replay legitimately re-parses the same child with no outcome to
+       -- report. Overwriting would read that silence as "it did not happen".
+       -- Replaying identical bytes still writes an identical row, so the P0
+       -- byte-identical double-replay property is untouched.
+       outcome_cause   = COALESCE(excluded.outcome_cause, agents.outcome_cause)`,
   ).run(
     row.id,
     row.sessionId,
@@ -138,6 +153,7 @@ export function upsertAgent(db: SqliteDatabase, row: AgentUpsert): AgentUpsertRe
     row.parentAgentId,
     row.firstSeenAt,
     row.lastSeenAt,
+    row.outcomeCause,
   );
   return { inserted: existing === undefined };
 }

@@ -145,6 +145,36 @@ describe('LiveView', () => {
     expect(sessionsCalls()).toHaveLength(1);
   });
 
+  it('absorbs a redelivered status frame instead of moving a second agent (LV-7)', async () => {
+    const session = sessionSummary({ statusCounts: statusCounts({ working: 3 }) });
+    fetchMock.mockResolvedValue(jsonResponse(200, sessionList([session])));
+    renderView();
+    await screen.findByRole('list', { name: 'sessions' });
+
+    const frame = {
+      type: 'agent-status-changed',
+      sessionId: session.id,
+      agentId: 'agent-main',
+      status: 'completed',
+      previousStatus: 'working',
+      occurredAt: '2026-07-29T10:10:00.000Z',
+    };
+    act(() => {
+      MockEventSource.latest().emit('agent-status-changed', frame);
+      // The stream gives no uniqueness guarantee: the same frame, again.
+      MockEventSource.latest().emit('agent-status-changed', frame);
+    });
+
+    // ONE agent finished. Reading `1 working / 2 done` here would tell the user
+    // that two of the three agents are done when only one is.
+    const buckets = screen.getByLabelText(`status counts for ${session.id}`);
+    expect(buckets.textContent).toContain('2 working');
+    expect(buckets.textContent).toContain('1 done');
+    // And a repeat is not a disagreement: there is nothing to refetch, so a
+    // redelivering stream must not turn into a refetch storm.
+    expect(sessionsCalls()).toHaveLength(1);
+  });
+
   it('refetches when a status event names a session the snapshot does not know', async () => {
     fetchMock.mockResolvedValue(jsonResponse(200, sessionList([sessionSummary()])));
     renderView();
@@ -260,7 +290,41 @@ describe('LiveView', () => {
     expect(screen.getByLabelText(`status counts for ${session.id}`).textContent).toContain(
       '1 working',
     );
+    // AMENDED 2026-09-09 (LV-9). This used to end here, at one call, on the
+    // reasoning that there was nothing to patch and no point aborting a fetch
+    // already in flight. Both halves still hold - the frame is still dropped, the
+    // in-flight fetch still runs to completion - but the response it produced was
+    // read at a moment the board cannot place relative to the dropped transition,
+    // and was then rendered as current anyway. So the snapshot is re-read once,
+    // and exactly once: the board is `ready` from here on, so no later frame takes
+    // the dropping path.
+    expect(sessionsCalls()).toHaveLength(2);
+  });
+
+  it('does not refetch for a status event that arrives while the board is in the error state', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(500, { error: 'Internal server error.' }));
+    renderView();
+    await screen.findByText(/Could not load sessions: Internal server error\./);
     expect(sessionsCalls()).toHaveLength(1);
+
+    act(() => {
+      MockEventSource.latest().emit('agent-status-changed', {
+        type: 'agent-status-changed',
+        sessionId: 'aaaaaaaa-1111-2222-3333-444444444444',
+        agentId: 'agent-main',
+        status: 'completed',
+        previousStatus: 'working',
+        occurredAt: '2026-07-29T10:10:00.000Z',
+      });
+    });
+
+    // LV-9 buys nothing here and is deliberately not spent. There is no fetch in
+    // flight whose read could predate this transition: the next fetch, whenever
+    // it is issued, is issued after this frame and so already contains it. The
+    // error stands as the last thing the board actually knows.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(sessionsCalls()).toHaveLength(1);
+    expect(screen.getByText(/Could not load sessions: Internal server error\./)).toBeDefined();
   });
 
   it('drops a snapshot that lands after a newer refetch already replaced it', async () => {
@@ -571,6 +635,105 @@ describe('LiveView', () => {
       expect(vi.getTimerCount()).toBe(before - 1);
     });
   });
+
+  describe('patched-card provenance (F-11)', () => {
+    // AMENDED 2026-09-03 (LV-7): the agent is now a parameter. Every frame this
+    // helper built was byte-identical, which is exactly what the board stopped
+    // applying twice; the default keeps the single-frame callers as they were.
+    function statusFrame(sessionId: string, agentId = 'agent-main') {
+      return {
+        type: 'agent-status-changed',
+        sessionId,
+        agentId,
+        status: 'completed',
+        previousStatus: 'working',
+        occurredAt: '2026-07-29T10:10:00.000Z',
+      };
+    }
+
+    it('says nothing on a card the stream has not rewritten', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, sessionList([sessionSummary()])));
+      renderView();
+      await screen.findByRole('list', { name: 'sessions' });
+
+      // An unpatched card is uniformly as old as the snapshot. A line on every
+      // row would bury the rows where it is a warning.
+      expect(screen.queryByTestId(`provenance-${sessionSummary().id}`)).toBeNull();
+    });
+
+    it('names which half of a patched card is live and how old the rest is', async () => {
+      vi.useFakeTimers();
+      const session = sessionSummary({ statusCounts: statusCounts({ working: 2 }) });
+      fetchMock.mockResolvedValue(jsonResponse(200, sessionList([session])));
+      renderView();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      // Four ticks: two minutes since the figures on this card were read.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CLOCK_INTERVAL_MS * 4);
+      });
+      act(() => {
+        MockEventSource.latest().emit('agent-status-changed', statusFrame(session.id));
+      });
+
+      // Read synchronously: the patch is a plain setState inside `act`, and
+      // `findBy*` polls on a clock this test has already frozen.
+      const line = screen.getByTestId(`provenance-${session.id}`);
+      // The defect this answers: the patch drags `lastActivityAt` to now while
+      // dollars, tokens, agent count and the session chip stay at fetch time -
+      // so the card must age the stale half out loud, in the same words the
+      // recency label uses.
+      expect(line.textContent).toContain('2m ago');
+      expect(line.textContent).toContain('1 status frame applied');
+      expect(sessionsCalls()).toHaveLength(1);
+    });
+
+    it('counts the frames rather than merely flagging that some arrived', async () => {
+      const session = sessionSummary({ statusCounts: statusCounts({ working: 3 }) });
+      fetchMock.mockResolvedValue(jsonResponse(200, sessionList([session])));
+      renderView();
+      await screen.findByRole('list', { name: 'sessions' });
+
+      act(() => {
+        MockEventSource.latest().emit('agent-status-changed', statusFrame(session.id, 'agent-a'));
+        MockEventSource.latest().emit('agent-status-changed', statusFrame(session.id, 'agent-b'));
+      });
+
+      // AMENDED 2026-09-03 (LV-7): two agents, not one agent twice. The count
+      // still has to be a count rather than a flag - that is what this test is
+      // for - but the identical repeat it used to send is now absorbed by the
+      // board as the redelivery it looks like, so it would count once.
+      const line = await screen.findByTestId(`provenance-${session.id}`);
+      expect(line.textContent).toContain('2 status frames applied');
+    });
+
+    it('drops the line again once a refetch makes the whole card one age', async () => {
+      const session = sessionSummary({ statusCounts: statusCounts({ working: 2 }) });
+      fetchMock.mockResolvedValue(jsonResponse(200, sessionList([session])));
+      renderView();
+      await screen.findByRole('list', { name: 'sessions' });
+
+      act(() => {
+        MockEventSource.latest().emit('agent-status-changed', statusFrame(session.id));
+      });
+      await screen.findByTestId(`provenance-${session.id}`);
+
+      // A fresh snapshot re-reads every figure, so there is no longer a stale
+      // half to disclose - the caveat must not outlive what it qualifies.
+      act(() => {
+        MockEventSource.latest().emit('session-ingested', {
+          type: 'session-ingested',
+          sessionId: session.id,
+          occurredAt: '2026-07-29T10:11:00.000Z',
+        });
+      });
+      await waitFor(() => {
+        expect(screen.queryByTestId(`provenance-${session.id}`)).toBeNull();
+      });
+    });
+  });
 });
 
 describe('toIngestFailureNotice', () => {
@@ -618,5 +781,118 @@ describe('ingestedSessionId', () => {
     ['a non-string sessionId', { sessionId: 9 }],
   ])('returns null for %s', (_label, frame) => {
     expect(ingestedSessionId(frame)).toBeNull();
+  });
+});
+
+/**
+ * AMENDED 2026-09-03 (LV-2): the board used to have no way to say "frames are
+ * missing from this feed".
+ *
+ * The stream numbers every frame and replays nothing, so a reconnect - or any
+ * server-side drop - leaves a hole that the board renders as continuity. The
+ * refetch-on-recovery effect repairs the SNAPSHOT, which is why sessions and
+ * buckets come back, but it cannot repair `ingest-failed`: a quarantined
+ * session never reaches the read API, so a failure announced inside the gap is
+ * unrecoverable and the reader has to be told it existed.
+ */
+describe('LiveView stream-gap notice (LV-2)', () => {
+  it('names how many frames the gap proves this board never received', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, sessionList([sessionSummary()])));
+    renderView();
+    await screen.findByRole('list', { name: 'sessions' });
+
+    act(() => {
+      // Two frames the board can ignore, four ids apart: whatever ids 2-4
+      // carried, this tab never saw it.
+      MockEventSource.latest().emit('message', { n: 1 }, { id: '1' });
+      MockEventSource.latest().emit('message', { n: 5 }, { id: '5' });
+    });
+
+    const notice = await screen.findByTestId('stream-gap');
+    expect(notice.getAttribute('role')).toBe('alert');
+    expect(notice.textContent).toContain('3 frames');
+    expect(notice.textContent).toContain('ids 2-4');
+    // The refetch below cannot bring a quarantine notice back, and the banner
+    // is the only place that can say so.
+    expect(notice.textContent).toContain('ingest failure');
+  });
+
+  it('names a single missed frame by the one id it was', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, sessionList([sessionSummary()])));
+    renderView();
+    await screen.findByRole('list', { name: 'sessions' });
+
+    act(() => {
+      MockEventSource.latest().emit('message', { n: 1 }, { id: '1' });
+      MockEventSource.latest().emit('message', { n: 3 }, { id: '3' });
+    });
+
+    const notice = await screen.findByTestId('stream-gap');
+    expect(notice.textContent).toContain('1 frame ');
+    expect(notice.textContent).toContain('id 2');
+  });
+
+  it('accumulates several gaps and names the most recent range', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, sessionList([sessionSummary()])));
+    renderView();
+    await screen.findByRole('list', { name: 'sessions' });
+
+    act(() => {
+      MockEventSource.latest().emit('message', {}, { id: '1' });
+      MockEventSource.latest().emit('message', {}, { id: '3' });
+      MockEventSource.latest().emit('message', {}, { id: '9' });
+    });
+
+    const notice = await screen.findByTestId('stream-gap');
+    // 1 + 5 missed. The ranges are not merged: ids 4-8 include frames that DID
+    // arrive, so naming one wide range would overstate the loss.
+    expect(notice.textContent).toContain('6 frames');
+    expect(notice.textContent).toContain('ids 4-8');
+  });
+
+  it('refetches persisted truth when the sequence proves frames went missing', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, sessionList([sessionSummary()])));
+    renderView();
+    await screen.findByRole('list', { name: 'sessions' });
+
+    act(() => {
+      MockEventSource.latest().emit('message', {}, { id: '1' });
+      MockEventSource.latest().emit('message', {}, { id: '4' });
+    });
+
+    // Status frames in the gap would have been patched into the buckets; the
+    // snapshot is the only way back to truth for everything except the
+    // failure notices.
+    await waitFor(() => expect(sessionsCalls()).toHaveLength(2));
+  });
+
+  it('keeps the notice until it is dismissed', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, sessionList([sessionSummary()])));
+    renderView();
+    await screen.findByRole('list', { name: 'sessions' });
+
+    act(() => {
+      MockEventSource.latest().emit('message', {}, { id: '1' });
+      MockEventSource.latest().emit('message', {}, { id: '4' });
+    });
+
+    const notice = await screen.findByTestId('stream-gap');
+    fireEvent.click(within(notice).getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByTestId('stream-gap')).toBeNull();
+  });
+
+  it('says nothing while the frame sequence is intact', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, sessionList([sessionSummary()])));
+    renderView();
+    await screen.findByRole('list', { name: 'sessions' });
+
+    act(() => {
+      MockEventSource.latest().emit('message', {}, { id: '1' });
+      MockEventSource.latest().emit('message', {}, { id: '2' });
+      MockEventSource.latest().emit('message', {});
+    });
+
+    expect(screen.queryByTestId('stream-gap')).toBeNull();
+    expect(sessionsCalls()).toHaveLength(1);
   });
 });

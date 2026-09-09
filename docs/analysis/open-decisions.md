@@ -352,8 +352,10 @@ reopen.**
 
 - [x] Coverage merge gate is **`>90%`**. (Closed 2026-07-06.)
 
-**Overtaken by the build (2026-08-15) — the number moved up, the word "merge" is still
-false.** The threshold shipped is **100%** for statements, branches, functions and lines, and
+**Overtaken by the build (2026-08-15; enforcement resolved 2026-08-25) — the number moved up,
+and the word "merge" has since caught up.** This note's opening line read "the number moved
+up, the word *merge* is still false" until 2026-08-25; the second paragraph below records what
+changed. The threshold shipped is **100%** for statements, branches, functions and lines, and
 it is pinned in each package's own `vitest.config.ts` across all five packages, so ">90%"
 above is now historical wording rather than the operative bar. All five additionally carry a
 static guard that fails if a `v8 ignore` / `c8 ignore` / `istanbul ignore` pragma appears
@@ -362,13 +364,22 @@ anywhere in `src/` — four as `coverage-honesty.test.ts`, `apps/web`'s as the
 removes both arms of an operator from the **denominator**, which makes 100% reachable by not
 looking.
 
-What has **not** changed is the part of the sentence that says *merge gate*. Branch
-protection on `main` is not enabled, so a failing coverage run cannot physically block
-anything; the gate runs, reports, and is obeyed by convention. Enabling protection is an
-owner act on GitHub, not a code change, and until it is done "blocks merges" should be read
-as **UNENFORCED**. Recording that here rather than quietly upgrading the closed decision —
-the closure was about a comparison operator; the enforcement question was never closed
-because it was never asked.
+The part of the sentence that says *merge gate* took longer. Until **2026-08-25** branch
+protection on `main` was not enabled, so a failing coverage run could not physically block
+anything; the gate ran, reported, and was obeyed by convention, and "blocks merges" was to be
+read as **UNENFORCED**. That changed on 2026-08-25: `main` is now branch-protected with `ci`
+as the required status check (lowercase — the job id in `.github/workflows/ci.yml`, not the
+workflow's `CI` display name), and force-pushes and deletion of `main` are refused for
+everyone. "Blocks merges" is therefore true **for anyone who is not the repository owner**,
+and deliberately not true for the owner: `enforce_admins` is left off because agenthropic has
+exactly one maintainer whose normal working mode is a direct push to `main`, and turning it on
+would lock the sole maintainer out of their own repository. Verify with
+`gh api repos/IvanBBaev/agenthropic/branches/main/protection --jq '{contexts: .required_status_checks.contexts, enforce_admins: .enforce_admins.enabled}'`
+→ `{"contexts":["ci"],"enforce_admins":false}`; the canonical write-up is
+[the standing correction](../site/contributing/decisions/README.md#a-standing-correction-merge-blocking).
+Recorded here rather than quietly upgrading the closed decision — the closure was about a
+comparison operator; the enforcement question was never closed because it was never asked,
+and it was answered by an owner action on GitHub, not by this form.
 
 ---
 
@@ -377,6 +388,9 @@ because it was never asked.
 Two columns were added on 2026-08-15. **Build status** says what the code does today;
 **Decided** stays empty until you sign. They are deliberately separate: a shipped default is
 a question still waiting for an answer, and nothing below has been answered by being built.
+*(Amended 2026-08-25: only the OPEN-8 row moved — its enforcement half is no longer
+UNENFORCED. Every other row still reads as it did on 2026-08-15, and no ratification has been
+signed.)*
 
 | # | Decision | Blocks | Recommendation reached by audit? | Build status (2026-08-15) | Decided (date) |
 |---|---|---|---|---|---|
@@ -387,5 +401,5 @@ a question still waiting for an answer, and nothing below has been answered by b
 | OPEN-5 | Hook-POST auth mechanism | 🟥 hook-ingest | No — options only | Implemented: shared token, argv-free curl delivery | |
 | OPEN-6 | Pricing data source | 🟥 cost-model / Track-D cost | No — candidates only (LOST-2) | **Still open** — seed is PROVISIONAL; no `verified_on` column exists | |
 | OPEN-7 | App port + config location | 🟥 config/scaffold + remote-access | No — pick a number | Implemented: **4317**, `DEFAULT_PORT` / `DASHBOARD_PORT` | |
-| OPEN-8 | Coverage boundary | — | ✅ Closed `>90%` (2026-07-06) | Threshold is 100% in five packages; **merge-blocking UNENFORCED** | 2026-07-06 |
+| OPEN-8 | Coverage boundary | — | ✅ Closed `>90%` (2026-07-06) | Threshold is 100% in five packages; **merge-blocking since 2026-08-25** — required check `ci`, for anyone who is not the repository owner (`enforce_admins` deliberately off) | 2026-07-06 |
 | OPEN-9 | "OPCⁿ" define or drop | 🟩 docs only | No firm rec (drop is low-risk) | **Still open** — now in three site docs | |

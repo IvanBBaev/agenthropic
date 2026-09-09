@@ -25,11 +25,36 @@
  * loud mispricing signal that the schema says is "served as-is, never averaged
  * away". So the panel calls a nonzero delta what it is: a discrepancy worth
  * looking at, not money anyone earned.
+ *
+ * AMENDED 2026-09-03 (CA-1..CA-4). The two rules above were right and were
+ * enforced; what neither of them covered:
+ *
+ *  - CA-1. The two count cells in the segment table went to `toLocaleString`
+ *    unguarded while the dollar cell next to them was guarded. Payloads reach
+ *    this panel through an unchecked cast (see `formatTokens`' F-5 note), so
+ *    those cells rendered `NaN`/`∞` as if they were counts, or threw and took
+ *    the page down. A guard on the money and none on the tokens is backwards:
+ *    tokens are the ground truth the money is derived FROM.
+ *  - CA-2. Rule 2 showed the excluded COUNT but never its denominator, and the
+ *    exclusion is wider than the text implied: `packages/core` skips an
+ *    unpriceable subagent in all three sums, so its real, measured dollars are
+ *    missing from the level labelled "measured" too. The label is now scoped to
+ *    the subagents actually in it.
+ *  - CA-3. `savingsUsd` is Σ max(0, hypothetical - actual) per subagent, so the
+ *    three figures do not subtract when any subagent cost MORE than the
+ *    alternative: the overspend is floored to zero and never netted. Read as a
+ *    difference, "Saved" then overstates. Said outright, where it happens.
+ *  - CA-4. Every caveat above was prose reachable only by reading the page in
+ *    visual order, while the tables are landmarks a reader can jump straight
+ *    into. Both tables and both figure groups now carry the caveats as their
+ *    accessible description (the F-18 pattern from `CostView`), so the reader
+ *    with the least context no longer gets the most confident numbers.
  */
 import { useEffect, useState } from 'react';
 import { fetchCostAnalysis } from '../api';
 import type { CostAnalysisDto } from '../dto';
-import { formatUsd, shortId } from '../format';
+import { formatTokens, formatUsd, shortId } from '../format';
+import { NO_FIGURE_META } from './status';
 
 type AnalysisState =
   | { readonly kind: 'loading' }
@@ -70,8 +95,15 @@ export function analysisErrorText(message: string, status: number | null): strin
   return message;
 }
 
-/** A signed dollar delta, so an over- and an under-count never look alike. */
+/**
+ * A signed dollar delta, so an over- and an under-count never look alike.
+ *
+ * The non-finite case is handed straight to `formatUsd`: `NaN >= 0` is false,
+ * so without this the gap marker would come back wearing a minus sign, and
+ * "-cost unreadable" claims a DIRECTION for a figure that has no value.
+ */
 function signedUsd(deltaUsd: number): string {
+  if (!Number.isFinite(deltaUsd)) return formatUsd(deltaUsd);
   return deltaUsd >= 0 ? `+${formatUsd(deltaUsd)}` : `-${formatUsd(Math.abs(deltaUsd))}`;
 }
 
@@ -94,6 +126,54 @@ function segmentTokens(tokens: {
   return (
     tokens.input + tokens.output + tokens.cacheRead + tokens.cacheWrite5m + tokens.cacheWrite1h
   );
+}
+
+/**
+ * A message count that is not a number at all. Worded like `UNREADABLE_USD` and
+ * `UNREADABLE_TOKENS` - subject, then state - so the three gaps read as one
+ * vocabulary and none of them can be mistaken for a quantity.
+ */
+const UNREADABLE_COUNT = 'messages unreadable';
+
+/**
+ * CA-1. `toLocaleString` does not throw on `NaN` or `Infinity`; it returns
+ * "NaN" and "∞", right-aligned in a numeric column beside figures that are
+ * real. On an absent field it throws instead, and with no error boundary in
+ * this tree that blanks the whole page. One `Number.isFinite` covers all four
+ * shapes (absent, null, NaN, infinite), which is also the only way to keep the
+ * guard reachable from a test under this repo's 100% branch gate.
+ */
+function messageCountLabel(messageCount: number): string {
+  return Number.isFinite(messageCount) ? messageCount.toLocaleString('en-US') : UNREADABLE_COUNT;
+}
+
+/**
+ * CA-4. Ids for the caveat paragraphs, so they can be named as the accessible
+ * DESCRIPTION of the figures they qualify - the F-18 pattern from `CostView`.
+ * A table is a landmark: a reader can jump into "delegation savings per agent"
+ * and hear its name and its cells without ever passing the prose above it. And
+ * the `~` that carries "estimate" visually is punctuation most screen readers
+ * drop at default verbosity, so for that reader the modelled figures arrive
+ * looking exactly like the measured ones.
+ */
+const COMPACTION_SIGNAL_ID = 'analysis-compaction-signal';
+const DELEGATION_BASIS_ID = 'analysis-delegation-basis';
+const DELEGATION_SCOPE_ID = 'analysis-delegation-scope';
+const DELEGATION_FLOOR_ID = 'analysis-delegation-floor';
+const DELEGATION_SKIPPED_ID = 'analysis-delegation-skipped';
+
+/**
+ * The caveats in DOCUMENT order, which is the order a sighted reader meets
+ * them. Only ids that are actually rendered may appear: `aria-describedby`
+ * pointing at a missing element is silently dropped by some assistive
+ * technology and read as an empty string by others, so a dangling id is a
+ * caveat that disappears without anyone noticing.
+ */
+function delegationDescribedBy(dearerAgentCount: number, skippedAgentCount: number): string {
+  const ids = [DELEGATION_BASIS_ID, DELEGATION_SCOPE_ID];
+  if (dearerAgentCount > 0) ids.push(DELEGATION_FLOOR_ID);
+  if (skippedAgentCount > 0) ids.push(DELEGATION_SKIPPED_ID);
+  return ids.join(' ');
 }
 
 export interface SessionCostAnalysisProps {
@@ -145,6 +225,11 @@ export function SessionCostAnalysis({
 
   const { compaction, delegationSavings } = state.analysis;
 
+  // Derived once: the banner and the table's accessible description have to
+  // agree about whether there is a signal, and two copies of the comparison is
+  // how they stop agreeing.
+  const hasDeltaSignal = Math.abs(compaction.deltaUsd) >= DELTA_SIGNAL_USD;
+
   // THREE delegation states, not two, because the middle one is a lie when it
   // is rendered like the others. `perAgent` is empty either because no subagent
   // ran - nothing to estimate - or because every subagent that DID run was
@@ -158,6 +243,26 @@ export function SessionCostAnalysis({
   const allDelegationSkipped = delegationSavings.perAgent.length === 0 && skippedAgentCount > 0;
   const hasDelegationEstimate = !noDelegationRan && !allDelegationSkipped;
 
+  // CA-2. The denominator the three delegation figures are computed over.
+  // `packages/core` skips an unpriceable subagent with a `continue`, so it is
+  // absent from the MEASURED sum as well as the two modelled ones - which the
+  // panel's own labels ("measured, subagents only") did not admit. A ratio
+  // whose denominator excludes rows has to say so where the ratio is printed,
+  // and these three figures are exactly that ratio's numerator.
+  const pricedAgentCount = delegationSavings.perAgent.length;
+  const delegatingAgentCount = pricedAgentCount + skippedAgentCount;
+  const coverageNote =
+    skippedAgentCount === 0 ? '' : ` · ${pricedAgentCount} of ${delegatingAgentCount} subagents`;
+
+  // CA-3. Subagents that cost MORE than the top-tier alternative would have.
+  // Their overspend is floored to $0.00 per subagent before summing, so it is
+  // never netted off "Saved" - which therefore is NOT the difference between
+  // the two levels above it, however much the layout suggests it is.
+  const dearerAgentCount = delegationSavings.perAgent.filter(
+    (agent) => agent.hypotheticalUsd < agent.actualUsd,
+  ).length;
+  const delegationDescription = delegationDescribedBy(dearerAgentCount, skippedAgentCount);
+
   return (
     <div data-testid="session-analysis">
       <h3>Compaction repricing</h3>
@@ -167,7 +272,7 @@ export function SessionCostAnalysis({
         </p>
       ) : (
         <>
-          <div className="kpis" aria-label="compaction repricing">
+          <div className="kpis" role="group" aria-label="compaction repricing">
             <div className="kpi">
               <span className="kpi-label">Naive</span>
               <span className="kpi-value">{formatUsd(compaction.naiveUsd)}</span>
@@ -187,14 +292,18 @@ export function SessionCostAnalysis({
               </span>
             </div>
           </div>
-          {Math.abs(compaction.deltaUsd) >= DELTA_SIGNAL_USD && (
-            <p className="empty-state" data-testid="delta-signal">
+          {hasDeltaSignal && (
+            <p className="empty-state" id={COMPACTION_SIGNAL_ID} data-testid="delta-signal">
               <span className="status-error">✕</span> These two should agree. A difference this size
               means the substrate or the pricing is incomplete - it is a mispricing signal, not a
               saving.
             </p>
           )}
-          <table className="data-table" aria-label="compaction segments">
+          <table
+            className="data-table"
+            aria-label="compaction segments"
+            aria-describedby={hasDeltaSignal ? COMPACTION_SIGNAL_ID : undefined}
+          >
             <thead>
               <tr>
                 <th className="num">#</th>
@@ -219,8 +328,8 @@ export function SessionCostAnalysis({
                       ? 'session start'
                       : (segment.boundary.trigger ?? 'compaction')}
                   </td>
-                  <td className="num">{segment.messageCount.toLocaleString('en-US')}</td>
-                  <td className="num">{segmentTokens(segment.tokens).toLocaleString('en-US')}</td>
+                  <td className="num">{messageCountLabel(segment.messageCount)}</td>
+                  <td className="num">{formatTokens(segmentTokens(segment.tokens))}</td>
                   <td className="num">{formatUsd(segment.usd)}</td>
                 </tr>
               ))}
@@ -235,7 +344,7 @@ export function SessionCostAnalysis({
           estimate
         </span>
       </h3>
-      <p className="muted">
+      <p className="muted" id={DELEGATION_BASIS_ID}>
         What the <strong>delegated work</strong> would have cost with no subagents - every delegated
         turn run on <strong>the top-tier model</strong> instead. The cache profile of a run that
         never happened is not observable, so this is a modelled figure, not a measurement.
@@ -253,39 +362,77 @@ export function SessionCostAnalysis({
       */}
       {hasDelegationEstimate && (
         <>
-          <p className="muted" data-testid="delegation-scope">
+          <p className="muted" id={DELEGATION_SCOPE_ID} data-testid="delegation-scope">
             Both levels below cover the delegated turns only. The main agent&apos;s own spend is in
             neither, because it is the same with or without delegation - which is why it cancels out
             and leaves the saving unaffected.
           </p>
-          <div className="kpis" aria-label="delegation savings">
+          <div
+            className="kpis"
+            role="group"
+            aria-label="delegation savings"
+            aria-describedby={delegationDescription}
+          >
             <div className="kpi">
               <span className="kpi-label">Delegated work, actual</span>
               <span className="kpi-value">{formatUsd(delegationSavings.actualUsd)}</span>
-              <span className="muted kpi-note">measured, subagents only</span>
+              {/* CA-2: the coverage suffix appears only when something was in
+                  fact excluded. A denominator printed when the figure covers
+                  everything is a caveat spent on a day nothing is wrong, and
+                  it is spent on the day it is finally right. */}
+              <span className="muted kpi-note">measured, subagents only{coverageNote}</span>
             </div>
             <div className="kpi">
               <span className="kpi-label">Same work, no delegation</span>
               <span className="kpi-value">~ {formatUsd(delegationSavings.hypotheticalUsd)}</span>
-              <span className="muted kpi-note">estimated, subagents only</span>
+              <span className="muted kpi-note">estimated, subagents only{coverageNote}</span>
             </div>
             <div className="kpi" data-testid="savings-kpi">
               <span className="kpi-label">Saved</span>
               <span className="kpi-value">~ {formatUsd(delegationSavings.savingsUsd)}</span>
-              <span className="muted kpi-note">estimated</span>
+              <span className="muted kpi-note">estimated{coverageNote}</span>
             </div>
           </div>
+          {/* CA-3. Placed under the three figures it contradicts, because a
+              reader who takes them as a subtraction is not wrong about
+              arithmetic - the panel is wrong about what it is showing. */}
+          {dearerAgentCount > 0 && (
+            <p className="empty-state" id={DELEGATION_FLOOR_ID} data-testid="delegation-floor">
+              <span className="status-error">✕</span> {dearerAgentCount}{' '}
+              {dearerAgentCount === 1 ? 'subagent' : 'subagents'} cost MORE than the top-tier
+              alternative would have. Each subagent&apos;s saving is floored at $0.00 before the
+              sum, so that overspend is nowhere subtracted: &quot;Saved&quot; is a sum of floors and
+              does not equal the difference between the two levels above it.
+            </p>
+          )}
         </>
       )}
       {/* Only meaningful alongside an estimate. When EVERY subagent was skipped
           there is no estimate for them to be excluded from, so that case gets
           its own message below instead of this footnote to nothing. */}
       {skippedAgentCount > 0 && hasDelegationEstimate && (
-        <p className="empty-state" data-testid="skipped-agents">
-          <span className="status-unknown">?</span> {skippedAgentCount}{' '}
-          {skippedAgentCount === 1 ? 'subagent is' : 'subagents are'} excluded from this estimate:
-          no top-tier model could be resolved for {skippedAgentCount === 1 ? 'it' : 'them'}, and a
-          guess would be worse than a gap.
+        <p className="empty-state" id={DELEGATION_SKIPPED_ID} data-testid="skipped-agents">
+          {/* The gap marker, not the unrecognised-STATUS marker it used to
+              borrow: nothing here is in an unknown state, a number could not be
+              computed. `aria-hidden` because the sentence that follows says the
+              same thing in words - a reader who hears "question mark" learns
+              nothing the next clause does not spell out. */}
+          <span className={NO_FIGURE_META.className} aria-hidden="true">
+            {NO_FIGURE_META.symbol}
+          </span>{' '}
+          {skippedAgentCount} {skippedAgentCount === 1 ? 'subagent is' : 'subagents are'} excluded
+          from this estimate: no top-tier model could be resolved for{' '}
+          {skippedAgentCount === 1 ? 'it' : 'them'}, and a guess would be worse than a gap.{' '}
+          {/* AMENDED 2026-09-03 (CA-2): the sentence above is unchanged; what
+              it left out is how wide the exclusion is. The server skips such a
+              subagent in ALL THREE sums, so its real, measured dollars are
+              missing from the figure labelled "measured" too - the reader was
+              told a modelled number had a hole in it, not that a measured one
+              did. */}
+          That is {skippedAgentCount} of {delegatingAgentCount} subagents this session delegated to,
+          and the exclusion drops {skippedAgentCount === 1 ? 'it' : 'them'} from all three figures
+          above - the measured one included - so those real dollars are missing from &quot;Delegated
+          work, actual&quot; as well, not just from the estimate.
         </p>
       )}
       {noDelegationRan ? (
@@ -294,14 +441,21 @@ export function SessionCostAnalysis({
         </p>
       ) : allDelegationSkipped ? (
         <p className="empty-state" data-testid="delegation-unpriceable">
-          <span className="status-unknown">?</span> This session delegated to {skippedAgentCount}{' '}
+          <span className={NO_FIGURE_META.className} aria-hidden="true">
+            {NO_FIGURE_META.symbol}
+          </span>{' '}
+          This session delegated to {skippedAgentCount}{' '}
           {skippedAgentCount === 1 ? 'subagent' : 'subagents'}, but no top-tier model could be
           resolved for {skippedAgentCount === 1 ? 'it' : 'any of them'}, so the saving cannot be
           estimated at all. The figures are withheld rather than shown as $0.00, which would read as
           &quot;delegation saved nothing&quot; - a measurement this session does not support.
         </p>
       ) : (
-        <table className="data-table" aria-label="delegation savings per agent">
+        <table
+          className="data-table"
+          aria-label="delegation savings per agent"
+          aria-describedby={delegationDescription}
+        >
           <thead>
             <tr>
               <th>Agent</th>

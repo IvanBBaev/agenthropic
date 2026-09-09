@@ -45,6 +45,18 @@ import { useSyncExternalStore } from 'react';
  * now" label is provably stale on screen), or a view arriving that needs
  * second-level precision (which would need its own faster clock, not a change
  * here).
+ *
+ * AMENDED 2026-09-07 (CL-1). "a 30 s tick leaves a label at most one third of
+ * that window behind the truth, and never lets 'just now' survive its own
+ * definition" was stated as a property of this constant. It is not one this
+ * constant can hold on its own: a browser throttles background-tab intervals
+ * to a minute or more and freezes them outright in a frozen/bfcached tab, so
+ * the bound holds only while the tab is FOREGROUNDED. A dashboard left on a
+ * second monitor or behind another tab - which is how this one is meant to be
+ * used - could therefore return to the reader still saying "just now" about a
+ * stream that went quiet an hour ago. The bound is now enforced rather than
+ * assumed: `subscribe` re-reads the clock on `visibilitychange`, so the first
+ * paint a returning reader sees is a fresh reading, not a frozen one.
  */
 export const CLOCK_INTERVAL_MS = 30_000;
 
@@ -65,11 +77,22 @@ function subscribe(listener: Listener): () => void {
     // before the clock stopped, so take a fresh one before handing it out.
     nowMs = Date.now();
     timer = setInterval(tick, CLOCK_INTERVAL_MS);
+    // CL-1. The interval alone cannot hold the staleness bound this module
+    // promises: a background tab has its timers throttled or stopped, and the
+    // reader who switches back is shown whatever the last tick before that
+    // managed to record. Re-reading on the visibility change makes the moment
+    // a stale label would otherwise be BELIEVED the moment it is refreshed.
+    // Deliberately unconditional: ticking on the way out is a wasted read,
+    // while branching on `visibilityState` would buy an untestable arm.
+    document.addEventListener('visibilitychange', tick);
   }
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
-    if (listeners.size === 0) clearInterval(timer);
+    if (listeners.size === 0) {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', tick);
+    }
   };
 }
 
@@ -84,4 +107,21 @@ function getSnapshot(): number {
  */
 export function useNowMs(): number {
   return useSyncExternalStore(subscribe, getSnapshot);
+}
+
+/**
+ * The time an EVENT happened, for stamping something that just occurred - a
+ * response landing, a click - rather than for rendering a duration.
+ *
+ * It deliberately bypasses the store. The store's reading is up to
+ * `CLOCK_INTERVAL_MS` old by design, which is harmless for a "3 minutes ago"
+ * label and wrong for a stamp: a response that arrives 10 s after a tick would
+ * be recorded 10 s before it happened, and within half a minute of UTC
+ * midnight that mis-stamps the DAY. This exists so that the exception is one
+ * named function instead of a `Date.now()` sprinkled through views - the rule
+ * the module protects is that nothing RENDERS from an ad-hoc reading, not that
+ * `Date.now` is never called.
+ */
+export function readNowMs(): number {
+  return Date.now();
 }

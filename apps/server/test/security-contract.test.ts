@@ -6,13 +6,16 @@
  *   loopback-only bind - mandatory token - timing-safe 401s -
  *   same-origin-only SSE - no token, no start.
  */
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { loadConfig } from '../src/config';
 import { start, type RunningServer } from '../src/index';
 import { TEST_TOKEN } from './helpers';
+
+/** Markup for the stand-in SPA shell; recognisable in an assertion. */
+const SPA_INDEX_MARKUP = '<!doctype html><title>agenthropic</title><div id="root"></div>';
 
 describe('security contract (WP-F7)', () => {
   let dir: string;
@@ -22,11 +25,16 @@ describe('security contract (WP-F7)', () => {
 
   beforeAll(async () => {
     dir = mkdtempSync(join(tmpdir(), 'agenthropic-contract-'));
+    // A stand-in for the built SPA, so this contract does not depend on the web
+    // app having been built - and never serves the repository's real dist.
+    mkdirSync(join(dir, 'web'));
+    writeFileSync(join(dir, 'web', 'index.html'), SPA_INDEX_MARKUP);
     server = await start({
       DASHBOARD_TOKEN: TEST_TOKEN,
       DASHBOARD_PORT: '0',
       DASHBOARD_DB_PATH: join(dir, 'data', 'agenthropic.db'),
       DASHBOARD_INGEST: '0', // tests must never resolve the real ~/.claude/projects
+      DASHBOARD_WEB_ROOT: join(dir, 'web'),
     });
     const address = server.app.addresses()[0];
     if (address === undefined) {
@@ -200,6 +208,40 @@ describe('security contract (WP-F7)', () => {
   it('non-stream /api routes never accept the query token', async () => {
     const response = await fetch(`${baseUrl}/api/health?token=${TEST_TOKEN}`);
     expect(response.status).toBe(401);
+  });
+
+  it('(8) the SPA shell is the ONLY unauthenticated surface', async () => {
+    // Deliberately unauthenticated: the bundle holds no secret (the operator
+    // types the token into the running page, and it stays in sessionStorage),
+    // and a browser cannot present a Bearer header for the document it is still
+    // loading - so gating the HTML would mean no token could ever be entered.
+    const spa = await fetch(`${baseUrl}/`);
+    expect(spa.status).toBe(200);
+    expect(spa.headers.get('content-type')).toBe('text/html; charset=utf-8');
+    expect(await spa.text()).toBe(SPA_INDEX_MARKUP);
+
+    // ...and the data behind it is exactly as gated as before it existed.
+    const health = await fetch(`${baseUrl}/api/health`);
+    expect(health.status).toBe(401);
+    const stream = await fetch(`${baseUrl}/api/stream`);
+    expect(stream.status).toBe(401);
+  });
+
+  it('(9) the static site never answers an /api path', async () => {
+    // The wildcard's routed pattern is '/*', which the auth hook skips - so the
+    // handler must refuse the /api namespace itself, or an unregistered /api
+    // path could be answered off the filesystem with no gate in front of it.
+    const response = await fetch(`${baseUrl}/api/unknown`);
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: 'Not found.' });
+  });
+
+  it('(10) the static site cannot be walked out of the web root', async () => {
+    const traversal = await fetch(`${baseUrl}/%2e%2e%2f%2e%2e%2fdata%2fagenthropic.db`);
+    expect(traversal.status).toBe(404);
+    const text = await traversal.text();
+    expect(text).toEqual(JSON.stringify({ error: 'Not found.' }));
+    expect(text).not.toContain(dir);
   });
 
   it('the 401 body never echoes the token', async () => {

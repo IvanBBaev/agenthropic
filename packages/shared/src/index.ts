@@ -1,4 +1,4 @@
-export type * from './types/rows';
+export type { TokenBucket, RawEventSource } from './types/enums';
 export type * from './ports/event-store';
 export { InMemoryEventStore } from './testing/in-memory-event-store';
 export {
@@ -16,6 +16,7 @@ export {
   ApiErrorSchema,
   AgentStatusSchema,
   AgentTypeSchema,
+  AgentOutcomeCauseSchema,
   OrchestrationEdgeSourceSchema,
   DEFAULT_PAGE_LIMIT,
   MAX_PAGE_LIMIT,
@@ -29,6 +30,7 @@ export type {
   ApiErrorDto,
   AgentStatus,
   AgentType,
+  AgentOutcomeCause,
   OrchestrationEdgeSource,
 } from './schemas/common';
 export { AgentNodeSchema, OrchestrationEdgeDtoSchema } from './schemas/graph';
@@ -92,6 +94,20 @@ export {
 export type { HookEventTimeSource, SessionHookEventDto, SessionEventsDto } from './schemas/events';
 export { DagCountsSchema, GlobalDagResponseSchema } from './schemas/dag';
 export type { DagCountsDto, GlobalDagDto } from './schemas/dag';
+export {
+  SessionChangeKindSchema,
+  ChangedSessionSchema,
+  ChangeTotalsSchema,
+  ChangesCoverageSchema,
+  ChangesResponseSchema,
+} from './schemas/changes';
+export type {
+  SessionChangeKind,
+  ChangedSessionDto,
+  ChangeTotalsDto,
+  ChangesCoverageDto,
+  ChangesDto,
+} from './schemas/changes';
 export {
   SessionIngestedEventSchema,
   AgentStatusChangedEventSchema,

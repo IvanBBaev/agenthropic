@@ -46,8 +46,20 @@ export {
   DEFAULT_DB_PATH,
   DEFAULT_POLL_INTERVAL_MS,
   DEFAULT_WATCHDOG_MINUTES,
+  DEFAULT_WEB_ROOT,
 } from './config';
 export type { ServerConfig } from './config';
+export {
+  registerStaticSite,
+  contentTypeFor,
+  readSiteFile,
+  SPA_INDEX_FILE,
+  SPA_NOT_BUILT_STATUS,
+  SPA_NOT_BUILT_MESSAGE,
+  NOT_FOUND_MESSAGE,
+  DEFAULT_CONTENT_TYPE,
+} from './http/static-site';
+export type { StaticSiteOptions } from './http/static-site';
 export { openDatabase, assertConnectionPragmas } from './db/connection';
 export type { SqliteDatabase } from './db/connection';
 export { migrations, runMigrations, currentSchemaVersion } from './db/migrations';
@@ -691,6 +703,12 @@ export async function start(
     // watcher exists: with ingest off there is nothing to exclude, and the
     // fields stay absent rather than reporting a zero nobody measured.
     ingestExclusions: ingestWatcher === null ? undefined : () => ingestWatcher.exclusions(),
+    // One command, one port: the built SPA is served from this same loopback
+    // origin, which is also what keeps the /api/stream same-origin check a real
+    // defence instead of a permanent CORS exception. A missing build directory
+    // is NOT a boot failure - the API serves normally and '/' explains how to
+    // build the UI.
+    webRoot: config.webRoot,
     // WP-C4/C5: compaction repricing and delegation savings need the raw
     // substrate (boundaries are not persisted), so the cost-analysis route gets
     // a read-only corpus seam. Same env hygiene as the watcher - config is the

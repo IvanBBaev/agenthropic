@@ -29,10 +29,18 @@
  * - TOLERATE records of an unknown/unrecognized `type` (stored, not crashed):
  *   the parser simply ignores record types it has no rule for.
  */
+import type { AgentOutcomeCause } from '@agenthropic/shared';
 import type { DedupedUsage, TokenBuckets, UsageRow } from '../types';
 import { dedupeUsageByMessageId } from '../usage/dedupe';
+import { classifyAgentOutcomeCause } from './agent-outcome';
 import { LEGACY_EXPLORE_EDGE_SOURCE } from './types';
-import type { ParsedAgent, ParsedEdge, ParsedEdgeSource, ParsedSession } from './types';
+import type {
+  ParsedAgent,
+  ParsedAgentOutcome,
+  ParsedEdge,
+  ParsedEdgeSource,
+  ParsedSession,
+} from './types';
 import type { SessionSubstrate } from './substrate';
 
 /** Structurally malformed or self-contradictory substrate — a loud failure. */
@@ -388,6 +396,48 @@ interface SpawnIndices {
    * foreign progress `agentId` can only live in the main transcript.
    */
   legacyProgressOwner: Map<string, string>;
+  /**
+   * `tool_use.id` of a MATERIALIZED `Agent`/`Workflow` spawn block -> the cause
+   * classified from the errored `tool_result` that answered it.
+   *
+   * The `toolUseOwner` membership test that populates this map is the whole
+   * safety story: an `is_error` result on any OTHER tool (a failed grep, a
+   * missing file - 862 of 2552 real files carry one) can never enter, because
+   * its `tool_use_id` names no spawn block. Keyed by structural id, matched by
+   * map lookup, never by substring (gate #5).
+   */
+  failedSpawns: Map<string, AgentOutcomeCause>;
+}
+
+/**
+ * Collects every ERRORED `tool_result` on a `type: 'user'` record, keyed by the
+ * `tool_use_id` it answers. Deliberately UNFILTERED here: which of these ids is
+ * a real spawn block is only knowable once the whole substrate has been walked
+ * (a depth-2 parent block lives in a depth-1 transcript — gate #4), so the
+ * filtering happens after the scan, against `toolUseOwner`.
+ *
+ * `content` is read as a plain string — that is what all 33 real error results
+ * carried. Any other shape stores `''`, which classifies as `unclassified`:
+ * the evidence is recorded, and it still never becomes an 'error'.
+ */
+function collectErrorResults(record: JsonRecord | undefined, pending: Map<string, string>): void {
+  const blocks = asArray(asRecord(record?.['message'])?.['content']);
+  if (blocks === undefined) {
+    return;
+  }
+  for (const rawBlock of blocks) {
+    const block = asRecord(rawBlock);
+    if (block === undefined || asString(block['type']) !== 'tool_result') {
+      continue;
+    }
+    if (block['is_error'] !== true) {
+      continue;
+    }
+    const toolUseId = asString(block['tool_use_id']);
+    if (toolUseId !== undefined) {
+      pending.set(toolUseId, asString(block['content']) ?? '');
+    }
+  }
 }
 
 /**
@@ -402,6 +452,7 @@ function buildIndices(transcripts: readonly Transcript[]): SpawnIndices {
   const toolUseResultByChildHex = new Map<string, string>();
   const queueChildToToolUse = new Map<string, string>();
   const legacyProgressOwner = new Map<string, string>();
+  const pendingErrorResults = new Map<string, string>();
 
   for (const transcript of transcripts) {
     for (const rawRecord of transcript.records) {
@@ -455,6 +506,12 @@ function buildIndices(transcripts: readonly Transcript[]): SpawnIndices {
           }
         }
       } else if (type === 'user') {
+        // ADDITIVE second read of the same records: an errored `tool_result` is
+        // the parent-side outcome of a spawn. Runs unconditionally because an
+        // error result need not carry a `toolUseResult.agentId` (a refused
+        // spawn has no child to name), so it cannot live under the guard below.
+        collectErrorResults(record, pendingErrorResults);
+
         // Parent-side async spawn record: `toolUseResult.agentId` names the child
         // hex and the sibling `tool_result` block's `tool_use_id` is the parent
         // spawn block (the join for a child whose sidecar carries no toolUseId).
@@ -491,6 +548,16 @@ function buildIndices(transcripts: readonly Transcript[]): SpawnIndices {
     }
   }
 
+  // Order-independent by construction: the filter runs only after EVERY
+  // transcript has been walked, so an error result that appears before the
+  // spawn block it answers (or in a different file from it) is still matched.
+  const failedSpawns = new Map<string, AgentOutcomeCause>();
+  for (const [toolUseId, message] of pendingErrorResults) {
+    if (toolUseOwner.has(toolUseId)) {
+      failedSpawns.set(toolUseId, classifyAgentOutcomeCause(message));
+    }
+  }
+
   return {
     toolUseOwner,
     workflowDispatcher,
@@ -498,6 +565,7 @@ function buildIndices(transcripts: readonly Transcript[]): SpawnIndices {
     toolUseResultByChildHex,
     queueChildToToolUse,
     legacyProgressOwner,
+    failedSpawns,
   };
 }
 
@@ -507,6 +575,16 @@ interface Resolution {
   parentAgentId: string | null;
   subagentType: string | null;
   edge: ParsedEdge | undefined;
+  /**
+   * The structural spawn-block id this child resolved THROUGH, or `null` when
+   * the join path carried none (directory, `legacy_explore`, orphan).
+   *
+   * Additive: nothing about resolution changes, the anchor the branches already
+   * computed is simply no longer discarded. It is the join key an observed
+   * outcome needs — the same id the edge records — so an outcome can only ever
+   * be attributed to the child the parser already attributed to that block.
+   */
+  anchor: string | null;
 }
 
 function makeEdge(
@@ -547,6 +625,7 @@ function resolveParent(
       parentAgentId: parent,
       subagentType: sidecar?.agentType ?? null,
       edge: makeEdge(sessionId, parent, agentFile.hex, 'directory', null),
+      anchor: null,
     };
   }
 
@@ -568,6 +647,7 @@ function resolveParent(
         parentAgentId: owner.owner,
         subagentType: owner.subagentType ?? sidecar?.agentType ?? null,
         edge: makeEdge(sessionId, owner.owner, agentFile.hex, 'tool_use', anchor),
+        anchor,
       };
     }
 
@@ -579,6 +659,7 @@ function resolveParent(
         parentAgentId: queueOwner,
         subagentType: sidecar?.agentType ?? null,
         edge: makeEdge(sessionId, queueOwner, agentFile.hex, 'queue_operation', anchor),
+        anchor,
       };
     }
 
@@ -588,6 +669,7 @@ function resolveParent(
       parentAgentId: sessionId,
       subagentType: sidecar?.agentType ?? null,
       edge: makeEdge(sessionId, sessionId, agentFile.hex, 'task_notification', anchor),
+      anchor,
     };
   }
 
@@ -599,6 +681,7 @@ function resolveParent(
       parentAgentId: sessionId,
       subagentType: sidecar?.agentType ?? null,
       edge: makeEdge(sessionId, sessionId, agentFile.hex, 'task_notification', recoveredToolUseId),
+      anchor: recoveredToolUseId,
     };
   }
 
@@ -625,13 +708,19 @@ function resolveParent(
         // constant is the sidecar value, not an invention.
         subagentType: LEGACY_EXPLORE_AGENT_TYPE,
         edge: makeEdge(sessionId, progressOwner, agentFile.hex, LEGACY_EXPLORE_EDGE_SOURCE, null),
+        anchor: null,
       };
     }
   }
 
   // 6. orphan: no structural join path — never fabricate a parent, emit no edge.
   //    The subagent type is still recoverable from the sidecar when present.
-  return { parentAgentId: null, subagentType: sidecar?.agentType ?? null, edge: undefined };
+  return {
+    parentAgentId: null,
+    subagentType: sidecar?.agentType ?? null,
+    edge: undefined,
+    anchor: null,
+  };
 }
 
 // --- Timespans --------------------------------------------------------------
@@ -744,6 +833,7 @@ export function parseSession(substrate: SessionSubstrate): ParsedSession {
 
   const agents: ParsedAgent[] = [];
   const edges: ParsedEdge[] = [];
+  const outcomes: ParsedAgentOutcome[] = [];
 
   if (hasMain) {
     const span = transcriptTimespan(mainRecords, `main transcript (session "${sessionId}")`);
@@ -771,9 +861,21 @@ export function parseSession(substrate: SessionSubstrate): ParsedSession {
     if (resolution.edge !== undefined) {
       edges.push(resolution.edge);
     }
+    // The STRUCTURAL half of the outcome rule: only an agent that actually
+    // materialized a transcript can be reached here, so a refused spawn
+    // (`concurrency_limit`, 19 of the 33 real error results) yields no row and
+    // no outcome — nothing is invented for an agent that never existed. The
+    // CAUSE half is the normalizer's: `user_interrupt` DOES resolve to a real
+    // transcript and must not be read as a failure.
+    if (resolution.anchor !== null) {
+      const cause = indices.failedSpawns.get(resolution.anchor);
+      if (cause !== undefined) {
+        outcomes.push({ agentId: agentFile.hex, cause, toolUseId: resolution.anchor });
+      }
+    }
   }
 
   const usage: DedupedUsage[] = dedupeUsageByMessageId(extractUsageRows(transcripts));
 
-  return { sessionId, agents, edges, usage };
+  return { sessionId, agents, edges, usage, outcomes };
 }

@@ -1,9 +1,12 @@
+import { isAbsolute, join, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_DB_PATH,
   DEFAULT_POLL_INTERVAL_MS,
   DEFAULT_PORT,
   DEFAULT_WATCHDOG_MINUTES,
+  DEFAULT_WEB_ROOT,
   HOST,
   loadConfig,
 } from '../src/config';
@@ -36,6 +39,38 @@ describe('config (WP-U0)', () => {
       corpusRoot: null,
       pollIntervalMs: DEFAULT_POLL_INTERVAL_MS,
       watchdogMinutes: DEFAULT_WATCHDOG_MINUTES,
+      webRoot: DEFAULT_WEB_ROOT,
+    });
+  });
+
+  describe('web root (single-port static site)', () => {
+    it('defaults to the built SPA directory, resolved from this module - never from cwd', () => {
+      // Derived independently, from the TEST file's own URL: `src/config.ts`
+      // and `test/config.test.ts` sit one level below `apps/server`, so the
+      // same `../../web/dist` hop must land on the same absolute directory. If
+      // the default were ever computed from `process.cwd()`, this equality
+      // would hold only when the suite happened to run from `apps/server`.
+      const fromThisModule = fileURLToPath(new URL('../../web/dist', import.meta.url));
+      expect(DEFAULT_WEB_ROOT).toBe(fromThisModule);
+      expect(isAbsolute(DEFAULT_WEB_ROOT)).toBe(true);
+      expect(DEFAULT_WEB_ROOT.endsWith(join('apps', 'web', 'dist'))).toBe(true);
+      // Nothing relative, and no leftover URL escaping in the path.
+      expect(DEFAULT_WEB_ROOT).not.toContain(`${sep}..${sep}`);
+      expect(DEFAULT_WEB_ROOT).not.toContain('%2');
+    });
+
+    it('reads DASHBOARD_WEB_ROOT as the override', () => {
+      const config = loadConfig({
+        DASHBOARD_TOKEN: TEST_TOKEN,
+        DASHBOARD_WEB_ROOT: '/tmp/fake-web-root',
+      });
+      expect(config.webRoot).toBe('/tmp/fake-web-root');
+    });
+
+    it('treats an empty DASHBOARD_WEB_ROOT as unset (never cwd)', () => {
+      expect(loadConfig({ DASHBOARD_TOKEN: TEST_TOKEN, DASHBOARD_WEB_ROOT: '' }).webRoot).toBe(
+        DEFAULT_WEB_ROOT,
+      );
     });
   });
 

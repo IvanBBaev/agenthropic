@@ -23,11 +23,15 @@ Every answer below links to the deeper reference page for the full detail.
 >   the workspace is `private: true` at `0.1.0`, so a checkout is the only way to run it.
 >   Test figures, re-measured **2026-08-15**: **106 test files / 1554 tests**, with **100%
 >   statements, branches, functions and lines** enforced in **all five** packages. Two
->   things that figure does not mean: the thresholds fail the CI run but do not yet *block a
->   merge* (that needs a branch-protection rule on `main`, an owner action, still unset at
->   the last recorded check), and coverage of the code is not accuracy of the output — the
->   hierarchy-accuracy exit gate still reports **NOT CERTIFIED at n = 0** because no session
->   has been hand-labeled.
+>   things that figure does not mean. It is not *unconditionally* merge-blocking — it blocks
+>   a merge only for someone who is not the repository owner: `main` has been
+>   branch-protected since **2026-08-25** and requires the `ci` check, so a red run withholds
+>   the merge button from a contributor, but `enforce_admins` is deliberately off —
+>   agenthropic has one maintainer whose normal mode is a direct push to `main`, and
+>   enforcing it would lock that maintainer out of their own repository (see the
+>   [standing correction](../contributing/decisions/README.md#a-standing-correction-merge-blocking)).
+>   And coverage of the code is not accuracy of the output — the hierarchy-accuracy exit
+>   gate still reports **NOT CERTIFIED at n = 0** because no session has been hand-labeled.
 > - **"The only outbound traffic is a Telegram alert" is now simply "no outbound traffic."**
 >   Alerting was not built and may never be: it is v2.0, entered only via **KC-5**, and the
 >   operator-alerts API and UI were **cut outright**. The running server **makes no

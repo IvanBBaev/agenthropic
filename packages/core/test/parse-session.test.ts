@@ -23,9 +23,13 @@ import {
 import {
   DUPLICATED_MESSAGE_ID,
   EVICTED_TOOL_USE_ID,
+  INTERRUPT_TOOL_USE_ID,
   LEGACY_CHILD_HEX,
   LEGACY_DECOY_HEX,
   QUEUED_TOOL_USE_ID,
+  TERMINATED_EARLY_AGENT_ID,
+  TERMINATED_TOOL_USE_ID,
+  USER_INTERRUPT_AGENT_ID,
   getFixture,
   listFixtures,
 } from '@agenthropic/test-fixtures';
@@ -2010,5 +2014,465 @@ describe('parseSession — gate #7 narrowness (near-legacy shapes stay orphans)'
 
   it('ignores a progress record that carries no top-level agentId at all', () => {
     expectOrphan(nearLegacy({ sidecar: { agentType: 'Explore' }, progress: {} }));
+  });
+});
+
+// --- observed agent outcomes (errored parent-side spawn results) ------------
+//
+// The outcome rule has two STRUCTURAL halves and both are exercised here. The
+// error must answer a `tool_use_id` that names a materialized `Agent`/
+// `Workflow` spawn block — an `is_error` on any other tool (862 of 2552 real
+// files carry one) can never enter — and the outcome is emitted only for a
+// child that actually materialized a transcript anchored on that same block,
+// so a refused spawn describes nothing. The message texts below are the
+// literal ones the corpus carried.
+
+describe('parseSession — observed agent outcomes from errored spawn results', () => {
+  const SESSION = '0c0c0000-1111-4222-8333-444444444444';
+  const CHILD = '0c0c0c0c';
+  const INTERRUPTED_ID = 'toolu_outcome_interrupted';
+  const REFUSED_ID = 'toolu_outcome_refused';
+  const GREP_ID = 'toolu_outcome_failed_grep';
+
+  const result = parseSession(
+    substrate([
+      {
+        path: `${SESSION}.jsonl`,
+        lines: [
+          jline({
+            sessionId: SESSION,
+            type: 'user',
+            timestamp: '2026-08-20T00:00:00.000Z',
+            message: { role: 'user', content: 'go' },
+          }),
+          jline({
+            sessionId: SESSION,
+            type: 'assistant',
+            timestamp: '2026-08-20T00:00:01.000Z',
+            message: {
+              id: 'm_outcome_main',
+              model: 'm',
+              usage: { input_tokens: 3 },
+              content: [
+                {
+                  type: 'tool_use',
+                  id: INTERRUPTED_ID,
+                  name: 'Agent',
+                  input: { subagent_type: 'general-purpose', prompt: 'p' },
+                },
+                // A second spawn block that was refused outright: no transcript
+                // will ever exist for it.
+                {
+                  type: 'tool_use',
+                  id: REFUSED_ID,
+                  name: 'Agent',
+                  input: { subagent_type: 'general-purpose', prompt: 'p' },
+                },
+                // The forbidden heuristic's bait: a non-spawn tool that also
+                // errored, in the same message, keyed the same way.
+                { type: 'tool_use', id: GREP_ID, name: 'Grep', input: { pattern: 'x' } },
+              ],
+            },
+          }),
+          jline({
+            sessionId: SESSION,
+            type: 'user',
+            timestamp: '2026-08-20T00:00:02.000Z',
+            message: {
+              role: 'user',
+              content: [
+                {
+                  type: 'tool_result',
+                  tool_use_id: INTERRUPTED_ID,
+                  is_error: true,
+                  content: '[Request interrupted by user for tool use]',
+                },
+                {
+                  type: 'tool_result',
+                  tool_use_id: REFUSED_ID,
+                  is_error: true,
+                  content:
+                    'Concurrent subagent limit reached. You can run 20 subagents at once. ' +
+                    'Do not retry.',
+                },
+                {
+                  type: 'tool_result',
+                  tool_use_id: GREP_ID,
+                  is_error: true,
+                  content: 'No files found',
+                },
+              ],
+            },
+          }),
+        ],
+      },
+      {
+        path: `subagents/agent-${CHILD}.jsonl`,
+        lines: [
+          jline({
+            sessionId: SESSION,
+            agentId: CHILD,
+            type: 'user',
+            timestamp: '2026-08-20T00:00:03.000Z',
+            message: { role: 'user', content: 'interrupted task' },
+          }),
+          jline({
+            sessionId: SESSION,
+            agentId: CHILD,
+            type: 'assistant',
+            timestamp: '2026-08-20T00:00:04.000Z',
+            message: {
+              id: 'm_outcome_child',
+              model: 'm',
+              usage: { input_tokens: 1 },
+              content: [{ type: 'text', text: 'x' }],
+            },
+          }),
+        ],
+      },
+      {
+        path: `subagents/agent-${CHILD}.meta.json`,
+        lines: [jline({ toolUseId: INTERRUPTED_ID, agentType: 'general-purpose', spawnDepth: 1 })],
+      },
+    ]),
+  );
+
+  it('emits exactly one outcome, for the child whose anchor block errored', () => {
+    expect(result.outcomes).toEqual([
+      { agentId: CHILD, cause: 'user_interrupt', toolUseId: INTERRUPTED_ID },
+    ]);
+  });
+
+  it('invents nothing for the refused spawn — no agent existed to describe', () => {
+    // `concurrency_limit` is 19 of the 33 real error results and every one of
+    // them names a spawn that never materialized; a row here would be fiction.
+    expect(agentById(result, REFUSED_ID)).toBeUndefined();
+    expect(result.outcomes?.map((o) => o.toolUseId)).not.toContain(REFUSED_ID);
+  });
+
+  it('never admits an errored NON-spawn tool (the forbidden any-tool heuristic)', () => {
+    // The Grep result carries `is_error: true` in the same record, so only the
+    // `toolUseOwner` membership test keeps it out.
+    expect(result.outcomes?.map((o) => o.toolUseId)).not.toContain(GREP_ID);
+  });
+
+  it('leaves resolution untouched — the outcome rides the edge it was joined by', () => {
+    expect(edgeForChild(result, CHILD)).toEqual({
+      sessionId: SESSION,
+      parentAgentId: SESSION,
+      childAgentId: CHILD,
+      source: 'tool_use',
+      toolUseId: INTERRUPTED_ID,
+    });
+    // A `user_interrupt` resolves to a REAL transcript; the parser still takes
+    // no position on status (that mapping is the normalizer's).
+    expect(agentById(result, CHILD)).not.toHaveProperty('status');
+  });
+});
+
+// --- the same two guards, with a materialized child behind each -------------
+//
+// The block above NAMES both structural halves but holds only one of them. Its
+// `never admits an errored NON-spawn tool` case asserts on `outcomes`, and the
+// emission site already refuses that id on a SECOND, independent ground: a
+// child is reached only by walking `agentFiles`, and no child anchors on the
+// Grep block. So the membership test that case credits can be deleted outright
+// and the assertion stays green — it pins the outcome, not the guard.
+//
+// A guard is only load-bearing in a test when the test puts something BEHIND
+// it that would otherwise come through. Both cases below do exactly that.
+
+describe('parseSession — the outcome guards, with a child behind each', () => {
+  const SESSION = '9a9a0000-1111-4222-8333-444444444444';
+
+  it('refuses an errored NON-spawn tool even when a child names it as its anchor', () => {
+    // The forbidden any-tool heuristic, at the only place it can actually be
+    // observed: a materialized transcript whose `.meta.json` anchors on a
+    // `Bash` block that failed. Every other structural filter passes this
+    // child through — it has a real transcript, a real anchor, and a real
+    // `is_error: true` answering that anchor. The ONE thing keeping a failed
+    // shell command from being reported as a failed agent is that the anchor
+    // is absent from `toolUseOwner`. `Exit code 1` is not a dead subagent.
+    const CHILD = '9a9a1111';
+    const BASH_ID = 'toolu_guard_failed_bash';
+    const result = parseSession(
+      substrate([
+        {
+          path: `${SESSION}.jsonl`,
+          lines: [
+            jline({
+              sessionId: SESSION,
+              type: 'assistant',
+              timestamp: '2026-08-21T00:00:00.000Z',
+              message: {
+                id: 'm_guard_bash',
+                model: 'm',
+                usage: { input_tokens: 1 },
+                content: [
+                  { type: 'tool_use', id: BASH_ID, name: 'Bash', input: { command: 'false' } },
+                ],
+              },
+            }),
+            jline({
+              sessionId: SESSION,
+              type: 'user',
+              timestamp: '2026-08-21T00:00:01.000Z',
+              message: {
+                role: 'user',
+                content: [
+                  {
+                    type: 'tool_result',
+                    tool_use_id: BASH_ID,
+                    is_error: true,
+                    content: 'Error: Exit code 1',
+                  },
+                ],
+              },
+            }),
+          ],
+        },
+        {
+          path: `subagents/agent-${CHILD}.jsonl`,
+          lines: [
+            jline({
+              sessionId: SESSION,
+              agentId: CHILD,
+              type: 'assistant',
+              timestamp: '2026-08-21T00:00:02.000Z',
+              message: {
+                id: 'm_guard_bash_child',
+                model: 'm',
+                usage: { input_tokens: 1 },
+                content: [{ type: 'text', text: 'x' }],
+              },
+            }),
+          ],
+        },
+        {
+          path: `subagents/agent-${CHILD}.meta.json`,
+          lines: [jline({ toolUseId: BASH_ID, agentType: 'general-purpose', spawnDepth: 1 })],
+        },
+      ]),
+    );
+
+    // Anti-vacuity: the child is REAL. Without this the case would pass just
+    // as well if the parser had dropped the transcript on the floor.
+    expect(agentById(result, CHILD)).toBeDefined();
+    expect(result.outcomes).toEqual([]);
+  });
+
+  it('emits no outcome for a spawn whose result did NOT error', () => {
+    // The `is_error !== true` filter, likewise with a child behind it. A
+    // successful spawn is 1421 of the 1454 real spawn results; without this
+    // guard every one of them acquires an `outcome_cause`, and the whole
+    // signal — 33 errors picked out of 1454 answers — collapses into "every
+    // agent has an outcome", which is the same as no signal at all.
+    const CHILD = '9a9a2222';
+    const OK_ID = 'toolu_guard_successful_spawn';
+    const result = parseSession(
+      substrate([
+        {
+          path: `${SESSION}.jsonl`,
+          lines: [
+            jline({
+              sessionId: SESSION,
+              type: 'assistant',
+              timestamp: '2026-08-21T00:01:00.000Z',
+              message: {
+                id: 'm_guard_ok',
+                model: 'm',
+                usage: { input_tokens: 1 },
+                content: [
+                  {
+                    type: 'tool_use',
+                    id: OK_ID,
+                    name: 'Agent',
+                    input: { subagent_type: 'general-purpose', prompt: 'p' },
+                  },
+                ],
+              },
+            }),
+            jline({
+              sessionId: SESSION,
+              type: 'user',
+              timestamp: '2026-08-21T00:01:01.000Z',
+              message: {
+                role: 'user',
+                content: [
+                  {
+                    type: 'tool_result',
+                    tool_use_id: OK_ID,
+                    content: 'Done. Wrote the file and the tests pass.',
+                  },
+                ],
+              },
+            }),
+          ],
+        },
+        {
+          path: `subagents/agent-${CHILD}.jsonl`,
+          lines: [
+            jline({
+              sessionId: SESSION,
+              agentId: CHILD,
+              type: 'assistant',
+              timestamp: '2026-08-21T00:01:02.000Z',
+              message: {
+                id: 'm_guard_ok_child',
+                model: 'm',
+                usage: { input_tokens: 1 },
+                content: [{ type: 'text', text: 'x' }],
+              },
+            }),
+          ],
+        },
+        {
+          path: `subagents/agent-${CHILD}.meta.json`,
+          lines: [jline({ toolUseId: OK_ID, agentType: 'general-purpose', spawnDepth: 1 })],
+        },
+      ]),
+    );
+
+    expect(agentById(result, CHILD)).toBeDefined();
+    expect(edgeForChild(result, CHILD)?.toolUseId).toBe(OK_ID);
+    expect(result.outcomes).toEqual([]);
+  });
+});
+
+describe('parseSession — malformed error results record evidence without a cause', () => {
+  const SESSION = '1de10000-1111-4222-8333-444444444444';
+  const CHILD = '1de11a11';
+  const SPAWN_ID = 'toolu_outcome_odd_content';
+
+  const result = parseSession(
+    substrate([
+      {
+        path: `${SESSION}.jsonl`,
+        lines: [
+          jline({
+            sessionId: SESSION,
+            type: 'user',
+            timestamp: '2026-08-21T00:00:00.000Z',
+            message: { role: 'user', content: 'go' },
+          }),
+          jline({
+            sessionId: SESSION,
+            type: 'assistant',
+            timestamp: '2026-08-21T00:00:01.000Z',
+            message: {
+              id: 'm_odd_main',
+              model: 'm',
+              usage: { input_tokens: 2 },
+              content: [
+                {
+                  type: 'tool_use',
+                  id: SPAWN_ID,
+                  name: 'Agent',
+                  input: { subagent_type: 'general-purpose', prompt: 'p' },
+                },
+              ],
+            },
+          }),
+          jline({
+            sessionId: SESSION,
+            type: 'user',
+            timestamp: '2026-08-21T00:00:02.000Z',
+            message: {
+              role: 'user',
+              content: [
+                // An errored result naming no block answers nothing: there is
+                // no id to key it by, so it is dropped rather than guessed at.
+                {
+                  type: 'tool_result',
+                  is_error: true,
+                  content: 'Tool permission request failed: no tool_use_id on this block',
+                },
+                // Every real error result carried a plain string; a block shape
+                // reads as the empty message, which classifies as
+                // `unclassified` — the evidence survives, the cause is not
+                // invented.
+                {
+                  type: 'tool_result',
+                  tool_use_id: SPAWN_ID,
+                  is_error: true,
+                  content: [{ type: 'text', text: '[Request interrupted by user for tool use]' }],
+                },
+              ],
+            },
+          }),
+        ],
+      },
+      {
+        path: `subagents/agent-${CHILD}.jsonl`,
+        lines: [
+          jline({
+            sessionId: SESSION,
+            agentId: CHILD,
+            type: 'user',
+            timestamp: '2026-08-21T00:00:03.000Z',
+            message: { role: 'user', content: 'task' },
+          }),
+          jline({
+            sessionId: SESSION,
+            agentId: CHILD,
+            type: 'assistant',
+            timestamp: '2026-08-21T00:00:04.000Z',
+            message: {
+              id: 'm_odd_child',
+              model: 'm',
+              usage: { input_tokens: 1 },
+              content: [{ type: 'text', text: 'x' }],
+            },
+          }),
+        ],
+      },
+      {
+        path: `subagents/agent-${CHILD}.meta.json`,
+        lines: [jline({ toolUseId: SPAWN_ID, spawnDepth: 1 })],
+      },
+    ]),
+  );
+
+  it('classifies a non-string error content as unclassified, never by its nested text', () => {
+    expect(result.outcomes).toEqual([
+      { agentId: CHILD, cause: 'unclassified', toolUseId: SPAWN_ID },
+    ]);
+  });
+
+  it('drops an id-less errored tool_result instead of attributing it to a neighbour', () => {
+    expect(result.outcomes).toHaveLength(1);
+  });
+});
+
+describe('parseSession — outcomes on a clean session', () => {
+  it('is always present and empty when nothing errored', () => {
+    // `outcomes` is optional on the type only so that adding it stayed additive
+    // for synthesized session-shaped values; `parseSession` always produces it,
+    // so absent may never be read as "the parser found none".
+    //
+    // `agent-outcome-errors` is excluded: it is the one fixture built
+    // specifically to carry errored spawns (WP-U10), asserted below instead.
+    for (const name of listFixtures()) {
+      if (name === 'agent-outcome-errors') continue;
+      expect(parseSession(getFixture(name)).outcomes).toEqual([]);
+    }
+  });
+});
+
+describe('parseSession — outcomes on agent-outcome-errors (WP-U10)', () => {
+  it('emits one outcome per errored spawn, in document order', () => {
+    const result = parseSession(getFixture('agent-outcome-errors'));
+    expect(result.outcomes).toEqual([
+      {
+        agentId: TERMINATED_EARLY_AGENT_ID,
+        cause: 'terminated_early',
+        toolUseId: TERMINATED_TOOL_USE_ID,
+      },
+      {
+        agentId: USER_INTERRUPT_AGENT_ID,
+        cause: 'user_interrupt',
+        toolUseId: INTERRUPT_TOOL_USE_ID,
+      },
+    ]);
   });
 });

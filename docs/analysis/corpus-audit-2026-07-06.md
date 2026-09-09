@@ -59,7 +59,7 @@ the Phase-0 feasibility spike returns GO.
 | **The probe** | `docs/analysis/phase0-probe.md` — a 2026-07-04 read-only empirical probe of the real `~/.claude/projects` corpus that pre-answered CD-1 with `CONDITIONAL-GO → build`, confidence 85. It **de-risks but does not replace** the formal spike. |
 | **Best-path memo** | `docs/analysis/best-path-decision.md` — the strategic memo that sits **above** the development plan. Its §6 lists plan amendments that were **never applied** (finding AMEND-1…6). |
 | **The moat** | Per the best-path memo: **persistent cross-session DAG + dollar-cost attribution — only these two.** (Older docs and the public site say four or five features; see finding LEDGER-23.) |
-| **P0 tests** | Three merge-blocking release tests: (1) Σ tokens == JSONL exact; (2) double replay produces a byte-identical DB; (3) DAG rebuilt from JSONL alone. |
+| **P0 tests** | Three merge-blocking release tests: (1) Σ tokens == JSONL exact; (2) double replay produces a byte-identical DB; (3) DAG rebuilt from JSONL alone. *(As built, 2026-08-25: `main` is branch-protected on the `ci` check, so "merge-blocking" here means merge-blocking for anyone who is not the repository owner — `enforce_admins` is deliberately off for this single-maintainer repository; see [the standing correction](../site/contributing/decisions/README.md#a-standing-correction-merge-blocking).)* |
 | **events_raw** | The immutable append-only ingest substrate (CD-2). Everything else (sessions, agents, edges, token_usage) is a deterministic, replayable projection. |
 | **OPCⁿ** | An undefined token inherited from the vendor documents. Nobody has ever defined it. Flagged "define-or-drop" since v2 §7; still open (OPEN-9). |
 | **The five daily questions** | The MVP requirement set (CD-10): what is running now · where did tokens/money go · what did session X spawn and why · what failed/stuck · what changed across sessions. Target: answerable in <30 s. |
@@ -217,7 +217,14 @@ never happened.** These six findings are the single largest consistency debt in 
 > are corrected there: **OPEN-6** rests on a `verified_on` column that does not exist in the
 > shipped `model_pricing` table, and **OPEN-8**'s premise (a boundary between ">90%" and
 > "≥90%") was overtaken by a 100% threshold — while its "blocks merges" clause turned out
-> to be the unexamined half, and is still false because branch protection is not enabled.
+> to be the unexamined half, and was still false on 2026-08-15, because `main` was
+> unprotected. *(As built, 2026-08-25: `main` is branch-protected, the required status check
+> is `ci` — the job id in `.github/workflows/ci.yml`, not the workflow's `CI` display name —
+> and force-pushes and branch deletion are refused. The clause holds for a contributor and,
+> by deliberate choice, not for the repository owner: `enforce_admins` is off because
+> agenthropic has one maintainer whose normal working mode is a direct push to `main`, and
+> admin enforcement would lock the sole maintainer out of their own repository. See
+> [the standing correction](../site/contributing/decisions/README.md#a-standing-correction-merge-blocking).)*
 > **OPEN-1** (retention) and **OPEN-9** (OPCⁿ) remain open in the plain sense: undecided,
 > unowned, and now with more surface area than they had here.
 

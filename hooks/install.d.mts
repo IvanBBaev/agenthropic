@@ -21,7 +21,15 @@ export interface HooksConfigOptions extends HookCommandOptions {
 
 export type SettingsObject = Record<string, unknown>;
 
+/**
+ * How an existing hook command in a settings file relates to this installer.
+ * `ambiguous` means "aims at our ingest endpoint but matches no shape we have
+ * ever generated" - callers must refuse to rewrite or delete it.
+ */
+export type HookCommandKind = 'ours' | 'ambiguous' | 'foreign';
+
 export declare function buildHookCommand(options?: HookCommandOptions): string;
+export declare function classifyHookCommand(command: unknown): HookCommandKind;
 export declare function isAgenthropicHookCommand(command: unknown): boolean;
 export declare function buildHooksConfig(options?: HooksConfigOptions): SettingsObject;
 export declare function mergeHooksIntoSettings(
@@ -52,9 +60,26 @@ export interface RunInstallOptions {
 }
 
 export interface RunInstallResult {
-  action: 'printed' | 'written' | 'dry-run';
+  /**
+   * `unchanged` (added 2026-09-07, finding H-2) means the computed settings text
+   * equals the file's current bytes, so no backup was taken and nothing was
+   * written. It is a distinct outcome from `written` on purpose: reporting a
+   * no-op as a write is the thing that made re-running the installer look like
+   * it had done something.
+   */
+  action: 'printed' | 'written' | 'dry-run' | 'unchanged';
   outPath?: string;
   backupPath?: string;
+  /**
+   * Set only when the write had to create the output file's parent tree
+   * (finding H-3). Present so a mistyped `--out` is visible in the result and
+   * on stdout rather than being an invisible success.
+   */
+  createdDirectory?: string;
+  /**
+   * Only meaningful on a `dry-run`: whether the run would have written anything.
+   */
+  unchanged?: boolean;
   settingsText: string;
 }
 

@@ -30,11 +30,14 @@ Two operational notes:
 - The workflow's source root is `docs/`, not `docs/site/`, because 129 relative links
   point outward from `docs/site/` into the analysis and due-diligence trees at the
   time of writing. Narrowing the root would break them.
-- **GitHub Pages is not yet enabled on this repository** (`has_pages: false`).
-  Enabling it is a one-time owner action in *Settings → Pages → Source: "GitHub
-  Actions"*. Until Ivan does that, the workflow builds and publishes into a Pages
-  environment that is not serving — so "CI builds & publishes on merge" is true of
-  the CI half and not yet true of the published half.
+- **GitHub Pages was enabled on 2026-08-25** (`has_pages: true`, `build_type:
+  workflow`), by an owner-credentialled
+  `gh api -X POST repos/IvanBBaev/agenthropic/pages -f build_type=workflow` — the API
+  equivalent of the one-time *Settings → Pages → Source: "GitHub Actions"* click. What
+  matters is the credential, not the surface: the workflow could not do it for itself,
+  having only `pages: write`, which authorises deploying to an existing site and not
+  creating one. The site now serves at <https://ivanbbaev.github.io/agenthropic/>, so
+  "CI builds & publishes on merge" is true of both halves.
 
 One note on the Context below: it quotes `CLAUDE.md`'s bootstrap-phase wording ("no
 code scaffolded yet"), which was accurate on 2026-07-04 and is not accurate now —

@@ -3,7 +3,7 @@
  * (parser-spec sections 4-6). These are the read-side domain shapes; the
  * snake_case SQLite row contracts live in `@agenthropic/shared`.
  */
-import type { OrchestrationEdgeSource } from '@agenthropic/shared';
+import type { AgentOutcomeCause, OrchestrationEdgeSource } from '@agenthropic/shared';
 import type { DedupedUsage } from '../types';
 
 export type ParsedAgentType = 'main' | 'subagent';
@@ -83,6 +83,29 @@ export interface ParsedEdge {
   toolUseId: string | null;
 }
 
+/**
+ * One agent's observed run outcome, read from the PARENT-side `Agent`/
+ * `Workflow` `tool_result` that answered its spawn block (see
+ * `classifyAgentOutcomeCause`).
+ *
+ * Emitted ONLY for a subagent that actually materialized a transcript AND whose
+ * resolved structural anchor is the errored spawn block. A refused spawn
+ * therefore produces nothing at all: there is no agent to describe, and
+ * inventing a failed row for an agent that never existed would be worse than
+ * the silence it replaces.
+ *
+ * Carries the CAUSE, not a boolean. The mapping from cause to a persisted
+ * `status` deliberately lives on the server side (the normalizer), because
+ * {@link ParsedAgent} takes no position on status at all.
+ */
+export interface ParsedAgentOutcome {
+  /** The `agent-<hex>` id whose run this describes. */
+  agentId: string;
+  cause: AgentOutcomeCause;
+  /** The parent-side `Agent`/`Workflow` `tool_use.id` the error result answered. */
+  toolUseId: string;
+}
+
 /** The full read-side reconstruction of one session. */
 export interface ParsedSession {
   sessionId: string;
@@ -90,4 +113,17 @@ export interface ParsedSession {
   edges: ParsedEdge[];
   /** Usage deduped by `message.id` (parser-spec section 5.2); `agentId === null` is ROOT/main usage. */
   usage: DedupedUsage[];
+  /**
+   * Observed run outcomes, one per agent that has one. Almost always EMPTY —
+   * corpus-wide only 33 spawn results out of 1276 carried an error at all, and
+   * only a fraction of those belong to an agent that ran.
+   *
+   * OPTIONAL on the type, ALWAYS PRESENT on `parseSession`'s output. The field
+   * is optional so that adding it stayed additive: a caller that synthesizes a
+   * session-shaped value for a reader which never looks at outcomes (the cost
+   * estimator does exactly this) keeps compiling unchanged. Read it as
+   * `outcomes ?? []`; absent means "not produced by the parser", never "the
+   * parser found none".
+   */
+  outcomes?: ParsedAgentOutcome[];
 }

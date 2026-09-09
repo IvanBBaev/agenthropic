@@ -22,7 +22,8 @@ import { DagView } from '../src/views/DagView';
 import { LiveView } from '../src/views/LiveView';
 import { SessionsView } from '../src/views/SessionsView';
 import { createSseClient, type SseClient } from '../src/sse';
-import { agentTypeLabel, projectLabel } from '../src/format';
+import { CLOCK_INTERVAL_MS } from '../src/clock';
+import { agentTypeLabel, formatUsd, projectLabel, UNREADABLE_USD } from '../src/format';
 import { describeAgentGraph, describeCostFlow } from '../src/views/chart-summary';
 import { applyAgentStatusChange } from '../src/views/live-model';
 import {
@@ -33,7 +34,12 @@ import {
   UNRECOGNISED_STATUS_LABEL,
   unrecognisedStatusMeta,
 } from '../src/views/status';
-import { computeCostFlow, toFlowLink, toFlowNode } from '../src/views/layout/cost-flow';
+import {
+  computeCostFlow,
+  flowNodeValueUsd,
+  toFlowLink,
+  toFlowNode,
+} from '../src/views/layout/cost-flow';
 import type { AgentStatus, SessionStatusCountsDto } from '../src/dto';
 import {
   agentNode,
@@ -65,6 +71,10 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  // One test below crosses UTC midnight with fake timers. Restoring here rather
+  // than at the end of that test means a failure inside it cannot leave a
+  // frozen clock behind for everything that follows.
+  vi.useRealTimers();
 });
 
 function renderLive() {
@@ -198,9 +208,21 @@ describe('a status bucket the server did not send', () => {
     const buckets = await screen.findByLabelText(
       'status counts for aaaaaaaa-1111-2222-3333-444444444444',
     );
-    expect(buckets.textContent).toContain('? waiting');
-    expect(buckets.textContent).toContain('? error');
-    expect(buckets.textContent).toContain('? unknown');
+    /*
+      AMENDED 2026-09-03 (LV-3). These three assertions used to read `'? waiting'`
+      and so on. The marker was explicit, which is what this test was written to
+      demand - but `?` is UNRECOGNISED_STATUS_SYMBOL, the vocabulary for "the
+      server sent a status word this build does not know". A missing COUNT for a
+      status we do know is a different fact, and printing it with the other
+      fact's glyph is the same borrowing F-14 removed elsewhere. The expected
+      text moves to NO_FIGURE_META's symbol AND word; the assertion is otherwise
+      unchanged, and still fails on a blank.
+    */
+    expect(buckets.textContent).toContain('∅ no figure waiting');
+    expect(buckets.textContent).toContain('∅ no figure error');
+    expect(buckets.textContent).toContain('∅ no figure unknown');
+    // The borrowed glyph must be gone, not merely joined by the right one.
+    expect(buckets.textContent).not.toContain('? waiting');
   });
 });
 
@@ -348,6 +370,58 @@ describe('the cost totals', () => {
     renderCost();
     await screen.findByLabelText('totals');
     expect(screen.queryByTestId('no-usage-note')).toBeNull();
+  });
+});
+
+/**
+ * F-1. The windows tick; the rows do not. Past UTC midnight the today window
+ * names a day the snapshot was taken before, so its sum is zero for a reason
+ * that has nothing to do with spending - and $0.00 in the slot where measured
+ * dollars go is the same lie as any other unmeasured number, told in the most
+ * credible font on the page.
+ *
+ * The pre-existing rollover test in cost-view.test.tsx crosses the same
+ * boundary and does NOT trip this, because its fixture happens to carry a row
+ * dated into the new day. That is the rarer case (a writer's clock running
+ * ahead of the viewer's); the common one is here.
+ */
+describe('a cost page left open across UTC midnight', () => {
+  it('refuses to print a $0.00 it could not have measured', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.UTC(2026, 7, 15, 23, 59, 50));
+    routeCostFetch(
+      jsonResponse(
+        200,
+        costSummary({
+          totals: { tokens: 1000, costUsd: 0.1, unpricedTokens: 0 },
+          // Nothing dated 2026-08-16: the snapshot predates that day entirely.
+          perDay: [{ day: '2026-08-15', tokens: 1000, costUsd: 0.1, unpricedTokens: 0 }],
+        }),
+      ),
+    );
+    renderCost();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    // Before the boundary the figure is a measurement and reads as one.
+    expect(screen.getByTestId('kpi-today').textContent).toContain('$0.10');
+    expect(screen.queryByTestId('kpi-today-unread')).toBeNull();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(CLOCK_INTERVAL_MS);
+    });
+
+    const today = screen.getByTestId('kpi-today');
+    expect(screen.getByTestId('kpi-today-unread').textContent).toBe('not measured');
+    expect(today.textContent).not.toContain('$0.00');
+    // The reason is stated with both dates, so the reader can act on it.
+    expect(today.textContent).toContain('2026-08-16');
+    expect(today.textContent).toContain('read on 2026-08-15');
+    // The week window keeps its figure - six measured days is a lower bound,
+    // not a fiction - but it stops presenting itself as complete.
+    const week = screen.getByTestId('kpi-week');
+    expect(week.textContent).toContain('$0.10');
+    expect(screen.getByTestId('kpi-week-partial').textContent).toContain('a lower bound');
   });
 });
 
@@ -788,5 +862,114 @@ describe('coverage honesty', () => {
     // Listed, not counted: the failure has to name the file, or the next person
     // just deletes the test.
     expect(offenders).toEqual([]);
+  });
+});
+
+/**
+ * F-7 / F-8 (2026-09-02). The block above ("the cost-flow layout helpers")
+ * pins `toFlowNode` returning `value: 0` for a node the layout never valued.
+ * That assertion is correct about the converter and must not be read as the
+ * honesty contract: $0.00 is a measured figure, and a node whose total was
+ * never computed has no figure at all. The production path routes the money
+ * field through `flowNodeValueUsd`, and these tests state what the PAGE
+ * promises rather than what one converter happens to return.
+ */
+describe('the cost diagram accounts for what it cannot draw', () => {
+  it('refuses to put a dollar amount on a node whose total was never computed', () => {
+    const seed = {
+      id: 'hub',
+      label: 'all cost',
+      kind: 'hub' as const,
+      colorIndex: null,
+      unpricedTokens: 0,
+    };
+    // Not zero: `formatUsd(NaN)` is the app's "cost unreadable", so the gap
+    // survives every formatter it passes through instead of being invented
+    // into a figure a reader would take as measured.
+    expect(formatUsd(flowNodeValueUsd(seed))).toBe(UNREADABLE_USD);
+    expect(formatUsd(flowNodeValueUsd({ ...seed, value: 3 }))).toBe('$3.00');
+  });
+
+  it('leaves no served cost both undrawn and unnamed', () => {
+    const flow = computeCostFlow(
+      costSummary({
+        totals: { tokens: 4000, costUsd: 0.7, unpricedTokens: 0 },
+        perModel: [
+          { model: 'drawn', tokens: 2000, costUsd: 1, unpricedTokens: 0 },
+          { model: 'refunded', tokens: 1000, costUsd: -0.3, unpricedTokens: 0 },
+          { model: 'broken', tokens: 500, costUsd: Number.NaN, unpricedTokens: 0 },
+          { model: 'unpriced-only', tokens: 0, costUsd: 0, unpricedTokens: 500 },
+        ],
+      }),
+    );
+    // Every served model row is accounted for by exactly one of the three
+    // channels the page renders: a ribbon, the zero-cost list, or the
+    // undrawable notice. The old split had a fourth outcome - silence.
+    const drawn = flow.links
+      .filter((link) => link.sourceId.startsWith('model:'))
+      .map((link) => link.sourceId.slice('model:'.length));
+    const named = [...flow.zeroCostModels, ...flow.undrawable.map((entry) => entry.label)];
+    expect(drawn).toEqual(['drawn']);
+    expect(named).toEqual(['unpriced-only', 'model refunded', 'model broken']);
+  });
+
+  it('says the picture does not add up rather than letting the layout pick a side', () => {
+    // d3-sankey resolves a disagreement between inflow and outflow by taking
+    // the larger of the two as the hub's value - silently, and the result
+    // still looks like a balanced diagram.
+    const flow = computeCostFlow(
+      costSummary({
+        totals: { tokens: 9000, costUsd: 40, unpricedTokens: 0 },
+        perModel: [{ model: 'claude-a', tokens: 9000, costUsd: 12, unpricedTokens: 0 }],
+      }),
+    );
+    expect(flow.balance.balanced).toBe(false);
+    expect(flow.balance.modelsMinusTotalUsd).toBe(-28);
+  });
+});
+
+/**
+ * CS-4 (2026-09-08). The block "the chart text alternatives" above pins what
+ * `describeAgentGraph` says about the graph it is handed. It could not pin the
+ * two things that make that sentence TRUE of the page - how old the reading is
+ * and whether the served nodes are the whole graph - because until now the
+ * function did not say them: each caller appended its own clause afterwards,
+ * so the qualification was a convention two files happened to follow rather
+ * than a property of the summary. These tests state the qualification as the
+ * function's own contract, and pin that a caller with nothing to disclose gets
+ * exactly the old string back.
+ */
+describe('the agent-graph summary carries its own qualification (CS-4)', () => {
+  it('CS-4: dates the tally itself, so the age cannot be lost with the caller', () => {
+    const text = describeAgentGraph([agentNode({ status: 'working' })], [], { asOf: '2m ago' });
+    expect(text).toContain('Agents by status: 1 working.');
+    expect(text).toContain('As recorded 2m ago, not as of now.');
+  });
+
+  it('CS-4: says the tally counts a slice when the payload was cut', () => {
+    const text = describeAgentGraph([agentNode({ status: 'working' })], [], {
+      sliceOf: { returnedAgents: 1, totalAgents: 1200 },
+    });
+    // Without this the sentence "Agents by status: 1 working" is a claim about
+    // a 1200-agent corpus, and it is the only channel a screen reader has.
+    expect(text).toContain('This counts the returned slice only: 1 of 1200 agents.');
+  });
+
+  it('CS-4: states the scope of the count before its age, as the page does', () => {
+    const text = describeAgentGraph([agentNode()], [], {
+      asOf: '2m ago',
+      sliceOf: { returnedAgents: 1, totalAgents: 1200 },
+    });
+    expect(text.indexOf('returned slice only')).toBeLessThan(text.indexOf('As recorded'));
+  });
+
+  it('CS-4: adds nothing a caller did not claim - an absent option is not a denial', () => {
+    const agents = [agentNode({ status: 'working' }), agentNode({ id: 'b', status: null })];
+    const edges = [orchestrationEdge({ source: 'directory' })];
+    // A caller that knows neither fact gets the pre-CS-4 string byte for byte:
+    // the function must not invent "this is the whole graph" or "as of now".
+    expect(describeAgentGraph(agents, edges, {})).toBe(describeAgentGraph(agents, edges));
+    expect(describeAgentGraph(agents, edges)).not.toContain('As recorded');
+    expect(describeAgentGraph(agents, edges)).not.toContain('returned slice');
   });
 });

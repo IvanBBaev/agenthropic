@@ -4,10 +4,23 @@
  *
  * PROBLEM. Replay-on-startup re-reads the WHOLE corpus on every boot: the
  * watcher's fingerprint map lives in process memory, so a restart starts blank
- * and every session is "changed". That is correct and idempotent, but on the
- * measured corpus (12.80 GiB / 1855 sessions) a full cold replay projects to
- * ~137 s of boot-time work — paid again on every restart, for sessions whose
- * bytes have not moved in months.
+ * and every session is "changed". That is correct and idempotent, but a full
+ * cold replay at census scale (141 sessions / 996.4 MiB) is MEASURED at
+ * 34.87-39.92 s of boot-time work — paid again on every restart, for sessions
+ * whose bytes have not moved in months.
+ *
+ * FIGURE CORRECTED 2026-09-01. This paragraph used to read "on the measured
+ * corpus (12.80 GiB / 1855 sessions) a full cold replay projects to ~137 s".
+ * Neither figure was measured. `1855` counts subagent TRANSCRIPTS, not sessions
+ * (parser-spec §4.2 census of record: 141 sessions), and the 12.80 GiB carries
+ * the same error in different units, which is why it went undetected while the
+ * session counts were being corrected: 12.80 GiB / 1855 implies 7.0659 MiB per
+ * session, against the measured 996.4 MiB / 141 = 7.0667 MiB — a 0.011%
+ * difference, i.e. one clone size multiplied by two different session counts.
+ * Corrected, that projection targeted the exact scale since measured, and
+ * overstated it by 3.4-3.9x. This store may still be worth its cost against a
+ * 35-40 s synchronous stall, but that argument has to be made from the measured
+ * figure rather than inherited from the projected one.
  *
  * SHAPE. This store persists exactly what the watcher already computes in
  * memory: sessionId -> {@link fingerprintSession} string. On the next boot the

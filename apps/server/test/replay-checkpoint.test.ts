@@ -558,8 +558,12 @@ describe('WP-IN10 replay checkpoint', () => {
         // Measured on this fixture corpus at the time of writing: cold read 21
         // files / 14579 bytes over 66 lstats; warm read 0 files / 0 bytes over
         // 36 lstats. The remaining cost is metadata-only and scales with the
-        // session count, not with corpus SIZE — which is the term that made a
-        // full cold replay ~137 s on the real 12.80 GiB / 1855-session corpus.
+        // session count, not with corpus SIZE — which is the term that makes a
+        // full cold replay 34.87-39.92 s at census scale (141 sessions /
+        // 996.4 MiB, measured 2026-09-01). This line used to cite "~137 s on the
+        // real 12.80 GiB / 1855-session corpus"; that was a projection whose
+        // corpus figure was never measured — see the dated correction in
+        // src/db/replay-checkpoints.ts.
       } finally {
         db.close();
       }

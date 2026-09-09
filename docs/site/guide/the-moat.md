@@ -35,9 +35,13 @@ doesn't change the "build" verdict.
 >   **rebuilds from JSONL alone** after a simulated outage, with hooks separately proven
 >   liveness-only — appending hook events leaves the DAG dump unchanged. A 12-scenario
 >   negative catalogue passes alongside them. Two limits on that sentence: *merge-blocking*
->   is a word this page has to stop using, because blocking a merge takes a
->   branch-protection rule on `main` and that rule is an owner action still unset at the
->   last recorded check; and those three proofs are the whole of what is proven — do not
+>   is a word this page may use again, but never on its own — `main` has been
+>   branch-protected since **2026-08-25** and requires the `ci` check, so a red run
+>   withholds the merge button from a contributor and not from the repository owner, because
+>   `enforce_admins` is deliberately off (one maintainer, working by direct push to `main`,
+>   would otherwise be locked out of their own repository; the full note is the
+>   [standing correction](../contributing/decisions/README.md#a-standing-correction-merge-blocking));
+>   and those three proofs are the whole of what is proven — do not
 >   read them as a general correctness guarantee. In particular, proving the DAG rebuilds
 >   deterministically is not the same as proving it is *right*: the hierarchy-accuracy exit
 >   gate reports **NOT CERTIFIED at n = 0**, because no session has been hand-labeled.

@@ -7,6 +7,15 @@
  * `droppedEdges` (and not drawn), and nodes trapped in a cycle are still
  * placed on a fallback layer and counted in `cyclicNodes` instead of hanging
  * the layout.
+ *
+ * AMENDED 2026-09-07 (CS-1). "What it cannot place it reports honestly" was
+ * read as settling the disclosure. It settled only half of it: `droppedEdges`
+ * is a number this module returns, and the views render it as sighted prose
+ * beside the chart - but the prose text alternative that a screen reader is
+ * pointed at (`chart-summary.ts`) counted the RAW edge list, so the reader who
+ * met the graph as an image was told a census that included edges the geometry
+ * never drew. The placeability test is now exported as `isPlaceableEdge` and
+ * both halves of the picture ask it, so one rule decides what "drawn" means.
  */
 
 export interface LayoutEdge<E> {
@@ -52,6 +61,19 @@ export interface LayeredOptions {
 const DEFAULTS: Required<LayeredOptions> = { gapX: 130, gapY: 90, marginX: 70, marginY: 40 };
 
 /**
+ * The one placeability rule, exported so the chart's prose text alternative
+ * counts undrawn edges by exactly the same test the geometry uses. An edge can
+ * be drawn only when BOTH endpoints are in the node set being laid out;
+ * anything else has no coordinates to connect and is not on screen.
+ */
+export function isPlaceableEdge(
+  nodeIds: { readonly has: (id: string) => boolean },
+  edge: { readonly parentId: string; readonly childId: string },
+): boolean {
+  return nodeIds.has(edge.parentId) && nodeIds.has(edge.childId);
+}
+
+/**
  * Layer nodes by longest path from a root (Kahn order), then order each layer
  * by the mean x of already-placed parents (stable on ties by input order) so
  * children cluster under their parent. Coordinates are a fixed grid - the
@@ -76,7 +98,7 @@ export function computeLayeredLayout<N extends { readonly id: string }, E>(
 
   const order = new Map<string, number>();
   nodes.forEach((node, index) => order.set(node.id, index));
-  const validEdges = edges.filter((edge) => order.has(edge.parentId) && order.has(edge.childId));
+  const validEdges = edges.filter((edge) => isPlaceableEdge(order, edge));
   const droppedEdges = edges.length - validEdges.length;
 
   const children = new Map<string, string[]>();

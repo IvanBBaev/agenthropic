@@ -106,7 +106,7 @@ Binding once Step 0 is signed; dates from roadmap §4. Every failure branch is t
 | **KC-0** | **2026-07-13** | All Step-0 boxes above checked | Archive — **DATE PASSED UNMET (2 of 5 boxes open); default overridden by owner instruction, see above** |
 | **KC-1** | **2026-07-27** | WP-S7 verdict written **+** the THROWAWAY DAG-with-dollars render exists **+** the friction log has not crowned a rival (≥4/5 questions) | Archive — **DATE PASSED UNMET: clauses 1 and 2 green, clause 3 unsatisfiable (log never opened); default overridden by owner instruction, see above** |
 | **KC-2** | **2026-09-14** | Phase 1–2 exit gates green; at most **one** velocity rebase applied | Descope ladder (roadmap §5) or archive |
-| **KC-3** | **2026-10-12** | The three P0 moat proofs green & merge-blocking | Archive |
+| **KC-3** | **2026-10-12** | The three P0 moat proofs green & merge-blocking — _the merge-blocking half became satisfiable on **2026-08-25**, when `main` started requiring the `ci` check; it blocks a contributor, not the owner (`enforce_admins: false`). Not yet due; do not tick early._ | Archive |
 | **KC-4** | **2026-12-01** | **v1.0 tagged. The date does not move.** | Archive + public write-up |
 | **KC-5** | earned, not dated | 14 consecutive days of real daily v1.0 use + ≥3 friction-log entries wanting alerts | v2.0 cancelled; maintenance mode |
 
@@ -272,6 +272,40 @@ files / 1540 tests, 100/100/100/100 in all five packages**. New PROVISIONAL cons
   `sqlite_master` for exactly that reason. Known residue: a pruned `token_usage` row whose source JSONL still exists returns on
   the next replay — totals self-heal upward, never silently down, but space is not durably
   reclaimed until segment archival exists (an argument for pruning `events` only, for now).
+  - **Decided 2026-09-09 (D3, Closing board):** `DASHBOARD_RETENTION_EVENTS_DAYS=90`;
+    `token_usage` never pruned in v1.0 (`NO_RETENTION` kept, `acknowledgeCostLoss` refusal
+    stays); backups `DASHBOARD_RETENTION_BACKUP_DAYS=30`, `_KEEP_MIN=7`. Wiring is Wave-2 lane L9.
+- [ ] **NODE-PIN** _(toolchain, blocked on Ivan)_ — **the repo does not pin a Node version
+  locally, and the default one on this machine silently fakes a whole-suite failure.**
+  `package.json` declares `engines.node >= 22` and CI pins `node-version: 22`, but there is no
+  `.nvmrc`, and the shell default resolves to `/opt/homebrew/bin/node` **v26.7.0**. The installed
+  `better-sqlite3` binding is built for `NODE_MODULE_VERSION 127` (Node 22) and refuses to load on
+  `147`, cascading into `Cannot read properties of undefined (reading 'close'/'cleanup')` across
+  every DB-touching test — the P0 proofs, `security-contract`, `hook-receiver` and
+  `security-stream` included — plus ~16 spurious `localStorage is undefined` failures in
+  `apps/web` under jsdom. Measured 2026-09-01: the same tree shows a full cascade on v26 and
+  **15 real failures on v22**. The failure is loud, large, and blames the wrong files.
+  **The fix is a fork Ivan has to pick, so it is not taken here:** either (a) pin to 22 — add
+  `.nvmrc`, tighten `engines` to `>=22 <23` — or (b) actually support 26, which means rebuilding
+  the native binding and widening CI to a version matrix. Declaring `>=22` while shipping a
+  binding that only loads on 22 is the part that is currently untrue either way. Workaround
+  meanwhile: `export PATH="$HOME/.nvm/versions/node/v22.23.2/bin:$PATH"`.
+  - **Decided 2026-09-09 (D2, Closing board):** (a) — `.nvmrc` = `22`, `engines.node` tightened
+    to `>=22 <23`, README says so. Wave-1 lane L6.
+- [ ] **BENCH-SHAPE** _(benchmark, blocked on Ivan)_ — **the measured `34.87-39.92 s` cold replay
+  does not describe the real corpus, and the gap is per-session size, not total bytes.**
+  Established 2026-09-01 at the source: `corpus-scale.ts` deliberately never reads
+  `~/.claude/projects` (`:82`, `:740`) — it plants a synthetic corpus (`:1349`) whose per-session
+  size is two literals, `DEFAULT_RECORDS = 1800` x `DEFAULT_RECORD_BYTES = 4100` (`:253-254`) =
+  **7.038 MiB** (~7.07 with subagents). That single constant is the whole provenance of both
+  retired figures: `141 x 7.07 = 996.4 MiB` and `1855 x 7.07 = 12.80 GiB`. Measured on disk the
+  same day, the real corpus is **51 sessions / 2477 subagent transcripts / 1335.5 MiB =
+  26.19 MiB per session** — 34% more bytes in total, but **3.7x the benchmark's per-session
+  size** and 1.8x the WP-S1 median it was calibrated against. Linear-in-bytes puts real cold
+  replay near ~47-53 s; a session is parsed as a unit, so any per-session superlinearity lands
+  precisely on the axis that is 3.7x off. **Settle it by rerunning with `--records` /
+  `--record-bytes` at the real shape — NOT done here, because a benchmark rerun changes a number
+  Ivan has to stand behind.** Feeds OPEN-1/2/3. See the 2026-09-01 WORKLOG entry.
 - [x] **WP-U0** _(backend)_ — Fastify bootstrap: loopback-or-fail (plus post-listen address
   re-verification that hard-exits), timing-safe token compare, same-origin SSE check,
   TypeBox, config. _(D9 merged into C1; WP-X11 vector-DB stub **deleted** per best-path §6.3.)_
@@ -298,16 +332,17 @@ files / 1540 tests, 100/100/100/100 in all five packages**. New PROVISIONAL cons
   `configure-pages` → `jekyll-build-pages` → `upload-pages-artifact` → `deploy-pages`
   flow, zero new dependencies). Publishes **`docs/`, not `docs/site/`** — 129 relative
   links point outward to `../analysis`, so a site-only publish would break them;
-  `docs/ai/` is git-excluded and absent from the CI checkout. **STILL BLOCKED ON IVAN** —
-  the 2026-08-07 claim recorded here ("`enablement: true` turns Pages on via the API, so the
-  one-time Settings → Pages click is gone") was **wrong, and two real runs disproved it**
-  (`31318246506` on 2026-08-09, `31879212583` on 2026-08-15): `Create Pages site failed.
-  Error: Resource not accessible by integration`. `pages: write` authorises **deploying to**
-  an existing Pages site; **creating** one needs repo-administration rights that the default
-  `GITHUB_TOKEN` never has. The workflow header now records this truthfully (2026-08-15).
-  **Owner action, one time:** Settings → Pages → Source: "GitHub Actions" (or
-  `gh api -X POST repos/IvanBBaev/agenthropic/pages -f build_type=workflow` with an
-  admin-scoped token). Every push touching `docs/**` fails this workflow until then.
+  `docs/ai/` is git-excluded and absent from the CI checkout. **UNBLOCKED 2026-08-25 — the
+  site is live** at <https://ivanbbaev.github.io/agenthropic/>. The blocker was real while
+  it lasted: the 2026-08-07 claim recorded here ("`enablement: true` turns Pages on via the
+  API, so the one-time Settings → Pages click is gone") was **wrong, and two real runs
+  disproved it** (`31318246506` on 2026-08-09, `31879212583` on 2026-08-15): `Create Pages
+  site failed. Error: Resource not accessible by integration`. `pages: write` authorises
+  **deploying to** an existing Pages site; **creating** one needs repo-administration rights
+  that the default `GITHUB_TOKEN` never has. That is why it took an owner-credentialled call:
+  `gh api -X POST repos/IvanBBaev/agenthropic/pages -f build_type=workflow` → `has_pages:
+  true`, `build_type: workflow`. Re-running the previously failed `32863218759` then
+  **succeeded**, and `curl` returns HTTP 200 on both `/` and `/site/`.
 - [ ] **WP-A1** alert port (v2-facing; not on the v1.0 critical path).
 - **Exit gate:** coverage >90% green & blocking ✅ (now genuinely including `apps/web` —
   its script ran without `--coverage` until 2026-07-30, so the thresholds silently never
@@ -316,12 +351,13 @@ files / 1540 tests, 100/100/100/100 in all five packages**. New PROVISIONAL cons
   of 2026-07-30 the badge finally means what it says: CI is `success` on `9b6c6b3`, the
   first pushed commit containing Waves 1–4 (until then the newest run on `main` was
   `eded0b3` from 2026-07-12, so the badge attested only to the Phase-1 foundation) ·
-  Pages builds ❌ — three failed runs, all the same cause: `30528892265` (`Get Pages site
-  failed … Not Found`), then `31318246506` and `31879212583` after `enablement: true` was
-  added (`Create Pages site failed … Resource not accessible by integration`). The
-  `enablement: true` fix did **not** work; a workflow token cannot create a Pages site.
-  Unblocked only by the owner's one-time Settings → Pages click (see WP-X7 above); tick
-  this only after a green `pages.yml` run, not by assumption.
+  Pages builds ✅ **as of 2026-08-25**, and ticked the only way this box allows — by a green
+  `pages.yml` run (`32863218759`, re-run after enablement), not by assumption. Three runs
+  had failed before it, all the same cause: `30528892265` (`Get Pages site failed … Not
+  Found`), then `31318246506` and `31879212583` after `enablement: true` was added (`Create
+  Pages site failed … Resource not accessible by integration`). The `enablement: true` fix
+  did **not** work; a workflow token cannot create a Pages site, which is why enablement had
+  to be an owner-credentialled call (see WP-X7 above).
 
 ### Phase 2 · Ingest substrate
 - [x] **WP-IN1** envelope + idempotency-key (`hooks/envelope.ts`) · **IN2** EventStore
@@ -382,7 +418,9 @@ files / 1540 tests, 100/100/100/100 in all five packages**. New PROVISIONAL cons
   criterion. _(Scenario #2's "anomaly flagged" half is documented against the current
   honest posture — raw stored + WP-IN12 `unknown` — because no hook normalizer seam
   exists; if one is ever built, that test must be extended.)_
-- **Exit gate:** three P0 tests green & merge-blocking ⏳ · hierarchy ≥95% without
+- **Exit gate:** three P0 tests green ✅ & merge-blocking ✅ since 2026-08-25 — for a
+  contributor; the owner stays exempt by design (`enforce_admins: false`), so on Ivan's own
+  pushes this is discipline, not a barrier · hierarchy ≥95% without
   `SubagentStart` — **blocked on LABEL-ME** (the ≥95% is measured against Ivan's hand-labeled
   corpus; machine-vs-machine cannot sign it) · PreCompact reprices vs baseline ✅ (core) ·
   no priceless model ✅.
@@ -410,17 +448,284 @@ files / 1540 tests, 100/100/100/100 in all five packages**. New PROVISIONAL cons
   readonly open → online backup → `integrity_check` = ok), and an explicit **blockers**
   section that names what is still open instead of hiding it. Two of those four blockers
   are now closed: `apps/web` coverage is enforced (2026-07-30) and `LICENSE` is tracked
-  (`9b6c6b3`, GitHub reports `MIT`). **Still open, and Ivan's alone — now two, not one:**
-  `main` is not branch-protected, and Pages is not enabled (the `enablement: true` fix
-  failed against a workflow token — see WP-X7; corrected 2026-08-15).
-- **Exit gate (= the v1.0 definition, best-path §6.1):** all 5 daily questions answerable ✅
-  (server + UI — the "+ UI" half was **overstated until 2026-08-07**: `/api/sessions/:id/
-  cost-analysis` had no reader in the dashboard, so the compaction/delegation question was
-  answerable only by curl. `SessionCostAnalysis.tsx` is what closed it) · <30s to understand
-  a session — **unmeasured**: nobody has yet sat in front
-  of it with a real corpus and timed it, and until Ivan does, this stays ⏳ (an agent cannot
-  sign a usability claim) · tree & global DAG served by a query over persisted edges ✅ ·
+  (`9b6c6b3`, GitHub reports `MIT`). **All four are now closed:** branch protection on
+  `main` and GitHub Pages both landed on 2026-08-25, the two that had been "Ivan's alone"
+  since this line was written (the `enablement: true` fix had failed against a workflow
+  token — see WP-X7; corrected 2026-08-15, resolved 2026-08-25).
+- [x] **WP-U10 — a producer for `status = 'error'` (Q4's "failed" half).** Found 2026-09-01 by
+  the E2E proof: the value is declared in four places and written by none. Blocks the v1.0
+  exit gate, since "what failed" is one of the five questions. The producer must respect CD-1
+  — a *failure* is structure-adjacent and belongs to JSONL ground truth if the transcript
+  carries one; hooks may only confirm liveness.
+  **Scanned 2026-09-01 — the signal exists, and it is worth ~2 agents.** Read-only pass over
+  2555 transcripts / 422,461 JSON lines. *Ruled out:* `stop_reason` (corpus-wide only
+  `tool_use` 122,679, `end_turn` 3,050, `stop_sequence` 829, `refusal` 2 — no error value, and
+  876 of 1252 workflow transcripts *end* on `tool_use`); tool-level `is_error: true` (862 of
+  2552 files — a failed `grep`, not a failed agent); `isApiErrorMessage: true` (780 records,
+  `apiErrorStatus` 429 ×486 / 529 ×36 / 500 ×7 — a failed *turn*, the session continues).
+  *Confirmed:* the **parent-side `Task`/`Agent`/`Workflow` `tool_result` with `is_error: true`**
+  — 1243 ok vs **33** error corpus-wide, and those 33 are **five** distinct facts that must not
+  be flattened: 19 spawn refused by the concurrency limit (no agent ever ran), 7 user interrupts
+  (not a failure), **3 tool-permission failures** (`Tool permission request failed:
+  AbortError`), 2 model-unavailable, **2 genuinely terminated mid-run by an API session limit**.
+  So the honest count is ~2, not 33. That is still the right change: it replaces a
+  *structurally impossible* zero with a *measured* one.
+  **ERRATUM 2026-09-02.** This paragraph read "30 ... four distinct facts" and omitted the 3
+  permission failures, which made `permission_failed` — one of the six causes the code ships —
+  look like a speculative bucket with no corpus behind it. It is measured. The error came from
+  a scan that matched only `Task`/`Agent` spawn blocks; `agent-outcome.ts` had 33-and-five right
+  all along, and it is the file that carries the argument, so the board was the wrong half.
+  Re-verified 2026-09-02 by a two-pass scan (spawn `tool_use.id` collected first, then
+  `tool_result` matched by `tool_use_id` — never by substring, gate #5) over 2633 transcripts /
+  442,140 records: **ok 1369 / error 33**, in exactly those five causes. The `ok` count moved
+  1243 -> 1369 because the corpus grew; the error count and the cause set did not move at all.
+  A first attempt at this re-verification returned "36 errors" by testing whether the result
+  *mentioned* a subagent — i.e. the tool-level `is_error` heuristic this very module forbids,
+  which pulled in 15 `Exit code 1` Bash results. Recorded because the wrong number was one
+  substring away from being reported as a correction to a docstring that was already right.
+  **ERRATUM, third pass, 2026-09-02.** Re-measured once more over **2693 transcripts /
+  461,334 records, 0 unparseable**: **ok 1421 / error 33**, causes 19/7/3/2/2. So the `ok`
+  figure has moved 1243 -> 1369 -> 1421 across three scans in two days — that is corpus
+  growth and nothing else — while **the error count and the five causes have not moved at
+  all**. `packages/core/src/parser/agent-outcome.ts` carries the current number and the full
+  provenance chain; this board line has now lagged it twice, which is itself the argument for
+  keeping the figure in the file that makes the argument rather than in the tracker.
+  "Stuck" needs nothing new — dangling
+  `tool_use` is 3 main + 7 subagent + 0 workflow files of 2555, already covered honestly by
+  the watchdog's `'unknown'`. Evidence in `WORKLOG.md`, entry of 2026-09-01 (second).
+  **CLOSED 2026-09-02.** `packages/core/src/parser/agent-outcome.ts` classifies the parent-side
+  errored spawn; `apps/server/src/ingest/normalize-session.ts` promotes exactly one cause
+  (`terminated_early`, via `ERROR_CAUSES`) onto `agents.status = 'error'`, and
+  `isTerminalAgentStatus` in `apps/server/src/ingest/watchdog.ts` already listed `'error'`, so an
+  errored agent is never swept back to `'unknown'`. Driven end-to-end by a new synthetic fixture
+  `agent-outcome-errors` whose two sibling spawns share one parent record: the terminated-early
+  one lands on `'error'`, the user-interrupt one on `'unknown'`. **That second assertion is the
+  point** — the fixture proves the causes do NOT collapse into one bucket, which is the defect a
+  19/7/3/2/2 distribution makes tempting.
+- [x] **WP-U11 — Q5 "what changed across sessions" is answered by no single endpoint.** Eight
+  routes exist; none is a diff/delta. Today the answer requires the caller to stitch
+  `/api/dag/global` with `/api/cost/summary` `perDay` client-side. Either add the endpoint or
+  amend the exit gate to state that this question is answered by the *dashboard*, not the API
+  — but it must not stay ticked as if one call answered it.
+  **CLOSED 2026-09-02** by the first route rather than the amendment: `GET /api/changes`
+  (`apps/server/src/api/routes.ts:449`), auth-gated like every other endpoint and covered by
+  `apps/server/test/api-changes.test.ts`.
+- [x] **WP-U12 — seven dead `*Row` interfaces in `packages/shared/src/types/rows.ts`, and they
+  are wrong.** Found 2026-09-02 by the dead-value sweep, verified by me the same day: all seven
+  (`SessionRow`, `AgentRow`, `TokenUsageRow`, …) have **zero importers** anywhere in the
+  monorepo, while `packages/shared/src/index.ts:1` re-exports them wholesale
+  (`export type * from './types/rows'`). The same names appear at `db-sessions.test.ts:5`,
+  `db-agents.test.ts:10`, `event-store.test.ts:57` and `src/db/pricing.ts:35`, but each is a
+  **locally redeclared, correctly-shaped duplicate** — which is precisely why nobody noticed the
+  originals rot. They are not merely unused, they contradict the schema: `AgentRow` declares
+  `started_at`/`ended_at` where the table has `first_seen_at`/`last_seen_at`, and `TokenUsageRow`
+  describes a **wide** row (`input`, `output`, `cache_read`, `cache_write_5m`, `cache_write_1h`)
+  against a `token_usage` table that is **tall**. A type nobody imports can never fail a
+  typecheck; an exported one is a trap for the next reader, and this package is the shared
+  contract.
+
+  **CLOSED 2026-09-02 — and the plan written on this line was half wrong, in exactly the way the
+  board warns about twice.** The action recorded here was "delete the seven interfaces, keep the
+  six type aliases — they are load-bearing (`AgentStatus` 63 references, `AgentOutcomeCause` 26,
+  `OrchestrationEdgeSource` 17, `TokenBucket` 13, `AgentType` 10, `RawEventSource` 8)." Three of
+  those six were **not** load-bearing and those three counts are **not** references to this file.
+  `packages/shared/src/index.ts` re-exported `AgentStatus`, `AgentType` and
+  `OrchestrationEdgeSource` **explicitly** from `./schemas/common` (lines 28-33) alongside the
+  `export type * from './types/rows'` on line 1 — and an explicit re-export **shadows** a star
+  re-export. So every consumer outside the package was already resolving to `schemas/common`; the
+  copies in `types/rows.ts` were reachable only from inside that one file. I had counted **name
+  occurrences and called them references** — substring, not resolution, the same error this board
+  already records twice. Two identical declarations of one union with nothing holding them in
+  step is drift waiting to happen; they happened to still agree.
+
+  **What was actually done.** `types/rows.ts` → `types/enums.ts`: the seven interfaces and the
+  three shadowed aliases deleted, `schemas/common.ts` left as the single declaration of each of
+  the three (the better one — derived from the runtime TypeBox validator rather than sitting
+  beside it); `AgentOutcomeCause`, `TokenBucket` and `RawEventSource` kept, these three being the
+  ones that really are load-bearing and really have no schema. Two importers updated
+  (`index.ts:1`, `ports/event-store.ts:7`). The index line is now an explicit named re-export
+  rather than `export type *` — **a star export is what let the duplicate hide**, so with every
+  export named the next duplicate is a compile error instead of a silent shadow. The four correct
+  local redeclarations (`db-sessions.test.ts:5`, `db-agents.test.ts:10`, `event-store.test.ts:57`,
+  `src/db/pricing.ts:35`) are untouched and still correct.
+- [~] **WP-U13 — `agents.outcome_cause` is written by ingest and read by nothing.** The mirror of
+  WP-U10: that was a value read by no writer, this is a column written for no reader. Produced at
+  `apps/server/src/ingest/normalize-session.ts:267,277` → `apps/server/src/db/agents.ts:130,146,156`;
+  no `src/` path ever selects it. Migration 17 justified the column with "the dashboard can say
+  *why*" — the dashboard cannot, because nothing serves it. This one is **not** a cleanup: the five
+  causes are exactly the distinction Q4 was reopened to preserve (19 of 33 are `concurrency_limit`,
+  a scheduling fact with no failed agent in it), so collapsing them is the defect and surfacing
+  them is an API-response-shape change plus a UI decision. **Blocked on Ivan for the UI half** —
+  whether a ~2-agent `error` bucket justifies any dashboard surface at all is his call, not an
+  agent's. The API half (expose `outcomeCause` on the agent DTO) can move independently.
+  - **Decided 2026-09-09 (D4, Closing board):** yes, minimal — the cause as text on `error`
+    rows in the Live view and the session tree; no new view, no colour. Wave-1 lane L5.
+
+  **API HALF CLOSED 2026-09-03; the UI half is still Ivan's.** `outcomeCause` is now a required,
+  nullable field on `AgentNodeDto` (`packages/shared/src/schemas/graph.ts`) and is selected and
+  served by **both** node readers in `apps/server/src/api/queries.ts` — `getSessionTree` and the
+  global-DAG query. NULL is served as NULL: "no outcome was observed" is not a claim that the
+  agent succeeded, and the six causes stay distinct on the wire exactly as they are in the column.
+
+  **Two corrections to the line above, both found while closing it.** (1) The board says "the five
+  causes" three times; there are **six** — migration 17's CHECK
+  (`apps/server/src/db/migrations.ts:1096-1097`) admits `unclassified` alongside the five, and an
+  API union that dropped it would reject rows the database can legally hold. (2) The union had **no
+  TypeBox schema at all**, only a bare type alias in `packages/shared/src/types/enums.ts`. Putting
+  it on the wire needs a runtime validator, and adding one next to a hand-written alias would have
+  rebuilt the exact WP-U12 defect (two declarations of one name, one of them shadowed and dead). So
+  the declaration was **moved, not copied**: `schemas/common.ts` now owns
+  `AgentOutcomeCauseSchema` and `AgentOutcomeCause = Static<typeof …>`, and `enums.ts` records why
+  it left. All eight import sites go through `@agenthropic/shared`, so no consumer changed.
+
+  **Verified by mutation, baseline green first, `queries.ts` restored byte-identical (`cmp -s`)
+  after every run.** The seeds deliberately carry *different* causes per agent, and both mains
+  carry NULL, so a reader that hard-coded a constant or derived the cause from `status` cannot
+  produce the expected list:
+  | mutation | result |
+  |---|---|
+  | mapper `outcomeCause: row.outcome_cause → null` | **KILLED** — both endpoints fail (`api-dag`, `api-sessions`) |
+  | drop `ag.outcome_cause` from the **session-tree** SELECT | **KILLED** — and *only* `api-sessions` fails |
+  | drop `ag.outcome_cause` from the **global-DAG** SELECT | **KILLED** — and *only* `api-dag` fails, both of its cases |
+
+  The last two rows are the point: each SELECT list has its own test, so deleting one column does
+  not hide behind the other's coverage. **Still open, and unchanged:** whether a ~2-agent `error`
+  bucket justifies any dashboard surface at all is Ivan's call, not an agent's — nothing in the
+  web app reads `outcomeCause` yet, and this closure deliberately did not invent a place for it.
+- [~] **WP-U14 — the realtime schema assertion cannot fail.** `RealtimeEventSchema`
+  (`packages/shared/src/schemas/realtime.ts:48-64`) appears in **no** `src/` path; its single use is
+  `apps/server/test/realtime-bridge.test.ts:104`,
+  `expect(Value.Check(RealtimeEventSchema, event)).toBe(true)`. Because the union's third arm is
+  `GenericRealtimeEventSchema` (`{ type: string, payload: Record<string, unknown> }`), **any** object
+  with a string `type` and an object `payload` validates — the assertion is tautological, and it sits
+  inside the suite that was supposed to catch tautologies. **Action:** assert the *specific* schema
+  per event type (`session-ingested`, `agent-status-changed`), and decide whether the generic arm
+  should exist at all — that second half is a CD-5 transport-contract question (what an unknown
+  event type over SSE is allowed to mean), not a test fix.
+  - **Decided 2026-09-09 (D5, Closing board):** closed union — a typed `ingest-failed` arm,
+    `GenericRealtimeEventSchema` deleted, an unknown `type` dropped client-side and counted;
+    documented in `docs/site/usage/api.md`. Wave-1 lane L4.
+
+  **TEST HALF CLOSED 2026-09-02; the contract half is still Ivan's.** The tautology is replaced by
+  a named-arm helper, `acceptingArms(event)`, which reports *which* of the three arms accept an
+  event — so "some arm said yes" becomes "exactly this arm said yes and the other two refused."
+  Two further gaps turned up while fixing it, both worse than the one on the board: the check was
+  applied **only** to the event that lands on the catch-all, while `session-ingested` and
+  `agent-status-changed` — the two arms where a union check has real bite
+  (`additionalProperties: false`, a literal `type`, integer minimums) — were asserted with
+  `toEqual`/`toMatchObject` alone and **never met the shared schema at all**. The check had teeth
+  everywhere it was not used.
+
+  **Verified by mutation, baseline green first, `realtime.ts` restored byte-identical (`cmp -s`)
+  after every run:**
+  | mutation | old assertion | new assertion |
+  |---|---|---|
+  | generic arm `additionalProperties: false → true` | **SURVIVED** (measured, not assumed — the old form was re-run as a scratch test under the mutation and still passed) | **KILLED** — `expected [ 'generic' ] to deeply equal []` |
+  | `SessionIngestedEventSchema.agentCount` `Integer → String` | n/a (no assertion existed) | **KILLED** — `expected [] to deeply equal [ 'session-ingested' ]` |
+  | `previousStatus` `nullable(AgentStatusSchema) → AgentStatusSchema` | n/a | **SURVIVED at first**, then killed after the null-previous-status test got its own arm assertion — `toMatchObject({previousStatus: null})` passes just as well against a schema that forbids the null |
+
+  The third row is the one worth keeping: the first repair was itself incomplete, and only the
+  mutation said so. **Still open:** whether `GenericRealtimeEventSchema` should exist at all, and
+  whether `ingest-failed` deserves a typed arm — a CD-5 transport-contract question (what an
+  unknown event type over SSE is allowed to mean), not an agent's call.
+- **Exit gate (= the v1.0 definition, best-path §6.1):** all 5 daily questions answerable — **5
+  of 5 ✅** as of 2026-09-02. This read **3 of 5 ✅, 2 RED** on 2026-09-01, the day the claim was
+  first tested end-to-end instead of asserted
+  (`apps/server/test/p0/p0-five-daily-questions.test.ts`: the 8 **synthetic fixtures**
+  materialized as real JSONL on real disk → real `runCorpusIngest` → real `buildServer`, every
+  question asked over HTTP with a Bearer token). **WORDING CORRECTED 2026-09-02** — this line
+  read "real corpus", which in this repo means `~/.claude/projects`; the P0 proof has never
+  touched it. Everything downstream of the files IS real (no stubs, no fakes, no in-memory
+  shortcut), and that is the claim the gate can carry. What it cannot carry is scale or
+  messiness: 8 curated sessions, all parseable, and P0 says nothing about the 141-session /
+  996.4 MiB census.
+  **AUDITED BY MUTATION 2026-09-02, and two of the five ticks did not survive first contact.**
+  A falsification lane re-ran the gate with deliberate defects injected at the sites each
+  question claims to verify. Two assertions could not fail: (a) the P0 fixture seeded a single
+  flat pricing epoch, so `ORDER BY effective_from DESC` and `ASC` were indistinguishable and
+  the "dated" half of "tokens x dated price" was never exercised — fixed by seeding a
+  superseded, strictly-dominated 7 USD/Mtok 2019 rate behind the live 1 USD/Mtok 2020 one, after
+  which `DESC->ASC` turns Q5 RED via `api/queries.ts:59` and Q2 RED via `migrations.ts:917`;
+  (b) no fixture session spanned a `/api/changes` window boundary, so `change_kind`'s `'updated'`
+  arm had no producer and swapping `'new'`/`'updated'` in `queries.ts:1563` passed green — fixed
+  by deriving a third window at the midpoint of the earliest session that measurably spans time,
+  plus per-row `change`-map equality, a `new + updated + unknown == total` partition check and
+  explicit anti-vacuity assertions. **Both remedies were null-hypothesis tested** (restore the
+  old fixture/test text, keep the mutation: 6 passed (6)), so the kills belong to the new
+  assertions and not to something that was already there. The 5-of-5 stands on this audit; it
+  did not stand on the run that first claimed it. Q1 "what is running now"
+  ✅ · Q2 "where did tokens/money go" ✅ (recomputed independently from `token_usage` +
+  `model_pricing`, matching at all four grains) · Q3 "what did session X spawn and why" ✅ (all five
+  provenance kinds, depth-2 chain) · **Q4 "what failed / stuck" ✅** (closed 2026-09-02, WP-U10) —
+  "stuck" was always answered by `statusCounts.unknown`; "failed" had **no data source** until then.
+  `status = 'error'` existed in the CHECK constraint, the union and the `error_count` SUM while
+  **nothing in `src/` ever wrote it**, so a crashed agent was indistinguishable from an idle one.
+  Where the P0 test used to carry a *tripwire* asserting that bucket was structurally always zero,
+  it now asserts the positive property: a named session reports `statusCounts.error > 0`, the global
+  DAG carries an `'error'` node, and its user-interrupted sibling on the same parent record is
+  asserted `'unknown'` — the causes must not collapse · **Q5 "what changed across sessions" ✅**
+  (closed 2026-09-02, WP-U11 — `GET /api/changes`; until then no diff/delta endpoint existed among
+  the eight routes and the answer required stitching `/api/dag/global` with `/api/cost/summary`
+  `perDay` client-side). This tick had been **overstated twice** — once before 2026-08-07
+  (`/api/sessions/:id/cost-analysis` had no dashboard reader, so the compaction/delegation question
+  was answerable only by curl; `SessionCostAnalysis.tsx` closed it) and again until the E2E proof
+  above, because the ✅ was assembled from server and UI unit tests separately, with no test that
+  booted a server and asked anything · <30s to understand a session — **unmeasured**: nobody has yet
+  sat in front of it with a real corpus and timed it, and until Ivan does, this stays ⏳ (an agent
+  cannot sign a usability claim) · tree & global DAG served by a query over persisted edges ✅ ·
   every dollar traces to tokens×price ✅.
+
+### Closing board — the road to v1.0 = 100% _(plan of record: [`closing-plan-2026-09-08.md`](docs/analysis/closing-plan-2026-09-08.md); added 2026-09-08)_
+
+"100%" is defined there as **`v1.0.0` tagged by KC-4 with every `RELEASE.md` box ticked,
+`[HUMAN]` ones included**. The last 15% splits ~5% agent code/docs · ~3% owner decisions ·
+~7% owner acts and measurements. Lanes below carry the plan's lane ids; a lane's full paths,
+exit and proof live in the plan. Dated one-word answers under D1…D8 are the sign-off.
+
+- [ ] **Wave 0 · 2026-09-08 → 2026-09-14 (KC-2)** — W0-A CHANGELOG `[Unreleased]` for the
+  133-file uncommitted tree (agent) · W0-B decision batch **D1 commit · D2 Node pin · D3
+  retention values · D4 `outcomeCause` surface · D5 SSE contract · D6 SS-1 wording · D7 the
+  two KC-0 acts (do/waive) · D8 LABEL-ME commit caveat** (Ivan; defaults in plan §2) · W0-C
+  commit + push on D1, CI green on the pushed SHA (Ivan) · KC-2 tick on 2026-09-14.
+  - **Decisions recorded 2026-09-09** (Ivan, in chat: all eight recommended defaults of plan
+    §2 accepted) — **D1 yes**: commit + push the whole uncommitted tree now, CI green on the
+    pushed SHA before anything else is layered on · **D2 (a)**: `.nvmrc` = `22`,
+    `engines.node` `>=22 <23`, README says so · **D3**: `DASHBOARD_RETENTION_EVENTS_DAYS=90`;
+    `token_usage` never pruned in v1.0 (`NO_RETENTION` kept, the `acknowledgeCostLoss` refusal
+    stays); backups `DASHBOARD_RETENTION_BACKUP_DAYS=30`, `_KEEP_MIN=7` · **D4 yes, minimal**:
+    the cause as text on `error` rows in the Live view and the session tree, no new view, no
+    colour · **D5 closed union**: typed `ingest-failed` arm, `GenericRealtimeEventSchema`
+    deleted, an unknown `type` is dropped client-side and counted, documented in
+    `docs/site/usage/api.md` · **D6**: chip reads `○ reconnecting (attempt N)` from the second
+    failed attempt on, N from a real `SseClient` channel · **D7 do**: both KC-0 acts in Wave 3
+    (the friction log doubles as KC-5 evidence) · **D8 commit**: the filled
+    `annotations/human/` files plus a README note; CI keeps reporting "substrate unavailable",
+    the locally ratified number goes to `DONE.md` with date and n.
+  - W0-A done 2026-09-09: `CHANGELOG.md` `[Unreleased]` written from the 2026-08-25 → 09-08
+    WORKLOG entries. W0-C pending: `apps/web` test half of CF-2/LV-9 held by the peer session.
+- [ ] **Wave 1 · 2026-09-15 → 2026-09-28** — eight disjoint agent lanes: **L1** cost-summary
+  `sessionCount`/`hasMore` · **L2** two-sided `hubIsWhole` + `describeCostFlow` owns the hub
+  disclosure + CV-5 statement · **L3** `SseClient` attempt channel (D6) · **L4** typed
+  `ingest-failed`, generic arm removed (D5; closes WP-U14) · **L5** `outcomeCause` on error
+  rows (D4; closes WP-U13) · **L6** NODE-PIN (D2) · **L7** `SECURITY.md` + two site pages
+  describing the widened `scripts/` gates · **L8** BENCH-SHAPE rerun at the real shape
+  (agent measures, Ivan ratifies by ticking).
+- [ ] **Wave 2 · 2026-09-29 → 2026-10-12 (KC-3)** — **L9** retention wiring on the signed
+  values (closes WP-D10) · **L10** LABEL-ME kit: one evidence page per claim, read-only over
+  `spike/` · **L11** time-to-understand kit: five sessions picked, log rows ready ·
+  KC-3 tick on 2026-10-12 (P0-1/2/3 green + `ci` required).
+- [ ] **Wave 3 · 2026-10-13 → 2026-11-08 — Ivan's, no new features** — fill the 60 claims,
+  run the hierarchy gate, drop PROVISIONAL (closes WP-X2 + LABEL-ME) · stopwatch run on five
+  sessions (closes the `<30s` clause) · **friction log, 14 consecutive days** (Step-0 box;
+  doubles as KC-5 evidence) · one rival dashboard, five questions (Step-0 box) · agents take
+  only log-raised defects; at most one velocity rebase.
+- [ ] **Wave 4 · 2026-11-09 → 2026-11-22 — release candidate** — R1 mechanical
+  `RELEASE.md` §1–3/5/6 pass (agent) · R2 docs truth pass + `CHANGELOG` `[1.0.0]` + `DONE.md`
+  milestone + `0.3.0 → 1.0.0` (agent) · R3 the `[HUMAN]` boxes, COPY-with-attribution review,
+  live backup→restore drill, usability signature (Ivan).
+- [ ] **Wave 5 · by 2026-12-01 (KC-4)** — release commit, `v1.0.0` tag, push (Ivan) ·
+  post-tag CI/Pages/badges green, `DONE.md` closed, this board reduced to the KC-5 items
+  (orchestrator). One week of buffer; the critical path is D1 → Wave 3's 14 days → R3.
 
 ### Post-1.0 / v2.0 · Alerting core _(off the v1.0 critical path — best-path §6.1; **entered only via KC-5**: 14 consecutive days of real daily v1.0 use + ≥3 friction-log entries wanting alerts — roadmap §6. If that evidence never materializes, v2.0 never starts, and that is a success of the roadmap, not a failure.)_
 - [ ] **WP-A2** alert/webhook schema · **A3** secret `token_ref` resolver · **A4** no-SSRF
@@ -442,11 +747,13 @@ files / 1540 tests, 100/100/100/100 in all five packages**. New PROVISIONAL cons
 - [ ] No all-rights-reserved code copied (clean-room cast/disler/nirdiamant; attribute
   simple10/hoangsonww) — CI provenance scan enforces it.
 - [ ] Coverage stays at **100%** on all four axes in all five packages — raised from the
-  CD-7 floor of >90% on 2026-07-30 and pinned in every `vitest.config.ts`. It is
-  **CI-failing, not merge-blocking**: blocking a merge takes a branch-protection rule on
-  `main` and that rule is still unset, so the gate reddens the run without stopping the
-  button. (Earlier revisions of this line said ">90%, merge-blocking from Phase 1" — both
-  halves were wrong.) · `WORKLOG.md` entry per
+  CD-7 floor of >90% on 2026-07-30 and pinned in every `vitest.config.ts`. Since
+  **2026-08-25** it is **merge-blocking for a contributor and CI-failing for the owner**:
+  `main` requires the `ci` check, but `enforce_admins` is off by design, because one
+  maintainer working by direct push would otherwise be locked out of their own repository.
+  (Earlier revisions of this line said ">90%, merge-blocking from Phase 1", and then
+  "CI-failing, not merge-blocking, that rule is still unset" — the first was wrong on both
+  halves, the second was right until the rule existed.) · `WORKLOG.md` entry per
   meaningful WP (written by the orchestrator) · AI-harness files stay git-excluded ·
   no commits without an explicit ask.
 

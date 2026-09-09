@@ -35,11 +35,18 @@ paired-capture corpus. See [the Phase-0 corpus probe](../../analysis/phase0-prob
 > status watchdog; the SSE hub; the read API; and all four dashboard views plus a
 > per-session cost-analysis panel. **106 test files / 1554 tests pass** (re-measured
 > 2026-08-15), with **100%** statements/branches/functions/lines enforced in all five
-> packages. The three P0 correctness proofs are green in CI on every push and pull request
-> — but *merge-blocking* is a word this page has to stop using, because blocking a merge
-> requires a branch-protection rule on `main` that is an owner action and was still unset
-> at the last recorded check. Retention is **mechanism-built and policy-unset**: it exists,
-> it is tested, and by default it does nothing. **Phases 5–6 (alerting) are not started,
+> packages. The three P0 correctness proofs are green in CI on every push and pull request,
+> and since **2026-08-25** they are **merge-blocking for anyone who is not the repository
+> owner**: `main` requires the `ci` check, so a red run withholds a contributor's merge
+> button. It does not withhold the owner's — `enforce_admins` is deliberately off, because
+> agenthropic has one maintainer whose normal mode is a direct push to `main`, and turning
+> it on would lock the sole maintainer out of their own repository. That exemption travels
+> with every "merge-blocking" claim on this page; see
+> [the standing correction](../contributing/decisions/README.md#a-standing-correction-merge-blocking).
+> **The documentation site went live the same day**, at
+> <https://ivanbbaev.github.io/agenthropic/>. Retention is **mechanism-built and
+> policy-unset**: it exists, it is tested, and by default it does nothing.
+> **Phases 5–6 (alerting) are not started,
 > are v2.0, are entered only via KC-5, and may never start** — the operator-alerts API and
 > UI were cut outright. The Phase-0 numbers quoted above and below remain **PROVISIONAL**
 > until ratified against a hand-labeled corpus, and the accuracy gate that would ratify
@@ -58,8 +65,8 @@ a deferral *is* the failure.
 |---|---|---|---|---|
 | **KC-0** | 2026-07-13 | Gate A signed **and** the friction log opened **and** ≥1 rival dashboard installed for a two-week trial | Archive the repo; salvage the security posture and probe method as a write-up | **PASSED UNMET** — Gate A was signed 2026-07-10, but the friction log was never opened and no rival was ever installed. 2 of 5 boxes open at the deadline. |
 | **KC-1** | 2026-07-27 | The WP-S7 verdict written (GO or CONDITIONAL-GO) **and** the throwaway DAG-with-dollars render exists **and** the 14-day friction log does **not** show a rival answering ≥4 of the 5 daily questions acceptably | Archive | **PASSED UNMET** — see below. |
-| **KC-2** | 2026-09-14 | Phases 1–2 exit gates green (security spine live, coverage gate blocking, ingest idempotent, kill+restart zero-loss) | Descope per the ladder if the P0 chain is intact; otherwise archive | Not yet reached. The coverage gate is configured at 100% and fails the CI run, but "blocking" in the literal sense still awaits branch protection. |
-| **KC-3** | 2026-10-12 | The three P0 release blockers green and merge-blocking | Archive — "the moat proof *is* the project" | Not yet reached. The three proofs are green in CI; the *merge-blocking* half of the condition is not satisfied until `main` is protected. |
+| **KC-2** | 2026-09-14 | Phases 1–2 exit gates green (security spine live, coverage gate blocking, ingest idempotent, kill+restart zero-loss) | Descope per the ladder if the P0 chain is intact; otherwise archive | Not yet reached. The coverage gate is configured at 100% and fails the CI run, and since 2026-08-25 "blocking" is literal for a contributor: `main` requires the `ci` check. The repository owner stays exempt by design (`enforce_admins` off — one maintainer, one direct-push workflow). |
+| **KC-3** | 2026-10-12 | The three P0 release blockers green and merge-blocking | Archive — "the moat proof *is* the project" | Not yet reached, and not yet due. The three proofs are green in CI, and since 2026-08-25 the *merge-blocking* half of the condition holds for anyone who is not the repository owner — `main` requires the `ci` check, with `enforce_admins` deliberately off so the sole maintainer is not locked out of their own repository ([the standing correction](../contributing/decisions/README.md#a-standing-correction-merge-blocking)). That half only; the checkpoint itself is not declared passed. |
 | **KC-4** | **2026-12-01** | v1.0 tagged: five daily questions answerable, <30s time-to-understand, tree/DAG served from `orchestration_edges`, every dollar traceable. **This date does not move.** | Archive + a public write-up of what was learned. No third rebase exists. | Not yet reached. Note that one clause of this condition — the <30s figure — has never been measured, so it cannot currently be evaluated any more than KC-1's could. |
 | **KC-5** | earned, never dated | v2.0 entry: **14 consecutive days of real daily use of v1.0 by its own author**, plus ≥3 dated friction-log entries asking for alerts | v2 cancelled; maintenance mode | Not entered; may never be — **and never entering it is a success of the roadmap, not a failure.** |
 
@@ -117,15 +124,29 @@ KC-4 (2026-12-01) is the next hard date, and that one does not move.
 | Experimental — context-layer feed | **Not built**; the placeholder was deleted rather than left as a stub. |
 | Deferred — fleet aggregation | Only the schema key exists, and only on `orchestration_edges`. No second host. |
 
-Also still open, and worth naming rather than burying:
+Also named here rather than buried — the first two of these four closed on **2026-08-25**
+and are kept, amended, rather than deleted:
 
-- **The GitHub Pages site is not live.** The workflow is committed and its deploy job
-  fails rather than pretending to succeed. Enabling Pages is a one-time owner click and
-  cannot be automated: a workflow token may deploy to an existing Pages site but may not
-  create one, which two red runs demonstrated with `Create Pages site failed. Error:
-  Resource not accessible by integration`.
-- **`main` is not branch-protected.** Every claim on this page about a gate "blocking"
-  something should be read as "fails the run", not "stops the merge", until that changes.
+- **The GitHub Pages site is live**, at <https://ivanbbaev.github.io/agenthropic/>. This
+  bullet read "the GitHub Pages site is not live" until 2026-08-25, and the reason it did
+  is worth keeping: the workflow was committed all along and its deploy job failed rather
+  than pretending to succeed, because enabling Pages could not be automated — a workflow
+  token may deploy to an existing Pages site but may not create one, which two red runs
+  demonstrated with `Create Pages site failed. Error: Resource not accessible by
+  integration`. Creation needs repository-administration rights the `GITHUB_TOKEN`
+  deliberately never has, so it took an owner-credentialled call; the same workflow was
+  then re-run and succeeded. Verify with
+  `gh api repos/IvanBBaev/agenthropic --jq .has_pages` → `true`.
+- **`main` is branch-protected**, since 2026-08-25: the `ci` check is required, and
+  force-pushes to `main` and deletion of `main` are refused for everyone. This bullet read
+  "`main` is not branch-protected" until then, and told you to downgrade every "blocking"
+  claim on this page to "fails the run". Read them now as **merge-blocking for anyone who
+  is not the repository owner** — `enforce_admins` is deliberately off, because agenthropic
+  has exactly one maintainer whose normal working mode is a direct push to `main`, and
+  turning it on would lock the sole maintainer out of their own repository. Verify with
+  `gh api repos/IvanBBaev/agenthropic/branches/main/protection --jq '{contexts: .required_status_checks.contexts, enforce_admins: .enforce_admins.enabled}'`
+  → `{"contexts":["ci"],"enforce_admins":false}`. The required context is `ci`, the job id
+  in `.github/workflows/ci.yml` — not `CI`, which is only the workflow's display name.
 - **Retention is mechanism-built and policy-unset.** Pruning, an audit journal,
   backup-file expiry and a runner all exist and are covered by tests. What does not exist
   is a decision about how many days of what to keep, because a retention TTL has to be
@@ -135,7 +156,8 @@ Also still open, and worth naming rather than burying:
 - **The accuracy gate has never run on real labels.** `n = 0` of the ≥52 needed.
 
 Resolved since this section was first written: the repository's `LICENSE` (MIT) is
-present and tracked.
+present and tracked, and — on 2026-08-25 — GitHub Pages was enabled and `main` was
+branch-protected, as the two amended bullets above record.
 
 ## How to read this roadmap
 
@@ -255,8 +277,10 @@ from the very first commit — not something added at the end.
   planned), so coverage can only go up from here, never quietly regress. *(As built: the
   threshold is set at **100%** on all four axes in every one of the five packages, which
   is stricter than planned, and `packages/test-fixtures` was folded inside the gate rather
-  than excluded from it. "Merge-blocking" is the part that did not land — see the note
-  below.)*
+  than excluded from it. "Merge-blocking" was the part that did not land until 2026-08-25,
+  and what landed then is merge-blocking **for anyone who is not the repository owner** —
+  `enforce_admins` is deliberately off, so the sole maintainer is not locked out of their own
+  repository; see the note below.)*
 - Static checks that turn the build red the moment anyone introduces a subprocess
   spawner, a URL dialed from untrusted event data (an SSRF path), or a dependency under
   a disallowed license.
@@ -275,7 +299,8 @@ deliberately introduced violation; `events_raw` is proven append-only under test
 mode is on and a restore has been exercised for real; the public documentation site is
 building and publishing.
 
-> **As built: this phase shipped, with one clause of the exit gate still open.**
+> **As built: this phase shipped; the exit-gate clauses this note recorded as open both
+> closed on 2026-08-25.**
 >
 > Live and tested: the loopback bind, the mandatory token (hashed, compared in constant
 > time), WAL with a daily backup timer and a restore path that refuses any image failing
@@ -286,19 +311,32 @@ building and publishing.
 > silently through every test that consumes them — and the static guards, which do turn
 > the build red on a deliberately introduced spawner, SSRF sink, or disallowed license.
 >
-> Two clauses of the exit gate are still open, and both are owner actions rather than code:
+> Two clauses of the exit gate were open for the whole of this project's life, and both were
+> owner actions rather than code. Both were performed on **2026-08-25**:
 >
-> - **The coverage gate does not literally block a merge.** It fails the CI run, which is
->   not the same thing. Blocking requires a branch-protection rule on `main` requiring the
->   `CI` check, and at the last check recorded in the release checklist that rule did not
->   exist. Wherever this page says a gate "blocks", read "turns the run red".
-> - **The documentation site is not publishing.** The workflow is committed, but GitHub
->   Pages has not been enabled for the repository. That is not an oversight in the
->   workflow: a workflow's `GITHUB_TOKEN` can deploy to an existing Pages site but cannot
->   create one, so the `enablement: true` input is idempotent once Pages exists and
->   powerless before then. The deploy job fails rather than reporting a success it did not
->   achieve. The page you are reading is in the repository; it is not yet served from a
->   Pages URL.
+> - **The coverage gate now blocks a merge — for a contributor.** Until 2026-08-25 it only
+>   failed the CI run, which is not the same thing, because blocking requires a
+>   branch-protection rule on `main` and no such rule existed. It does now: the required
+>   status check is `ci` (the job id in `.github/workflows/ci.yml`; `CI` is only the
+>   workflow's display name), and force-pushes to `main` and deletion of `main` are refused
+>   for everyone. The one exemption is deliberate and has to be stated wherever the
+>   blocking is: `enforce_admins` is off, because agenthropic has exactly one maintainer
+>   whose normal working mode is a direct push to `main`, and turning it on would lock the
+>   sole maintainer out of their own repository. So wherever this page says a gate "blocks",
+>   read **"withholds the merge button from a contributor, and not from the repository
+>   owner"** — the phrasing this corpus converged on in
+>   [the standing correction](../contributing/decisions/README.md#a-standing-correction-merge-blocking).
+> - **The documentation site is publishing.** The workflow was committed long before GitHub
+>   Pages was enabled for the repository, and that was not an oversight in the workflow: a
+>   workflow's `GITHUB_TOKEN` can deploy to an existing Pages site but cannot create one, so
+>   the `enablement: true` input is idempotent once Pages exists and powerless before then.
+>   Creating the site needed repository-administration rights the token deliberately never
+>   has. Three runs failed loudly rather than reporting a success they had not achieved —
+>   first `Get Pages site failed … Not Found`, then twice `Create Pages site failed. Error:
+>   Resource not accessible by integration` after `enablement: true` was added. Pages was
+>   created by an owner-credentialled call on 2026-08-25, the last failing run was re-run and
+>   succeeded, and the page you are reading is now served from
+>   <https://ivanbbaev.github.io/agenthropic/> as well as living in the repository.
 
 ## Phase 1.5 — Animated-room view *(optional, cosmetic, deferred)*
 
@@ -462,9 +500,14 @@ a model with no price on file — that's a hard failure, not a quiet default.
 > baseline is implemented, the delegation-savings metric is implemented, and a model with
 > no price on file is a hard failure rather than a silent zero.
 >
-> **Do not read more into that than it says.** Three specific properties are proven, and
-> "green in CI" is not the same as "merge-blocking" while `main` is unprotected. The ≥95%
-> hand-labeled-accuracy clause in the same exit gate is **not** among the proven three —
+> **Do not read more into that than it says.** Three specific properties are proven — and
+> since `main` was branch-protected on 2026-08-25 they are also merge-blocking for anyone
+> who is not the repository owner, the owner being exempt by design because `enforce_admins`
+> is off and a single maintainer working by direct push to `main` would otherwise be locked
+> out of their own repository
+> ([the standing correction](../contributing/decisions/README.md#a-standing-correction-merge-blocking)).
+> Three proven properties is still all it is. The ≥95% hand-labeled-accuracy clause in the
+> same exit gate is **not** among the proven three —
 > that still rests on the PROVISIONAL probe numbers, and ratification against a
 > hand-labeled corpus remains outstanding. The gate does not quietly pass in the meantime:
 > the test run prints **`EXIT GATE (>= 95.0% hierarchy accuracy, n >= 52): NOT CERTIFIED`**
@@ -576,9 +619,12 @@ release checklist is complete.
 > from v1.0. The release-hardening half, which never depended on alerting, exists:
 > [`RELEASE.md`](https://github.com/IvanBBaev/agenthropic/blob/main/RELEASE.md)
 > enumerates every build-failing gate and the backup-restore drill. Its remaining
-> unticked boxes are human acts — enabling Pages and branch protection, ratifying the
-> labeled corpus, settling the retention policy — not missing code. (The `LICENSE` file
-> was one of those boxes and is now tracked.)
+> unticked boxes are human acts — ratifying the labeled corpus (LABEL-ME), settling the
+> retention policy's OPEN-1/2/3 values, timing the "<30s to understand a session" claim
+> with a stopwatch, opening the friction log, and installing a rival dashboard for the
+> two-week trial — not missing code. (Three boxes on that list have since been ticked: the
+> `LICENSE` file is tracked, and on 2026-08-25 GitHub Pages was enabled and `main` was
+> branch-protected.)
 
 ## Experimental, off the critical path — context-layer feed
 

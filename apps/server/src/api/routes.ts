@@ -14,6 +14,7 @@ import { Type, type TypeBoxTypeProvider } from '@fastify/type-provider-typebox';
 import {
   AggregateDelegationSavingsSchema,
   ApiErrorSchema,
+  ChangesResponseSchema,
   CostAnalysisSchema,
   CostSummaryResponseSchema,
   DEFAULT_COST_TOP_N,
@@ -39,14 +40,17 @@ import type { SqliteDatabase } from '../db/connection';
 import { loadPricing } from '../db/pricing';
 import type { SubstrateLookup, SubstrateProvider } from './substrate-provider';
 import {
+  ISO_INSTANT_PATTERN,
   countSessions,
   getAggregateDelegationSavings,
+  getChanges,
   getCostSummary,
   getGlobalDag,
   getSessionDetail,
   getSessionEvents,
   getSessionTree,
   listSessions,
+  normalizeSinceInstant,
 } from './queries';
 
 export interface ApiRoutesOptions {
@@ -100,6 +104,27 @@ const DagQuerySchema = Type.Object(
       maximum: MAX_DAG_NODE_LIMIT,
       default: DEFAULT_DAG_NODE_LIMIT,
     }),
+  },
+  { additionalProperties: false },
+);
+
+/**
+ * WP-U11 - the changes-since window. `since` is REQUIRED and has no default:
+ * a delta endpoint that silently invents its own lower bound answers a
+ * different question than the caller asked, with nothing in the reply to say
+ * so. Absent or malformed, it is a 400.
+ *
+ * The `pattern` rejects the ambiguous spellings early (a local-time instant
+ * with no zone, most of all); `normalizeSinceInstant` then rejects what a
+ * regex cannot see - a date that does not exist on the calendar.
+ * `limit`/`offset` reuse the house caps, so this route is as bounded as
+ * /api/sessions.
+ */
+const ChangesQuerySchema = Type.Object(
+  {
+    since: Type.String({ pattern: ISO_INSTANT_PATTERN }),
+    limit: Type.Integer({ minimum: 1, maximum: MAX_PAGE_LIMIT, default: DEFAULT_PAGE_LIMIT }),
+    offset: Type.Integer({ minimum: 0, maximum: MAX_PAGE_OFFSET, default: 0 }),
   },
   { additionalProperties: false },
 );
@@ -402,5 +427,45 @@ export const apiRoutes: FastifyPluginAsync<ApiRoutesOptions> = async (app, optio
       },
     },
     async (request) => getGlobalDag(db, request.query.limit),
+  );
+
+  // WP-U11 - CD-10 question 5, "what changed across sessions". Until this
+  // existed the answer had to be stitched client-side out of /api/dag/global
+  // and /api/cost/summary's perDay, which cannot express a window boundary at
+  // all: a caller could neither ask "since my last look" nor tell whether the
+  // answer had missed anything.
+  //
+  // The reply names its own window - `since`, `until`, and the half-open
+  // `interval` between them - so chaining `since=until` walks the corpus
+  // without a gap and without double-counting. `until` comes from the DATA,
+  // never the clock (see getChanges), because ingest lags event time and a
+  // clock boundary would promise rows that have not arrived.
+  //
+  // Registered inside this plugin, which buildServer registers inside the app
+  // scope carrying the global `onRequest` auth hook - so it is Bearer-gated
+  // exactly like its eight neighbours, with no per-route code (see the 401
+  // test in api-changes.test.ts and GUARDED_ENDPOINTS in the P0 suite).
+  typed.get(
+    '/api/changes',
+    {
+      schema: {
+        querystring: ChangesQuerySchema,
+        response: {
+          200: ChangesResponseSchema,
+          400: ApiErrorSchema,
+          500: ApiErrorSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const { since, limit, offset } = request.query;
+      const normalized = normalizeSinceInstant(since);
+      if (normalized === null) {
+        return reply
+          .code(400)
+          .send({ error: 'The `since` parameter must be a real ISO-8601 instant in UTC.' });
+      }
+      return getChanges(db, normalized, limit, offset);
+    },
   );
 };

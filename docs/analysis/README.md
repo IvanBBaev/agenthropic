@@ -27,6 +27,7 @@ Read in order: **v1 analysis → external review → v2 consolidation → develo
 | [phase0-verdict.md](phase0-verdict.md) | **Post-freeze verdict record #1 (the WP-S7 GO/NO-GO).** The Phase-0 feasibility spike (WP-S1…S7) executed end-to-end against a hostile 5-session / 224-agent corpus: verdict **`CONDITIONAL GO` ~90%** — the subagent DAG + dollar cost is mechanically reconstructable from `~/.claude/projects/*.jsonl` alone, zero inference. Six-row evidence table, the 11-item gate's final status, the three new parser MUSTs, the first velocity number, and what still needs Ivan. **All numbers are self-check / PROVISIONAL** until the five `LABEL-ME.md` trees are hand-filled. |
 | [parser-spec.md](parser-spec.md) | **Post-freeze — the parser contract distilled from the verdict.** Normative, implementation-ready: the **14-item requirements gate** (original 11 + three MUSTs the spike found — `<task-notification>` flat join, `queue-operation` 3rd join schema, `message.id` usage dedup + bucket/model pricing), the four structural join paths, token→cost rules, the self-referential depth-2 tree index, the amended EMP-1 wave-partial ordering, and the exact site-doc edits to fold into the published pages. **Normative and IMPLEMENTED (2026-08-15)** — see its §3 for what is implemented (14 of 14) versus what the real corpus actually exercises (11; #11 amended, #7 and N1 witnessed only by fixtures). Also the **census of record** (§4.2) and the duplicate-session-uuid rule (§4.3). |
 | [PROJECT-STATE-2026-07-06.md](PROJECT-STATE-2026-07-06.md) | **The entry point for a context-free session.** Navigation only — supersedes nothing: complete timeline 07-03→07-06, document map + authority order, current-truth snapshot (decided / unsigned / ruled-but-unapplied / open / stale), the pending decision funnel (Gate A · three exits · friction log · commit authorization), and per-request playbooks with the binding session rules. |
+| [closing-plan-2026-09-08.md](closing-plan-2026-09-08.md) | **Post-freeze schedule record #3 — the closing plan (2026-09-08).** Defines "100%" as `v1.0.0` tagged by KC-4 with every `RELEASE.md` box ticked, `[HUMAN]` ones included; locates the last 15% (~5% agent code/docs · ~3% owner decisions · ~7% owner acts and measurements); the eight-item decision batch D1…D8 with recommended defaults; five dated waves (W0 commit + KC-2 → L1–L8 code residue → L9–L11 retention + ratification kits at KC-3 → Ivan's measurements and 14 days of real use → release candidate → tag) and the descope ladder. Its lanes are mirrored as the **Closing board** in [`../../TODO.md`](../../TODO.md). |
 
 ## The idea in one paragraph
 A self-hosted, local-first cockpit for Claude Code agent/subagent activity on a Mac
@@ -49,18 +50,31 @@ personal-first / commercial-clean, with the vector-DB leap carved to an experime
 **Test coverage (CI-gated)** · **README badges + donation** · **GitHub Pages docs site** —
 while the app itself stays **loopback-only**.
 
-> **Where the bar actually stands (2026-08-15).** The historical wording here was ">90%
-> coverage, CI-gated". As shipped the threshold is **100%** for statements, branches,
-> functions and lines in **all five packages**, and every one of them carries a static guard
-> that fails if a `v8 ignore` / `c8 ignore` / `istanbul ignore` pragma appears in `src/` — so
-> the figure cannot be bought back by removing code from the denominator. Four of the guards
-> live in a file named `coverage-honesty.test.ts`; `apps/web`'s is the `coverage honesty`
-> block of `test/honesty.test.tsx`. But **"CI-gated" is not the same as merge-blocking, and
-> today nothing is merge-blocking**: branch protection on `main` is not enabled, so a red
-> coverage run cannot physically stop a merge. Enabling it is an owner act, not a code task.
-> The canonical version of this correction lives in
-> [development-plan.md](development-plan.md) §2c, which also records the two other places
-> the plan and the tree disagree.
+> **Where the bar actually stands (2026-08-15, updated 2026-08-25).** The historical wording
+> here was ">90% coverage, CI-gated". As shipped the threshold is **100%** for statements,
+> branches, functions and lines in **all five packages**, and every one of them carries a
+> static guard that fails if a `v8 ignore` / `c8 ignore` / `istanbul ignore` pragma appears in
+> `src/` — so the figure cannot be bought back by removing code from the denominator. Four of
+> the guards live in a file named `coverage-honesty.test.ts`; `apps/web`'s is the
+> `coverage honesty` block of `test/honesty.test.tsx`. This paragraph used to continue
+> `"CI-gated" is not the same as merge-blocking, and today nothing is merge-blocking` — true
+> until **2026-08-25**, while `main` was unprotected and a red coverage run could not
+> physically stop a merge. Since 2026-08-25 `main` is branch-protected: the required status
+> check is `ci` (lowercase — the job id in `.github/workflows/ci.yml`, not the workflow's `CI`
+> display name), and force-pushes and deletion of `main` are refused for everyone. So a red
+> run now **withholds the merge button from a contributor, but not from the repository
+> owner** — `enforce_admins` is deliberately off, because agenthropic has exactly one
+> maintainer whose normal working mode is a direct push to `main`, and admin enforcement would
+> lock the sole maintainer out of their own repository. The canonical write-up of this
+> correction is
+> [the standing correction](../site/contributing/decisions/README.md#a-standing-correction-merge-blocking);
+> [development-plan.md](development-plan.md) §2c records the other places the plan and the
+> tree disagree.
+>
+> The **GitHub Pages** leg of the bar is met as well, as of the same day: Pages was enabled on
+> 2026-08-25 by an owner-credentialled call and the site is live at
+> <https://ivanbbaev.github.io/agenthropic/>. Verify with
+> `gh api repos/IvanBBaev/agenthropic --jq .has_pages` → `true`.
 
 ---
 

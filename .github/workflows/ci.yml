@@ -3,9 +3,27 @@
 # The security gate runs first so a broken invariant fails in seconds rather
 # than after the suite.
 #
-# NOTE: making this workflow merge-blocking requires a GitHub branch-protection
-# rule (Settings -> Branches -> require status checks to pass). That is an owner
-# action on github.com and cannot be configured from this file.
+# NOTE: this workflow used to carry a note saying that making it merge-blocking
+# required a GitHub branch-protection rule that was an owner action, still unset.
+# That rule exists as of 2026-08-25: `main` requires the status-check context
+# `ci` - which is the JOB ID below (lowercase), NOT this workflow's display name
+# `CI`. Renaming the `ci:` job therefore silently drops the protection until the
+# rule is updated on github.com. Force-pushes to `main` and deletion of `main`
+# are refused for everyone.
+#
+# `enforce_admins` is deliberately OFF: a red run withholds the merge button from
+# a contributor, but not from the repository owner. agenthropic has exactly one
+# maintainer whose normal working mode is a direct push to `main`, and turning
+# admin enforcement on would lock the sole maintainer out of their own
+# repository. That is a stated design choice, not an oversight.
+#
+# The rule itself still lives on github.com and cannot be configured from this
+# file. Verify it with:
+#   gh api repos/IvanBBaev/agenthropic/branches/main/protection \
+#     --jq '{contexts: .required_status_checks.contexts, enforce_admins: .enforce_admins.enabled}'
+#   -> {"contexts":["ci"],"enforce_admins":false}
+# Full write-up: docs/site/contributing/decisions/README.md
+# ("A standing correction: merge-blocking").
 name: CI
 
 on:

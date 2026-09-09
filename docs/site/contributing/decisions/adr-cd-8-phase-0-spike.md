@@ -82,9 +82,11 @@ specified.
 Two things to record, and neither of them improves this ADR's standing.
 
 **First, a narrowing.** "Three merge-blocking P0 proofs" should be read as "three
-CI-failing P0 proofs". They run on every push and pull request and fail the run; nothing
-withholds a merge, because `main` is not branch-protected (`404 Branch not protected`,
-verified 2026-08-15). See [the standing correction](README.md#a-standing-correction-merge-blocking).
+CI-failing P0 proofs, merge-blocking for everyone but the owner". They run on every push
+and pull request and fail the run; since 2026-08-25 `main` is branch-protected on the
+`ci` check, so the failure withholds a contributor's merge, while the owner is exempt by
+design (`enforce_admins: false`). See
+[the standing correction](README.md#a-standing-correction-merge-blocking).
 
 **Second, and more to the point for an ADR about a gate that was overridden: no part of the
 override has been retired.** `WP-S7` has still not run. `WP-S3` / G0.1b has still not been

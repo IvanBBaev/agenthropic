@@ -288,6 +288,20 @@ alongside a healthy hook stream, to clear the gate.
 > longer a *fallback* proof: since hooks never feed edges, JSONL-alone is the only
 > branch, and the test asserts the system's normal operation, not an outage mode.
 >
+> **On the "merge-blocking" in the exit gate quoted above:** that phrase is
+> `development-plan.md`'s own wording and is left exactly as written. Read against this
+> repository it was only half-true until **2026-08-25** — the tests did fail the CI run,
+> but `main` carried no branch-protection rule, so a red run withheld nothing. `main` is
+> branch-protected now: the required status-check context is `ci` (lowercase — the job id
+> in `.github/workflows/ci.yml`; the workflow's `CI` display name is not the context), and
+> force-pushes to `main` and deletion of `main` are refused for everyone. So a red P0 test
+> does withhold the merge button — **from a contributor**. It does not withhold it from the
+> repository owner: `enforce_admins` is deliberately off, because agenthropic has exactly
+> one maintainer whose normal working mode is a direct push to `main`, and admin
+> enforcement would lock the sole maintainer out of his own repository. The same reading
+> applies to `WP-IN13`'s "green in CI and **blocking**" in the table above. Full write-up:
+> [the standing correction](../contributing/decisions/README.md#a-standing-correction-merge-blocking).
+>
 > **The ≥95% bar has not been passed — it has not been measured.** An earlier revision
 > of this note said it "was passed with margin … on the hand-labeled corpus," and both
 > halves of that were wrong. The **0.000% orphaned agents / 100% usage attribution**

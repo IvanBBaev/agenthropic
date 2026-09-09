@@ -1,6 +1,6 @@
 # ADR-0009: CD-7 — Security + the coverage gate are boundary conditions from commit one
 
-- **Status:** accepted — **built and enforced** as of 2026-07-30; every criterion below is a failing build or a hard process exit, with one criterion (no-SSRF) currently vacuous (see the as-built update below); **amended 2026-08-15** — the coverage bar is now 100 in five packages, but the "**blocks merges**" half of that criterion is **not met**: branch protection on `main` is not enabled
+- **Status:** accepted — **built and enforced** as of 2026-07-30; every criterion below is a failing build or a hard process exit, with one criterion (no-SSRF) currently vacuous (see the as-built update below); **amended 2026-08-15**, re-amended **2026-08-25** — the coverage bar is now 100 in five packages, and the "**blocks merges**" half of that criterion is met for everyone the project can be defended against: `main` is branch-protected on the `ci` check, with the sole maintainer exempt on purpose (`enforce_admins: false`)
 - **Date:** 2026-07-03
 - **Deciders:** Ivan Baev (project owner), via the six-lens concept-analysis-v2 workflow
 - **Source:** [`concept-analysis-v2.md` §3, row CD-7](../../../analysis/concept-analysis-v2.md#3-canonical-decision-register-v2)
@@ -65,6 +65,11 @@ test; today it has nothing to test.
 ## As-built update — 2026-08-15
 
 **Verdict: the coverage bar strengthened; its enforcement clause is still unmet.**
+*(Verdict re-amended 2026-08-25: the second clause held when written and holds no longer —
+`main` is now branch-protected on the `ci` check, so the enforcement clause is met for
+anyone who is not the repository owner, `enforce_admins: false` being deliberate for a
+single-maintainer repository. See the "Blocks merges" paragraph below and
+[the standing correction](README.md#a-standing-correction-merge-blocking).)*
 Two things changed since the 2026-07-30 reading, and they point in opposite
 directions. Recording only the first would be exactly the kind of
 success-list-as-evidence this ADR already refuses.
@@ -85,20 +90,26 @@ see [testing & quality](../testing.md) §6.1 for the per-package numbers, the th
 ways a coverage figure can be bought, and the static guards that read the config as
 text to stop each of them.
 
-**But "blocks merges" remains false.** The Decision below says **CI-blocking**, and
-the fifth acceptance criterion says the gate "**blocks merges** at or below 90%."
-As of 2026-08-15, `gh api repos/IvanBBaev/agenthropic/branches/main/protection`
-returns `404 Branch not protected`. CI runs the gate on every push and pull request
-and fails correctly when a threshold is missed — the mechanism is real and stricter
-than specified — but nothing physically prevents a merge over a red run. The
-workflow file says so itself in a header comment: making it merge-blocking requires a
-GitHub branch-protection rule, which is an owner action on github.com and cannot be
-configured from the repository.
+**"Blocks merges" was false until 2026-08-25, and is now true with one exception.**
+The Decision below says **CI-blocking**, and the fifth acceptance criterion says the
+gate "**blocks merges** at or below 90%." Until 2026-08-25,
+`gh api repos/IvanBBaev/agenthropic/branches/main/protection` returned
+`404 Branch not protected`: CI ran the gate on every push and pull request and failed
+correctly when a threshold was missed — the mechanism was real and stricter than
+specified — but nothing physically prevented a merge over a red run.
 
-So this criterion is **half satisfied and should be read that way**: the measurement
-side exceeds what was asked, the enforcement side has not been switched on. It is not
-an override — nobody decided to proceed without it — but it is also not a pass, and
-no commit inside this repository can close it.
+The rule now exists. `main` requires the `ci` check, and refuses force-pushes and
+deletion. What it does **not** do is stop the repository owner: `enforce_admins` is
+deliberately off, because this is a single-maintainer repository whose normal mode is a
+direct push to `main`. So the criterion reads: **a coverage regression withholds the
+merge button from a contributor, and does not withhold it from Ivan.**
+
+So this criterion is **satisfied for the case it was written about, with the
+single-maintainer exemption stated rather than assumed**: the measurement side exceeds
+what was asked, and the enforcement side binds everyone the project can be defended
+against. It is not an override — nobody decided to proceed without it — but the
+owner-bypass half is still not a pass, and no commit inside this repository can close
+it: it is a setting on github.com, kept off on purpose.
 
 **One criterion remains vacuous.** The no-SSRF position is unchanged: still no
 outbound network call anywhere in `apps/server`, still nothing to test, still owed a

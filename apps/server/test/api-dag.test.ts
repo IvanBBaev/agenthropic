@@ -15,11 +15,11 @@ function seed(db: SqliteDatabase): void {
     INSERT INTO sessions (id, project_slug, started_at, last_activity_at, status) VALUES
       ('s1', 'proj-x', '2026-07-10T00:00:00Z', '2026-07-10T03:00:00Z', 'active'),
       ('s2', 'proj-y', '2026-07-12T00:00:00Z', '2026-07-12T01:00:00Z', 'active');
-    INSERT INTO agents (id, session_id, type, subagent_type, status, parent_agent_id, first_seen_at, last_seen_at) VALUES
-      ('g-main', 's1', 'main', NULL, 'working', NULL, '2026-07-10T00:00:00Z', '2026-07-10T03:00:00Z'),
-      ('g-sub1', 's1', 'subagent', 'explorer', 'completed', 'g-main', '2026-07-10T00:10:00Z', '2026-07-10T02:00:00Z'),
-      ('h-main', 's2', 'main', NULL, 'completed', NULL, '2026-07-12T00:00:00Z', '2026-07-12T01:00:00Z'),
-      ('h-sub1', 's2', 'subagent', 'planner', 'completed', 'h-main', '2026-07-12T00:10:00Z', '2026-07-12T00:30:00Z');
+    INSERT INTO agents (id, session_id, type, subagent_type, status, outcome_cause, parent_agent_id, first_seen_at, last_seen_at) VALUES
+      ('g-main', 's1', 'main', NULL, 'working', NULL, NULL, '2026-07-10T00:00:00Z', '2026-07-10T03:00:00Z'),
+      ('g-sub1', 's1', 'subagent', 'explorer', 'completed', 'permission_failed', 'g-main', '2026-07-10T00:10:00Z', '2026-07-10T02:00:00Z'),
+      ('h-main', 's2', 'main', NULL, 'completed', NULL, NULL, '2026-07-12T00:00:00Z', '2026-07-12T01:00:00Z'),
+      ('h-sub1', 's2', 'subagent', 'planner', 'completed', 'terminated_early', 'h-main', '2026-07-12T00:10:00Z', '2026-07-12T00:30:00Z');
     INSERT INTO orchestration_edges (session_id, parent_agent_id, child_agent_id, source, instance, host_id, created_at) VALUES
       ('s1', 'g-main', 'g-sub1', 'tool_use', 'default', 'host-1', '2026-07-10T00:10:00Z'),
       ('s2', 'h-main', 'h-sub1', 'queue_operation', 'default', 'host-1', '2026-07-12T00:10:00Z');
@@ -68,11 +68,26 @@ describe('/api/dag/global (WP-U4)', () => {
       type: 'subagent',
       subagentType: 'explorer',
       status: 'completed',
+      outcomeCause: 'permission_failed',
       parentAgentId: 'g-main',
       totalTokens: 1_000_000,
       unpricedTokens: 0,
     });
     expect(gSub1.costUsd).toBeCloseTo(10, 9);
+
+    // WP-U13: the cause travels per node, across sessions, and is NOT a
+    // function of `status` - both subagents are 'completed' yet carry
+    // different causes, and both mains carry none. A reader that derived the
+    // cause from the status, or that read one agent's cause and reused it,
+    // cannot produce this list.
+    expect(
+      body.nodes.map((n: { id: string; outcomeCause: string | null }) => [n.id, n.outcomeCause]),
+    ).toEqual([
+      ['h-main', null],
+      ['h-sub1', 'terminated_early'],
+      ['g-main', null],
+      ['g-sub1', 'permission_failed'],
+    ]);
 
     // Edge provenance stays verbatim and distinguishable per edge.
     expect(body.edges.map((e: { source: string }) => e.source)).toEqual([

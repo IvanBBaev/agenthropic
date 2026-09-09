@@ -3,6 +3,8 @@
  * persisted graph, honest reporting of dropped edges and cycles.
  */
 import { describe, expect, it } from 'vitest';
+import type { AgentNodeDto, OrchestrationEdgeDto } from '../src/dto';
+import { describeAgentGraph } from '../src/views/chart-summary';
 import { computeLayeredLayout, type LayoutEdge } from '../src/views/layout/layered';
 
 interface Node {
@@ -98,5 +100,95 @@ describe('computeLayeredLayout', () => {
     // Widest layer has 2 nodes -> width 10*2 + 100; depth max 1 -> height 5*2 + 50.
     expect(layout.width).toBe(120);
     expect(layout.height).toBe(60);
+  });
+});
+
+/**
+ * ADDED 2026-09-07 (CS-1, CS-2). `describeAgentGraph` is the screen-reader half
+ * of the picture `computeLayeredLayout` draws, so its census is tested here,
+ * against that layout's own drop rule, rather than in isolation - the two must
+ * agree about what the reader is actually being shown.
+ *
+ * Local fixtures on purpose: `test/fixtures.ts` is shared with the view tests
+ * and these cases need field values (a non-finite unpriced count) that no view
+ * fixture should default to.
+ */
+function agent(overrides: Partial<AgentNodeDto> = {}): AgentNodeDto {
+  return {
+    id: 'agent-main',
+    sessionId: 'session-1',
+    type: 'main',
+    subagentType: null,
+    status: 'working',
+    outcomeCause: null,
+    parentAgentId: null,
+    firstSeenAt: '2026-09-07T10:00:00.000Z',
+    lastSeenAt: '2026-09-07T10:05:00.000Z',
+    totalTokens: 800,
+    costUsd: 0.3,
+    unpricedTokens: 0,
+    ...overrides,
+  };
+}
+
+function graphEdge(overrides: Partial<OrchestrationEdgeDto> = {}): OrchestrationEdgeDto {
+  return {
+    id: 1,
+    sessionId: 'session-1',
+    parentAgentId: 'agent-main',
+    childAgentId: 'agent-child',
+    source: 'tool_use',
+    instance: 'default',
+    hostId: 'host-1',
+    createdAt: '2026-09-07T10:01:00.000Z',
+    ...overrides,
+  };
+}
+
+describe('describeAgentGraph', () => {
+  it('does not count edges the layout cannot draw as part of the picture', () => {
+    const agents = [agent({ id: 'a' }), agent({ id: 'b' })];
+    const edges = [
+      graphEdge({ id: 1, parentAgentId: 'a', childAgentId: 'b' }),
+      graphEdge({ id: 2, parentAgentId: 'a', childAgentId: 'ghost', source: 'directory' }),
+      graphEdge({ id: 3, parentAgentId: 'ghost', childAgentId: 'b', source: 'directory' }),
+    ];
+    // The geometry these words describe drops both ghost-ended edges.
+    const layout = computeLayeredLayout(
+      agents,
+      edges.map((e) => ({ parentId: e.parentAgentId, childId: e.childAgentId, payload: e })),
+    );
+    expect(layout.edges).toHaveLength(1);
+    expect(layout.droppedEdges).toBe(2);
+
+    const text = describeAgentGraph(agents, edges);
+    expect(text).toContain('Edges: 1 observed (tool_use), 2 inferred (directory).');
+    expect(text).toContain('Not drawn: 2 edges pointing at an agent that is not in this picture.');
+
+    // Singular reads as singular; one undrawn edge is still worth one sentence.
+    const one = describeAgentGraph(agents, [edges[1]!]);
+    expect(one).toContain('Not drawn: 1 edge pointing at an agent that is not in this picture.');
+  });
+
+  it('says nothing about undrawn edges when every edge is drawn', () => {
+    const agents = [agent({ id: 'a' }), agent({ id: 'b' })];
+    const text = describeAgentGraph(agents, [graphEdge({ parentAgentId: 'a', childAgentId: 'b' })]);
+    expect(text).toContain('Edges: 1 observed (tool_use), 0 inferred.');
+    expect(text).not.toContain('not in this picture');
+  });
+
+  it('states an unreadable unpriced total instead of dropping the caveat', () => {
+    const readable = describeAgentGraph([agent({ id: 'a', unpricedTokens: 4000 })], []);
+    expect(readable).toContain('4,000 tokens carry no price');
+
+    // A NaN in the sum poisons it, and `> 0` is false for NaN - so before this
+    // the string was indistinguishable from a graph where everything is priced.
+    const agents = [
+      agent({ id: 'a', unpricedTokens: 4000 }),
+      agent({ id: 'b', unpricedTokens: Number.NaN }),
+    ];
+    const text = describeAgentGraph(agents, []);
+    expect(text).toContain('tokens unreadable');
+    expect(text).not.toContain('4,000 tokens carry no price');
   });
 });

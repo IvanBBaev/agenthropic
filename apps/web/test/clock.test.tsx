@@ -124,6 +124,28 @@ describe('useNowMs', () => {
 
     expect(readingOf('a')).toBe(START + 4 * 60 * 60 * 1000);
   });
+
+  /**
+   * ADDED 2026-09-07 (CL-1). The interval is not a guarantee the app can make
+   * on its own: a browser throttles or freezes `setInterval` in a background
+   * tab, so time passes and no tick fires. `setSystemTime` without advancing
+   * the timer queue is exactly that situation.
+   */
+  it('re-reads the clock when the tab comes back rather than trusting a frozen timer', async () => {
+    render(<Probe label="a" />);
+    await settle();
+    expect(readingOf('a')).toBe(START);
+
+    const HOUR = 60 * 60 * 1000;
+    vi.setSystemTime(START + HOUR);
+    // Still the old reading: the tick that would have refreshed it never ran.
+    expect(readingOf('a')).toBe(START);
+
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    expect(readingOf('a')).toBe(START + HOUR);
+  });
 });
 
 describe('CLOCK_INTERVAL_MS', () => {

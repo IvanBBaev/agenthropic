@@ -7,6 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { SessionsView, SESSION_LIST_LIMIT } from '../src/views/SessionsView';
+import { CLOCK_INTERVAL_MS } from '../src/clock';
 import { createSseClient, type SseClient } from '../src/sse';
 import {
   agentNode,
@@ -346,7 +347,14 @@ describe('SessionsView', () => {
   it('says "Showing N of M" when the list is truncated by the page size', async () => {
     routeFetch({ list: jsonResponse(200, sessionList([sessionSummary()], { total: 80 })) });
     renderView();
-    await screen.findByText('Showing 1 of 80 sessions.');
+    // AMENDED 2026-09-07 (SV-1). This pinned the exact line "Showing 1 of 80
+    // sessions." That was the wrong text to hold the view to, because it was
+    // the wrong text to print: /api/sessions pages by most recent activity, so
+    // the 79 rows not shown are the least recently active, not an arbitrary
+    // remainder, and the denominator was published with nothing said about
+    // what had filtered it. The assertion now matches the disclosed line; the
+    // SV-1 case at the foot of this file pins the disclosure itself.
+    await screen.findByText(/Showing 1 of 80 sessions - the server pages by most recent activity/);
   });
 
   it('calls onAuthRejected when the list fetch answers 401', async () => {
@@ -411,5 +419,334 @@ describe('SessionsView', () => {
     // leaves and the tree pane keeps inviting a selection.
     expect(fetchMock.mock.calls.every(([url]) => !String(url).includes('/tree'))).toBe(true);
     expect(screen.getByText('Select a session to see its persisted agent tree.')).toBeDefined();
+  });
+});
+
+/**
+ * F-3 (2026-09-02). Both panes read once - the list on mount, the tree on
+ * selection - and then keep painting. These tests pin what the reader is TOLD
+ * about those reads: their age, that the statuses and dollars below belong to
+ * them rather than to now, and that a new read is one keyboard-reachable
+ * control away.
+ *
+ * A separate describe so nothing above is disturbed; the file-level
+ * beforeEach/afterEach still apply.
+ */
+describe('SessionsView - snapshot provenance (F-3)', () => {
+  // Four clock ticks: two minutes, past the 90 s window inside which
+  // `formatRelativeMs` still says "just now" (see src/views/snapshot.ts).
+  const AGED_MS = CLOCK_INTERVAL_MS * 4;
+
+  async function selectTheSession(): Promise<void> {
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /agenthropic/ }));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+  }
+
+  it('ages both reads independently and qualifies their figures once stale, without refetching', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.UTC(2026, 8, 2, 12, 0, 0));
+    try {
+      routeFetch();
+      renderView();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      const freshList = screen.getByTestId('list-provenance');
+      expect(freshList.textContent).toContain('Session list read just now.');
+      // A caveat that applies to every load equally is stated quietly.
+      expect(freshList.getAttribute('class')).toBe('muted card-provenance');
+
+      // The list is already two minutes old when the tree is read, so the two
+      // panes are dated separately rather than sharing one line that would be
+      // wrong for one of them.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(AGED_MS);
+      });
+      await selectTheSession();
+
+      const agedList = screen.getByTestId('list-provenance');
+      expect(agedList.textContent).toContain('Session list read 2m ago');
+      expect(agedList.textContent).toContain('remembered, not observed');
+      expect(agedList.getAttribute('class')).toBe('truncation-banner');
+
+      const freshTree = screen.getByTestId('tree-provenance');
+      expect(freshTree.textContent).toContain('Tree read just now.');
+      expect(freshTree.getAttribute('class')).toBe('muted card-provenance');
+      expect(
+        screen.getByTestId('tree-node-agent-main').querySelector('title')?.textContent,
+      ).not.toContain('as recorded');
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(AGED_MS);
+      });
+
+      const agedTree = screen.getByTestId('tree-provenance');
+      expect(agedTree.textContent).toContain('Tree read 2m ago');
+      expect(agedTree.textContent).toContain('may have finished or failed since');
+      expect(agedTree.getAttribute('class')).toBe('truncation-banner');
+      // The hover text a reader lands on carries the same date.
+      expect(
+        screen.getByTestId('tree-node-agent-main').querySelector('title')?.textContent,
+      ).toContain('- as recorded 2m ago');
+      // The list is now four minutes old and says so: the panes age apart.
+      expect(screen.getByTestId('list-provenance').textContent).toContain(
+        'Session list read 4m ago',
+      );
+      // The served status is dated, never rewritten into a guess.
+      expect(screen.getByTestId('tree-node-agent-main').getAttribute('class')).toBe(
+        'status-working',
+      );
+      // Two fetches in total - the list and the one tree. Ageing costs nothing.
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('re-reads and re-stamps the session list from its own refresh control', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.UTC(2026, 8, 2, 12, 0, 0));
+    try {
+      routeFetch();
+      renderView();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(AGED_MS);
+      });
+      expect(screen.getByTestId('list-provenance').textContent).toContain(
+        'Session list read 2m ago',
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Refresh sessions' }));
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      const refreshed = screen.getByTestId('list-provenance');
+      expect(refreshed.textContent).toContain('Session list read just now.');
+      expect(refreshed.getAttribute('class')).toBe('muted card-provenance');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('re-reads and re-stamps the tree from its own refresh control', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.UTC(2026, 8, 2, 12, 0, 0));
+    try {
+      routeFetch();
+      renderView();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      await selectTheSession();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(AGED_MS);
+      });
+      expect(screen.getByTestId('tree-provenance').textContent).toContain('Tree read 2m ago');
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Refresh tree' }));
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      const treeCalls = fetchMock.mock.calls.filter(([url]) => String(url).includes('/tree'));
+      expect(treeCalls).toHaveLength(2);
+      const refreshed = screen.getByTestId('tree-provenance');
+      expect(refreshed.textContent).toContain('Tree read just now.');
+      // Refreshing the tree does not re-read the list, whose own age is
+      // reported separately and is untouched by this click.
+      expect(screen.getByTestId('list-provenance').textContent).toContain(
+        'Session list read 2m ago',
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('dates the empty list too - "no sessions yet" is itself a claim with an age', async () => {
+    routeFetch({ list: jsonResponse(200, sessionList()) });
+    renderView();
+
+    await screen.findByText('No sessions ingested yet - nothing to drill into.');
+    const provenance = screen.getByTestId('list-provenance');
+    expect(provenance.textContent).toContain('Session list read just now.');
+    // The refresh control is offered here above all: an empty list is the
+    // reading most likely to have been overtaken by the first ingest.
+    expect(screen.getByRole('button', { name: 'Refresh sessions' })).toBeDefined();
+  });
+
+  it('offers a retry that actually re-reads after a failed list fetch', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(500, { error: 'Internal server error.' }))
+      .mockResolvedValueOnce(jsonResponse(200, sessionList([sessionSummary()])));
+    renderView();
+
+    await screen.findByText(/Could not load sessions: Internal server error\./);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    await screen.findByRole('list', { name: 'session list' });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('offers a retry that actually re-reads after a failed tree fetch', async () => {
+    let treeCalls = 0;
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes('/tree')) {
+        treeCalls += 1;
+        return Promise.resolve(
+          treeCalls === 1
+            ? jsonResponse(404, { error: 'Session not found.' })
+            : jsonResponse(200, sessionTree()),
+        );
+      }
+      return Promise.resolve(jsonResponse(200, sessionList([sessionSummary()])));
+    });
+    renderView();
+    await screen.findByRole('list', { name: 'session list' });
+    fireEvent.click(screen.getByRole('button', { name: /agenthropic/ }));
+
+    await screen.findByText(/Could not load tree: Session not found\./);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    await screen.findByTestId('tree-provenance');
+    expect(treeCalls).toBe(2);
+  });
+});
+
+/**
+ * Red-team honesty wave (2026-09-07). Each case below started from one
+ * question asked of a rendered claim: if a reader took this literally, what
+ * would they now believe about their own data that is not true?
+ *
+ * A separate describe so nothing above is disturbed; the file-level
+ * beforeEach/afterEach still apply.
+ */
+describe('SessionsView - red-team honesty wave (2026-09-07)', () => {
+  const AGED_MS = CLOCK_INTERVAL_MS * 4;
+
+  async function selectTheSession(): Promise<void> {
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /agenthropic/ }));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+  }
+
+  it('SV-1: says WHICH sessions the truncated page holds, not only how many', async () => {
+    routeFetch({ list: jsonResponse(200, sessionList([sessionSummary()], { total: 80 })) });
+    renderView();
+    await screen.findByRole('list', { name: 'session list' });
+
+    const line = screen.getByTestId('list-truncation');
+    expect(line.textContent).toContain('Showing 1 of 80 sessions');
+    // /api/sessions pages BY RECENT ACTIVITY (SESSION_PAGE_ORDER on the
+    // server), so the 79 rows not shown are not an arbitrary remainder: they
+    // are the least recently active, and a session started since this read
+    // counts in neither the 1 nor the 80. LiveView already discloses the
+    // ordering for the same endpoint - this pane printed the denominator bare.
+    expect(line.textContent).toContain('most recent activity first');
+    expect(line.textContent).toContain('newest slice as of that read');
+  });
+
+  it('SV-2: carries the snapshot age into the chart TEXT ALTERNATIVE, not only the hover title', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.UTC(2026, 8, 2, 12, 0, 0));
+    try {
+      routeFetch();
+      renderView();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      await selectTheSession();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(AGED_MS);
+      });
+
+      const svg = screen.getByRole('img', { name: /agent tree for session/ });
+      const summary = document.getElementById(svg.getAttribute('aria-describedby') ?? '');
+      // role="img" hides every <title> in the subtree, so this prose is the
+      // ONLY channel a screen reader has for the status mix - and the hover
+      // text it stands in for already says the reading is two minutes old.
+      expect(summary?.textContent).toContain('As recorded 2m ago, not as of now.');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('SV-3: never prints a missing status as the word "undefined"', async () => {
+    // The api-layer guards deliberately check containers and load-bearing
+    // numbers, never strings, so a server that omits `status` reaches the
+    // renderer intact.
+    routeFetch({ list: jsonResponse(200, sessionList([sessionSummary({ status: undefined })])) });
+    renderView();
+    await screen.findByRole('list', { name: 'session list' });
+
+    const row = screen.getByRole('button', { name: /agenthropic/ });
+    expect(row.textContent).not.toContain('undefined');
+    expect(row.textContent).toContain('no status word');
+  });
+});
+
+/**
+ * DG-3 (2026-09-08). The same question asked of the tree: which of this
+ * panel's disclosures reach a reader who is handed the chart as one
+ * `role="img"` object, and which are only on the page for someone who can see
+ * it.
+ *
+ * A separate describe so nothing above is disturbed; the file-level
+ * beforeEach/afterEach still apply.
+ */
+describe('SessionsView - the accessible description of the tree (2026-09-08)', () => {
+  /** The ids `aria-describedby` names, and the prose they actually resolve to. */
+  function describedBy(svg: Element): { readonly ids: string[]; readonly text: string } {
+    const ids = (svg.getAttribute('aria-describedby') ?? '').split(' ').filter((id) => id !== '');
+    return { ids, text: ids.map((id) => document.getElementById(id)?.textContent ?? '').join(' ') };
+  }
+
+  it('DG-3: tells the description that some agents are parked on a fallback layer', async () => {
+    routeFetch({
+      tree: jsonResponse(
+        200,
+        sessionTree({
+          agents: [agentNode()],
+          edges: [orchestrationEdge({ childAgentId: 'agent-main' })],
+        }),
+      ),
+    });
+    renderView();
+    await screen.findByRole('list', { name: 'session list' });
+    fireEvent.click(screen.getByRole('button', { name: /agenthropic/ }));
+
+    const svg = await screen.findByRole('img', { name: /agent tree for session/ });
+    // Visible to a sighted reader before this change, and only to them.
+    expect(
+      screen.getByText('1 agent sit in a cycle and are placed on a fallback layer.'),
+    ).toBeDefined();
+    const described = describedBy(svg);
+    // This view promises the hierarchy "exactly as PERSISTED"; a node placed
+    // on a fallback layer is not where the hierarchy would put it, and the
+    // description is the only channel that can say so to this reader.
+    expect(described.text).toContain('sit in a cycle and are placed on a fallback layer');
+    expect(described.text).toContain('Agents by status:');
+    for (const id of described.ids) expect(document.getElementById(id)).not.toBeNull();
+  });
+
+  it('DG-3: names no id that is absent from the page when there is no cycle', async () => {
+    routeFetch();
+    renderView();
+    await screen.findByRole('list', { name: 'session list' });
+    fireEvent.click(screen.getByRole('button', { name: /agenthropic/ }));
+
+    const svg = await screen.findByRole('img', { name: /agent tree for session/ });
+    const described = describedBy(svg);
+    expect(described.ids.length).toBeGreaterThan(0);
+    for (const id of described.ids) expect(document.getElementById(id)).not.toBeNull();
+    expect(described.text).not.toContain('cycle');
   });
 });

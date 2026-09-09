@@ -17,10 +17,10 @@ function seed(db: SqliteDatabase): void {
     INSERT INTO sessions (id, project_slug, started_at, last_activity_at, status) VALUES
       ('session-a', 'proj-a', '2026-07-10T00:00:00Z', '2026-07-10T02:00:00Z', 'active'),
       ('session-b', 'proj-b', '2026-07-12T00:00:00Z', '2026-07-12T01:00:00Z', 'active');
-    INSERT INTO agents (id, session_id, type, subagent_type, status, parent_agent_id, first_seen_at, last_seen_at) VALUES
-      ('a-main', 'session-a', 'main', NULL, 'working', NULL, '2026-07-10T00:00:00Z', '2026-07-10T02:00:00Z'),
-      ('a-sub1', 'session-a', 'subagent', 'explorer', 'completed', 'a-main', '2026-07-10T00:10:00Z', '2026-07-10T01:00:00Z'),
-      ('a-sub2', 'session-a', 'subagent', NULL, NULL, 'a-main', '2026-07-10T00:20:00Z', '2026-07-10T00:30:00Z');
+    INSERT INTO agents (id, session_id, type, subagent_type, status, outcome_cause, parent_agent_id, first_seen_at, last_seen_at) VALUES
+      ('a-main', 'session-a', 'main', NULL, 'working', NULL, NULL, '2026-07-10T00:00:00Z', '2026-07-10T02:00:00Z'),
+      ('a-sub1', 'session-a', 'subagent', 'explorer', 'completed', 'user_interrupt', 'a-main', '2026-07-10T00:10:00Z', '2026-07-10T01:00:00Z'),
+      ('a-sub2', 'session-a', 'subagent', NULL, NULL, 'concurrency_limit', 'a-main', '2026-07-10T00:20:00Z', '2026-07-10T00:30:00Z');
     INSERT INTO orchestration_edges (session_id, parent_agent_id, child_agent_id, source, instance, host_id, created_at) VALUES
       ('session-a', 'a-main', 'a-sub1', 'tool_use', 'default', 'host-1', '2026-07-10T00:10:00Z'),
       ('session-a', 'a-main', 'a-sub2', 'task_notification', 'default', 'host-1', '2026-07-10T00:20:00Z');
@@ -181,6 +181,14 @@ describe('session endpoints (WP-U3)', () => {
     expect(sub1.parentAgentId).toBe('a-main');
     expect(sub2.parentAgentId).toBe('a-main');
     expect(sub2.status).toBeNull(); // served as stored, not coerced
+
+    // WP-U13: outcome_cause was written by ingest and read by nothing. Three
+    // agents carry three DIFFERENT values here on purpose - one NULL and two
+    // distinct causes - so a reader that hard-coded a constant, or that mapped
+    // every ended agent onto one bucket, fails instead of passing by accident.
+    expect(main.outcomeCause).toBeNull();
+    expect(sub1.outcomeCause).toBe('user_interrupt');
+    expect(sub2.outcomeCause).toBe('concurrency_limit');
 
     // Per-agent rollup: m1 + m3 + m4 belong to a-sub1.
     expect(sub1.totalTokens).toBe(1_000_750);

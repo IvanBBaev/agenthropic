@@ -66,13 +66,21 @@ counts third-party code only.
 
 **One over-claim to retire.** The 2026-07-30 note says the gate "runs as
 `gate:licenses` in CI on every push," which is accurate, but this ADR set has
-elsewhere described the CD-9 gate as merge-blocking. It is not: branch protection on
-`main` is not enabled, so a red run is a signal rather than a barrier
-([ADR-0009](adr-cd-7-security-and-coverage-boundary.md)'s 2026-08-15 update covers
-the same gap for the coverage gate). The acceptance criterion — "verified by a CI
-provenance check" — is satisfied on its own wording, since verification is what the
-check performs; enforcement was never this ADR's word, and should not be borrowed
-into it.
+elsewhere described the CD-9 gate as merge-blocking. On 2026-08-15 it was not: branch
+protection on `main` was not enabled, so a red run was a signal rather than a barrier
+([ADR-0009](adr-cd-7-security-and-coverage-boundary.md)'s 2026-08-15 update recorded
+the same gap for the coverage gate).
+
+> **As built — 2026-08-25:** `main` is now branch-protected and requires the `ci`
+> check, so a red `gate:licenses` run does withhold the merge button — from a
+> contributor, and not from the repository owner, who is exempt by design
+> (`enforce_admins: false`) because agenthropic has exactly one maintainer whose
+> normal working mode is a direct push to `main`. See
+> [the standing correction](README.md#a-standing-correction-merge-blocking).
+
+The acceptance criterion — "verified by a CI provenance check" — is satisfied on its
+own wording either way, since verification is what the check performs; enforcement was
+never this ADR's word, and should not be borrowed into it.
 
 **The clean-room half is still discipline, not tooling.** Nothing has changed:
 no source text from any of the six audited projects has been copied in, the

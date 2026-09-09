@@ -97,20 +97,27 @@ Both High findings are closed:
 | M-23 | superseded | All five packages now pin 100% and all five carry an anti-pragma guard (four named `coverage-honesty.test.ts`; `apps/web`'s is the `coverage honesty` block of `test/honesty.test.tsx`) |
 | M-3, M-17, M-19, M-21 | not re-verified | No code in the tree names them |
 | M-24 | **still open, owner-only** | The hierarchy-accuracy gate remains **unmeasured**: the LABEL-ME hand-labelled corpus does not exist, so the ≥95% bar reports **NOT CERTIFIED** and every Phase-0 number stays PROVISIONAL. No agent can close this — producing ground truth is Ivan's act |
-| M-25 | **still open, owner-only** | Branch protection on `main` is still not enabled, so no gate is merge-blocking; the KC calendar's owner-only acts are unchanged |
+| M-25 | **open, owner-only on 2026-08-15 — closed 2026-08-25** | As read on 2026-08-15: branch protection on `main` was not enabled, so no gate was merge-blocking. The owner act has since happened — on **2026-08-25** `main` was branch-protected with `ci` (the job id in `.github/workflows/ci.yml`, not the workflow's `CI` display name) as the required status check, force-pushes and branch deletion refused. A red run now withholds the merge button from a contributor and, deliberately, not from the repository owner: `enforce_admins` is off because agenthropic has one maintainer whose normal working mode is a direct push to `main`, and admin enforcement would lock the sole maintainer out of their own repository — see [the standing correction](../site/contributing/decisions/README.md#a-standing-correction-merge-blocking). The KC calendar's **other** owner-only acts (LABEL-ME, the `<30 s` stopwatch) are unchanged |
 | Low (all) | not re-verified | The block was not re-reviewed |
 
 The two items at the bottom of that table are the ones worth re-reading. Everything
 above them was work an agent could do and did; M-24 and M-25 are the findings that
 **cannot be closed by writing code**, and they are precisely the ones that gate the
 project's honesty claims — an uncertified accuracy number and an unenforced quality
-bar. Fourteen fixes have not moved them by one inch.
+bar. Fourteen fixes had not moved them by one inch. One of the two has moved since,
+and only in the way it always could: **M-25 was closed on 2026-08-25 by the owner act
+itself**, not by a commit. M-24 stands exactly as written — the hand-labelled corpus
+does not exist, the ≥95% gate still reports NOT CERTIFIED at n = 0, and every Phase-0
+number is still PROVISIONAL.
 
 ## Second amendment (2026-08-22)
 
 Same method as above, and for the same reason the table above is left untouched
 rather than rewritten in place. This section records only what moved after
-2026-08-15.
+2026-08-15. *(One later exception, dated where it happened: on 2026-08-25 the
+M-25 row of that table and the paragraph under it were amended, because the
+owner act they were waiting on finally happened; both keep their 2026-08-15
+reading and label it as such.)*
 
 **Read this before trusting either table.** The body of this report is a dated
 2026-08-09 snapshot, and it has now caused two misreadings in one session: the
@@ -128,7 +135,7 @@ authority is the tree itself.**
 | M-10 | closed | `apps/web/src/clock.ts` — one module-level `useSyncExternalStore` clock, one reference-counted `setInterval` shared by every consumer, cached reading refreshed on the 0→1 subscribe transition so a remount after an idle gap cannot read a stopped value. `LiveView` and `CostView` both read `useNowMs()`; the per-view timer and the duplicated `CLOCK_INTERVAL_MS` are gone. `CLOCK_INTERVAL_MS = 30_000` is PROVISIONAL against the review's 30–60 s guidance |
 | M-18 | closed | The residue named in the first table is wired: `apps/server/src/index.ts` hoists a single `createTailCachingFs(nodeCorpusFs())` above the ingest branch and hands the same decorator to both the watcher and `createSubstrateProvider`. `apps/server/test/api-substrate-shared-fs.test.ts` asserts exactly one decorator exists process-wide, that boot replay warmed it, and that a cost-analysis request reads through it as a **tail** read with no full `.jsonl` read |
 | M-21 | partial — pricing half closed | Migration **14** (`model-pricing-canonical-effective-from`) rewrites every `model_pricing.effective_from` to the canonical `YYYY-MM-DDTHH:mm:ss.sssZ` instant and installs 4 triggers (2 `BEFORE` guards that `RAISE(ABORT)`, 2 `AFTER` rewrites) so the column's lexicographic order is its chronological order — the ordering the SQL resolver's `effective_from <= occurred_at` + `ORDER BY … DESC LIMIT 1` had been silently assuming. Three of four pinned divergences in `apps/server/test/rate-resolver-parity.test.ts` graduated to `PARITY_CASES`, including the one where core priced $30 and the API reported $10. **One survivor stays pinned:** `offset-form-occurred-at` — that divergence is on `token_usage.occurred_at`, written verbatim by ingest, so it needs the write path |
-| M-19 | **documented and guarded — NOT closed; now the largest measured cost in the system** | `getCostSummary` still scans all of `token_usage` on every request. The L-26 run below measures one `GET /api/cost/summary` at real corpus scale as **15.62 s of blocked event loop**, per click — roughly 100× one fingerprint sweep tick. What shipped is honesty, not a fix: an explicit "read this before recording the finding as closed" block on `getCostSummary`, an addendum to the `costSummaryStateKey` docstring stating that false invalidation is the norm under ingest, and `apps/server/test/api-cost-summary-equivalence.test.ts`, which mutates the ledger five ways and after each one asserts the served summary still equals a cache-cold direct scan. Every sound narrowing of the cache key turned out to be a write-side seam; the one in-process option (`PRAGMA data_version`) moves only on *other-connection* commits, and ingest shares the handle, so it would have served stale dollars |
+| M-19 | **documented and guarded — NOT closed; now the largest measured cost in the system** | `getCostSummary` still scans all of `token_usage` on every request. The L-26 run below measures one `GET /api/cost/summary` at what it called real corpus scale — in fact **~11x real scale**, 1590 sessions / 10.97 GiB, see the scale-label correction below — as **15.62 s of blocked event loop**, per click — roughly 100× one fingerprint sweep tick. What shipped is honesty, not a fix: an explicit "read this before recording the finding as closed" block on `getCostSummary`, an addendum to the `costSummaryStateKey` docstring stating that false invalidation is the norm under ingest, and `apps/server/test/api-cost-summary-equivalence.test.ts`, which mutates the ledger five ways and after each one asserts the served summary still equals a cache-cold direct scan. Every sound narrowing of the cache key turned out to be a write-side seam; the one in-process option (`PRAGMA data_version`) moves only on *other-connection* commits, and ingest shares the handle, so it would have served stale dollars |
 | M-9 | still partial | The half the first table could not verify — an **aggregate** delegation-saved figure — is still absent. The rest of M-9 is in fact done: `cost-windows.ts` supplies the today/this-week KPIs and every `SessionsView` row carries an `analyse` button, so the "only top-5 sessions are analysable" clause no longer holds |
 | M-1 | closed (correcting the body, not the first table) | See the paragraph above; the first table was already right |
 
@@ -145,9 +152,26 @@ dollar figure that outlives the rate that produced it.
 Bucket 2 item 5 asked for event-loop-delay and concurrent-inject contention
 phases in `apps/server/bench/corpus-scale.ts`, precisely so item 6 (M-17) could
 be decided "from measurement, not speculation". Both phases now exist and were
-run. The benchmark was run twice at **real corpus scale** — 1590 sessions
-discovered, 10.97 GiB, 7.16 M `token_usage` rows — rather than answering M-17
-from a linear projection.
+run. The benchmark was run twice at what this section called **real corpus
+scale** — 1590 sessions discovered, 10.97 GiB, 7.16 M `token_usage` rows —
+rather than answering M-17 from a linear projection.
+
+> **Scale label corrected — 2026-09-01.** "Real corpus scale" is wrong, and the
+> figures below should be read at the scale they were actually taken at. The
+> census of record (`parser-spec.md` §4.2) is **141 sessions**; the 1590 here is
+> what you get when the bench is sized by `1855` — the count of subagent
+> **transcripts** — mistaken for a session count (1855 clones, one fixture in
+> seven planting no root transcript, gives 1590 discovered sessions). So this
+> run covers roughly **11x the real session count** and **11x the corpus bytes**
+> measured today (996.4 MiB). The numbers themselves are not withdrawn — they
+> were measured, and they are the reason M-17's verdict is what it is — but they
+> describe a synthetic corpus about an order of magnitude larger than the real
+> one, and every "at real scale" phrase in this section means "at ~11x real
+> scale". The constant is fixed in code: `REAL_CORPUS_SESSIONS = 141` in
+> `apps/server/bench/corpus-scale.ts`, with the retraction written out beside it.
+> M-17's conclusion survives the correction and gets stronger — the shortlist was
+> already judged not worth building below ~1100–1250 sessions, and the real
+> corpus is 141.
 
 Two defects in the new instrumentation were found and fixed before any number
 was trusted, and both matter to anyone reading a loop-delay figure here again:
@@ -163,8 +187,15 @@ was trusted, and both matter to anyone reading a loop-delay figure here again:
   `setInterval` that fired **zero** times. Fixed with a `setImmediate` yield
   between requests, outside the measured interval.
 
-Measured at real scale, the blocking costs order like this — and the ordering,
-not any single figure, is the finding:
+Measured at **~11x real scale** (1590 sessions / 10.97 GiB — see the scale-label
+correction above; this label said "at real scale" until 2026-09-01), the blocking
+costs order like this. **The ordering, not any single figure, is the finding** — and
+the ordering survives the correction intact, because every row was inflated by the
+same factor. The individual figures did not survive: `cold replay` is the one
+quantity since measured at census scale, and it comes out at **34.87-39.92 s**, an
+order of magnitude below the row below — measured over a *synthetic* corpus whose
+per-session size is 3.7x below the real one, so read it as a lower bound (**BENCH-SHAPE**). Read the table as a ranking, not as
+magnitudes.
 
 | What | Blocked event loop | Trigger |
 |---|---|---|
@@ -176,7 +207,7 @@ not any single figure, is the finding:
 
 **M-17 verdict: do not build the fingerprint shortlist now.** The sweep is
 linear and cheap — 0.08 ms/session at 172 sessions, 0.09 ms/session at 1590, a
-constant per-session cost across a 9.2× range. At real scale it is a 4.9–5.2%
+constant per-session cost across a 9.2× range. At that ~11x scale it is a 4.9–5.2%
 duty cycle, and its effect on in-flight reads is ~0.8 ms at p99 (6.7 → 7.5 ms,
 worst observed 24.0 ms). At small corpus size the effect is **below the
 run-to-run noise**: across four runs the p99 delta was +1.4, +0.1, −4.2, −1.1 ms
@@ -185,7 +216,7 @@ the quiescent one. On a 100 ms-blocked-loop criterion the shortlist becomes
 worth building at roughly **1100–1250 sessions**. One `CostView` load blocks the
 loop about **100× longer** than one tick.
 
-One incidental result confirms M-17 named the right cost centre: at real scale
+One incidental result confirms M-17 named the right cost centre: at that ~11x scale
 an *incremental* tick (135.5 ms, one session grew by one record) is **cheaper**
 than a warm tick (148.0 ms), so accepting the changed session vanishes into the
 noise and essentially the whole tick **is** the sweep.
@@ -239,9 +270,12 @@ matters if the *real* boot path has the same shape. It does:
 
 That yield does what it claims and no more: it drains what was already accepted
 at the instant of bind. A probe that connects one second *into* the replay is
-accepted by the kernel backlog and then waits — at real corpus scale for the
-better part of six minutes, and even in the smaller run in the same series for
-22.5 s. So the observable boot behaviour is a socket that accepts and never
+accepted by the kernel backlog and then waits — for the better part of six minutes
+at what this review called real corpus scale (in fact ~11x it), and even in the
+smaller run in the same series for 22.5 s. At census scale the same wait is
+**34.87-39.92 s** (measured 2026-09-01, over a synthetic corpus 3.7x lighter per
+session than the real one — a lower bound; see **BENCH-SHAPE**). The behaviour is unchanged by the
+correction; only its duration is. So the observable boot behaviour is a socket that accepts and never
 answers, which for a health probe is worse than connection-refused: refused
 fails fast and is unambiguous, accepted-and-silent hangs until the client's own
 timeout and is indistinguishable from a wedged server.
@@ -573,8 +607,9 @@ that in-place restore requires the server stopped.
 **M-5. `getGlobalDag` prices and groups the entire `token_usage` table on every
 request** — data-layer · `apps/server/src/api/queries.ts:563`
 `usage_by_agent` builds from the unfiltered priced CTE regardless of
-`nodeLimit` (measured 432 ms over 752k rows; ~5 s projected at real corpus
-scale), and the edge query full-scans `orchestration_edges` (no parent/child
+`nodeLimit` (measured 432 ms over 752k rows; ~5 s projected at what was then
+called real corpus scale — the inflated 1855-as-sessions target, so this projection
+is now unverified), and the edge query full-scans `orchestration_edges` (no parent/child
 index). Page cost grows with corpus size, not response size.
 *Fix:* restrict `usage_by_agent` to the selected agent set (id-list injection,
 as `sessionSummarySelect` already does); add edge indexes on
@@ -694,9 +729,14 @@ tick-duration metric to health.
 **M-16. Startup replay blocks before listen — minutes of no server at real
 corpus scale** — performance-roadmap · `apps/server/src/index.ts:407`
 `watcher.tick()` runs before `app.listen`; a first boot (or any
-checkpoint-degrade) against the real ~1855-session corpus reads and parses
-everything with no HTTP surface, no health endpoint and no progress output — a
-health-checked supervisor may kill it into a loop.
+checkpoint-degrade) against the real corpus reads and parses everything with no
+HTTP surface, no health endpoint and no progress output — a health-checked
+supervisor may kill it into a loop. *(Unit corrected 2026-09-01: this sentence
+said "the real ~1855-session corpus". `1855` counts subagent **transcripts**;
+the census of record is **141 sessions** — parser-spec §4.2. The finding does
+not depend on the number: cold replay at census scale is measured at
+34.87–39.92 s of one synchronous stall, and "minutes" in this heading was a
+projection at the inflated scale, now unverified.)*
 *Fix:* listen first with a "replaying" status (replay is idempotent, partial
 visibility is safe), emit periodic progress, or chunk replay across ticks.
 
@@ -785,6 +825,16 @@ The stay-alive condition can fail on a 10-minute Settings click.
 *Fix:* put the two 10-minute owner acts (branch-protection click, LABEL-ME
 start) in front of Ivan now with the KC-3 date attached; run the `<30 s`
 stopwatch measurement in September, not November.
+*Resolved 2026-08-25 — branch-protection half only.* `main` is now
+branch-protected: the required status check is `ci` (the job id in
+`.github/workflows/ci.yml`, not the workflow's `CI` display name), and
+force-pushes to `main` and deletion of `main` are refused. The three P0 proofs
+are therefore merge-blocking for a contributor and, by deliberate design, not
+for the repository owner — `enforce_admins` is off because agenthropic has one
+maintainer whose normal working mode is a direct push to `main`, and admin
+enforcement would lock the sole maintainer out of their own repository. KC-3's
+stay-alive clause no longer fails on this act. LABEL-ME (M-24) and the `<30 s`
+measurement are untouched.
 
 ### Low (all UNVERIFIED-LOW)
 
@@ -926,7 +976,7 @@ stopwatch measurement in September, not November.
 | # | What | Why now | Size |
 |---|------|---------|------|
 | 1 | Byte-offset tail-read for changed sessions (+ optional worker-thread parse); tick-duration metric on health (M-15) | Highest-leverage perf fix; the live-watch path is the core use case | M–L |
-| 2 | Listen-before-replay with a "replaying" status and progress output (M-16) | Removes the minutes-long boot blackout at real corpus scale | M |
+| 2 | Listen-before-replay with a "replaying" status and progress output (M-16) | Removes the boot blackout — **measured at 34.87-39.92 s** of one synchronous stall at census scale (2026-09-01). The "minutes-long" that justified this row was a projection at ~11x real scale and is now unverified; the fix may well still be worth its slot at 35-40 s, but that argument has to be made rather than inherited. The 35-40 s is itself a lower bound: it was measured over a synthetic corpus 3.7x lighter per session than the real one (**BENCH-SHAPE**) | M |
 | 3 | Direct-ref lookup for cost-analysis (skip corpus enumeration) (M-18) | Removes a per-click whole-server freeze; pairs with #1 | S–M |
 | 4 | Incremental (session, model, day) rollup or cached summary for `getCostSummary` (M-19) | The read grows with corpus age forever otherwise | M |
 | 5 | Bench: event-loop-delay + concurrent-inject contention phases (L-26); then run the `<30 s` stopwatch measurement in **September** (M-25c) | Findings need two months of fix runway before 2026-12-01 | S–M |
@@ -938,6 +988,15 @@ stopwatch measurement in September, not November.
 |---|------|---------|------|
 | 7 | Branch-protection click making the three P0 proofs merge-blocking (M-25a) | KC-3's stay-alive clause fails on this alone; agents cannot do it | 10 min (owner) |
 | 8 | Start LABEL-ME: hand-label ≥52 claims from the spike corpus (M-24, M-25b) | The ≥95% hierarchy bar is unsignable and every number stays PROVISIONAL until this exists | M (owner) |
+
+*Item 7 was carried out on 2026-08-25:* `main` is branch-protected with `ci` as
+the required status check, and force-pushes and branch deletion are refused, so
+the three P0 proofs withhold the merge button from a contributor — and,
+deliberately, not from the repository owner, `enforce_admins` being off because
+agenthropic has one maintainer whose normal working mode is a direct push to
+`main`. **Item 8 has not been carried out:** the human annotation corpus is
+still empty, so the ≥95% bar still reports NOT CERTIFIED and every hierarchy
+number stays PROVISIONAL.
 
 **Product/correctness before the KC-4 exit gate:**
 

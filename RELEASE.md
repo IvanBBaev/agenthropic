@@ -36,12 +36,17 @@ Rules of this document:
 - [ ] **[HUMAN] The two KC-0 physical acts** — friction log opened; ≥1 rival dashboard
       installed — recorded open in `TODO.md` as of 2026-07-29. Close or consciously
       waive them in writing before tagging.
-- [ ] **[HUMAN] Branch protection.** CD-7 says coverage **"blocks merges"**; the CI
-      workflow itself notes that blocking requires a branch-protection rule
-      ([`.github/workflows/ci.yml`](.github/workflows/ci.yml) header). As of 2026-07-29
-      `main` is **not protected** (`gh api repos/IvanBBaev/agenthropic/branches/main/protection`
-      → 404). Enable: Settings → Branches → require the `CI` check. Verify:
-      `gh api repos/IvanBBaev/agenthropic/branches/main/protection --jq '.required_status_checks.contexts'`
+- [x] **Branch protection — DONE 2026-08-25.** CD-7 says coverage **"blocks merges"**; the
+      CI workflow itself notes that blocking requires a branch-protection rule
+      ([`.github/workflows/ci.yml`](.github/workflows/ci.yml) header). `main` now requires
+      the `ci` status check (that is the context name — the job id, not the workflow's
+      display name `CI`), with force-pushes and branch deletion refused.
+      `enforce_admins` is **deliberately off**: one maintainer, whose normal mode is a
+      direct push to `main`. So a red run withholds a contributor's merge and not Ivan's
+      push — every "merge-blocking" claim in the docs set is written with that exemption
+      spelled out. Verify:
+      `gh api repos/IvanBBaev/agenthropic/branches/main/protection --jq '{contexts: .required_status_checks.contexts, enforce_admins: .enforce_admins.enabled}'`
+      → `{"contexts":["ci"],"enforce_admins":false}`
 - [ ] **CI green on the release commit.** Verify:
       `gh api "repos/IvanBBaev/agenthropic/actions/workflows/ci.yml/runs?branch=main&per_page=1" --jq '.workflow_runs[0] | {head_sha, conclusion}'`
       — `conclusion` must be `success` and `head_sha` must equal the commit to be tagged.
@@ -157,12 +162,14 @@ The canonical P0 set ([`docs/site/contributing/testing.md`](docs/site/contributi
 §4; `WP-X3`/`WP-IN13`): release-blocking, and no other feature work substitutes for
 them. Test bodies live under `apps/server/test/p0/`.
 
-> **Status honesty (updated 2026-08-07):** the three P0 test bodies now exist and pass
-> (`apps/server/test/p0/`, 3 files / 13 tests green). What is still missing is the half
-> that makes them *blockers*: CI is **not merge-blocking**, because `main` is not
-> branch-protected (§0). A passing test that nothing gates on is a test, not a gate — so
-> these boxes stay **unticked**, and they are ticked on the release commit, against that
-> commit's CI run, not by pointing at a local run.
+> **Status honesty (updated 2026-08-25):** the three P0 test bodies exist and pass
+> (`apps/server/test/p0/`, 3 files / 13 tests green). The half that makes them *blockers*
+> arrived on 2026-08-25: `main` now requires the `ci` check (§0), so a red P0 does
+> withhold a contributor's merge button. It does not withhold the sole maintainer's push —
+> `enforce_admins` is off by design — so "blocker" here means "blocking for anyone who is
+> not the owner", and for the owner it remains a discipline. Either way these boxes are
+> ticked on the release commit, against that commit's CI run, never by pointing at a
+> local run.
 
 - [ ] **P0-1 — Σ `token_usage` == JSONL exact, per session** — the ground-truth-tokens
       invariant holds in the projected data; zero drift, no silent rounding, no double
@@ -171,8 +178,11 @@ them. Test bodies live under `apps/server/test/p0/`.
       deterministic and safe on every process start.
 - [ ] **P0-3 — DAG-rebuild from JSONL alone, after a simulated outage** — the persisted
       `orchestration_edges` tree survives the exact failure mode it exists to survive.
-- [ ] All three are **green in CI on the release commit and merge-blocking** (via the
-      §0 branch-protection box), per `WP-IN13`'s Done-when.
+- [ ] All three are **green in CI on the release commit**, and merge-blocking for any
+      non-owner contributor via the §0 branch-protection box (ticked 2026-08-25), per
+      `WP-IN13`'s Done-when. The `enforce_admins: false` exemption means the release
+      commit's own green run is what this box records — the rule cannot enforce it
+      against the owner.
 - [ ] **[HUMAN-dependent] Hierarchy correctness ≥95%** vs. the labeled corpus
       (testing.md §4) — this bar is only meaningful once the §0 LABEL-ME box is done,
       because it is scored against Ivan's hand-labeled trees, not self-check.
@@ -262,28 +272,28 @@ scan."**
       commit that contains Waves 1–4 (before it, the badge described only the Phase-1
       foundation). Re-read the section at tag time; it must describe v1.0, not this
       pre-tag state.
-- [ ] **[HUMAN] Enable GitHub Pages, then confirm the deploy.** The
+- [x] **GitHub Pages enabled and the deploy confirmed — DONE 2026-08-25.** The
       `Docs site (GitHub Pages)` workflow
-      ([`.github/workflows/pages.yml`](.github/workflows/pages.yml)) must be green on the
-      release commit — but it cannot go green until the owner turns Pages on once.
+      ([`.github/workflows/pages.yml`](.github/workflows/pages.yml)) could not go green
+      until Pages existed, and the repository could not create it for itself.
       **An earlier revision of this checklist claimed otherwise and was wrong.** It said
       that passing `enablement: true` to `configure-pages` lets the workflow turn Pages
       on through the API with the `pages: write` permission it already holds, and struck
       the [HUMAN] tag on that basis. `pages: write` authorises _deploying_ to an existing
       Pages site; it does not authorise _creating_ one. Creation needs repo
       administration rights, which the default `GITHUB_TOKEN` deliberately never has.
-      Three runs prove it, all dead in `configure-pages`:
+      Three runs proved it, all dead in `configure-pages`:
       `30528892265` (on `9b6c6b3`, input still `false`) with
       `Get Pages site failed … Not Found`, then `31318246506` and `31879212583` with
       `enablement: true` and `Create Pages site failed. Error: Resource not accessible by integration`.
-      The owner action is one of:
-      Settings → Pages → Source: "GitHub Actions", or
-      `gh api -X POST repos/IvanBBaev/agenthropic/pages -f build_type=workflow` with an
-      admin-scoped token. Only the owner can do either; the repository cannot do it for
-      itself. Once Pages exists, the workflow deploys on its own and the step fails
-      loudly rather than deploying nowhere, so this box is ticked by a green run, never
-      by assumption.
-      Verify: `gh api repos/IvanBBaev/agenthropic --jq .has_pages` → `true`.
+      Pages was created on 2026-08-25 via
+      `gh api -X POST repos/IvanBBaev/agenthropic/pages -f build_type=workflow`, and the
+      previously failing run `32863218759` was re-run and **succeeded**. The site serves
+      at <https://ivanbbaev.github.io/agenthropic/>.
+      Still re-verify on the release commit — this box records that the one-time
+      enablement is done, not that any future run is green.
+      Verify: `gh api repos/IvanBBaev/agenthropic --jq .has_pages` → `true`, and
+      `curl -sSI https://ivanbbaev.github.io/agenthropic/ | head -1` → `HTTP/2 200`.
 
 ## 7. Version, tag, release notes
 

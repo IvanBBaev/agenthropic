@@ -25,9 +25,10 @@ later without touching page content.
 > Test figures, re-measured 2026-08-15 on the working tree: **106 test files / 1554 tests**,
 > with **100% statements, branches, functions and lines** enforced in **all five** packages —
 > `packages/test-fixtures` is no longer an exclusion, it is inside the gate. Two things that
-> figure does not mean: the thresholds fail the CI run but do not yet *block a merge* (that
-> needs a branch-protection rule on `main`, an owner action, still unset at the last
-> recorded check), and coverage of the code is not accuracy of the output — the
+> figure does not mean: the thresholds block a *contributor's* merge but not the sole
+> maintainer's push (branch protection on `main` requires the `ci` check as of 2026-08-25,
+> with `enforce_admins` deliberately off), and coverage of the code is not accuracy of the
+> output — the
 > hierarchy-accuracy exit gate still reports **NOT CERTIFIED at n = 0** because no session
 > has been hand-labeled.
 >
@@ -54,22 +55,23 @@ later without touching page content.
 > **On the generator.** Still deferred (`DOC-P1` / ADR-0013) — but the corpus **is wired to
 > publish**: `.github/workflows/pages.yml` renders it with the stock GitHub Pages Jekyll
 > builder, adding zero dependencies. Its source root is `docs/`, not `docs/site/`, because
-> the site tree cross-links heavily into `../analysis/` and `../due-diligence/`. **Pages is
-> still not enabled on the repository**, so no site is live and every run of that workflow
-> fails at the Configure Pages step. The fix is a one-time owner action (Settings → Pages →
-> Source: "GitHub Actions"). It cannot be automated away: the workflow does pass
+> the site tree cross-links heavily into `../analysis/` and `../due-diligence/`. **Pages was
+> enabled on 2026-08-25** and the site is live at
+> <https://ivanbbaev.github.io/agenthropic/>. Before that, every run of the workflow failed
+> at the Configure Pages step, and it could not be automated away: the workflow does pass
 > `enablement: true`, but a workflow's `GITHUB_TOKEN` may only deploy to a Pages site that
 > already exists — creating one needs repository-administration rights the token
 > deliberately never has. Two runs proved it with `Create Pages site failed. Error:
-> Resource not accessible by integration`. Failing loudly there is the intended behaviour;
-> a job that "succeeded" while deploying nowhere would be worse. Until the click happens,
-> read this corpus in the repository.
+> Resource not accessible by integration`. Failing loudly there was the intended behaviour;
+> a job that "succeeded" while deploying nowhere would have been worse. The same corpus
+> remains readable in the repository.
 
 ## Site map
 
 | Section | Page | File |
 |---|---|---|
 | Guide | What is agenthropic | [guide/what-is-agenthropic.md](guide/what-is-agenthropic.md) |
+| Guide | Running agenthropic | [guide/running.md](guide/running.md) |
 | Guide | The moat — why build | [guide/the-moat.md](guide/the-moat.md) |
 | Guide | Comparison vs the field | [guide/comparison.md](guide/comparison.md) |
 | Guide | Roadmap | [guide/roadmap.md](guide/roadmap.md) |

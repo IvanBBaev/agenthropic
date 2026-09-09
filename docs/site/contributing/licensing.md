@@ -17,9 +17,10 @@ important limit of what that CI gate can and cannot prove
 [§3](../../analysis/concept-analysis-v2.md) CD-9; development-plan
 [`WP-F5`/`WP-F6`](../../analysis/development-plan.md)).
 
-> **Update — 2026-08 (as built; both gates re-run locally on 2026-08-15).** Both
-> gates named in §6 exist, are wired into the root `package.json`, and run as named
-> steps in [`.github/workflows/ci.yml`](https://github.com/IvanBBaev/agenthropic/blob/main/.github/workflows/ci.yml),
+> **Update — 2026-08 (as built; both gates re-run locally on 2026-08-15; branch
+> protection recorded 2026-08-25).** Both gates named in §6 exist, are wired into the
+> root `package.json`, and run as named steps in
+> [`.github/workflows/ci.yml`](https://github.com/IvanBBaev/agenthropic/blob/main/.github/workflows/ci.yml),
 > so the CD-9 mechanism below is live rather than planned. The two figures quoted
 > here are a dated measurement of the tree as it stood on 2026-08-15, not constants —
 > both move with every dependency change and every added file.
@@ -56,12 +57,24 @@ important limit of what that CI gate can and cannot prove
 >   it defines every forbidden pattern as a literal; that allowlisting is printed on
 >   every run rather than applied silently.
 >
-> **Neither gate is physically merge-blocking.** Both run in CI on every push and
-> pull request, and both fail the workflow correctly when violated — but branch
-> protection on `main` is not enabled, so a red run does not prevent a merge. Where
-> §6 below says the license gate is "merge-blocking," read that as the intended
-> configuration, not the current one; see
-> [governance](governance.md) for the open owner action.
+> **Both gates are merge-blocking for anyone who is not the repository owner.** Both
+> run in CI on every push and pull request, and both fail the workflow correctly when
+> violated. That verdict is the reverse of the one this paragraph carried until
+> **2026-08-25**: it opened "Neither gate is physically merge-blocking." and continued
+> "…but branch protection on `main` is not enabled, so a red run does not prevent a
+> merge," telling you to read §6's "merge-blocking" as the intended configuration
+> rather than the current one. On that date `main` was branch-protected: the
+> required status check is `ci` (lowercase — the job id in
+> [`.github/workflows/ci.yml`](https://github.com/IvanBBaev/agenthropic/blob/main/.github/workflows/ci.yml),
+> not the workflow's `CI` display name), and force-pushes to `main` and deletion of
+> `main` are refused for everyone. `enforce_admins` is deliberately off, because
+> agenthropic has exactly one maintainer whose normal working mode is a direct push to
+> `main` and enabling it would lock the sole maintainer out of their own repository —
+> so that exemption travels with every "merge-blocking" in §6 below: a red run
+> withholds the merge button from a contributor, not from the owner. The full
+> write-up is
+> [the standing correction](decisions/README.md#a-standing-correction-merge-blocking);
+> see also [governance](governance.md).
 >
 > **§4's undecided attribution mechanism has not been decided, because nothing has
 > triggered it.** No source text from any of the six audited projects has been
@@ -364,13 +377,27 @@ hold; neither substitutes for the other.
 
 There is a second, smaller over-claim worth retiring in the same breath, because
 this page made it too. "Merge-blocking" was the word used here, and as of 2026-08-15
-it is not accurate: `gate:licenses` runs on every push and pull request and exits
+it was not accurate: `gate:licenses` ran on every push and pull request and exited
 non-zero on a disallowed license, but with no branch-protection rule on `main` a red
-workflow is a red mark, not a closed door. The mechanism is built and correct; the
-enforcement switch is an owner action on github.com that has not been taken. Until it
-is, read every "the gate blocks X" sentence in this documentation set as a statement
-of design intent — the gate reliably *tells* you, and a human still has to act on
-what it says.
+workflow was a red mark, not a closed door. The mechanism was built and correct; the
+enforcement switch was an owner action on github.com that had not been taken, so
+until it was, every "the gate blocks X" sentence in this documentation set read as a
+statement of design intent — the gate reliably *told* you, and a human still had to
+act on what it said.
+
+That switch was taken on **2026-08-25**, and the over-claim is retired rather than
+merely qualified. `main` now requires the `ci` status check — lowercase `ci`, the job
+id in `.github/workflows/ci.yml`, not the workflow's `CI` display name — and refuses
+force-pushes and branch deletion for everyone. `enforce_admins` is deliberately left
+off, because agenthropic has exactly one maintainer whose normal working mode is a
+direct push to `main` and enabling it would lock the sole maintainer out of their own
+repository. So "merge-blocking" is now accurate with one qualifier that must always
+travel with it: **merge-blocking for anyone who is not the repository owner**. Read
+every "the gate blocks X" sentence in this documentation set that way — a closed door
+for a contributor, a loud red mark the owner can still walk past. Verify with
+`gh api repos/IvanBBaev/agenthropic/branches/main/protection --jq '{contexts: .required_status_checks.contexts, enforce_admins: .enforce_admins.enabled}'`
+→ `{"contexts": ["ci"], "enforce_admins": false}`; the reasoning is written up once, in
+[the standing correction](decisions/README.md#a-standing-correction-merge-blocking).
 
 ## 7. Why this is load-bearing: LB2
 
@@ -462,7 +489,10 @@ that the shape of the original uncertainty stays visible. Two remain genuinely o
   model this licensing rule is checked against at PR time.
 - [Contributing: testing & quality](testing.md) — the coverage gate that runs
   alongside `WP-F5`/`WP-F6` in CI, specified at >90% and shipped at 100, and subject
-  to the same branch-protection caveat as the gates on this page.
+  to the same branch-protection caveat as the gates on this page — which since
+  2026-08-25 is the narrower one: merge-blocking for anyone who is not the repository
+  owner, `enforce_admins` being deliberately off so the sole maintainer is not locked
+  out of their own repository.
 - [Contributing: governance](governance.md) — the PR-template checklist item that
   points back to this page.
 - [Decisions (ADRs)](decisions/README.md) — the full ADR index; the LB-2 ADR

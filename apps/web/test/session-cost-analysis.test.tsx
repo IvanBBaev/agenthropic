@@ -20,6 +20,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { UNREADABLE_TOKENS, UNREADABLE_USD } from '../src/format';
+import { NO_FIGURE_META } from '../src/views/status';
 import { analysisErrorText, SessionCostAnalysis } from '../src/views/SessionCostAnalysis';
 import { agentSavings, compactionSegment, costAnalysis, deferred, jsonResponse } from './fixtures';
 
@@ -229,6 +231,42 @@ describe('SessionCostAnalysis', () => {
     expect(screen.getByTestId('compaction-delta').textContent).toContain('across 1 compaction');
   });
 
+  it('refuses to put a sign on a difference it cannot read', async () => {
+    // Nothing on the client validates this DTO at runtime, so whatever `json()`
+    // hands back is what gets rendered; a non-finite delta is not excluded by
+    // anything this component controls. It matters because `NaN >= 0` is false,
+    // so the plain signing would have printed a MINUS in front of a figure that
+    // has no direction at all - a fabricated claim that the repricing came in
+    // under the naive sum.
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        200,
+        costAnalysis({
+          compaction: {
+            naiveUsd: 3.0,
+            repricedUsd: Number.NaN,
+            deltaUsd: Number.NaN,
+            compactionCount: 1,
+            segments: [compactionSegment()],
+          },
+        }),
+      ),
+    );
+    renderPanel();
+    await screen.findByTestId('session-analysis');
+
+    const delta = screen.getByTestId('compaction-delta');
+    expect(delta.textContent).toContain(UNREADABLE_USD);
+    expect(delta.textContent).not.toContain('+');
+    expect(delta.textContent).not.toContain('-');
+    expect(delta.textContent).not.toContain('NaN');
+    // The banner stays away on purpose. Its sentence is about "a difference
+    // this size", and an unreadable delta has no size to be that size - the
+    // tile already tells the reader the figure could not be read, which is the
+    // louder and the truer of the two statements.
+    expect(screen.queryByTestId('delta-signal')).toBeNull();
+  });
+
   it('says a session was never compacted instead of showing a $0 repricing', async () => {
     fetchMock.mockResolvedValue(jsonResponse(200, costAnalysis()));
     renderPanel();
@@ -291,6 +329,44 @@ describe('SessionCostAnalysis', () => {
     const skipped = await screen.findByTestId('skipped-agents');
     expect(skipped.textContent).toContain('1 subagent is');
     expect(skipped.textContent).toContain('a guess would be worse than a gap');
+  });
+
+  it('marks both computation gaps with the gap glyph, not with a status glyph', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, richAnalysis()));
+    const { unmount } = renderPanel();
+
+    const skipped = await screen.findByTestId('skipped-agents');
+    const marker = skipped.querySelector('[aria-hidden="true"]');
+    expect(marker?.textContent?.trim()).toBe(NO_FIGURE_META.symbol);
+    // Not `status-unknown`. That class is the watchdog's amber for an agent
+    // whose STATE is not known; nothing here is in an unknown state - a number
+    // could not be computed. Painting the two the same taught the reader that
+    // amber means one thing and then used it for another.
+    expect(marker?.getAttribute('class')).toBe(NO_FIGURE_META.className);
+    expect(skipped.querySelector('.status-unknown')).toBeNull();
+    unmount();
+
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        200,
+        costAnalysis({
+          delegationSavings: {
+            actualUsd: 0,
+            hypotheticalUsd: 0,
+            savingsUsd: 0,
+            perAgent: [],
+            skippedAgentIds: ['a-1'],
+            isEstimate: true,
+          },
+        }),
+      ),
+    );
+    renderPanel();
+    const gap = await screen.findByTestId('delegation-unpriceable');
+    const gapMarker = gap.querySelector('[aria-hidden="true"]');
+    expect(gapMarker?.textContent?.trim()).toBe(NO_FIGURE_META.symbol);
+    expect(gapMarker?.getAttribute('class')).toBe(NO_FIGURE_META.className);
+    expect(gap.querySelector('.status-unknown')).toBeNull();
   });
 
   it('pluralises the excluded-subagent note and hides it when nothing was skipped', async () => {
@@ -383,6 +459,241 @@ describe('SessionCostAnalysis', () => {
     const gap = await screen.findByTestId('delegation-unpriceable');
     expect(gap.textContent).toContain('delegated to 1 subagent,');
     expect(gap.textContent).toContain('resolved for it,');
+  });
+
+  /**
+   * AMENDED 2026-09-03 (CA-1..CA-4). Everything below is new; nothing above it
+   * was changed. The suite pinned the two honesty contracts named in the file
+   * header and stopped there, so four claims went unexamined: that the counts
+   * in the segment table are counts, that the delegation dollars cover the
+   * subagents the labels name, that the three levels reconcile, and that a
+   * reader who never sees the layout meets the same caveats a sighted reader
+   * does.
+   */
+  it('refuses to print an unreadable segment count as if it were a count', async () => {
+    // The F-5 vector, one component over: `api.ts` casts the body with
+    // `body as T` and there is no runtime schema anywhere in this app, so a
+    // renamed or absent field arrives as a non-number. `toLocaleString` does
+    // not throw on those - it renders `NaN` and `∞`, right-aligned in the
+    // numeric column next to figures that are real.
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        200,
+        costAnalysis({
+          compaction: {
+            naiveUsd: 1,
+            repricedUsd: 1,
+            deltaUsd: 0,
+            compactionCount: 1,
+            segments: [
+              compactionSegment({
+                index: 0,
+                messageCount: undefined as unknown as number,
+                tokens: {
+                  input: 100,
+                  output: undefined as unknown as number,
+                  cacheRead: 300,
+                  cacheWrite5m: 40,
+                  cacheWrite1h: 5,
+                },
+              }),
+              compactionSegment({
+                index: 1,
+                messageCount: Number.POSITIVE_INFINITY,
+                tokens: {
+                  input: Number.POSITIVE_INFINITY,
+                  output: 200,
+                  cacheRead: 300,
+                  cacheWrite5m: 40,
+                  cacheWrite1h: 5,
+                },
+              }),
+            ],
+          },
+        }),
+      ),
+    );
+    renderPanel();
+    await screen.findByTestId('session-analysis');
+
+    const rows = [
+      ...screen.getByRole('table', { name: 'compaction segments' }).querySelectorAll('tbody tr'),
+    ];
+    for (const row of rows) {
+      const text = row.textContent ?? '';
+      expect(text).not.toContain('NaN');
+      expect(text).not.toContain('∞');
+      expect(text).toContain(UNREADABLE_TOKENS);
+      expect(text).toContain('messages unreadable');
+    }
+  });
+
+  it('says how many subagents the delegation dollars actually cover', async () => {
+    // packages/core computes all three sums with `continue` on a skipped
+    // subagent, so a skipped one is missing from the MEASURED level too - and
+    // its dollars are real, merely unpriceable against a counterfactual. The
+    // panel labelled that level "measured, subagents only" and printed the
+    // exclusion as a bare count, so nothing on screen let the reader work out
+    // that two thirds of the delegating subagents are in the figure.
+    fetchMock.mockResolvedValue(jsonResponse(200, richAnalysis()));
+    renderPanel();
+    await screen.findByTestId('session-analysis');
+
+    const kpis = screen.getByLabelText('delegation savings');
+    expect(kpis.textContent).toContain('2 of 3');
+
+    const skipped = screen.getByTestId('skipped-agents');
+    expect(skipped.textContent).toContain('1 of 3');
+    expect(skipped.textContent).toContain('the measured one included');
+  });
+
+  it('leaves the coverage note off when every subagent that ran is in the figures', async () => {
+    // The counterpart: no exclusion, so no denominator to disclose. A caveat
+    // printed when nothing is wrong is spent credibility.
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        200,
+        costAnalysis({
+          delegationSavings: {
+            actualUsd: 0.2,
+            hypotheticalUsd: 0.9,
+            savingsUsd: 0.7,
+            perAgent: [agentSavings()],
+            skippedAgentIds: [],
+            isEstimate: true,
+          },
+        }),
+      ),
+    );
+    renderPanel();
+    await screen.findByTestId('session-analysis');
+    const kpis = screen.getByLabelText('delegation savings');
+    expect(kpis.textContent).toContain('measured, subagents only');
+    expect(kpis.textContent).not.toContain(' of 1');
+  });
+
+  it('says that Saved is floored at zero when a subagent cost more than the alternative', async () => {
+    // `savingsUsd` is Σ max(0, hypothetical - actual) per subagent, so the
+    // three levels do NOT subtract: here 1.30 - 1.20 = 0.10, and the panel
+    // shows ~$0.70. A subagent routed to a model dearer than its parent's is
+    // exactly how that happens, and floored to $0.00 it reads as "delegation
+    // was neutral for this one" rather than "it cost 0.60 more".
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        200,
+        costAnalysis({
+          delegationSavings: {
+            actualUsd: 1.2,
+            hypotheticalUsd: 1.3,
+            savingsUsd: 0.7,
+            perAgent: [
+              agentSavings({ actualUsd: 1.0, hypotheticalUsd: 0.4, savingsUsd: 0 }),
+              agentSavings({
+                agentId: 'deadbeef-9999-8888-7777-666666666666',
+                actualUsd: 0.2,
+                hypotheticalUsd: 0.9,
+                savingsUsd: 0.7,
+              }),
+            ],
+            skippedAgentIds: [],
+            isEstimate: true,
+          },
+        }),
+      ),
+    );
+    renderPanel();
+    await screen.findByTestId('session-analysis');
+
+    const floor = screen.getByTestId('delegation-floor');
+    expect(floor.textContent).toContain('1 subagent');
+    expect(floor.textContent).toContain('floor');
+    expect(floor.textContent).toContain('does not equal');
+  });
+
+  it('keeps the floor notice grammatical when more than one subagent cost more', async () => {
+    // The plural arm of the same sentence. Pinned for the same reason the
+    // skipped-agent pair above is: a count rendered with the wrong noun reads
+    // as a template that nobody checked, which is exactly the impression a
+    // caveat cannot afford to give.
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        200,
+        costAnalysis({
+          delegationSavings: {
+            actualUsd: 2.0,
+            hypotheticalUsd: 0.8,
+            savingsUsd: 0,
+            perAgent: [
+              agentSavings({ actualUsd: 1.0, hypotheticalUsd: 0.4, savingsUsd: 0 }),
+              agentSavings({
+                agentId: 'deadbeef-9999-8888-7777-666666666666',
+                actualUsd: 1.0,
+                hypotheticalUsd: 0.4,
+                savingsUsd: 0,
+              }),
+            ],
+            skippedAgentIds: [],
+            isEstimate: true,
+          },
+        }),
+      ),
+    );
+    renderPanel();
+    await screen.findByTestId('session-analysis');
+    expect(screen.getByTestId('delegation-floor').textContent).toContain('2 subagents');
+  });
+
+  it('stays quiet about the floor when no subagent cost more than the alternative', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, richAnalysis()));
+    renderPanel();
+    await screen.findByTestId('session-analysis');
+    expect(screen.queryByTestId('delegation-floor')).toBeNull();
+  });
+
+  /**
+   * CA-4, the F-18 defect one element over. A table is a navigable landmark:
+   * a reader can jump straight into "delegation savings per agent" and hear
+   * its accessible name and its cells. The caveats that make those cells
+   * honest - the counterfactual basis, the scope, the exclusions - were prose
+   * elsewhere on the page, reachable only by reading the page in visual order,
+   * and the `~` that carries "estimate" visually is punctuation most screen
+   * readers drop at default verbosity. So the reader with the least context
+   * got the most confident numbers.
+   */
+  it('carries the delegation caveats into the table description, not just the layout', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, richAnalysis()));
+    renderPanel();
+    await screen.findByTestId('session-analysis');
+
+    const table = screen.getByRole('table', { name: 'delegation savings per agent' });
+    const described = (table.getAttribute('aria-describedby') ?? '')
+      .split(' ')
+      .filter((id) => id.length > 0)
+      .map((id) => document.getElementById(id)?.textContent ?? '')
+      .join(' ');
+    expect(described).toContain('not a measurement');
+    expect(described).toContain('delegated turns only');
+    expect(described).toContain('worse than a gap');
+
+    // The KPI group carries the same description, for the same reason.
+    const kpis = screen.getByLabelText('delegation savings');
+    expect(kpis.getAttribute('aria-describedby')).toBe(table.getAttribute('aria-describedby'));
+  });
+
+  it('ties the mispricing banner to the segment table it is about', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, richAnalysis()));
+    renderPanel();
+    await screen.findByTestId('session-analysis');
+
+    const table = screen.getByRole('table', { name: 'compaction segments' });
+    const describedBy = table.getAttribute('aria-describedby') ?? '';
+    expect(describedBy.length).toBeGreaterThan(0);
+    const described = describedBy
+      .split(' ')
+      .filter((id) => id.length > 0)
+      .map((id) => document.getElementById(id)?.textContent ?? '')
+      .join(' ');
+    expect(described).toContain('mispricing signal');
   });
 
   it.each([

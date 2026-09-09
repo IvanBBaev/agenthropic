@@ -14,7 +14,8 @@
  * writing to SQLite and reading back.
  */
 import { describe, expect, it } from 'vitest';
-import type { ParsedAgent, ParsedEdge, ParsedSession } from '@agenthropic/core';
+import type { ParsedAgent, ParsedAgentOutcome, ParsedEdge, ParsedSession } from '@agenthropic/core';
+import type { AgentOutcomeCause } from '@agenthropic/shared';
 import {
   LIVENESS_STATUS,
   normalizeSession,
@@ -52,6 +53,17 @@ function edge(parentAgentId: string, childAgentId: string): ParsedEdge {
 
 function parsed(overrides: Partial<ParsedSession> = {}): ParsedSession {
   return { sessionId: SESSION, agents: [], edges: [], usage: [], ...overrides };
+}
+
+/**
+ * A `ParsedAgentOutcome` as `parseSession` would hand it to the normalizer:
+ * the agent it describes, the cause the parent-side tool_result carried, and
+ * the tool_use id that spawn answered. `toolUseId` plays no role in
+ * `normalizeSession` (only `causeByAgent` reads the array), so a synthetic
+ * default is enough here.
+ */
+function outcome(agentId: string, cause: AgentOutcomeCause): ParsedAgentOutcome {
+  return { agentId, cause, toolUseId: `tu-${agentId}` };
 }
 
 describe('normalizeSession', () => {
@@ -224,6 +236,84 @@ describe('normalizeSession', () => {
       expect(result.session.status).toBe(LIVENESS_STATUS);
       for (const a of result.agents) {
         expect(a.status).toBe(LIVENESS_STATUS);
+      }
+    });
+  });
+
+  describe('observed outcomes (the only "error" producer)', () => {
+    // `parsed.outcomes` is almost always absent or empty — see the field's own
+    // doc comment on ParsedSession. This block is the one place that exercises
+    // the non-empty array, so `causeByAgent`'s `.map` callback and both sides
+    // of its `?? []` actually run, and so the module doc's central claim —
+    // that `terminated_early` is the ONE cause that becomes 'error' — is
+    // pinned by a test rather than left to the comment above `ERROR_CAUSES`.
+
+    it('records each observed cause on the matching agent row, not just the first', () => {
+      const result = normalizeSession(
+        parsed({
+          agents: [agent(SESSION, { type: 'main', subagentType: null }), agent('a1'), agent('a2')],
+          outcomes: [outcome('a2', 'unclassified'), outcome('a1', 'dispatch_unavailable')],
+        }),
+        OPTIONS,
+      );
+
+      const byId = new Map(result.agents.map((a) => [a.id, a]));
+      expect(byId.get('a1')?.outcomeCause).toBe('dispatch_unavailable');
+      expect(byId.get('a2')?.outcomeCause).toBe('unclassified');
+      // The main agent has no outcome of its own.
+      expect(byId.get(SESSION)?.outcomeCause).toBeNull();
+    });
+
+    it("marks only 'terminated_early' as 'error' — a user_interrupt agent stays live", () => {
+      const result = normalizeSession(
+        parsed({
+          agents: [agent('killed'), agent('stopped-by-user')],
+          outcomes: [
+            outcome('killed', 'terminated_early'),
+            outcome('stopped-by-user', 'user_interrupt'),
+          ],
+        }),
+        OPTIONS,
+      );
+
+      const byId = new Map(result.agents.map((a) => [a.id, a]));
+      expect(byId.get('killed')?.outcomeCause).toBe('terminated_early');
+      expect(byId.get('killed')?.status).toBe('error');
+      // A human pressing stop is not a failure: the status stays the ordinary
+      // liveness reading even though the cause is still recorded.
+      expect(byId.get('stopped-by-user')?.outcomeCause).toBe('user_interrupt');
+      expect(byId.get('stopped-by-user')?.status).toBe(LIVENESS_STATUS);
+    });
+
+    it('does not apply an outcome naming an agent absent from this session to anyone', () => {
+      const result = normalizeSession(
+        parsed({
+          agents: [agent('a1')],
+          // `refused-spawn` never materialized a transcript, so it never
+          // became a ParsedAgent — but the parser can still emit an outcome
+          // for it (a resolved structural anchor with no agent behind it,
+          // e.g. a spawn refusal paired with a materialized agent by some
+          // future substrate). It must land on nobody, not on 'a1'.
+          outcomes: [outcome('refused-spawn', 'terminated_early')],
+        }),
+        OPTIONS,
+      );
+
+      expect(result.agents).toHaveLength(1);
+      expect(result.agents[0]?.id).toBe('a1');
+      expect(result.agents[0]?.outcomeCause).toBeNull();
+      expect(result.agents[0]?.status).toBe(LIVENESS_STATUS);
+    });
+
+    it('leaves outcomeCause null on every row for a session with no outcomes', () => {
+      const result = normalizeSession(
+        parsed({ agents: [agent(SESSION, { type: 'main', subagentType: null }), agent('a1')] }),
+        OPTIONS,
+      );
+
+      expect(result.agents).toHaveLength(2);
+      for (const a of result.agents) {
+        expect(a.outcomeCause).toBeNull();
       }
     });
   });

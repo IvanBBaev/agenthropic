@@ -21,8 +21,10 @@ and the quantified acceptance criteria in
 > built, superseded by something stricter, or blocked on a human act that has not
 > happened. This note is the verified state of the suite as of **2026-08-15**, measured by
 > running `pnpm -r --workspace-concurrency=1 run test` on a clean tree and reading the
-> per-package `coverage/coverage-summary.json` it writes. Where a section below disagrees
-> with this note, this note is the current truth and the section is the historical intent.
+> per-package `coverage/coverage-summary.json` it writes — with the merge-gating bullet
+> re-verified on **2026-08-25**, the day `main` became branch-protected. Where a section below
+> disagrees with this note, this note is the current truth and the section is the historical
+> intent.
 >
 > - **The three P0 release-blocker tests are green.** They live in `apps/server/test/p0/` —
 >   `p0-token-reconciliation.test.ts`, `p0-double-replay.test.ts`, `p0-dag-rebuild.test.ts`,
@@ -83,14 +85,23 @@ and the quantified acceptance criteria in
 >   unlabeled corpus is an honest state rather than a broken build. Every spike-derived
 >   accuracy number in this corpus stays **PROVISIONAL** until that labeling happens. No
 >   test result on this page should be read as satisfying that bar.
-> - **Nothing here is physically merge-blocking yet.** `.github/workflows/ci.yml` runs the
->   spawner gate, typecheck, lint, format check, the web production build, the full suite
->   with its coverage thresholds, and the license gate — in that order, security first so a
->   broken invariant fails in seconds. But branch protection on `main` is not enabled, so
->   GitHub does not withhold the merge button when that workflow is red. The gates are real
->   and they fail loudly; calling them "merge-blocking" requires an owner action on
->   github.com that has not been taken. Sections below that say "merge-blocking" are
->   describing the intended end state.
+> - **Merge-blocking for a contributor, not for the repository owner — since 2026-08-25.**
+>   `.github/workflows/ci.yml` runs the spawner gate, typecheck, lint, format check, the web
+>   production build, the full suite with its coverage thresholds, and the license gate — in
+>   that order, security first so a broken invariant fails in seconds. Until 2026-08-25 this
+>   bullet read *"nothing here is physically merge-blocking yet"*, and it was true: `main` was
+>   unprotected, so a red run withheld nothing. `main` is now branch-protected — the `ci`
+>   check is required (lowercase `ci`, the job id in that workflow, **not** its `CI` display
+>   name), and force-pushes to `main` and deletion of `main` are refused for everyone. One
+>   exemption is deliberate and is stated wherever it applies: `enforce_admins` is off,
+>   because this is a single-maintainer repository whose normal working mode is a direct push
+>   to `main`, and turning it on would lock the sole maintainer out of their own repository.
+>   **How to read the sections below:** where they say "merge-blocking", read
+>   *"merge-blocking for anyone who is not the repository owner; CI-failing and loud, but
+>   bypassable, for the owner."* Verify with
+>   `gh api repos/IvanBBaev/agenthropic/branches/main/protection --jq '{contexts: .required_status_checks.contexts, enforce_admins: .enforce_admins.enabled}'`
+>   → `{"contexts":["ci"],"enforce_admins":false}`; the full write-up is [the standing
+>   correction](decisions/README.md#a-standing-correction-merge-blocking).
 
 ## 1. Four units, not "the dashboard"
 
@@ -279,7 +290,9 @@ this corpus is PROVISIONAL** and the Phase-3 exit clause is unmet — not failed
 Three tests are named **release-blockers**: they must be green **and merge-blocking**
 in CI before Phase 3 — projection, the DAG moat, reconciliation, cost — can be
 considered done, and no other feature work substitutes for them
-(development-plan §3, Phase 3 exit gate; concept-analysis-v2 §4.3). The QA
+(development-plan §3, Phase 3 exit gate; concept-analysis-v2 §4.3). *(As built: green, and
+merge-blocking since 2026-08-25 for anyone who is not the repository owner — read
+"merge-blocking" here per the note at the top of this page.)* The QA
 lens calls the third one "the make-or-break test both externals omit"
 (concept-analysis-v2 §4.3):
 
@@ -428,6 +441,14 @@ any ingest feature code (development-plan §4, waves 6–7; §7, "security + cov
 live at Phase 1, never deferred"), and CD-7's coverage-gate obligation is itself
 implemented by `WP-X5` in the CD-coverage matrix (development-plan §6, CD-7 row).
 
+*(As built: the ">90%" in CD-7's clause and in those three Done-whens is 100 in every package
+that shipped (§6.1 below), and their "blocks merges" half was intent rather than mechanism until
+2026-08-25, when `main` became branch-protected on the `ci` check — lowercase `ci`, the job id in
+`.github/workflows/ci.yml`, not its `CI` display name. A coverage regression now withholds the
+merge button from a contributor, but not from the repository owner, whose `enforce_admins`
+exemption is deliberate in a single-maintainer repository — see the note at the top of this page
+and [the standing correction](decisions/README.md#a-standing-correction-merge-blocking).)*
+
 **Scope is resolved explicitly, not left ambiguous.** The open scope question the gap
 analysis raised — whether the shipped UI would be quietly exempted from the bar — is
 resolved by *not* exempting it: the web package "counts toward the >90% gate" once
@@ -538,9 +559,14 @@ checklist an agent could skip under time pressure — `WP-F1` (the monorepo scaf
 itself) has a real dependency edge on `WP-S7`, and `WP-IN13`/`WP-X3` are wired as
 **blocking** CI checks, not advisory ones (development-plan §1, §5). Two corrections to
 that table from the as-built note: the coverage figure it calls ">90%" is 100 in every
-package that shipped, and "blocking" describes the intent rather than the current
-mechanism — the workflow runs on every push and pull request, but branch protection on
-`main` has not been enabled, so nothing physically withholds a merge.
+package that shipped, and "blocking" described the intent rather than the mechanism until
+2026-08-25 — the workflow ran on every push and pull request, but `main` was unprotected, so
+nothing physically withheld a merge. The mechanism now exists: `main` requires the `ci`
+check, so a red run withholds the merge button from a contributor — but not from the
+repository owner, because `enforce_admins` is deliberately off in a repository with one
+maintainer whose normal working mode is a direct push to `main`, and enabling it would lock
+that sole maintainer out (see [the standing
+correction](decisions/README.md#a-standing-correction-merge-blocking)).
 
 ## What's undecided
 

@@ -790,14 +790,27 @@ export const migrations: readonly Migration[] = [
       // its own comment says so.
       //
       // This migration installs the persisted rollup that does bound it,
-      // maintained incrementally by the write path. It is a SHADOW table: no
-      // reader is switched onto it here. The cutover is a separate change, and
-      // it must not happen until an equivalence suite exists and is green -
-      // one that compares this table against a direct grouped scan of
+      // maintained incrementally by the write path. It installs a SHADOW
+      // table: no reader is switched onto it HERE, and this migration takes no
+      // position on whether one should be. The cutover is a separate change,
+      // and it must not happen until an equivalence suite exists and is green
+      // - one that compares this table against a direct grouped scan of
       // `token_usage` after every mutation shape - because the whole value of
-      // this table is that it equals that scan. No such suite exists yet:
-      // `token_usage_rollup` is named nowhere outside this file, so today the
-      // triggers below are asserted by nothing.
+      // this table is that it equals that scan.
+      //
+      // STATUS, so this paragraph is not read as current truth about the rest
+      // of the tree (both statements below were checked against the files
+      // named, not inferred):
+      //
+      //  - The equivalence suite now EXISTS and is green. Three test files
+      //    assert this table directly and a fourth covers the read side; all
+      //    four are named at the seeding step below.
+      //  - A reader HAS since been switched onto it: `getCostSummary` in
+      //    api/queries.ts selects FROM `token_usage_rollup` instead of
+      //    scanning `token_usage`. That cutover was not made by this migration
+      //    and is NOT ratified by it. It remains an open owner decision, and
+      //    is recorded here only so a reader of this file is not misled into
+      //    believing the table is still unread.
       //
       // THE GRAIN, and why the review's own wording is wrong.
       //
@@ -935,9 +948,22 @@ export const migrations: readonly Migration[] = [
 
       // Step 1 - seed the table from what is already stored. This is the same
       // expression set the triggers use, phrased as one grouped scan; that the
-      // two agree is the property the cutover's equivalence suite will have to
-      // assert after every mutation. It is not asserted anywhere today - see
-      // the shadow-table note at the top of this migration.
+      // two agree is the property an equivalence suite has to assert after
+      // every mutation.
+      //
+      // That suite now EXISTS, so the "asserted by nothing" wording this
+      // paragraph used to carry is no longer true. Three test files assert this
+      // table: db-token-usage-rollup-equivalence.test.ts (rollup versus a direct
+      // grouped scan of `token_usage`, after every mutation shape),
+      // db-token-usage-rollup-seed.test.ts (this scan specifically, against a
+      // database that already held a ledger - the only path a real upgrade
+      // takes) and db-token-usage-rollup-trigger-order.test.ts (both firing
+      // orders). api-cost-summary-equivalence.test.ts covers the read side.
+      //
+      // The shadow-table paragraph at the top of this migration now carries
+      // that status, and the reader cutover with it. Neither paragraph
+      // ratifies that cutover: switching `getCostSummary` onto this table was
+      // done outside this file and remains an open owner decision.
       db.exec(`
         INSERT INTO token_usage_rollup (${KEY}, tokens, row_count)
         SELECT tu.session_id, tu.model, tu.bucket, ${dayOf('tu')}, ${rateOf('tu')},
@@ -1041,6 +1067,37 @@ export const migrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    id: 17,
+    name: 'agents-outcome-cause',
+    up(db) {
+      // WHY A COLUMN AND NOT A TABLE. The fact is one closed enum per agent,
+      // 1:1 with the row that already exists, with no cardinality, no
+      // retention story and no join of its own. A side table would buy a
+      // second FK and a second prune rule for a value the agent row is the
+      // natural owner of.
+      //
+      // WHY IT IS NOT FOLDED INTO `status`. `status` answers "where is this
+      // agent now"; this answers "why did it end that way". Most causes are
+      // NOT failures - a user interrupt is the commonest cause that resolves
+      // to a real agent - so collapsing them would either inflate 'error' or
+      // throw the reason away. Keeping both lets the dashboard say *why*
+      // instead of showing a bare count.
+      //
+      // Nullable and additive: every existing row reads NULL ("no outcome was
+      // observed"), which is the honest value for all of them. The CHECK
+      // tolerates NULL and pins the enum; the literals are spelled out inline
+      // rather than interpolated from a constant, matching migration 13 - a
+      // migration's SQL must stay frozen even if the TypeScript union later
+      // grows a member.
+      db.exec(`
+        ALTER TABLE agents ADD COLUMN outcome_cause TEXT
+          CHECK (outcome_cause IS NULL OR outcome_cause IN
+            ('concurrency_limit','user_interrupt','permission_failed',
+             'dispatch_unavailable','terminated_early','unclassified'));
+      `);
+    },
+  },
 ];
 
 export interface MigrationRunResult {
@@ -1057,10 +1114,64 @@ export interface MigrationRunResult {
  *
  * The hash covers the migration's own `up` source AND the module-level seed
  * constants, because the historical in-place edit went through PRICING_SEED -
- * a constant OUTSIDE any up() body, invisible to a body-only hash. Whitespace
- * is stripped before hashing so formatting and TS-transform differences never
- * trip the verifier; the trade-off is that a whitespace-only edit inside a
- * string literal is not detectable.
+ * a constant OUTSIDE any up() body, invisible to a body-only hash.
+ *
+ * `Function.prototype.toString()` returns the source the *executor* produced,
+ * not the bytes on disk, so the hash input is a property of whatever TypeScript
+ * transform is in the run path. `normalise` below cancels the parts of that
+ * output a transform is free to vary: comments, whitespace (in code AND inside
+ * string/template literals) and separators that are redundant before a closing
+ * `)`, `]` or `}`. Everything that carries meaning survives.
+ *
+ * Measured on 2026-08-29 across the three executors this repo can reach - tsx
+ * (what `pnpm start` runs, so the value a real `schema_version` row holds),
+ * vitest, and `node --experimental-strip-types`. Before: all three disagreed on
+ * all sixteen migrations. After: vitest and node each agree with tsx on eleven
+ * of the sixteen, and every tsx value is byte-identical to what it was.
+ *
+ * Honest limits, measured, not argued:
+ * - Normalisation does NOT reach full executor independence, and cannot while
+ *   the recorded checksums must stay byte-identical. The five that still
+ *   diverge do so for exactly three measured reasons, all of them tsx's
+ *   esbuild re-printing what the other two executors pass through: numeric
+ *   literals (`0.1` -> `.1`, migrations 7 and 11), `new Map()` -> `new Map`
+ *   (migration 14), dropped empty statements (14 and 15) and the `keepNames`
+ *   `__name` wrapper around arrow functions (15 and 16). String quoting was
+ *   probed and is NOT a cause - both printers chose identical quotes in every
+ *   migration body. Cancelling the three real ones means re-printing literals
+ *   into some canonical form, which by definition changes the bytes tsx
+ *   produces today - i.e. it
+ *   invalidates every checksum already sitting in an operator's database. So
+ *   the "do not add a build step" note in apps/server/package.json stays
+ *   load-bearing; see migrations-checksum-stability.test.ts for the residual
+ *   five, pinned as data.
+ * - A whitespace-only edit inside a string literal is still not detectable.
+ * - A comment-only edit is now, by design, not detectable either; that is the
+ *   point - a comment cannot change what a migration does.
+ *
+ * The failure mode that would actually matter is the opposite one: two
+ * SEMANTICALLY DIFFERENT sources hashing EQUAL. Everything the lexer consumes is
+ * emitted verbatim except comments, whitespace and a redundant separator, so
+ * those three are the only channels through which a difference can be cancelled.
+ * All three were probed, and two cancellations are real. Both are pinned as
+ * measurements in migrations-checksum-stability.test.ts so they cannot widen
+ * unnoticed:
+ * - WHITESPACE MERGES ADJACENT WORDS. `new Map()` and `newMap()` hash equal,
+ *   because squeezing joins the two identifiers. Pre-existing - the old
+ *   `replace(/\s+/g, '')` formula cancelled it too - and NOT fixable here: the
+ *   fix is to keep a separator between words, which changes the bytes and so
+ *   invalidates every recorded checksum. Inside SQL it is the same gap the
+ *   string-literal bullet above already names.
+ * - A MIS-READ REGEX CAN FLIP TEMPLATE MODE. `regexAfterWord` contains words
+ *   that are also legal property names (`a.in`) and, for `of`/`await`/`yield`,
+ *   legal variable names, so a `/` after one is read as a regex. If that regex
+ *   swallows the `}` closing a `${}` substitution, the rest of the TEMPLATE TEXT
+ *   is lexed as code - and a `//` inside that SQL is then dropped as a comment,
+ *   cancelling whatever differed inside it. Deciding keyword-versus-value needs a
+ *   parser, not a lexer, so this is NOT fixable inside `normalise`; declining the
+ *   regex reading after `.` was measured and rejected because the `of`-as-a-
+ *   variable form still cancels. No migration body reaches it: only 14 and 15
+ *   contain a regex literal and both sit after `=`, where the reading is right.
  */
 export function migrationChecksum(migration: Migration): string {
   const frozenConstants = JSON.stringify({
@@ -1068,9 +1179,271 @@ export function migrationChecksum(migration: Migration): string {
     PRICING_SEED_EFFECTIVE_FROM,
     PRICING_SEED,
   });
+
+  /**
+   * Single-pass lexer over transformed function source. Comments are dropped;
+   * string, template and regex literals are copied through verbatim, so a `//`
+   * or `/*` inside SQL text is never mistaken for a comment.
+   *
+   * The `/` ambiguity (regex vs division) is resolved by tracking whether the
+   * previous token can end an expression. `)`, `]` and `}` are read as "can end
+   * an expression", so a following `/` is division: the safe direction, because
+   * a wrong "division" reading consumes nothing while a wrong "regex" reading
+   * would swallow a span of real code.
+   *
+   * Nothing this lexer consumes is thrown away except comments, whitespace and
+   * a separator that is redundant before a closer - every other branch emits the
+   * exact slice it read. That is what bounds the damage a mis-read token can do:
+   * a swallowed span is still in the hash input verbatim, so it can make two
+   * sources hash UNEQUAL that a parser would call equal, but it cannot lose a
+   * difference. The one exception is measured and pinned in
+   * migrations-checksum-stability.test.ts - see `migrationChecksum`'s docstring.
+   */
+  const normalise = (source: string): string => {
+    const identifierChar = /[A-Za-z0-9_$]/;
+    const whitespaceChar = /\s/;
+    /** Keywords after which a `/` can only start a regular expression. */
+    const regexAfterWord = new Set([
+      'case',
+      'delete',
+      'do',
+      'else',
+      'in',
+      'instanceof',
+      'new',
+      'of',
+      'return',
+      'throw',
+      'typeof',
+      'void',
+      'yield',
+      'await',
+    ]);
+    /** Punctuators after which a `/` can only start a regular expression. */
+    const regexAfterPunctuator = new Set([
+      '{',
+      '(',
+      '[',
+      ';',
+      ',',
+      '<',
+      '>',
+      '+',
+      '-',
+      '*',
+      '%',
+      '&',
+      '|',
+      '^',
+      '!',
+      '~',
+      '?',
+      ':',
+      '=',
+    ]);
+    const lineTerminator = new Set(['\n', '\r', '\u2028', '\u2029']);
+
+    const out: string[] = [];
+    /** Brace depth at which each open `${` substitution started. */
+    const substitutionDepth: number[] = [];
+    let depth = 0;
+    let regexAllowed = true;
+    let inTemplate = false;
+    let heldSeparator = false;
+    let i = 0;
+
+    const emit = (text: string): void => {
+      out.push(text);
+      heldSeparator = false;
+    };
+
+    while (i < source.length) {
+      const ch = source.charAt(i);
+
+      if (inTemplate) {
+        if (ch === '\\') {
+          out.push(source.slice(i, i + 2));
+          i += 2;
+          continue;
+        }
+        if (ch === '`') {
+          out.push(ch);
+          i += 1;
+          inTemplate = false;
+          regexAllowed = false;
+          continue;
+        }
+        if (ch === '$' && source.charAt(i + 1) === '{') {
+          out.push('${');
+          substitutionDepth.push(depth);
+          depth += 1;
+          i += 2;
+          inTemplate = false;
+          regexAllowed = true;
+          continue;
+        }
+        out.push(ch);
+        i += 1;
+        continue;
+      }
+
+      if (whitespaceChar.test(ch)) {
+        i += 1;
+        continue;
+      }
+
+      if (ch === '/' && source.charAt(i + 1) === '/') {
+        i += 2;
+        while (i < source.length && !lineTerminator.has(source.charAt(i))) {
+          i += 1;
+        }
+        continue;
+      }
+
+      if (ch === '/' && source.charAt(i + 1) === '*') {
+        i += 2;
+        while (i < source.length && !(source.charAt(i) === '*' && source.charAt(i + 1) === '/')) {
+          i += 1;
+        }
+        i += 2;
+        continue;
+      }
+
+      if (ch === "'" || ch === '"') {
+        const start = i;
+        i += 1;
+        while (i < source.length) {
+          const c = source.charAt(i);
+          if (c === '\\') {
+            i += 2;
+            continue;
+          }
+          i += 1;
+          if (c === ch) {
+            break;
+          }
+        }
+        emit(source.slice(start, i));
+        regexAllowed = false;
+        continue;
+      }
+
+      if (ch === '`') {
+        emit(ch);
+        i += 1;
+        inTemplate = true;
+        continue;
+      }
+
+      if (ch === '/' && regexAllowed) {
+        const start = i;
+        i += 1;
+        let inClass = false;
+        while (i < source.length) {
+          const c = source.charAt(i);
+          if (c === '\\') {
+            i += 2;
+            continue;
+          }
+          i += 1;
+          if (c === '[') {
+            inClass = true;
+            continue;
+          }
+          if (c === ']') {
+            inClass = false;
+            continue;
+          }
+          if (c === '/' && !inClass) {
+            break;
+          }
+        }
+        while (i < source.length && identifierChar.test(source.charAt(i))) {
+          i += 1;
+        }
+        emit(source.slice(start, i));
+        regexAllowed = false;
+        continue;
+      }
+
+      if (identifierChar.test(ch)) {
+        const start = i;
+        while (i < source.length && identifierChar.test(source.charAt(i))) {
+          i += 1;
+        }
+        const word = source.slice(start, i);
+        emit(word);
+        regexAllowed = regexAfterWord.has(word);
+        continue;
+      }
+
+      if (ch === ';' || ch === ',') {
+        // Held, not emitted: dropped again if the next token closes the list or
+        // block, which is exactly where a transform may add or remove it.
+        //
+        // Armed only when the separator actually TRAILS something. A comma that
+        // directly follows `[` or another comma is an ELISION, not a redundant
+        // separator: `[,]` is a one-element array holding a hole and `[]` is
+        // empty, so dropping that comma would cancel a real difference between
+        // two sources - measured, and it did until this guard existed.
+        // `f(a,)`, `[a, b,]` and `{ k: 1, }` still collapse, which is the whole
+        // class a printer is free to vary. A `;` has no elision form - `[;]`
+        // and `f(;)` do not parse and `{;}` really is `{}` - so it stays
+        // unconditionally droppable, which also keeps every recorded checksum
+        // byte-identical.
+        const previous = out.at(-1);
+        heldSeparator = ch === ';' || (previous !== '[' && previous !== ',');
+        out.push(ch);
+        i += 1;
+        regexAllowed = true;
+        continue;
+      }
+
+      if (heldSeparator && (ch === ')' || ch === ']' || ch === '}')) {
+        out.pop();
+      }
+
+      if ((ch === '+' || ch === '-') && source.charAt(i + 1) === ch) {
+        emit(ch + ch);
+        i += 2;
+        regexAllowed = false;
+        continue;
+      }
+
+      if (ch === '{') {
+        depth += 1;
+        emit(ch);
+        i += 1;
+        regexAllowed = true;
+        continue;
+      }
+
+      if (ch === '}') {
+        depth -= 1;
+        emit(ch);
+        i += 1;
+        if (substitutionDepth.at(-1) === depth) {
+          substitutionDepth.pop();
+          inTemplate = true;
+          continue;
+        }
+        regexAllowed = false;
+        continue;
+      }
+
+      emit(ch);
+      i += 1;
+      regexAllowed = regexAfterPunctuator.has(ch);
+    }
+
+    // Whitespace inside preserved literals is squeezed here, exactly as the
+    // pre-normalisation formula did, so recorded checksums stay unchanged.
+    return out.join('').replace(/\s+/g, '');
+  };
+
   return createHash('sha256')
     .update(`${String(migration.id)}\n${migration.name}\n`)
-    .update(migration.up.toString().replace(/\s+/g, ''))
+    .update(normalise(migration.up.toString()))
     .update('\n')
     .update(frozenConstants)
     .digest('hex');

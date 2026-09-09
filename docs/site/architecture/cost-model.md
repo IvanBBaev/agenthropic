@@ -32,8 +32,18 @@ tree, and live-flow correctness (concept-analysis-v2 §4.3).
 >   **before any row is written**, and at the API it surfaces as a `422` — never a
 >   silent `$0`. Read-side aggregates additionally surface tokens that resolve to no
 >   dated rate as `unpricedTokens` (contributing `$0`, visibly). Whether the `WP-C6`
->   staleness-fails-CI gate is wired as a merge-blocking CI job has **not been
->   verified** — treat the CI-gate claims below as design intent.
+>   staleness-fails-CI gate is wired as a CI job at all has **still not been
+>   verified** — treat the CI-gate claims below as design intent. This bullet used to say
+>   "wired as a **merge-blocking** CI job," folding two separate doubts into one phrase.
+>   The merge-blocking half stopped being in doubt on **2026-08-25**, when `main` became
+>   branch-protected on the `ci` check: any step inside the `ci` job now withholds a
+>   contributor's merge button — not the repository owner's, `enforce_admins` being
+>   deliberately off so that the sole maintainer, whose normal working mode is a direct
+>   push to `main`, is not locked out of his own repository (see
+>   [the standing correction](../contributing/decisions/README.md#a-standing-correction-merge-blocking)).
+>   What is unverified is the **gate itself**, not the enforcement wrapped around it. And
+>   if `WP-C6` is ever wired, it has to land as a step *inside* the `ci` job: `ci` is the
+>   only required context, so a separate job would go red without withholding anything.
 > - **Compaction (G0.2b) resolved toward JSONL**: boundaries are parsed from the
 >   transcript substrate itself; the `PreCompact` hook contributes liveness only.
 >   Delegation savings shipped with its honesty labels: a literal `isEstimate: true`
@@ -513,6 +523,18 @@ criteria alongside the three P0 reconciliation tests).
 > priceless fixture model into a red build (`WP-C6`) — has **not been verified as wired
 > into CI** at the time of this update; until that is confirmed, treat "staleness fails
 > CI" as design intent backed by the runtime halt, not as an observed CI behavior.
+>
+> One clarification the paragraph above needs since **2026-08-25**: "or the merge is
+> blocked" is no longer the uncertain half of that sentence. `main` is branch-protected
+> and requires the `ci` check, so a red run does withhold the merge button — from a
+> contributor. It does not withhold it from the repository owner, whose exemption is
+> deliberate and stated rather than accidental: `enforce_admins` is off because
+> agenthropic has one maintainer whose normal working mode is a direct push to `main`
+> ([the standing correction](../contributing/decisions/README.md#a-standing-correction-merge-blocking)).
+> None of that moves this section's verdict. **No `WP-C6` staleness gate has been verified
+> to run as a step inside the `ci` job**, and a gate that never runs blocks nobody's merge,
+> however `main` is protected. (A gate added as a *separate* job would not block one either:
+> `ci` is the only required context.)
 
 ## 10. Read surface (as built: shipped)
 

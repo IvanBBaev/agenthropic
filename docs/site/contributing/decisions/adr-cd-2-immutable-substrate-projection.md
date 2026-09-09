@@ -1,6 +1,6 @@
 # ADR-0004: CD-2 — Single immutable substrate + deterministic projection
 
-- **Status:** accepted, **amended in practice 2026-07-30** — append-only immutability shipped and is trigger-enforced; the two-stage Normalizer → Projection pipeline was not built; **amended 2026-08-15** — the abort test is CI-failing rather than merge-blocking, though the triggers that enforce immutability sit below CI and are unaffected (see the as-built updates below)
+- **Status:** accepted, **amended in practice 2026-07-30** — append-only immutability shipped and is trigger-enforced; the two-stage Normalizer → Projection pipeline was not built; **amended 2026-08-15**, re-amended **2026-08-25** — the abort test is merge-blocking for anyone who is not the repository owner (`main` is branch-protected on the `ci` check; `enforce_admins: false`, deliberate for a single-maintainer repository), and the triggers that enforce immutability sit below CI either way (see the as-built updates below)
 - **Date:** 2026-07-03
 - **Deciders:** Ivan Baev (project owner), via the six-lens concept-analysis-v2 workflow
 - **Source:** [`concept-analysis-v2.md` §3, row CD-2](../../../analysis/concept-analysis-v2.md#3-canonical-decision-register-v2)
@@ -74,8 +74,9 @@ originally drawn.
 **Verdict: unchanged. One process claim is narrower than written, and it does not reach the
 data.** The negative test that asserts both `RAISE(ABORT, 'events_raw is append-only')`
 paths is called **merge-blocking** above. It runs in CI on every push and fails the run if
-either trigger stops firing, but it withholds no merge — `main` is not branch-protected
-(`404 Branch not protected`, verified 2026-08-15); see
+either trigger stops firing. Since 2026-08-25 `main` is branch-protected on the `ci`
+check, so that failure does withhold a merge from a contributor — but not from the owner,
+who is exempt by design (`enforce_admins: false`); see
 [the standing correction](README.md#a-standing-correction-merge-blocking).
 
 That correction is worth stating precisely, because it is easy to over-read. The

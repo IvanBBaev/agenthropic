@@ -31,6 +31,7 @@ const MAIN_AGENT: AgentUpsert = {
   parentAgentId: null,
   firstSeenAt: TS,
   lastSeenAt: TS,
+  outcomeCause: null,
 };
 
 const SUB_AGENT: AgentUpsert = {
@@ -42,6 +43,7 @@ const SUB_AGENT: AgentUpsert = {
   parentAgentId: SESSION_ID,
   firstSeenAt: TS,
   lastSeenAt: TS,
+  outcomeCause: null,
 };
 
 function normalizedWith(agents: readonly AgentUpsert[]): NormalizedSession {

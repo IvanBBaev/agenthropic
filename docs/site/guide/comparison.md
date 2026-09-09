@@ -34,9 +34,14 @@ this page (full grading rationale: [the moat §3](the-moat.md)).
 > `packages/test-fixtures` is inside the gate, not excluded from it. Three P0 correctness
 > proofs run green in CI on every push and pull request — Σ tokens against an
 > independently written reader, a byte-identical double replay, and the DAG rebuilt from
-> JSONL alone after a simulated outage. Calling them *merge-blocking* would be one word too
-> strong: that takes a branch-protection rule on `main`, which is an owner action and was
-> still unset at the last recorded check. And coverage of the code is not accuracy of the
+> JSONL alone after a simulated outage. Calling them *merge-blocking* needs one
+> qualification: `main` has been branch-protected since **2026-08-25** and requires the `ci`
+> check, so a red run withholds the merge button from a contributor — but not from the
+> repository owner, because `enforce_admins` is deliberately off. agenthropic has exactly
+> one maintainer, whose normal working mode is a direct push to `main`; turning admin
+> enforcement on would lock the sole maintainer out of their own repository. See the
+> [standing correction](../contributing/decisions/README.md#a-standing-correction-merge-blocking).
+> And coverage of the code is not accuracy of the
 > output — the hierarchy-accuracy exit gate reports **NOT CERTIFIED at n = 0**, because no
 > session has been hand-labeled. Those three proofs are the whole of what is proven;
 > nothing here should be read as a broader guarantee. None of it is released, either:

@@ -8,6 +8,7 @@
  * The auth token is mandatory: `loadConfig` throws when `DASHBOARD_TOKEN` is
  * unset, so the server can never start without auth.
  */
+import { fileURLToPath } from 'node:url';
 import { requireDashboardToken } from '@agenthropic/shared';
 
 /** The one and only bind host. Loopback, constant, no configuration path. */
@@ -15,6 +16,20 @@ export const HOST = '127.0.0.1';
 
 export const DEFAULT_PORT = 4317;
 export const DEFAULT_DB_PATH = 'data/agenthropic.db';
+/**
+ * Built SPA directory served by the single-port server (`DASHBOARD_WEB_ROOT`).
+ *
+ * Resolved from `import.meta.url`, NOT from `process.cwd()`. The dashboard is
+ * started from wherever the operator happens to stand - a cwd-relative default
+ * would serve the UI only when the server was launched from the repository
+ * root, and would silently answer "not built" everywhere else. Anchoring on the
+ * module's own URL makes the default a property of the installation, not of the
+ * shell. This file lives at `apps/server/src/`, so `../../web/dist` is
+ * `apps/web/dist`; the server runs straight from TypeScript source under tsx
+ * (there is deliberately no JS emit step for `apps/server`), so that relative
+ * hop is the same at every start.
+ */
+export const DEFAULT_WEB_ROOT = fileURLToPath(new URL('../../web/dist', import.meta.url));
 /** Tail-follow poll cadence (WP-IN5). PROVISIONAL (LABEL-ME) — not yet ratified. */
 export const DEFAULT_POLL_INTERVAL_MS = 3000;
 /** Missing-Stop watchdog inactivity window (WP-IN12). PROVISIONAL (LABEL-ME). */
@@ -39,6 +54,13 @@ export interface ServerConfig {
   readonly pollIntervalMs: number;
   /** Watchdog inactivity window in minutes (`DASHBOARD_WATCHDOG_MINUTES`). */
   readonly watchdogMinutes: number;
+  /**
+   * Directory holding the built SPA (`DASHBOARD_WEB_ROOT`), served from the
+   * same loopback origin as /api. Never `null`: a missing directory is a
+   * runtime condition the static handler reports as "not built yet", not a
+   * reason to have no value here.
+   */
+  readonly webRoot: string;
 }
 
 /**
@@ -62,7 +84,17 @@ export function loadConfig(env: Record<string, string | undefined>): ServerConfi
     env['DASHBOARD_WATCHDOG_MINUTES'],
     DEFAULT_WATCHDOG_MINUTES,
   );
-  return { token, port, dbPath, ingestEnabled, corpusRoot, pollIntervalMs, watchdogMinutes };
+  const webRoot = parseWebRoot(env['DASHBOARD_WEB_ROOT']);
+  return {
+    token,
+    port,
+    dbPath,
+    ingestEnabled,
+    corpusRoot,
+    pollIntervalMs,
+    watchdogMinutes,
+    webRoot,
+  };
 }
 
 function parsePort(raw: string | undefined): number {
@@ -90,6 +122,16 @@ function parseIngestEnabled(raw: string | undefined): boolean {
 /** Empty string counts as unset — an accidental `CLAUDE_PROJECTS_DIR=` must not mean cwd. */
 function parseCorpusRoot(raw: string | undefined): string | null {
   return raw === undefined || raw === '' ? null : raw;
+}
+
+/**
+ * Same house rule: empty counts as unset. An accidental `DASHBOARD_WEB_ROOT=`
+ * must fall back to the built-in default, never to `''` — which `path.resolve`
+ * would turn into the current working directory, i.e. serving whatever
+ * directory the operator happened to start the process from.
+ */
+function parseWebRoot(raw: string | undefined): string {
+  return raw === undefined || raw === '' ? DEFAULT_WEB_ROOT : raw;
 }
 
 function parsePositiveInt(name: string, raw: string | undefined, fallback: number): number {

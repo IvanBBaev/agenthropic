@@ -4,8 +4,10 @@
   ~~formal spike pending~~ *(the `WP-S7` gate was overridden by the owner on 2026-07-11, not
   passed — [ADR-0010](adr-cd-8-phase-0-spike.md))*. **Open:** the ≥95%-vs-labeled-corpus
   criterion has never been measured; parser thresholds remain PROVISIONAL. **Amended
-  2026-08-15** — still unmeasured, and the P0 proofs described below are CI-failing rather
-  than merge-blocking (see the as-built updates below)
+  2026-08-15**, re-amended **2026-08-25** — still unmeasured; the P0 proofs described below
+  are merge-blocking for anyone who is not the repository owner (`main` is branch-protected
+  on the `ci` check; `enforce_admins: false`, deliberate for a single-maintainer repository)
+  (see the as-built updates below)
 - **Date:** 2026-07-03
 - **Deciders:** Ivan Baev (project owner), via the six-lens concept-analysis-v2 workflow
   (Architect · Developer · QA · Business Analyst · Gap · Holistic)
@@ -80,10 +82,15 @@ The `WP-S7` gate this ADR defers to was overridden, not passed — see
 One word above needs narrowing, and nothing else has moved. The two P0 proofs called
 **merge-blocking** — the rebuild of the DAG from JSONL alone after a simulated outage, and
 the byte-identical double replay — do run in CI on every push and pull request, and they
-fail the run when violated. They do not withhold a merge: `main` is not branch-protected
+fail the run when violated. Until 2026-08-25 that was all they did: `main` was unprotected
 (`gh api repos/IvanBBaev/agenthropic/branches/main/protection` → `404 Branch not
-protected`, verified 2026-08-15). Read "merge-blocking" here, and everywhere in this ADR
-set, as "CI-failing" — see [the standing correction](README.md#a-standing-correction-merge-blocking).
+protected`, verified 2026-08-15), so a red run withheld nothing. Since 2026-08-25 `main`
+requires the `ci` check, so a red run does withhold the merge button — from a contributor,
+and not from the repository owner, who is exempt on purpose (`enforce_admins: false`)
+because this repository has a single maintainer whose normal mode is a direct push to
+`main`. Read "merge-blocking" here, and everywhere in this ADR set, as "merge-blocking for
+anyone who is not the repository owner" — see
+[the standing correction](README.md#a-standing-correction-merge-blocking).
 
 The rest of the verdict stands unchanged, including the part that matters most: the
 golden-corpus criterion that was supposed to *certify* this decision has still **not been

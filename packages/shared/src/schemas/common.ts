@@ -39,6 +39,41 @@ export const AgentTypeSchema = Type.Union([Type.Literal('main'), Type.Literal('s
 export type AgentType = Static<typeof AgentTypeSchema>;
 
 /**
+ * Why a spawned agent's run ended the way it did, read from the PARENT-side
+ * `Agent`/`Workflow` `tool_result` that answered the spawn block. Mirrors the
+ * migration-17 CHECK on `agents.outcome_cause`.
+ *
+ * The causes are kept DISTINCT rather than flattened into one "failed" flag,
+ * because they do not mean the same thing and most of them are not failures:
+ *
+ *  - `concurrency_limit`     the spawn was REFUSED ("Concurrent subagent limit
+ *                            reached") - the agent never ran.
+ *  - `user_interrupt`        a human stopped it. NOT a failure; never 'error'.
+ *  - `permission_failed`     a tool-permission stream closed before an answer.
+ *  - `dispatch_unavailable`  the model was unavailable at dispatch time.
+ *  - `terminated_early`      the agent RAN and was killed. The one cause that
+ *                            is honestly an 'error'.
+ *  - `unclassified`          an error result matching none of the above,
+ *                            recorded so the evidence is not lost and
+ *                            deliberately NOT promoted to 'error'.
+ *
+ * On the measured corpus 19 of 33 are `concurrency_limit` - a scheduling fact
+ * with no failed agent in it. That is the whole reason this is a five-valued
+ * enum on the wire and not a boolean: collapsing it would invent 33 failures
+ * where there are 2.
+ */
+export const AgentOutcomeCauseSchema = Type.Union([
+  Type.Literal('concurrency_limit'),
+  Type.Literal('user_interrupt'),
+  Type.Literal('permission_failed'),
+  Type.Literal('dispatch_unavailable'),
+  Type.Literal('terminated_early'),
+  Type.Literal('unclassified'),
+]);
+
+export type AgentOutcomeCause = Static<typeof AgentOutcomeCauseSchema>;
+
+/**
  * The four structural spawn-edge join paths (parser-spec section 4), plus the
  * `legacy_explore` heuristic join for pre-2.1.71 bare-`Explore` sidecars
  * (parser-spec gate #7). Served verbatim as persisted - the

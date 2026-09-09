@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  ABSENT_STATUS_META,
   AGENT_STATUSES,
   isAgentStatus,
   NULL_STATUS_META,
@@ -47,5 +48,31 @@ describe('statusMeta', () => {
     expect(statusMeta(null)).toBe(NULL_STATUS_META);
     expect(NULL_STATUS_META.label).toBe('unrecorded');
     expect(NULL_STATUS_META).not.toBe(STATUS_META.unknown);
+  });
+});
+
+/**
+ * Red-team honesty wave (2026-09-07), SV-3. `statusMeta` is the last honest
+ * stop for a status value: the api-layer guards check containers and
+ * load-bearing numbers and deliberately do NOT check strings, so an omitted
+ * `status` field arrives here as `undefined` and gets rendered.
+ */
+describe('statusMeta - absent status (SV-3)', () => {
+  it('reports an absent status as absent, never as the word "undefined"', () => {
+    const meta = statusMeta(undefined);
+    expect(meta.label).not.toContain('undefined');
+    expect(meta.label).toContain('no status word');
+    // Still the unrecognised glyph, which the shell legend already explains:
+    // this build cannot map what it got onto the vocabulary.
+    expect(meta.symbol).toBe('?');
+    expect(meta).toBe(ABSENT_STATUS_META);
+    // Three different absences, three different words: nothing was recorded
+    // (null), nothing arrived (absent), something arrived that this build
+    // cannot read (unrecognised word).
+    expect(ABSENT_STATUS_META).not.toBe(NULL_STATUS_META);
+  });
+
+  it('keeps reporting an unknown status WORD with its raw value', () => {
+    expect(statusMeta('zombie').label).toBe('unrecognised (zombie)');
   });
 });

@@ -68,18 +68,20 @@ Constraints on every amendment:
     ever timed it;
   - kill checkpoints KC-0 and KC-1 both **passed unmet** — work continues by explicit owner
     override, not because the gates were satisfied;
-  - **branch protection on `main` is not enabled**, so no CI gate physically blocks a merge;
-  - **GitHub Pages has never been enabled**, so the docs site is not live and every run of
-    the Pages workflow fails at `configure-pages`;
+  - **branch protection on `main` requires the `ci` check** (since 2026-08-25) but leaves
+    `enforce_admins` off on purpose, so a CI gate blocks a contributor's merge and not the
+    sole maintainer's direct push — say which one you mean;
   - the **retention policy values are unset** — the mechanism is built, the numbers await
     OPEN-1/2/3, and the shipped default is a no-op.
 - **Don't overclaim the proofs.** Three P0 correctness proofs are green in CI on every push
   and pull request (Σ tokens vs JSONL · byte-identical double replay · DAG rebuilt from
   JSONL alone). Cite those precisely; do not stretch them into a general correctness
-  guarantee — and **do not call them "merge-blocking."** Blocking a merge takes a
-  branch-protection rule on `main`; that rule is an owner action on github.com, it was
-  still unset at the last check recorded in `RELEASE.md`, and `.github/workflows/ci.yml`
-  says so in its own header comment. The proofs fail the run; they do not stop the button.
+  guarantee — and **say whose merge they block.** Since 2026-08-25 a branch-protection rule
+  on `main` requires the `ci` check, so a red run does withhold a contributor's merge
+  button. It does not stop the sole maintainer: `enforce_admins` is off by design, because
+  one maintainer working by direct push to `main` would otherwise be locked out of their own
+  repository. "The proofs fail the run" is always safe to write; "merge-blocking" is only
+  accurate with that exemption named alongside it.
 
 ## Mechanics
 - **Placeholder secrets** in samples: `DASHBOARD_TOKEN=<token>`, `--host <tailscale-host>`.

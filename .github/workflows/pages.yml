@@ -19,28 +19,35 @@
 #   - jekyll-readme-index: docs/site/README.md becomes /site/index.html
 #   - jekyll-titles-from-headings + the default Primer theme
 #
-# Pages enablement is an OWNER ACTION, not something this workflow can do.
+# Pages enablement WAS an OWNER ACTION, not something this workflow could do.
 # An earlier revision of this comment claimed the `enablement: true` input below
 # removes the one-time Settings -> Pages click. That claim was wrong and the
-# workflow proved it twice (runs 31318246506 and 31879212583):
+# workflow proved it: run 30528892265 failed before the input was added, and
+# runs 31318246506 and 31879212583 failed twice more after it was added:
 #
 #   Get Pages site failed. Error: Not Found
 #   Create Pages site failed. Error: Resource not accessible by integration
 #
 # `pages: write` lets a workflow DEPLOY to an existing Pages site; it does not
 # let the default GITHUB_TOKEN CREATE one. Creation needs a token with repo
-# administration rights, which a workflow token deliberately never has.
+# administration rights, which a workflow token deliberately never has. That is
+# the whole reason this mistake is worth recording: no workflow edit could have
+# fixed it, so every run of this workflow failed at the Configure Pages step.
+# Failing there was honest - it failed loudly rather than deploying nowhere -
+# but it was a red run on main for as long as it lasted.
 #
-# So: until the owner sets Settings -> Pages -> Source: "GitHub Actions" once
-# (equivalently, `gh api -X POST repos/<owner>/agenthropic/pages -f
-# build_type=workflow` with an admin-scoped token), every run of this workflow
-# fails at the Configure Pages step. That failure is honest - it fails loudly
-# rather than deploying nowhere - but it is a red run on main until the click
-# happens. The input is kept because it is idempotent once Pages exists, and
-# because the denial message above names the cause better than a bare 404.
+# RESOLVED 2026-08-25 by an owner-credentialled call, `gh api -X POST
+# repos/IvanBBaev/agenthropic/pages -f build_type=workflow` (equivalently,
+# Settings -> Pages -> Source: "GitHub Actions" once). Run 32863218759 was then
+# re-run and SUCCEEDED, and the site serves at
+# https://ivanbbaev.github.io/agenthropic/ - `/` and `/site/` both return 200.
+# Verify with `gh api repos/IvanBBaev/agenthropic --jq .has_pages` -> true.
+# The `enablement: true` input is kept: it is idempotent now that Pages exists,
+# and if the site were ever deleted the denial message above names the cause
+# better than a bare 404.
 #
-# What the click changes for the repository: it flips has_pages to true and
-# publishes docs/ at the project's github.io URL. That is a deliberate public
+# What enabling changed for the repository: has_pages is now true and docs/ is
+# published at the project's github.io URL. That is a deliberate public
 # surface, and the only one: the application itself stays bound to 127.0.0.1
 # (ADR-0013). docs/ai/ is git-excluded and never present in the CI checkout, so
 # no local-only harness file can reach the published site.
@@ -73,9 +80,10 @@ jobs:
       - name: Configure Pages
         uses: actions/configure-pages@v6
         with:
-          # No-op once the owner has enabled Pages; before that it fails with
-          # "Resource not accessible by integration" rather than a bare 404.
-          # See the enablement note in the header - this cannot self-serve.
+          # A no-op since 2026-08-25, when the owner created the Pages site;
+          # before that it failed with "Resource not accessible by integration"
+          # rather than a bare 404. See the enablement note in the header -
+          # this input cannot self-serve, it only reports the denial better.
           enablement: true
 
       - name: Add build-time site scaffolding (runner workspace only, never committed)

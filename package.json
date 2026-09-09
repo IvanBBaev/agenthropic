@@ -33,7 +33,10 @@
     "CHANGELOG.md",
     "SECURITY.md"
   ],
+  "//": "`start` is the single-port run: build the SPA, then start the server, which serves the built SPA and /api from the SAME loopback origin (http://127.0.0.1:4317 by default; DASHBOARD_PORT overrides the port, the host never). It is a plain script composition on purpose. Do NOT add a build step for apps/server - `pnpm --filter @agenthropic/server start` must keep running from TypeScript source under tsx; the reason is spelled out in apps/server/package.json and it is a real landmine (migration checksums).",
   "scripts": {
+    "start": "pnpm --filter @agenthropic/web build && pnpm --filter @agenthropic/server start",
+    "hooks:install": "node hooks/install.mjs",
     "typecheck": "tsc -b",
     "lint": "eslint .",
     "format": "prettier --write .",

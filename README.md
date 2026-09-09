@@ -28,12 +28,38 @@ dated price — token counts are read from the JSONL, never inferred).
 Requires **Node 22+** and **pnpm** (the repo pins `pnpm@11.11.0` via `packageManager`,
 so `corepack enable` is enough).
 
+### Run it — one command, one port
+
 ```sh
 git clone https://github.com/IvanBBaev/agenthropic.git
 cd agenthropic
 pnpm install
 
 # The auth token is mandatory (16+ characters); the server refuses to start without it.
+export DASHBOARD_TOKEN="$(openssl rand -hex 32)"
+echo "$DASHBOARD_TOKEN"   # you paste this into the dashboard once
+
+pnpm start
+```
+
+`pnpm start` builds the SPA (`vite build` → `apps/web/dist`) and then starts the
+server from TypeScript source under `tsx`. The server serves **both** the built
+dashboard and `/api` from the same loopback origin, so there is one process, one
+port and one URL: open <http://127.0.0.1:4317> and paste the token on the token
+screen. It is kept in `sessionStorage` only — never `localStorage`, never a cookie —
+so you paste it again after closing the tab. Serving the UI and the API from one
+origin is also what the same-origin check on the SSE stream wants; there is no proxy
+in between.
+
+Full operator run book — every environment variable with its real default, why the
+host is fixed, and troubleshooting: [`docs/site/guide/running.md`](docs/site/guide/running.md).
+
+### The developer path (two dev servers)
+
+Use this one when you are **changing** the dashboard and want hot reload; use
+`pnpm start` when you want to run it.
+
+```sh
 DASHBOARD_TOKEN="replace-with-a-long-random-secret" pnpm --filter @agenthropic/server dev
 ```
 
@@ -51,7 +77,10 @@ Open <http://127.0.0.1:5173> and paste the same `DASHBOARD_TOKEN` on the token
 screen (the Vite dev server proxies `/api` to the server). Optional environment
 overrides: `DASHBOARD_PORT`, `DASHBOARD_DB_PATH`, `CLAUDE_PROJECTS_DIR` (corpus
 root), `DASHBOARD_INGEST=0` (disable ingest), `DASHBOARD_WATCHDOG_MINUTES`
-(inactivity window, default 10).
+(inactivity window, default 10). On the `pnpm start` path there is one more,
+`DASHBOARD_WEB_ROOT`, which points at the built SPA and defaults to `apps/web/dist`;
+the complete table is in
+[the running guide](docs/site/guide/running.md#environment-variables).
 
 ### Wiring the lifecycle hooks
 
@@ -99,10 +128,19 @@ flow) plus a per-session cost-analysis panel.
 The three P0 reconciliation proofs run green in CI on every push and pull request — Σ
 tokens against an independently-written reader, a byte-identical double replay, and the
 DAG rebuilt from JSONL alone after a simulated outage — alongside a 12-scenario negative
-catalogue. Calling them *merge-blocking* would be one word too strong: blocking a merge
-takes a branch-protection rule on `main`, that rule is an owner action, and it was still
-unset at the last check recorded in [`RELEASE.md`](RELEASE.md). The proofs fail the run;
-they do not yet stop the button.
+catalogue. This paragraph used to go on to say that calling them *merge-blocking* would be
+one word too strong, because blocking a merge takes a branch-protection rule on `main`, that
+rule was an owner action, and it was still unset at the last check recorded in
+[`RELEASE.md`](RELEASE.md). That was true until **2026-08-25**, when `main` was protected:
+the required status check is `ci` — the job id in
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml), lowercase, not the workflow's
+display name — and force-pushes to `main` and deletion of `main` are refused for everyone.
+So a red run now withholds the merge button from a **contributor**. It does not withhold it
+from the repository owner: `enforce_admins` is deliberately off, because agenthropic has
+exactly one maintainer whose normal working mode is a direct push to `main`, and turning it
+on would lock the sole maintainer out of their own repository. The standing write-up, with
+the verify command, is
+[in the decisions index](docs/site/contributing/decisions/README.md#a-standing-correction-merge-blocking).
 
 Retention is deliberately half-built. The mechanism — pruning, an audit journal,
 backup-file expiry, a runner — is implemented and covered by tests, but the *policy*,
@@ -185,20 +223,26 @@ packages** (`packages/shared`, `packages/core`, `packages/test-fixtures`,
 and guard tests that fail the build if one appears. Last local full run: **106 test
 files, 1554 tests, 100% on all four axes in every package** (2026-08-15; the figure
 moves as the tree does). CI runs the same command on every push and pull request, so a
-regression turns the run red — though see the branch-protection caveat above for what
-"gated" does and does not currently mean.
+regression turns the run red and, since 2026-08-25, withholds the merge button from anyone
+who is not the repository owner — see the branch-protection note above for that exemption.
 
 Badges are backed by real signals only, which is why there is no coverage badge here:
 one would have to be generated from a run, and a hand-written 100% shield is exactly
 the kind of decoration this project refuses.
 
-The docs corpus is set up to publish to GitHub Pages from `docs/`, but **the site is
-not live.** Turning Pages on is a one-time owner action (Settings → Pages → Source:
-"GitHub Actions"); a workflow token can deploy to an existing Pages site but cannot
-create one, and the workflow proved it twice with `Create Pages site failed. Error:
-Resource not accessible by integration`. Until that click happens, every run of the
-docs workflow fails at the Configure Pages step — loudly, rather than deploying
-nowhere. Read the corpus in the repository under [`docs/`](docs/) meanwhile.
+The docs corpus publishes to GitHub Pages from `docs/` and **the site is live** at
+<https://ivanbbaev.github.io/agenthropic/>, as of 2026-08-25. This paragraph used to say the
+opposite: that the site was not live, that turning Pages on was a one-time owner action
+(Settings → Pages → Source: "GitHub Actions") nobody had performed, and that until that
+click happened every run of the docs workflow failed at the Configure Pages step — loudly,
+rather than deploying nowhere. That was true until 2026-08-25, when the owner created the
+site with `gh api -X POST repos/IvanBBaev/agenthropic/pages -f build_type=workflow`, the API
+equivalent of that click. The owner credential is the whole point: a workflow token may
+deploy to an existing Pages site but cannot create one, and the workflow proved that twice
+with `Create Pages site failed. Error: Resource not accessible by integration`. The run that
+had been failing on that step was then re-run and succeeded. Verify with
+`gh api repos/IvanBBaev/agenthropic --jq .has_pages` → `true`. The same corpus is readable in
+the repository under [`docs/`](docs/).
 
 ## Support
 

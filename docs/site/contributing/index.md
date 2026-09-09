@@ -42,11 +42,13 @@ For the full pitch and the "why build instead of fork" argument, see
 > **Update — 2026-08 (as built).** The section below was written during the pre-code
 > bootstrap phase and its answers are **no longer true**. Implementation began
 > **2026-07-11**. The table has been rewritten with the real answers, re-measured on
-> 2026-08-15; the paragraph after it preserves why the original said what it said.
+> 2026-08-15 — with the merge-gating row re-verified on **2026-08-25**, the day `main`
+> became branch-protected; the paragraph after it preserves why the original said what it
+> said.
 
 The scaffold exists and the commands in this guide are runnable:
 
-| Question | Answer today (verified 2026-08-15) |
+| Question | Answer today (verified 2026-08-15; the merge-gating row re-verified 2026-08-25) |
 |---|---|
 | Can I `pnpm install` and run something? | **Yes.** `pnpm install` against the committed `pnpm-lock.yaml`, then `pnpm --filter @agenthropic/server dev` (needs `DASHBOARD_TOKEN`) and `pnpm --filter @agenthropic/web dev`. |
 | Is the stack decided? | **Locked and built**: Fastify + TypeBox, `better-sqlite3` (single driver), React/Vite/D3, SSE, in a pnpm monorepo — `apps/server`, `apps/web`, `packages/shared`, `packages/core`, `packages/test-fixtures`, `hooks/`. |
@@ -54,7 +56,7 @@ The scaffold exists and the commands in this guide are runnable:
 | When does the scaffold land? | It landed. `WP-F1`'s dependency on a `WP-S7` **GO** was resolved by an owner override, not by a GO — see the note below. |
 | Where do lint/test commands come from? | They exist at the repo root: `pnpm run typecheck` · `lint` · `format:check` · `test` · `gate:spawner` · `gate:licenses`. |
 | Is the test suite real? | **106 test files / 1554 tests**, green, with lines/branches/functions/statements each pinned and held at **100** in all five packages. See [Testing & quality](testing.md). |
-| Do those gates block a merge? | **Not yet.** CI runs every gate on every push and pull request, but branch protection on `main` is not enabled, so nothing physically withholds the merge button. That is an owner action on github.com — see [Governance](governance.md). |
+| Do those gates block a merge? | **Yes — for a contributor.** Since **2026-08-25** `main` is branch-protected with the `ci` check required (lowercase `ci` — the job id in `.github/workflows/ci.yml`, not its `CI` display name), and force-pushes and deletion of `main` are refused for everyone. **Not for the repository owner:** `enforce_admins` is deliberately off, because a single-maintainer repo whose normal working mode is a direct push to `main` cannot lock out its sole maintainer. See [the standing correction](decisions/README.md#a-standing-correction-merge-blocking) and [Governance](governance.md). |
 
 [`TODO.md`](../../../TODO.md) at the repo root remains the live, authoritative status of
 what's done vs. open, and [`DONE.md`](../../../DONE.md) Milestone 1 records the
@@ -167,9 +169,13 @@ Every WP, in every phase, is held to the same bar
 
 - Touched code passes **typecheck + lint + tests**; coverage stays **>90%** — the gate
   is **merge-blocking from Phase 1 onward**, not a soft target added later. *(As built the
-  bar is stricter and the enforcement is weaker than this clause: the threshold is 100,
-  not 90, in all five packages; but no branch-protection rule exists, so CI failing does
-  not stop a merge. Both halves of that are covered below and on
+  bar is stricter than this clause and the enforcement arrived late: the threshold is 100,
+  not 90, in all five packages; and the branch-protection rule that turns a red run into a
+  withheld merge button did not exist until 2026-08-25. It exists now — `main` requires the
+  `ci` check — so the clause holds for a contributor, but not for the repository owner,
+  since `enforce_admins` is deliberately off in a single-maintainer repository. Both halves
+  of that are covered below, in [the standing
+  correction](decisions/README.md#a-standing-correction-merge-blocking), and on
   [Testing & quality](testing.md) §6.1.)*
 - No security invariant is weakened: loopback-only bind, mandatory-token-or-fail-startup,
   SSE same-origin, no subprocess spawner, no SSRF, secrets never in SQLite/SSE/logs.
@@ -190,19 +196,28 @@ and coverage are live "from commit one," never bolted on at the end. Full mechan
 the golden fixture corpus, the three P0 reconciliation tests, and the 12-scenario
 negative catalogue — are covered on [Testing & quality](testing.md).
 
-**How that reads against what shipped, on 2026-08-15.** The threshold is not >90% — it
-is 100 for lines, branches, functions and statements in `apps/server`, `apps/web`,
-`packages/core`, `packages/shared` and `packages/test-fixtures`, and all five currently
-hold it. The bar was raised rather than met because a 90% bar on a package sitting at
-100% quietly licenses a ten-point regression, which is the opposite of a gate. Three
-separate cheats that can manufacture such a figure — an ignore pragma, a lowered
-threshold, an added `exclude` — are each blocked by a test that reads the config and the
-sources as *text* and never imports them, so a mock cannot satisfy it. What did **not**
-ship is the "blocking" half: `.github/workflows/ci.yml` runs the security gate,
-typecheck, lint, format check, the web production build, the full suite with its coverage
-thresholds, and the license gate on every push and pull request, but enabling a required
-status check on `main` is an owner action on github.com and it has not been taken. The
-gates are real, they fail loudly, and today they persuade rather than prevent. See
+**How that reads against what shipped, on 2026-08-15 — with the enforcement half re-checked
+on 2026-08-25.** The threshold is not >90% — it is 100 for lines, branches, functions and
+statements in `apps/server`, `apps/web`, `packages/core`, `packages/shared` and
+`packages/test-fixtures`, and all five currently hold it. The bar was raised rather than met
+because a 90% bar on a package sitting at 100% quietly licenses a ten-point regression,
+which is the opposite of a gate. Three separate cheats that can manufacture such a figure —
+an ignore pragma, a lowered threshold, an added `exclude` — are each blocked by a test that
+reads the config and the sources as *text* and never imports them, so a mock cannot satisfy
+it. The "blocking" half shipped last, and separately: `.github/workflows/ci.yml` runs the
+security gate, typecheck, lint, format check, the web production build, the full suite with
+its coverage thresholds, and the license gate on every push and pull request, and until
+**2026-08-25** this paragraph said that enabling a required status check on `main` was an
+owner action that had not been taken. It has since been taken. `main` now requires the `ci`
+check — lowercase `ci`, the job id in the workflow, not its `CI` display name — and
+force-pushes to `main` and deletion of `main` are refused for everyone. The single exemption
+is deliberate: `enforce_admins` is off, because agenthropic has one maintainer whose normal
+working mode is a direct push to `main`, and turning it on would lock the sole maintainer
+out of their own repository. So a red run withholds the merge button from a contributor, not
+from the repository owner. Verify with
+`gh api repos/IvanBBaev/agenthropic/branches/main/protection --jq '{contexts: .required_status_checks.contexts, enforce_admins: .enforce_admins.enabled}'`
+→ `{"contexts":["ci"],"enforce_admins":false}`; the full write-up is [the standing
+correction](decisions/README.md#a-standing-correction-merge-blocking). See
 [Testing & quality](testing.md) §6.1 for the mechanism and its three honest gaps.
 
 ## WORKLOG discipline

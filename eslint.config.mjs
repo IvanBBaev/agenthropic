@@ -8,6 +8,10 @@ export default tseslint.config(
       '**/node_modules/**',
       '**/dist/**',
       '**/coverage/**',
+      // Harness-local, never committed (see .git/info/exclude): AI worktrees
+      // and session scratch. Linting them reports on files that are not part
+      // of the repo, and the noise masks a real warning in code that is.
+      '.claude/**',
       'data/**',
       'docs/**',
       'due-diligence/**',

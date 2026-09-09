@@ -1,11 +1,46 @@
 import { describe, expect, it } from 'vitest';
 import { Value } from '@sinclair/typebox/value';
-import { RealtimeEventSchema } from '@agenthropic/shared';
+import {
+  AgentStatusChangedEventSchema,
+  GenericRealtimeEventSchema,
+  SessionIngestedEventSchema,
+} from '@agenthropic/shared';
 import type { AgentStatusChangedEvent, SessionIngestedEvent } from '../src/ingest/ingest-events';
 import type { IngestFailureReport } from '../src/ingest/corpus-watcher';
 import { toIngestFailureEvent, toRealtimeEvent } from '../src/realtime/bridge';
 
 const STAMP = '2026-07-20T10:00:00.000Z';
+
+/**
+ * Which arms of the shared realtime union actually accept this event - named,
+ * in a fixed order, and including the ones that must REJECT it.
+ *
+ * WHY THIS REPLACED `Value.Check(RealtimeEventSchema, event)` (WP-U14). That
+ * assertion was very nearly a tautology on anything that lands on the generic
+ * arm, because `GenericRealtimeEventSchema` accepts ANY `{type: string,
+ * payload: object}`: it could not see one thing about the payload it was
+ * nominally validating, and it sat inside the suite meant to catch exactly
+ * this. Worse, it was applied ONLY to the event that lands on the catch-all -
+ * the two events with real typed arms, where a union check has genuine bite
+ * (`additionalProperties: false`, a literal `type`, integer minimums), were
+ * asserted with `toEqual` alone and never met the shared schema at all. The
+ * check had teeth everywhere it was not used.
+ *
+ * Naming the arm turns "some arm accepted it" into "exactly this arm accepted
+ * it and the other two refused", which is a claim that can fail: loosen any
+ * arm, or let a typed event decay onto the catch-all, and this goes red.
+ */
+function acceptingArms(event: unknown): string[] {
+  return (
+    [
+      ['session-ingested', SessionIngestedEventSchema],
+      ['agent-status-changed', AgentStatusChangedEventSchema],
+      ['generic', GenericRealtimeEventSchema],
+    ] as const
+  )
+    .filter(([, schema]) => Value.Check(schema, event))
+    .map(([name]) => name);
+}
 
 describe('toRealtimeEvent (ingest -> shared realtime seam)', () => {
   it('maps session-ingested, renaming agentsUpserted -> agentCount and stamping occurredAt', () => {
@@ -28,6 +63,9 @@ describe('toRealtimeEvent (ingest -> shared realtime seam)', () => {
       costUsd: 0.42,
       occurredAt: STAMP,
     });
+    // Typed arm, exclusively: a session-ingested event must NOT be able to
+    // decay onto the generic catch-all, or the union stops discriminating.
+    expect(acceptingArms(toRealtimeEvent(ingest, STAMP))).toEqual(['session-ingested']);
   });
 
   it('preserves a null costUsd (unpriced session) instead of coercing it', () => {
@@ -59,6 +97,7 @@ describe('toRealtimeEvent (ingest -> shared realtime seam)', () => {
       previousStatus: 'working',
       occurredAt: STAMP,
     });
+    expect(acceptingArms(toRealtimeEvent(ingest, STAMP))).toEqual(['agent-status-changed']);
   });
 
   it('maps a NULL previous status (first observation) through unchanged', () => {
@@ -70,6 +109,11 @@ describe('toRealtimeEvent (ingest -> shared realtime seam)', () => {
       newStatus: 'unknown',
     };
     expect(toRealtimeEvent(ingest, STAMP)).toMatchObject({ previousStatus: null });
+    // The mapping test above passes just as well against a schema that forbids
+    // the null - `toMatchObject` never consults the schema. The arm assertion
+    // is what pins `previousStatus` as genuinely nullable on the wire, which is
+    // the whole point of a first observation having no previous status.
+    expect(acceptingArms(toRealtimeEvent(ingest, STAMP))).toEqual(['agent-status-changed']);
   });
 });
 
@@ -99,9 +143,14 @@ describe('toIngestFailureEvent (ingest failure -> SSE)', () => {
         occurredAt: STAMP,
       },
     });
-    // The generic arm forbids top-level extras, so `occurredAt` must live in
-    // the payload - assert the real shared schema accepts what we publish.
-    expect(Value.Check(RealtimeEventSchema, event)).toBe(true);
+    // This event has no typed arm, so it must land on the catch-all and ONLY
+    // there. That much is nearly free, which is why it is not asserted alone:
+    expect(acceptingArms(event)).toEqual(['generic']);
+    // ...the negative control is what gives the line above any weight. The one
+    // thing the generic arm genuinely enforces is `additionalProperties: false`,
+    // so hoisting `occurredAt` out of the payload must be refused by all three
+    // arms. If any arm is ever loosened, this is the assertion that goes red.
+    expect(acceptingArms({ ...event, occurredAt: STAMP })).toEqual([]);
   });
 
   it('carries the quarantine verdict and nothing about the substrate', () => {

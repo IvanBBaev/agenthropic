@@ -19,6 +19,19 @@ The four **real** Claude Code lifecycle hooks (`SubagentStart` does not exist):
 - `SubagentStop`
 - `PreCompact`
 
+> **AMENDED 2026-09-02.** The parenthesis is out of date. It was written when
+> `SubagentStart` genuinely was not in the hook list, and it is now false:
+> Claude Code 2.1.251 declares `SubagentStart` (among others, including
+> `SessionEnd` and `PostCompact`) in its own settings schema and fires it with
+> `agent_id` and `agent_type`. What has **not** changed is which hooks this
+> installer wires, and why. The four above are the ones that carry a signal
+> the transcripts cannot supply — an *ending*. A start signal adds nothing:
+> ingest already writes `working` for an agent the moment its transcript
+> appears, and under CD-1 a hook may never create or re-parent an agent, so a
+> `SubagentStart` delivery would be a row that changes no row. Wiring it is a
+> data-model decision, not a wiring convenience; it stays out until someone
+> argues for it on the merits.
+
 Each one POSTs the hook's stdin JSON, unmodified, to:
 
 ```
@@ -69,6 +82,38 @@ therefore stamps each firing with a delivery id that the **shell expands at fire
 time** (`$$-$(date +%s)-$RANDOM`) and sends as `X-Agenthropic-Delivery-Id`; the
 server folds it into the idempotency key.
 
+> **AMENDED 2026-09-02.** The first sentence is **false**, and it is the load-
+> bearing sentence of this section, so it needs correcting rather than
+> softening.
+>
+> *What was believed:* the fields a `Stop` hook receives are the documented
+> common ones — `session_id`, `transcript_path`, `cwd`, `hook_event_name`,
+> `stop_hook_active` — every one of them constant for the life of a session.
+> On that reading a `Stop` body really would be the same bytes every turn.
+>
+> *Why it was believed:* it was never measured. It cannot be measured from the
+> corpus this project reads — `~/.claude/projects/*.jsonl` records the
+> conversation, not the hook deliveries, so no transcript anywhere contains a
+> `Stop` payload to compare against another.
+>
+> *What is actually true:* read off the payload builder in Claude Code 2.1.251,
+> a `Stop` body also carries `prompt_id`, `permission_mode`, `agent_type`,
+> `effort`, `last_assistant_message`, `background_tasks` and `session_crons`.
+> Two of those — `prompt_id` and `last_assistant_message` — differ from turn to
+> turn in the ordinary case. So consecutive `Stop` bodies are usually *not*
+> byte-identical. (`stop_hook_active` is real; that part of the list stands.
+> `SubagentStop` additionally carries `agent_id` and `agent_transcript_path`.)
+>
+> *Why the delivery id survives the correction unchanged:* the argument only
+> ever needed the second sentence. Content equality cannot distinguish
+> recurrence from redelivery **in general** — two firings are permitted to
+> carry identical bytes, nothing in the hook contract promises a turn-varying
+> field, and which fields a given Claude Code version includes is not something
+> this project controls or gets notified about. The sender is the only party
+> that knows which firing this is. A design resting on "the payload happens to
+> vary" would have been the fragile one; this one never rested on it, it just
+> described itself with an unverified claim.
+
 Consequences:
 
 - Two genuine firings of an identical body → two rows (the liveness timeline
@@ -113,6 +158,14 @@ Options:
 The installer never touches `~/.claude` unless you explicitly pass an `--out`
 path there.
 
+AMENDED 2026-09-07 (finding H-1). Every flag that takes a value now refuses a
+value that begins with a dash. Previously a dropped value was swallowed by the
+flag behind it: `--out --dry-run` set the output path to the literal string
+`--dry-run`, ran no dry run at all, and wrote a real settings file under that
+name in the current directory — the operator's belief and what happened were
+opposites, and nothing said so. If you genuinely want a path that starts with a
+dash, write it as `./-name`.
+
 ## Merge behavior and rollback
 
 - **Non-destructive merge:** unrelated settings keys and unrelated hook entries
@@ -124,6 +177,25 @@ path there.
 - **Rollback:** copy the backup over the settings file, or run with `--remove`
   to strip only the agenthropic entries.
 - The installer refuses to touch a file it cannot parse as JSON.
+- **A run that changes nothing writes nothing.** If the computed settings are
+  byte-for-byte what the file already holds, the installer takes no backup, does
+  not rewrite the file, and says so (`... already matches this installer's
+  output - nothing written, no backup taken.`).
+- **A created parent directory is reported.** Installing to a path whose parent
+  does not exist still creates the whole tree, and now prints
+  `Created directory <path>`.
+
+AMENDED 2026-09-07 (findings H-2, H-3). The two bullets above are new, and both
+correct something this section used to imply rather than say. On the first: the
+installer backed up and rewrote on EVERY run, so re-running it to check whether
+it was installed — the most ordinary thing anyone does with an installer —
+printed `Backed up existing file to ...` and `Wrote ...` about a change that was
+not made, left one more backup file in `.claude/` each time, and reformatted a
+hand-indented settings file into the installer's own two-space shape. On the
+second: `--out` creates its parent tree recursively, so a typo such as
+`--out .clade/settings.json` succeeded silently and left the operator believing
+the hooks were live in `.claude/`. The directory is still created — refusing
+would break the documented first-run path — but it is no longer invisible.
 
 ## Verifying the wiring
 
@@ -143,6 +215,70 @@ file that this project does not use. The health response and the server's ingest
 log are how you tell those apart — the fields it reports, the ones it deliberately
 omits rather than faking, and the skip/quarantine lines are all documented in
 [troubleshooting](../docs/site/operations/troubleshooting.md).
+
+> **AMENDED 2026-09-02.** Two corrections and one addition.
+>
+> *The first paragraph is now half wrong, in the good direction.* The generated
+> command carries `--show-error` alongside `--silent`, so a **failed** firing
+> does print exactly one line of curl's own error text (a success still prints
+> nothing). Where that line goes depends on your setup: Claude Code runs hooks
+> with piped stdio and captures their output, so it lands in Claude Code's hook
+> output rather than in your terminal — it cannot corrupt the TUI, and it can
+> also be easy to miss. The line never contains the token: it names the URL and
+> the status, and the token exists only inside curl's own variable space.
+>
+> *`/api/health` cannot answer the question this section asks it to.* It tells
+> you the server is up and authenticating you; it carries **no** field for hook
+> deliveries — not a count, not a last-seen timestamp — so a server that has
+> received zero hook events in its life reports exactly what a busy one
+> reports. Use it to rule the server out, never to rule the wiring in.
+>
+> *What does answer it* is sending the same request the hook sends, by hand,
+> with the flags that make the outcome visible. This is the generated command
+> with `--fail` swapped for `--write-out` and the delivery-id header dropped:
+>
+> ```sh
+> printf '{"hook_event_name":"Stop","session_id":"install-probe"}' | \
+>   curl --silent --show-error --max-time 3 --output /dev/null \
+>     --request POST --header 'Content-Type: application/json' \
+>     --variable '%DASHBOARD_TOKEN' \
+>     --expand-header 'Authorization: Bearer {{DASHBOARD_TOKEN}}' \
+>     --write-out 'HTTP %{http_code}\n' --data-binary @- \
+>     'http://127.0.0.1:4317/api/hooks/event'
+> ```
+>
+> `HTTP 202` means the whole path works and the event was stored — it is a real
+> event, so expect a `Stop` liveness row for session `install-probe`. `HTTP 401`
+> is the token, `HTTP 000` with `curl: (7)` is nothing listening on that port,
+> `curl: (28)` is a server that accepted the connection and then hung, and an
+> `unknown option` error is a curl older than 8.3.0.
+
+### What failure looks like, and what it does not look like
+
+Stated plainly, because the section above used to imply better than this: a
+delivery that fails is **lost**. Nothing retries it, nothing spools it to disk,
+nothing counts it. The single `--show-error` line is the entire record, and it
+exists only until the surrounding output scrolls away. A dashboard that has
+silently dropped every event since Tuesday is, from the hook side, still
+indistinguishable from a healthy one unless somebody was reading that output at
+the moment it happened.
+
+Known ways a firing is lost:
+
+- **Dashboard down, wedged, or on another port** — `curl: (7)` / `curl: (28)`.
+- **Wrong or missing token** — HTTP 401. `--fail` suppresses the body, so the
+  visible trace is `curl: (22) The requested URL returned error: 401`.
+- **Payload over 1 MiB** — HTTP 413 (`curl: (22) … error: 413`). The server
+  inherits Fastify's default 1 MiB body limit; it is not a chosen number, and
+  nothing truncates or splits an oversized body. This is not hypothetical: a
+  `Stop` body carries `last_assistant_message`, so one very long final answer
+  can put a turn over the line. The event is rejected whole.
+- **curl older than 8.3.0** — rejected at option-parse time, nothing sent.
+
+Whether that should stay this way is an open policy question (a spool, a retry,
+or a delivery counter on `/api/health` are all buildable and all trade something
+away); it is recorded under [Pending decisions](#pending-decisions-defaults-awaiting-sign-off)
+rather than decided here.
 
 ## Security model
 
@@ -195,11 +331,50 @@ omits rather than faking, and the skip/quarantine lines are all documented in
   command is `--silent --fail` with `--max-time 3` and a trailing `|| true`,
   and Claude Code additionally applies its own hook timeout.
 
+  > **AMENDED 2026-09-02.** As written, that bullet was false — and the flags
+  > it cites are not what would have made it true. *What was believed:*
+  > "fail-silent, exits 0" was treated as "the session never notices". *What is
+  > true:* the exit code is not the cost; the **wait** is. Every entry this
+  > installer generated was a synchronous hook, so Claude Code waited for curl
+  > to return before the turn could continue — up to the full `--max-time 3` on
+  > every prompt, every turn end, every subagent finish and every compaction,
+  > precisely when the dashboard was unreachable or wedged. Four hook events
+  > times a busy session is a real, measurable tax paid for a *broken*
+  > dashboard.
+  >
+  > The generated entries now set **`async: true`**, which is the field that
+  > actually buys the claim: Claude Code writes the hook JSON to the command's
+  > stdin, closes it, backgrounds the process and continues immediately. The
+  > `timeout` stays (it becomes the background process's bound), and
+  > `--max-time 3` stays because a Claude Code too old to know the field
+  > ignores it and keeps waiting — on such a version the original wording is
+  > still wrong, and three seconds is the worst case.
+  >
+  > Re-run the installer to upgrade a settings file written before this change;
+  > the merge replaces the old entries in place.
+
 ## Pending decisions (defaults, awaiting sign-off)
 
 - **Auth mechanism (OPEN-5):** shared Bearer token over loopback — matches the
   server's existing global auth gate. Unix-socket peer credentials remain the
   catalogued alternative.
+- **Delivery durability (raised 2026-09-02, undecided):** a failed firing is
+  dropped and unrecorded — see [What failure looks like](#what-failure-looks-like-and-what-it-does-not-look-like).
+  `--show-error` makes a failure *visible* to whoever is watching, which is the
+  smallest honest fix and the only one taken so far. Making it *durable* means
+  choosing one of: a spool file (buys replay, costs a retention policy and puts
+  possibly-secret-shaped payloads on disk **outside** the ingest redaction
+  boundary — a real privacy regression), an in-command retry (buys nothing
+  against a dashboard that is simply down, costs session time and risks
+  double-counting if the id is re-minted per attempt), or a delivery counter on
+  `/api/health` (buys "is it arriving?" at a glance, costs a server-side change
+  and still records nothing about *what* was lost). None is obviously right;
+  none should be picked by an installer.
+- **Payload size cap (raised 2026-09-02, undecided):** the 1 MiB limit is
+  Fastify's default rather than a decision, and an oversized body is rejected
+  whole (413). Options are to raise the cap, or to have the server store a
+  truncated marker row so the loss is at least recorded. Untouched pending
+  sign-off.
 - **Redaction phase (OPEN-3):** payloads are redacted at the ingest boundary
   from Phase 1 (the audit-recommended resolution, implemented as the default in
   `apps/server/src/hooks/redact.ts`). The fuller retention side (WP-D10) still

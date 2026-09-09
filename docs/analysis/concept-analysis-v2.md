@@ -145,10 +145,19 @@ This extends the byte-exact-tokens guarantee to the priced output.
 > `effective_from` alone carries the versioning. Whether provenance is worth adding is the
 > surviving half of OPEN-6 in [`open-decisions.md`](open-decisions.md) — a genuinely open
 > question, not an oversight to be quietly patched into the table above. **CD-7**'s closing
-> clause, ">90% coverage blocks merges", is half true and half false in a way worth naming:
+> clause, ">90% coverage blocks merges", was half true and half false in a way worth naming:
 > the threshold shipped at 100% in all five packages, above what was asked, while *blocks
-> merges* is not enforced by anything, because branch protection on `main` is not enabled.
-> A coverage run can go red and a merge can still happen. **CD-9**'s per-artifact licensing
+> merges* was enforced by nothing, because `main` was unprotected — a coverage run could go
+> red and a merge still happen. **As built, 2026-08-25:** `main` is branch-protected, the
+> required status check is `ci` (the job id in `.github/workflows/ci.yml`, not the workflow's
+> `CI` display name), and force-pushes and branch deletion are refused. So the clause now
+> holds with one deliberate exemption that must travel with it: a red run withholds the merge
+> button from a contributor, not from the repository owner, because `enforce_admins` is left
+> off on purpose — agenthropic has exactly one maintainer whose normal working mode is a
+> direct push to `main`, and admin enforcement would lock the sole maintainer out of their own
+> repository. See
+> [the standing correction](../site/contributing/decisions/README.md#a-standing-correction-merge-blocking).
+> **CD-9**'s per-artifact licensing
 > now has the LICENSE file it presupposed. **CD-1** was decided the way it was meant to be —
 > by the Phase-0 evidence, which returned CONDITIONAL GO for the JSONL-primary branch.
 >
@@ -393,8 +402,17 @@ Merged across lenses; these become the gates in [`development-plan.md`](developm
 > never been hand-filled, so there is no ground truth to measure against, and every
 > hierarchy number in this corpus remains **PROVISIONAL** self-check output. **Time to
 > understand a session < 30 s** has **never been measured** — not passed, not failed,
-> untested; nobody has sat with a stopwatch. The delivery bar's "blocks merges below 90%"
-> is likewise unenforced, for the reason given under the decision register above.
+> untested; nobody has sat with a stopwatch. Neither of those two has moved since.
+>
+> Two of the delivery bar's own three clauses have moved. "Blocks merges below 90%" was
+> unenforced when this note was written; **as built, 2026-08-25** `main` is branch-protected
+> with `ci` as the required check, so it now blocks a contributor's merge and — deliberately,
+> `enforce_admins` being off for a single-maintainer repository whose normal working mode is a
+> direct push to `main` — not the owner's; the reasoning is under the decision register above
+> and in
+> [the standing correction](../site/contributing/decisions/README.md#a-standing-correction-merge-blocking).
+> And "the GitHub Pages docs site builds" is no longer a build that publishes nowhere: Pages
+> was enabled on 2026-08-25 and the site serves at <https://ivanbbaev.github.io/agenthropic/>.
 
 ---
 

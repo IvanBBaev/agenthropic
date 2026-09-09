@@ -21,9 +21,14 @@
  *
  * The normalizer takes NO position on liveness beyond {@link LIVENESS_STATUS}
  * (see the note there): reading a transcript proves activity, never
- * termination.
+ * termination. The ONE exception is an OBSERVED outcome — a parent-side spawn
+ * result that says in words that the agent was terminated (see
+ * {@link ERROR_CAUSES}). That is not an inference from silence; it is a
+ * statement in the transcript, and it is the only producer the `'error'` status
+ * has ever had.
  */
 import type { ParsedAgent, ParsedSession, DedupedUsage } from '@agenthropic/core';
+import type { AgentOutcomeCause, AgentStatus } from '@agenthropic/shared';
 import type { AgentUpsert } from '../db/agents';
 import type { OrchestrationEdgeInsert } from '../db/edges';
 import type { SessionUpsert } from '../db/sessions';
@@ -53,6 +58,51 @@ import type { SessionUpsert } from '../db/sessions';
  * state when the JSONL timestamps strictly advance.
  */
 export const LIVENESS_STATUS = 'working';
+
+/**
+ * The ONE cause that becomes an 'error' status — and the reason the other four
+ * do not.
+ *
+ * `'error'` has been in the `agents.status` CHECK, in the API's status counts
+ * and in the UI's bucket since the schema was written, with NO producer
+ * anywhere in `src/`. An operator reading zero errors was reading a bucket that
+ * was structurally incapable of being non-empty. This set is that bucket's
+ * first and only producer, and it is deliberately the narrowest honest one:
+ *
+ *  - `terminated_early` — "Agent terminated early due to an API error". The
+ *    agent RAN and was killed by something outside the session. There is no
+ *    reading of that which is not a failure. This is the whole set.
+ *  - `user_interrupt` — a human pressed stop. It resolves to a REAL transcript
+ *    (7 of the 9 real error results that do), so a structural "did it run?"
+ *    test alone would sweep it in. Stopping your own agent is not a failure and
+ *    counting it as one would more than quadruple the number.
+ *  - `concurrency_limit`, `permission_failed`, `dispatch_unavailable` — the
+ *    spawn was refused; no agent existed to fail. The parser emits no outcome
+ *    for these on a real corpus (no transcript, no row), and if some future
+ *    substrate ever pairs one with a materialized agent, this set still
+ *    declines to call it an error rather than guessing.
+ *  - `unclassified` — an error result on a real spawn block with unrecognised
+ *    text. RECORDED (the cause column keeps it), never promoted. Among the
+ *    error results that reach a real agent the benign cause outnumbers the
+ *    fatal one 7 to 2, so "unknown text" is far likelier to be benign than
+ *    fatal; defaulting it to 'error' would be an inflation, not caution.
+ *
+ * On the author's own 2555-transcript corpus this yields TWO errored agents.
+ * A design that yields thirty has flattened the causes.
+ */
+const ERROR_CAUSES: ReadonlySet<AgentOutcomeCause> = new Set<AgentOutcomeCause>([
+  'terminated_early',
+]);
+
+/**
+ * The status an observed outcome asserts. Note what this is NOT: it never
+ * downgrades to a terminal on the strength of silence, and it never invents
+ * 'completed'. Only an outcome the transcript actually recorded moves anything,
+ * and only in one direction.
+ */
+function statusForOutcome(cause: AgentOutcomeCause | null): AgentStatus {
+  return cause !== null && ERROR_CAUSES.has(cause) ? 'error' : LIVENESS_STATUS;
+}
 
 /**
  * An edge as the normalizer can know it: everything except `created_at`, which
@@ -200,6 +250,13 @@ export function normalizeSession(
   // agents self-FK and rolling the whole session back. The spawn relation
   // itself is never lost — it is still recorded in orchestration_edges, which
   // carries no FK.
+  // Cause per agent, from the parser's structurally-gated outcomes. Empty for
+  // almost every session: corpus-wide only 33 of 1276 spawn results errored at
+  // all, and only the ones whose agent actually ran reach here.
+  const causeByAgent = new Map<string, AgentOutcomeCause>(
+    (parsed.outcomes ?? []).map((outcome) => [outcome.agentId, outcome.cause]),
+  );
+
   const emittedAgentIds = new Set<string>();
   const agents: AgentUpsert[] = [];
   for (const agent of orderedAgents) {
@@ -207,15 +264,17 @@ export function normalizeSession(
       agent.parentAgentId !== null && emittedAgentIds.has(agent.parentAgentId)
         ? agent.parentAgentId
         : null;
+    const outcomeCause = causeByAgent.get(agent.id) ?? null;
     agents.push({
       id: agent.id,
       sessionId: parsed.sessionId,
       type: agent.type,
       subagentType: agent.subagentType,
-      status: LIVENESS_STATUS,
+      status: statusForOutcome(outcomeCause),
       parentAgentId,
       firstSeenAt: agent.startedAt,
       lastSeenAt: agent.endedAt,
+      outcomeCause,
     });
     emittedAgentIds.add(agent.id);
   }

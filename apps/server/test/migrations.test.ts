@@ -889,8 +889,14 @@ describe('migration runner (WP-D3)', () => {
     });
 
     it('tolerates formatting-only differences in an applied migration', () => {
-      // The checksum strips whitespace before hashing, so a formatter or
-      // TS-transform change never bricks a healthy database.
+      // The checksum normalises whitespace (and, since review H-1, comments)
+      // away before hashing, so a reformat never bricks a healthy database.
+      // Only the whitespace half is provable here: this file is compiled by
+      // vitest, whose transform deletes comments before `up.toString()` can see
+      // them, so a comment written below would never reach the hash under ANY
+      // revision of `migrationChecksum`. The comment half is proved instead in
+      // `migrations-checksum-stability.test.ts`, which feeds the hash source
+      // text directly rather than through this file's transform.
       const dir = mkdtempSync(join(tmpdir(), 'agenthropic-mig-reformat-'));
       const db = openDatabase(join(dir, 'reformat.db'));
       try {

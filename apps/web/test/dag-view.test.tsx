@@ -5,8 +5,9 @@
  * fetch is mocked - no real server, no ~/.claude tree.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { DagView, DAG_NODE_LIMIT } from '../src/views/DagView';
+import { CLOCK_INTERVAL_MS } from '../src/clock';
 import { createSseClient, type SseClient } from '../src/sse';
 import { agentNode, globalDag, jsonResponse, orchestrationEdge } from './fixtures';
 import { MockEventSource } from './mock-event-source';
@@ -286,5 +287,323 @@ describe('DagView', () => {
     renderView();
     await waitFor(() => expect(onAuthRejected).toHaveBeenCalledTimes(1));
     expect(screen.queryByText(/Could not load DAG/)).toBeNull();
+  });
+});
+
+/**
+ * F-4 (2026-09-02). The view reads the DAG once and then keeps painting it.
+ * These tests pin what the reader is TOLD about that read - how old it is,
+ * that the "showing N of M" figures belong to it rather than to now, and that
+ * there is a way to take a new one - not that a timestamp field exists.
+ *
+ * A separate describe so nothing above is disturbed; the file-level
+ * beforeEach/afterEach still apply.
+ */
+describe('DagView - snapshot provenance (F-4)', () => {
+  // Four clock ticks: two minutes, comfortably past the 90 s window inside
+  // which `formatRelativeMs` still says "just now" (see src/views/snapshot.ts).
+  const AGED_MS = CLOCK_INTERVAL_MS * 4;
+  const TRUNCATED_DAG = () =>
+    globalDag({
+      nodes: [agentNode()],
+      edges: [],
+      counts: {
+        totalSessions: 40,
+        totalAgents: 1200,
+        totalEdges: 900,
+        returnedAgents: 1,
+        returnedEdges: 0,
+        truncated: true,
+      },
+    });
+
+  it('ages the read on screen and qualifies every figure once it is stale, without refetching', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.UTC(2026, 8, 2, 12, 0, 0));
+    try {
+      fetchMock.mockResolvedValue(jsonResponse(200, twoAgentDag()));
+      renderView();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      const fresh = screen.getByTestId('dag-provenance');
+      expect(fresh.textContent).toContain('Read just now.');
+      // Inside the app's own "just now" window the caveat is a truism, so it
+      // is stated quietly rather than shouted on every load.
+      expect(fresh.getAttribute('class')).toBe('muted card-provenance');
+      expect(
+        screen.getByTestId('dag-node-agent-main').querySelector('title')?.textContent,
+      ).not.toContain('as recorded');
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(AGED_MS);
+      });
+
+      const aged = screen.getByTestId('dag-provenance');
+      expect(aged.textContent).toContain('Read 2m ago');
+      expect(aged.textContent).toContain('remembered, not observed');
+      expect(aged.textContent).toContain('may have finished or failed since');
+      // Outside that window it marks real drift, so it takes the banner
+      // treatment the truncation notice already uses.
+      expect(aged.getAttribute('class')).toBe('truncation-banner');
+      // The hover text a reader lands on carries the same qualification.
+      expect(
+        screen.getByTestId('dag-node-agent-main').querySelector('title')?.textContent,
+      ).toContain('- as recorded 2m ago');
+      // Ageing is arithmetic on a stamp, not a reason to hit the API...
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      // ...and the served status is never rewritten into a guess: the node
+      // still says exactly what the ingest recorded, dated rather than edited.
+      expect(screen.getByTestId('dag-node-agent-main').getAttribute('class')).toBe(
+        'status-working',
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('re-reads and re-stamps when the refresh control is used', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.UTC(2026, 8, 2, 12, 0, 0));
+    try {
+      fetchMock.mockResolvedValue(jsonResponse(200, twoAgentDag()));
+      renderView();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(AGED_MS);
+      });
+      expect(screen.getByTestId('dag-provenance').textContent).toContain('Read 2m ago');
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Refresh DAG' }));
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      // A second read, and the disclosure resets with it - the control is not
+      // decorative, and the age it resets is the age of the new read.
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      const refreshed = screen.getByTestId('dag-provenance');
+      expect(refreshed.textContent).toContain('Read just now.');
+      expect(refreshed.getAttribute('class')).toBe('muted card-provenance');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('says a truncated graph is the newest slice AS OF the read, beside the untouched banner', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, TRUNCATED_DAG()));
+    renderView();
+
+    const banner = await screen.findByTestId('truncation-banner');
+    // The N-of-M wording is unchanged; the as-of qualification lives in its
+    // own element so the counts sentence stays exactly as pinned above.
+    expect(banner.textContent).toBe(
+      'Truncated: showing 1 of 1200 agents and 0 of 900 edges (node limit 1000).',
+    );
+    const provenance = screen.getByTestId('dag-provenance').textContent ?? '';
+    // The endpoint slices by recency, so both figures count what existed at
+    // one moment - the banner alone understates the incompleteness.
+    expect(provenance).toContain('most recent agents first');
+    expect(provenance).toContain('newest slice as of that read');
+    expect(provenance).toContain('"showing N of M"');
+  });
+
+  it('claims no slice when the whole graph was returned', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, twoAgentDag()));
+    renderView();
+    await screen.findByRole('img', { name: 'global orchestration dag' });
+
+    const provenance = screen.getByTestId('dag-provenance').textContent ?? '';
+    expect(provenance).toContain('Read just now.');
+    // Nothing was cut, so no cut is announced: a caveat that does not apply
+    // is noise that teaches the reader to skip the ones that do.
+    expect(provenance).not.toContain('newest slice');
+  });
+
+  it('dates the empty state too - "no agents persisted" is itself a claim with an age', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, globalDag()));
+    renderView();
+
+    await screen.findByText('No agents persisted yet - the DAG appears with the first ingest.');
+    expect(screen.getByTestId('dag-provenance').textContent).toContain('Read just now.');
+  });
+
+  it('offers a retry that actually re-reads after a failed fetch', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(500, { error: 'Internal server error.' }))
+      .mockResolvedValueOnce(jsonResponse(200, twoAgentDag()));
+    renderView();
+
+    await screen.findByText(/Could not load DAG: Internal server error\./);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    await screen.findByRole('img', { name: 'global orchestration dag' });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+/**
+ * Red-team honesty wave (2026-09-07). Each case below started from one
+ * question asked of a rendered claim: if a reader took this literally, what
+ * would they now believe about their own data that is not true?
+ *
+ * A separate describe so nothing above is disturbed; the file-level
+ * beforeEach/afterEach still apply.
+ */
+describe('DagView - red-team honesty wave (2026-09-07)', () => {
+  const AGED_MS = CLOCK_INTERVAL_MS * 4;
+
+  /** One node returned out of a 1200-agent corpus. */
+  const SLICE_OF_A_BIG_CORPUS = () =>
+    globalDag({
+      nodes: [agentNode()],
+      edges: [],
+      counts: {
+        totalSessions: 40,
+        totalAgents: 1200,
+        totalEdges: 900,
+        returnedAgents: 1,
+        returnedEdges: 0,
+        truncated: true,
+      },
+    });
+
+  /**
+   * The shape the server itself contemplates: "a zero-node selection over a
+   * non-empty agents table is honestly truncated" (queries.ts, getGlobalDag).
+   */
+  const EMPTY_SLICE_OF_A_BIG_CORPUS = () =>
+    globalDag({
+      nodes: [],
+      edges: [],
+      counts: {
+        totalSessions: 40,
+        totalAgents: 1200,
+        totalEdges: 900,
+        returnedAgents: 0,
+        returnedEdges: 0,
+        truncated: true,
+      },
+    });
+
+  it('DG-1: the chart text alternative describes the returned slice AS a slice', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, SLICE_OF_A_BIG_CORPUS()));
+    renderView();
+
+    const svg = await screen.findByRole('img', { name: 'global orchestration dag' });
+    const summary = document.getElementById(svg.getAttribute('aria-describedby') ?? '');
+    expect(summary?.textContent).toContain('Agents by status: 1 working.');
+    // The image is named "global orchestration dag" and its description is
+    // the only channel a screen reader has for the tally - so the tally must
+    // say it counts 1 of 1200 agents, not the corpus.
+    expect(summary?.textContent).toContain('1 of 1200 agents');
+  });
+
+  it('DG-1: the chart text alternative is dated once the read is stale', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.UTC(2026, 8, 2, 12, 0, 0));
+    try {
+      fetchMock.mockResolvedValue(jsonResponse(200, twoAgentDag()));
+      renderView();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(AGED_MS);
+      });
+
+      const svg = screen.getByRole('img', { name: 'global orchestration dag' });
+      const summary = document.getElementById(svg.getAttribute('aria-describedby') ?? '');
+      // Every node's hover text carries "- as recorded 2m ago"; the prose that
+      // stands in for those titles carried nothing.
+      expect(summary?.textContent).toContain('As recorded 2m ago, not as of now.');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('DG-2: does not claim nothing is persisted when the same payload counts 1200 agents', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, EMPTY_SLICE_OF_A_BIG_CORPUS()));
+    renderView();
+
+    await screen.findByTestId('dag-provenance');
+    expect(
+      screen.queryByText('No agents persisted yet - the DAG appears with the first ingest.'),
+    ).toBeNull();
+    expect(screen.getByTestId('dag-empty').textContent).toContain('1200');
+  });
+
+  it('DG-2: renders the "showing N of M" figures its own provenance sends the reader to', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, EMPTY_SLICE_OF_A_BIG_CORPUS()));
+    renderView();
+
+    const provenance = await screen.findByTestId('dag-provenance');
+    expect(provenance.textContent).toContain('"showing N of M" figures above');
+    // ...so those figures have to exist above it.
+    expect(screen.getByTestId('truncation-banner').textContent).toContain(
+      'showing 0 of 1200 agents',
+    );
+  });
+});
+
+/**
+ * DG-3 (2026-09-08). The wave above asked what a rendered claim makes a reader
+ * believe. This one asks the narrower question it did not: of the disclosures
+ * on this page, which ones reach a reader who is handed the diagram as a
+ * single `role="img"` object, and which exist only for someone who can see it.
+ *
+ * A separate describe so nothing above is disturbed; the file-level
+ * beforeEach/afterEach still apply.
+ */
+describe('DagView - the accessible description of the picture (2026-09-08)', () => {
+  /** The ids `aria-describedby` names, and the prose they actually resolve to. */
+  function describedBy(svg: Element): { readonly ids: string[]; readonly text: string } {
+    const ids = (svg.getAttribute('aria-describedby') ?? '').split(' ').filter((id) => id !== '');
+    return { ids, text: ids.map((id) => document.getElementById(id)?.textContent ?? '').join(' ') };
+  }
+
+  const SELF_REFERENCING_DAG = () =>
+    globalDag({
+      nodes: [agentNode()],
+      edges: [orchestrationEdge({ childAgentId: 'agent-main' })],
+      counts: { totalSessions: 1 },
+    });
+
+  it('DG-3: tells the description that some agents are drawn on a fallback layer', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, SELF_REFERENCING_DAG()));
+    renderView();
+
+    const svg = await screen.findByRole('img', { name: 'global orchestration dag' });
+    // The notice is on the page for a reader who can see it...
+    expect(
+      screen.getByText('1 agent sit in a cycle and are placed on a fallback layer.'),
+    ).toBeDefined();
+    // ...and now also in what the diagram itself says it means. Without it the
+    // other reader is given "Agents by status: 1 working" about a picture whose
+    // geometry, for that node, is a stand-in rather than its real position -
+    // and the hierarchy is the whole point of this image.
+    const described = describedBy(svg);
+    expect(described.text).toContain('sit in a cycle and are placed on a fallback layer');
+    // The summary is not displaced by the notice; the list holds both.
+    expect(described.text).toContain('Agents by status: 1 working.');
+    // Every named id resolves: an idref pointing at nothing describes nothing
+    // while reading, to anyone auditing the markup, as though it had.
+    for (const id of described.ids) expect(document.getElementById(id)).not.toBeNull();
+  });
+
+  it('DG-3: names no id that is absent from the page when there is no cycle', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, twoAgentDag()));
+    renderView();
+
+    const svg = await screen.findByRole('img', { name: 'global orchestration dag' });
+    const described = describedBy(svg);
+    expect(described.ids.length).toBeGreaterThan(0);
+    for (const id of described.ids) expect(document.getElementById(id)).not.toBeNull();
+    // No cycle, no caveat: a notice that does not apply is what teaches a
+    // reader to stop reading the ones that do.
+    expect(described.text).not.toContain('cycle');
   });
 });

@@ -4,7 +4,7 @@
  * elsewhere. Methods are synchronous because the production adapter is
  * better-sqlite3, which is synchronous by design.
  */
-import type { RawEventSource } from '../types/rows';
+import type { RawEventSource } from '../types/enums';
 
 /** A raw event as handed to the store, before normalization. */
 export interface RawEventEnvelope {

@@ -30,6 +30,7 @@ export const FIXTURE_NAMES = [
   'usage-dedup',
   'depth-2-sync',
   'legacy-bare-explore',
+  'agent-outcome-errors',
 ] as const;
 
 export type FixtureName = (typeof FIXTURE_NAMES)[number];

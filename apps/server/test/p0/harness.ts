@@ -114,14 +114,38 @@ export function materializeCorpus(
   return bySessionId;
 }
 
-/** Seed flat 1 USD/Mtok prices for the synthetic fixture models. */
+/**
+ * Seed 1 USD/Mtok prices for the synthetic fixture models — behind a SUPERSEDED
+ * older rate, so that "dated price" is load-bearing rather than decorative.
+ *
+ * A single epoch cannot tell a correct dated lookup from an incorrect one: with
+ * one candidate row per (model, bucket), picking the LATEST `effective_from`
+ * not after the usage and picking the EARLIEST return the same rate, and so
+ * does picking at random. Every P0 dollar assertion would pass against a price
+ * table that carries no dates at all.
+ *
+ * The 2019 rate exists to break that tie, and is deliberately STRICTLY
+ * DOMINATED — it is never the correct answer for any row in the corpus, and it
+ * is 7x the live rate, so an implementation that reaches for it is off by a
+ * factor no rounding tolerance can absorb. Correct behaviour is therefore
+ * unchanged (every figure these tests assert is still computed at 1 USD/Mtok),
+ * while a reversed ordering, a dropped `effective_from <= occurred_at` bound,
+ * or a MIN where a MAX belongs now fails P0 instead of only the unit tests.
+ */
+const SYNTHETIC_RATES = [
+  { usdPerMtok: 7, effectiveFrom: '2019-01-01' },
+  { usdPerMtok: 1, effectiveFrom: '2020-01-01' },
+] as const;
+
 export function seedSyntheticPricing(db: SqliteDatabase): void {
   const insert = db.prepare(
-    'INSERT INTO model_pricing (model, bucket, usd_per_mtok, effective_from) VALUES (?, ?, 1, ?)',
+    'INSERT INTO model_pricing (model, bucket, usd_per_mtok, effective_from) VALUES (?, ?, ?, ?)',
   );
   for (const model of SYNTHETIC_MODELS) {
     for (const bucket of DB_BUCKETS) {
-      insert.run(model, bucket, '2020-01-01');
+      for (const rate of SYNTHETIC_RATES) {
+        insert.run(model, bucket, rate.usdPerMtok, rate.effectiveFrom);
+      }
     }
   }
 }

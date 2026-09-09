@@ -30,10 +30,39 @@
  *   points it at via `--out` (plus a timestamped backup of that same file).
  *   Without `--out` it only prints to stdout. It never touches `~/.claude`
  *   unless the user explicitly passes an `--out` path there.
+ *
+ *   AMENDED 2026-09-07 (H-2, H-3): "its only side effect is writing the ONE
+ *   settings file" was two claims short of the truth. First, it also creates
+ *   the file's whole PARENT TREE (`mkdirSync(..., { recursive: true })`), so a
+ *   mistyped `--out` silently succeeded into a directory that did not exist a
+ *   moment earlier; the tree is still created, and the created path is now
+ *   named in the result and printed by the CLI. Second, "writing" happened on
+ *   every run, including runs that computed byte-for-byte what the file already
+ *   held - one accumulated backup per re-run, a settings file reformatted into
+ *   this installer's own shape, and `Wrote <path>` printed over a change that
+ *   was not made. A run whose output equals the current file now returns the
+ *   `unchanged` action and writes nothing at all.
  * - The POST target is hard-pinned to loopback (127.0.0.1); the port is the
  *   only variable part.
  * - Hook failures never block Claude Code: the command is fail-silent
  *   (`--silent --fail`, a hard `--max-time`, and a trailing `|| true`).
+ *
+ *   AMENDED 2026-09-02: the "never block" half of that bullet was wrong.
+ *   What was believed: exiting 0 and printing nothing was read as "invisible
+ *   to the session". What is true: exit code and elapsed time are different
+ *   things. Every entry this installer generated was a SYNCHRONOUS hook, so
+ *   Claude Code waited for curl to finish before the turn could continue -
+ *   up to `--max-time 3` of dead wait on every prompt, every turn end, every
+ *   subagent finish and every compaction, precisely when the dashboard was
+ *   unreachable or wedged. The entries now carry `async: true`, which is
+ *   what actually buys the property this bullet claimed: Claude Code writes
+ *   the hook JSON to the command's stdin, backgrounds the process and
+ *   continues immediately. `--max-time 3` stays because a Claude Code too
+ *   old to know the field silently ignores it and keeps waiting.
+ * - Delivery failures are visible, but only just: `--show-error` prints one
+ *   line of curl's own error text (see buildHookCommand). Nothing retries,
+ *   nothing spools, nothing counts them - a dashboard that has received
+ *   zero events still looks exactly like a healthy one from this side.
  * - The command stamps each firing with a delivery id expanded by the shell at
  *   fire time (see DELIVERY_ID_HEADER). It carries no user data - a pid, an
  *   epoch second and `$RANDOM` - and the server uses it as idempotency-key
@@ -79,7 +108,13 @@ export const DEFAULT_TOKEN_ENV = 'DASHBOARD_TOKEN';
  */
 export const MIN_CURL_VERSION = '8.3.0';
 
-/** Hard timeout (seconds) Claude Code applies to the hook command. */
+/**
+ * Hard timeout (seconds) Claude Code applies to the hook command. With
+ * `async: true` (see buildHooksConfig) this is no longer time the session
+ * waits: Claude Code carries the same number over as the timeout of the
+ * BACKGROUNDED process, so it still bounds a wedged curl - it just no longer
+ * bounds the turn.
+ */
 const HOOK_TIMEOUT_SECONDS = 5;
 
 /**
@@ -87,6 +122,25 @@ const HOOK_TIMEOUT_SECONDS = 5;
  * byte-identical on every turn of a session, so the server cannot tell "this
  * happened again" from "this was delivered twice" by content alone - only the
  * sender can. Must match apps/server/src/hooks/routes.ts.
+ *
+ * AMENDED 2026-09-02: "byte-identical on every turn" is FALSE. What was
+ * believed: the documented common fields (`session_id`, `transcript_path`,
+ * `cwd`, `hook_event_name`, `stop_hook_active`) are all session-scoped, so a
+ * `Stop` body looked constant for a whole session. What is true, read off
+ * the Claude Code 2.1.251 binary's own payload construction: a `Stop` body
+ * also carries `prompt_id`, `last_assistant_message`, `background_tasks` and
+ * `session_crons`, and the first two of those change from turn to turn.
+ * (`stop_hook_active` is still there; that part of the sentence stands.)
+ *
+ * The header stays, and the reason it stays is the second sentence, not the
+ * first: content equality can never distinguish recurrence from redelivery
+ * in the general case - two firings ARE allowed to carry the same bytes, and
+ * which fields a given Claude Code version includes is not a contract we
+ * control. Only the sender knows which firing this is. What the correction
+ * does change is the honesty of the argument: the premise was an observation
+ * we never actually verified (`~/.claude/projects/*.jsonl` stores no hook
+ * payloads at all, so the corpus cannot settle it), and it should not be
+ * repeated as a fact about the wire format.
  */
 export const DELIVERY_ID_HEADER = 'X-Agenthropic-Delivery-Id';
 
@@ -118,14 +172,28 @@ Options:
   --remove            Remove previously installed agenthropic hook entries.
   --help              Show this help.`;
 
+/**
+ * The two validity rules live in non-throwing predicates because the command
+ * classifier (classifyHookCommand) has to ask the same questions about values
+ * it scraped out of a settings file someone else may have hand-edited, where
+ * "not valid" is an ordinary answer and not an error worth unwinding for.
+ */
+function isValidPort(port) {
+  return Number.isInteger(port) && port >= 1 && port <= 65535;
+}
+
+function isValidTokenEnv(tokenEnv) {
+  return typeof tokenEnv === 'string' && /^[A-Z_][A-Z0-9_]*$/.test(tokenEnv);
+}
+
 function assertValidPort(port) {
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+  if (!isValidPort(port)) {
     throw new Error(`Invalid port ${String(port)}: expected an integer between 1 and 65535.`);
   }
 }
 
 function assertValidTokenEnv(tokenEnv) {
-  if (typeof tokenEnv !== 'string' || !/^[A-Z_][A-Z0-9_]*$/.test(tokenEnv)) {
+  if (!isValidTokenEnv(tokenEnv)) {
     throw new Error(
       `Invalid token env var name ${JSON.stringify(tokenEnv)}: expected UPPER_SNAKE_CASE.`,
     );
@@ -155,12 +223,38 @@ function assertValidTokenEnv(tokenEnv) {
  *   collected a 401 - same net effect: no event stored, hook exits 0.)
  * - curl < MIN_CURL_VERSION -> unknown-option error at parse, sends nothing.
  * Both print a short, token-free line to stderr and exit 0.
+ *
+ * `--show-error` is there on purpose and is the one thing standing between an
+ * operator and an undiagnosable dashboard. `--silent` alone silences curl's
+ * ERRORS as well as its progress meter, so with the previous command shape a
+ * refused connection, a three-second timeout and a rejected payload all
+ * produced exactly what a perfectly healthy delivery produced: no output, exit
+ * 0, nothing written anywhere. Total failure was byte-for-byte
+ * indistinguishable from the documented healthy state. `--show-error` restores
+ * one line per failed firing and nothing at all on success (measured on curl
+ * 8.7.1: `curl: (7) Failed to connect to 127.0.0.1 port 4317` when the server
+ * is down, `curl: (28) Operation timed out after 3009 milliseconds` when it is
+ * wedged, `curl: (22) The requested URL returned error: 413` when the payload
+ * exceeds the server's 1 MiB body cap; a stored 202 prints nothing). The line
+ * cannot leak the token: it names the URL and the HTTP status, and the URL
+ * carries no credential - the token only ever exists inside curl's own
+ * variable space (see the M-11 note above). It cannot corrupt the terminal
+ * either: Claude Code spawns hook commands with piped stdio and reads them,
+ * so this goes to the hook's captured stderr rather than to the TUI.
+ *
+ * What it deliberately is NOT: a retry, a spool, or a counter. Nothing here
+ * remembers a failure past the moment it is printed, so a dashboard that has
+ * missed every event since Tuesday still looks healthy from this side unless
+ * somebody was watching that output. Making the loss durable (a spool file, a
+ * failure counter surfaced on /api/health) is an owner policy decision - it
+ * buys retention, disk and privacy questions that a hook installer must not
+ * settle on its own.
  */
 export function buildHookCommand({ port = DEFAULT_PORT, tokenEnv = DEFAULT_TOKEN_ENV } = {}) {
   assertValidPort(port);
   assertValidTokenEnv(tokenEnv);
   return (
-    `curl --silent --fail --max-time 3 --output /dev/null ` +
+    `curl --silent --show-error --fail --max-time 3 --output /dev/null ` +
     `--request POST --header 'Content-Type: application/json' ` +
     `--variable '%${tokenEnv}' ` +
     `--expand-header 'Authorization: Bearer {{${tokenEnv}}}' ` +
@@ -169,16 +263,148 @@ export function buildHookCommand({ port = DEFAULT_PORT, tokenEnv = DEFAULT_TOKEN
   );
 }
 
-/** True when a hook command string is one of ours (loopback ingest POST). */
-export function isAgenthropicHookCommand(command) {
+/**
+ * Every command shape this installer has ever generated, newest retired shape
+ * first. They exist so that `--remove` and the merge can still RECOGNIZE an
+ * entry written by an older version of this file, which is the only reason a
+ * substring test was tolerable before.
+ *
+ * These are frozen copies and must never be refactored to share code with
+ * buildHookCommand or to reference the marker constants: the whole point is
+ * that they keep saying what that generation said even after the current
+ * generation changes. When buildHookCommand changes shape again, copy the OLD
+ * body down here as the next generation and leave these alone. Only `port`
+ * and `tokenEnv` are parameters, because those are the only two values the
+ * installer has ever varied.
+ */
+function buildHookCommandGen1({ port, tokenEnv }) {
+  // Shipped 2026-07..2026-08 (pre-M-11): token expanded by the SHELL, so the
+  // value landed in curl's argv. Recognized here, never generated again.
   return (
-    typeof command === 'string' &&
-    command.includes(LOOPBACK_MARKER) &&
-    command.includes(ENDPOINT_MARKER)
+    `curl --silent --fail --max-time 3 --output /dev/null ` +
+    `--request POST --header 'Content-Type: application/json' ` +
+    `--header "Authorization: Bearer \${${tokenEnv}}" --data-binary @- ` +
+    `'http://127.0.0.1:${String(port)}/api/hooks/event' || true`
   );
 }
 
-/** The `hooks` object wiring every event to the generated command. */
+function buildHookCommandGen2({ port, tokenEnv }) {
+  // Gen 1 plus the per-firing delivery id (WP-IN1), still pre-M-11.
+  return (
+    `curl --silent --fail --max-time 3 --output /dev/null ` +
+    `--request POST --header 'Content-Type: application/json' ` +
+    `--header "Authorization: Bearer \${${tokenEnv}}" ` +
+    `--header "X-Agenthropic-Delivery-Id: $$-$(date +%s)-$RANDOM" --data-binary @- ` +
+    `'http://127.0.0.1:${String(port)}/api/hooks/event' || true`
+  );
+}
+
+function buildHookCommandGen3({ port, tokenEnv }) {
+  // M-11 shape: argv-free token, delivery id, but still `--silent` alone, so
+  // failures printed nothing (see buildHookCommand's --show-error note).
+  return (
+    `curl --silent --fail --max-time 3 --output /dev/null ` +
+    `--request POST --header 'Content-Type: application/json' ` +
+    `--variable '%${tokenEnv}' ` +
+    `--expand-header 'Authorization: Bearer {{${tokenEnv}}}' ` +
+    `--header "X-Agenthropic-Delivery-Id: $$-$(date +%s)-$RANDOM" --data-binary @- ` +
+    `'http://127.0.0.1:${String(port)}/api/hooks/event' || true`
+  );
+}
+
+const COMMAND_GENERATIONS = Object.freeze([
+  buildHookCommand,
+  buildHookCommandGen3,
+  buildHookCommandGen2,
+  buildHookCommandGen1,
+]);
+
+/**
+ * Loose extractors for the only two values a generation is parameterized by.
+ * They are allowed to be wrong: whatever they pull out is fed back through a
+ * generation builder and the result must match the command CHARACTER FOR
+ * CHARACTER before anything is called ours. A bad guess therefore produces a
+ * mismatch, never a false positive.
+ */
+const PORT_PATTERN = /:(\d{1,5})\/api\/hooks\/event/;
+const TOKEN_ENV_PATTERNS = Object.freeze([
+  /--variable '%([A-Z_][A-Z0-9_]*)'/,
+  /Authorization: Bearer \$\{([A-Z_][A-Z0-9_]*)\}/,
+]);
+
+/**
+ * Decide whether a hook command in someone's settings file is ours, and be
+ * willing to answer "I cannot tell".
+ *
+ * This used to be two `includes()` calls - a command counted as ours if it
+ * mentioned 127.0.0.1 and /api/hooks/event anywhere. That is an ownership
+ * claim over a string this installer may never have written: a hand-rolled
+ * curl to the same endpoint, a wrapper script, a `jq` pipeline, someone
+ * else's dashboard on the same path - all of them matched, and `--remove`
+ * would delete them without a word. Deleting a line out of a user's settings
+ * file because it looks a bit like ours is not a defensible thing for an
+ * installer to do.
+ *
+ * The rule is now exact equality against a shape we know we generated:
+ * - 'ours'      - byte-identical to some generation. Safe to replace/remove.
+ * - 'ambiguous' - aims at our endpoint but matches no generation. SOMETHING
+ *                 wrote it; we do not know what, so callers must refuse
+ *                 rather than guess.
+ * - 'foreign'   - unrelated. Preserved verbatim, as always.
+ */
+export function classifyHookCommand(command) {
+  if (
+    typeof command !== 'string' ||
+    !command.includes(LOOPBACK_MARKER) ||
+    !command.includes(ENDPOINT_MARKER)
+  ) {
+    return 'foreign';
+  }
+  const port = Number(PORT_PATTERN.exec(command)?.[1]);
+  if (isValidPort(port)) {
+    for (const pattern of TOKEN_ENV_PATTERNS) {
+      const tokenEnv = pattern.exec(command)?.[1];
+      if (!isValidTokenEnv(tokenEnv)) {
+        continue;
+      }
+      for (const generate of COMMAND_GENERATIONS) {
+        if (generate({ port, tokenEnv }) === command) {
+          return 'ours';
+        }
+      }
+    }
+  }
+  return 'ambiguous';
+}
+
+/** True when a hook command string is one of ours (loopback ingest POST). */
+export function isAgenthropicHookCommand(command) {
+  return classifyHookCommand(command) === 'ours';
+}
+
+/**
+ * The `hooks` object wiring every event to the generated command.
+ *
+ * `async: true` is what makes the delivery genuinely free for the session.
+ * Without it Claude Code runs the hook synchronously and waits for curl to
+ * exit before the turn continues, which costs up to `--max-time 3` on every
+ * prompt, turn end, subagent finish and compaction whenever the dashboard is
+ * down or slow - the exact situation in which the dashboard is worth the
+ * least. With it, Claude Code writes the hook JSON to the command's stdin,
+ * closes it, backgrounds the process and reports success immediately.
+ *
+ * Verified rather than assumed (Claude Code 2.1.251): `async` is declared on
+ * the command-hook object in the shipped settings JSON schema, and its hook
+ * runner branches on that field for every event type - the "force synchronous"
+ * override exists but is only ever passed for MessageDisplay/SessionStart/
+ * Setup, never for the four events wired here.
+ *
+ * `timeout` stays. On a Claude Code new enough to honour `async` it becomes
+ * the background process's timeout instead of the turn's; on one too old to
+ * know the field, the unknown key is ignored and `timeout` plus curl's own
+ * `--max-time` are all that bound the wait. Dropping it would make the old
+ * client strictly worse, so both belong there.
+ */
 export function buildHooksConfig({
   port = DEFAULT_PORT,
   tokenEnv = DEFAULT_TOKEN_ENV,
@@ -187,7 +413,9 @@ export function buildHooksConfig({
   const command = buildHookCommand({ port, tokenEnv });
   const config = {};
   for (const event of events) {
-    config[event] = [{ hooks: [{ type: 'command', command, timeout: HOOK_TIMEOUT_SECONDS }] }];
+    config[event] = [
+      { hooks: [{ type: 'command', command, timeout: HOOK_TIMEOUT_SECONDS, async: true }] },
+    ];
   }
   return config;
 }
@@ -204,6 +432,22 @@ function cloneJson(value) {
 /**
  * Remove agenthropic commands from one event's entry list, preserving every
  * foreign entry - including foreign commands sharing an entry with ours.
+ *
+ * Throws on an AMBIGUOUS command (one aimed at our endpoint that matches no
+ * shape we have ever generated - see classifyHookCommand). Refusing is the
+ * conservative branch in both directions: on a merge it stops us from
+ * silently replacing a line somebody wrote by hand, and on `--remove` it
+ * stops us from deleting it. Both callers compute the whole new settings
+ * object before anything is backed up or written, so a throw from here leaves
+ * the file exactly as it was and the operator can decide - keep the line and
+ * pass an explicit `--out` elsewhere, or delete it themselves and re-run.
+ *
+ * The message names the event and the position but deliberately does NOT
+ * print the command: an unrecognized variant is by definition something we
+ * did not write, and a hand-written one is exactly the kind that has a
+ * literal token pasted into it. An installer that echoes user-authored hook
+ * commands into stdout, and from there into a terminal scrollback or a CI
+ * log, has invented a credential leak that did not exist before.
  */
 function pruneEventEntries(entries, event) {
   if (!Array.isArray(entries)) {
@@ -212,15 +456,28 @@ function pruneEventEntries(entries, event) {
     );
   }
   const kept = [];
-  for (const entry of entries) {
+  for (const [entryIndex, entry] of entries.entries()) {
     if (!isRecord(entry) || !Array.isArray(entry.hooks)) {
       kept.push(cloneJson(entry));
       continue;
     }
-    const foreignHooks = entry.hooks.filter(
-      (hook) =>
-        !(isRecord(hook) && hook.type === 'command' && isAgenthropicHookCommand(hook.command)),
-    );
+    const foreignHooks = [];
+    for (const [hookIndex, hook] of entry.hooks.entries()) {
+      const kind =
+        isRecord(hook) && hook.type === 'command' ? classifyHookCommand(hook.command) : 'foreign';
+      if (kind === 'ambiguous') {
+        throw new Error(
+          `Refusing to touch hooks.${event}[${String(entryIndex)}].hooks[${String(hookIndex)}]: ` +
+            `it posts to the dashboard ingest endpoint but does not match any command this ` +
+            `installer has generated, so it was written by something else. Remove or move that ` +
+            `entry by hand and re-run. (The command text is withheld on purpose: it may contain ` +
+            `a literal token.)`,
+        );
+      }
+      if (kind === 'foreign') {
+        foreignHooks.push(hook);
+      }
+    }
     if (foreignHooks.length === entry.hooks.length) {
       kept.push(cloneJson(entry));
     } else if (foreignHooks.length > 0) {
@@ -301,6 +558,21 @@ export function parseArgs(argv) {
       if (value === undefined) {
         throw new Error(`Missing value for ${arg}.\n\n${USAGE}`);
       }
+      // H-1 (2026-09-07). A dropped value used to be swallowed by the flag that
+      // followed it: `--out --dry-run` set the output path to the string
+      // "--dry-run", performed no dry run, and wrote a real settings file to a
+      // file of that name in the current directory. The operator's belief ("I
+      // just did a dry run") and what happened ("I installed, somewhere odd")
+      // were opposites, and nothing on the way out said so. A leading dash is
+      // therefore refused as a value; a path that genuinely starts with one is
+      // still reachable as ./-name.
+      if (value.startsWith('-')) {
+        throw new Error(
+          `Missing value for ${arg}: the next argument is ${value}, which is a flag rather than ` +
+            `a value. If you really mean a path beginning with a dash, write it as ./${value}.` +
+            `\n\n${USAGE}`,
+        );
+      }
       return value;
     };
     switch (arg) {
@@ -378,9 +650,23 @@ export function runInstall({
   const existing = readExistingSettings(out);
   const fileExisted = existsSync(out);
   const settingsText = formatSettings(transform(existing));
+  const currentText = fileExisted ? readFileSync(out, 'utf8') : undefined;
+  const unchanged = currentText === settingsText;
 
   if (dryRun) {
-    return { action: 'dry-run', outPath: out, settingsText };
+    return { action: 'dry-run', outPath: out, settingsText, unchanged };
+  }
+
+  // H-2 (2026-09-07). A run that computes exactly what the file already holds
+  // now stops here. It used to back up and rewrite regardless, which made three
+  // false statements at once: the CLI printed `Backed up existing file to ...`
+  // and `Wrote ...` about a run that changed nothing, one backup file accrued in
+  // the operator's `.claude/` per re-run forever, and the rewrite reformatted a
+  // hand-maintained settings file into this installer's own two-space shape.
+  // Re-running an installer to find out whether it is installed is the most
+  // ordinary thing an operator does with one; it must be free.
+  if (unchanged) {
+    return { action: 'unchanged', outPath: out, settingsText };
   }
 
   let backupPath;
@@ -388,9 +674,17 @@ export function runInstall({
     backupPath = `${out}.backup-${backupTimestamp(now())}`;
     copyFileSync(out, backupPath);
   }
-  mkdirSync(dirname(out), { recursive: true });
+  // H-3 (2026-09-07). `recursive: true` materialises the WHOLE parent tree, so a
+  // typo (`--out .clade/settings.json`) succeeded, reported `Wrote ...`, and left
+  // the operator believing the hooks were live in `.claude/`. The directory is
+  // still created - refusing would break the documented first-run path - but it
+  // is now reported, so a created tree is something the operator reads rather
+  // than something they have to go looking for.
+  const parentDirectory = dirname(out);
+  const createdDirectory = existsSync(parentDirectory) ? undefined : parentDirectory;
+  mkdirSync(parentDirectory, { recursive: true });
   writeFileSync(out, settingsText, 'utf8');
-  return { action: 'written', outPath: out, backupPath, settingsText };
+  return { action: 'written', outPath: out, backupPath, createdDirectory, settingsText };
 }
 
 /* c8 ignore start - CLI entry, exercised only when run as a script */
@@ -407,7 +701,15 @@ if (isMain) {
         if (result.backupPath !== undefined) {
           console.log(`Backed up existing file to ${result.backupPath}`);
         }
+        if (result.createdDirectory !== undefined) {
+          console.log(`Created directory ${result.createdDirectory}`);
+        }
         console.log(`Wrote ${result.outPath}`);
+      } else if (result.action === 'unchanged') {
+        console.log(
+          `${result.outPath} already matches this installer's output - ` +
+            'nothing written, no backup taken.',
+        );
       } else {
         if (result.action === 'dry-run' && result.outPath !== undefined) {
           console.log(`[dry-run] Would write ${result.outPath}:`);

@@ -62,12 +62,23 @@ friction log still does not exist anywhere in the repository, so the kill condit
 second input remains unmeasured and the AND still cannot fire. §7's governance complaint
 has been partly overtaken and partly confirmed — the quality bar was in fact built (100%
 coverage in all five packages, each guarded against `v8 ignore` pragmas), while the gate
-that was supposed to make it binding was not: branch protection on `main` is not enabled,
-so nothing in the repository can physically block a merge. That is the same defect this
+that was supposed to make it binding was not: on 2026-08-15 `main` was unprotected, so
+nothing in the repository could physically block a merge. That was the same defect this
 section named, one level up: a rule that exists only because everyone agrees to honour it.
 And the deepest charge — that nobody has produced a single datum on *"should it be
 built?"* — is exactly as true today as it was on 2026-07-06. Six weeks of building
 produced no evidence of demand, because building never could.
+
+> **As built — 2026-08-25.** The governance half above is closed. `main` is branch-protected:
+> the required status check is `ci` (the job id in `.github/workflows/ci.yml`; the workflow's
+> `CI` display name is not the context), and force-pushes to `main` and deletion of `main` are
+> refused for everyone. A red run withholds the merge button from a contributor — and, by a
+> stated design choice rather than an oversight, not from the repository owner, because
+> `enforce_admins` is off: agenthropic has exactly one maintainer whose normal working mode is
+> a direct push to `main`, and admin enforcement would lock the sole maintainer out of their
+> own repository. Nothing else in this section moves: the friction log still does not exist,
+> and no datum on *"should it be built?"* has been produced. See
+> [the standing correction](../site/contributing/decisions/README.md#a-standing-correction-merge-blocking).
 
 The three exits in §10 were not taken as written. Exit B's *substance* happened —
 the corpus is parsed, SQLite is written, the DAG renders with dollars on the nodes — but
@@ -214,8 +225,13 @@ designed, praised, and dodged.
 > system rather than an imagined one. The coverage bullet has half-inverted: the bar was
 > not merely met but raised to 100% in all five packages, which sharpens rather than
 > answers the charge that the delivery bar optimises for how a serious OSS project looks;
-> and the "CI-gated" half of it is still fiction, because branch protection on `main` is
-> not enabled and no run can block a merge. The ADR bullet is unchanged in substance:
+> and the "CI-gated" half of it was fiction on 2026-08-15, because `main` was unprotected and
+> no run could block a merge. *(As built, 2026-08-25: `main` is branch-protected with `ci` as
+> the required check, so a red run withholds the merge button from a contributor — and
+> deliberately not from the repository owner, `enforce_admins` being off because agenthropic
+> has one maintainer whose normal working mode is a direct push to `main`. See §1a and
+> [the standing correction](../site/contributing/decisions/README.md#a-standing-correction-merge-blocking).)*
+> The ADR bullet is unchanged in substance:
 > Gate A is only partially signed, so decisions are still marked accepted by an authority
 > that has not finished signing. The QA bullet is unchanged and will stay so.
 

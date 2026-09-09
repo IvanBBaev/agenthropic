@@ -79,23 +79,33 @@ snapshot in §4–§5.
 >    fixtures; #11 is amended (sibling order is wave-partial, never total). Any future
 >    session reporting "14/14 green" is overstating the corpus evidence. See
 >    [`parser-spec.md`](parser-spec.md) §3.
-> 3. **The five remaining v1.0 blockers are all Ivan's, and none is a programming task:**
->    branch protection on `main` (without it CD-7's "coverage blocks merges" is not
->    physically enforced); **enabling GitHub Pages** (Settings → Pages → Source: "GitHub
->    Actions", or `gh api -X POST repos/IvanBBaev/agenthropic/pages -f build_type=workflow`
->    with an admin-scoped token); the **LABEL-ME** corpus (≥52 hand-labelled agents —
->    until then the hierarchy ≥95% gate reports `NOT CERTIFIED` and every Phase-0 number
->    stays **PROVISIONAL**); the **unmeasured** "<30s to understand a session" claim; and
->    the retention policy values (OPEN-1/2/3 — the mechanism is built and tested, the
->    default `NO_RETENTION` is a byte-identical no-op).
->    **On Pages, an earlier revision of this snapshot was wrong** and said the workflow
->    "should now self-enable on push" because it passes `enablement: true` to
->    `configure-pages`. It cannot. `pages: write` authorises *deploying* to an existing
->    Pages site, never *creating* one; creation needs repo administration rights that the
->    default `GITHUB_TOKEN` deliberately lacks. Three runs died in `configure-pages` to
->    prove it: `30528892265` (`Get Pages site failed … Not Found`), then `31318246506`
->    and `31879212583` (`Create Pages site failed. Error: Resource not accessible by
->    integration`). It is an owner click, not an automation gap.
+> 3. **Three remaining v1.0 blockers are Ivan's, and none is a programming task** — down
+>    from five on **2026-08-25**, when the two GitHub-settings items were done. Still open:
+>    the **LABEL-ME** corpus (≥52 hand-labelled agents — until then the hierarchy ≥95% gate
+>    reports `NOT CERTIFIED` and every Phase-0 number stays **PROVISIONAL**); the
+>    **unmeasured** "<30s to understand a session" claim; and the retention policy values
+>    (OPEN-1/2/3 — the mechanism is built and tested, the default `NO_RETENTION` is a
+>    byte-identical no-op).
+>    **Closed 2026-08-25 — branch protection on `main`.** It requires the `ci` status check
+>    (that is the job id; the workflow's display name `CI` is not the context) and refuses
+>    force-pushes and deletion, so CD-7's "coverage blocks merges" is physically enforced —
+>    against a contributor. `enforce_admins` is deliberately **off**, because a single
+>    maintainer whose normal mode is a direct push to `main` would otherwise be locked out
+>    of their own repository; read every "merge-blocking" claim in this corpus with that
+>    exemption attached. Verify:
+>    `gh api repos/IvanBBaev/agenthropic/branches/main/protection --jq '{contexts: .required_status_checks.contexts, enforce_admins: .enforce_admins.enabled}'`
+>    → `{"contexts":["ci"],"enforce_admins":false}`.
+>    **Closed 2026-08-25 — GitHub Pages**, and the reason it took an owner is worth keeping.
+>    An earlier revision of this snapshot said the workflow "should now self-enable on push"
+>    because it passes `enablement: true` to `configure-pages`. It cannot. `pages: write`
+>    authorises *deploying* to an existing Pages site, never *creating* one; creation needs
+>    repo administration rights that the default `GITHUB_TOKEN` deliberately lacks. Three
+>    runs died in `configure-pages` to prove it: `30528892265` (`Get Pages site failed …
+>    Not Found`), then `31318246506` and `31879212583` (`Create Pages site failed. Error:
+>    Resource not accessible by integration`). Pages was created by
+>    `gh api -X POST repos/IvanBBaev/agenthropic/pages -f build_type=workflow`; run
+>    `32863218759` was then re-run and succeeded, and the site is live at
+>    <https://ivanbbaev.github.io/agenthropic/> (HTTP 200, as is `/site/`).
 > 4. **KC-2 (2026-09-14, "Phases 1–2 complete") is met well ahead of its window.** The
 >    next real checkpoint is **KC-3, 2026-10-12**, and it turns on items in (3) that no
 >    agent can perform. **KC-4 (v1.0, 2026-12-01) is unchanged and immovable.**
@@ -213,6 +223,12 @@ them**.
   verdict (the **14-item gate**, four structural join paths, token→cost rules). For any
   parser/ingest question this is now the most-current authority; it supersedes the
   11-item framing embedded in older docs. Design only — CD-8 still gates code.
+
+- [`closing-plan-2026-09-08.md`](closing-plan-2026-09-08.md) — **the closing plan**
+  (2026-09-08): what "100%" means (`v1.0.0` tagged by KC-4, every `RELEASE.md` box
+  ticked), where the last 15% sits, the decision batch D1…D8 for Ivan, and five dated
+  waves to the tag. `TODO.md`'s **Closing board** mirrors its lanes; for "what is left"
+  questions this is now the most-current authority.
 
 ## 4. Current truth snapshot
 

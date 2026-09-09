@@ -262,10 +262,19 @@ exactly the failure mode to avoid.
 > and the test suite is larger than the source it covers. The bar also moved up rather than
 > down — the shipped threshold is 100%, not >90%, in every package, each defended by a
 > static guard that fails the suite if a coverage-ignore pragma appears in `src/`. What this
-> section did not anticipate is the part that is still missing: coverage is measured and
-> reported, but nothing blocks a merge, because branch protection on `main` is not enabled.
-> The failure mode named in the last sentence was avoided; its sibling — a gate that runs
-> but cannot stop anything — was not.
+> section did not anticipate is the part that was, on 2026-08-15, still missing: coverage was
+> measured and reported, but nothing blocked a merge, because `main` was unprotected. The
+> failure mode named in the last sentence was avoided; its sibling — a gate that runs but
+> cannot stop anything — was not.
+>
+> **As built, 2026-08-25:** that sibling is closed too. `main` is branch-protected with `ci`
+> (the job id, not the `CI` display name) as the required status check, and force-pushes and
+> branch deletion are refused. The gate stops a contributor's merge; it does not stop the
+> repository owner's, because `enforce_admins` is deliberately off — agenthropic has one
+> maintainer whose normal working mode is a direct push to `main`, and admin enforcement would
+> lock the sole maintainer out of their own repository. The exemption is stated wherever the
+> claim is; see
+> [the standing correction](../site/contributing/decisions/README.md#a-standing-correction-merge-blocking).
 
 ### 3.6 Developer's verdict
 Feasible and well-chosen stack; **effort is under-budgeted by roughly the

@@ -61,6 +61,10 @@ export function agentNode(overrides: Partial<AgentNodeDto> = {}): AgentNodeDto {
     type: 'main',
     subagentType: null,
     status: 'working',
+    // NULL is the honest default: "no parent-side outcome was observed", not
+    // a claim that the agent finished cleanly. A fixture that defaulted to a
+    // cause would put a reason on every agent in every test.
+    outcomeCause: null,
     parentAgentId: null,
     firstSeenAt: '2026-07-29T10:00:00.000Z',
     lastSeenAt: '2026-07-29T10:05:00.000Z',

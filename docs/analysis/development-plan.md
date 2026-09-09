@@ -132,19 +132,44 @@ through, so WP numbering stays stable.
 The plan below was written before any code existed. Phases 1–4 have since been built, and
 three things it states as future commitments now have an as-built answer that differs from
 the wording. The plan text is left intact — it is the record of what was agreed — and the
-corrections live here.
+corrections live here. _(Updated 2026-08-25: the first correction below has itself been
+overtaken by events — see its second half — and a fourth entry was added for the Phase-1
+Pages exit-gate leg, which the tree now satisfies.)_
 
-**The coverage number moved up; the word "blocking" is still not true.** Every "**>90%**"
-in this document (§3 Phase 1, §5 `WP-F3`/`WP-F4`/`WP-X5`, §8) describes a bar that shipped
-at **100%** for statements, branches, functions and lines, pinned per package in its own
-`vitest.config.ts` across all five packages. Each package also carries a static guard that
-fails if a `v8 ignore` / `c8 ignore` / `istanbul ignore` pragma appears in `src/`, because a
-pragma removes code from the **denominator** and makes 100% reachable by not looking. But
-`WP-F4`'s "coverage gate **blocking merges**" and `WP-X5`'s "a PR dropping below the
-threshold is blocked (demonstrated)" remain **UNENFORCED**: branch protection on `main` is
-not enabled, so a red run reports and is obeyed by convention — it cannot physically stop a
-merge. Enabling protection is an owner act on GitHub, not a work package. Until it is done,
-read every "blocking" in this plan as "runs, reports, and is honoured voluntarily".
+**The coverage number moved up; "blocking" was UNENFORCED, and became true on 2026-08-25 for
+everyone except the repository owner.** Every "**>90%**" in this document (§3 Phase 1, §5
+`WP-F3`/`WP-F4`/`WP-X5`, §8) describes a bar that shipped at **100%** for statements,
+branches, functions and lines, pinned per package in its own `vitest.config.ts` across all
+five packages. Each package also carries a static guard that fails if a `v8 ignore` /
+`c8 ignore` / `istanbul ignore` pragma appears in `src/`, because a pragma removes code from
+the **denominator** and makes 100% reachable by not looking. This note originally continued
+that `WP-F4`'s "coverage gate **blocking merges**" and `WP-X5`'s "a PR dropping below the
+threshold is blocked (demonstrated)" remain **UNENFORCED**, branch protection on `main` not
+being enabled — accurate until **2026-08-25**, throughout which a red run merely reported and
+was obeyed by convention rather than stopping anything. On 2026-08-25 protection was enabled:
+the required status check is `ci` (lowercase — the job id in `.github/workflows/ci.yml`; the
+workflow's display name is `CI`, which is **not** the context), and force-pushes and deletion
+of `main` are refused for everyone. `enforce_admins` is deliberately left **off**, because
+agenthropic has exactly one maintainer whose normal working mode is a direct push to `main`
+and turning it on would lock the sole maintainer out of their own repository. So read every
+"blocking" in this plan as **merge-blocking for anyone who is not the repository owner** —
+a red run withholds the merge button from a contributor, and does not withhold it from the
+owner. Verify with
+`gh api repos/IvanBBaev/agenthropic/branches/main/protection --jq '{contexts: .required_status_checks.contexts, enforce_admins: .enforce_admins.enabled}'`
+→ `{"contexts":["ci"],"enforce_admins":false}`. The canonical write-up is
+[the standing correction](../site/contributing/decisions/README.md#a-standing-correction-merge-blocking).
+
+**Phase 1's "Pages builds" exit-gate leg is met (2026-08-25).** `WP-X7` and the Phase-1 exit
+gate both promise a published docs site; the workflow shipped, but every run failed at the
+Configure Pages step because GitHub Pages had never been created for the repository — and
+that was not automatable, since `pages: write` on a workflow's `GITHUB_TOKEN` authorises
+**deploying to** an existing Pages site and never **creating** one, which needs
+repository-administration rights the token deliberately never has. Pages was created on
+2026-08-25 by an owner-credentialled call, the previously failing run was re-run and
+succeeded, and the site is live at <https://ivanbbaev.github.io/agenthropic/>. Verify with
+`gh api repos/IvanBBaev/agenthropic --jq .has_pages` → `true`. What this does **not** settle
+is `ADR-0013`: the pipeline runs on the stock Jekyll builder with zero dependencies, so
+`DOC-P1` (the generator choice) is still deliberately deferred.
 
 **Phase 4's `< 30s` exit gate is UNMEASURED.** The four views are built and the five daily
 questions have on-screen answers, but "time-to-understand a session < 30s" is a *measured*
@@ -164,6 +189,12 @@ was stepped over knowingly and is still owed its evidence.
 ## 3. Roadmap — phases & exit gates
 
 The app is bound to `127.0.0.1` throughout; the docs site is the only public surface.
+
+_(As built, 2026-08-25: the "merge-blocking" / "green & blocking" wording in the table below
+is the 2026-07-06 commitment, left verbatim. Read it as **merge-blocking for anyone who is
+not the repository owner** — `enforce_admins` is deliberately off, because agenthropic has a
+single maintainer whose normal mode is a direct push to `main`. See §2c and
+[the standing correction](../site/contributing/decisions/README.md#a-standing-correction-merge-blocking).)_
 
 | Phase | Goal | WPs | Exit gate |
 |---|---|---|---|
@@ -229,6 +260,12 @@ WP-IN13/WP-X3`.
 Deps shown are the **canonical** (post-reconciliation) ids. Done-when is the headline
 acceptance criterion; full criteria per WP follow the CD acceptance set in
 [`concept-analysis-v2.md`](concept-analysis-v2.md) §6.
+
+_(As built, 2026-08-25: `WP-F4`'s "blocking merges", `WP-X5`'s "blocked (demonstrated)" and
+`WP-IN13`'s "blocking" are the 2026-07-06 commitments, left verbatim. Read each as
+**merge-blocking for anyone who is not the repository owner** — `enforce_admins` is
+deliberately off for the sole maintainer. See §2c and
+[the standing correction](../site/contributing/decisions/README.md#a-standing-correction-merge-blocking).)_
 
 ### Track S — Phase-0 feasibility spike _(throwaway; hard GO/NO-GO stop, CD-8)_
 
@@ -393,7 +430,11 @@ Every canonical decision is implemented by ≥1 WP (verifier-confirmed `ok:true`
 ## 8. Global Definition of Done (applies to every WP)
 
 - Touched code passes **typecheck + lint + tests**; coverage stays **>90%** (the gate is
-  merge-blocking from Phase 1; it blocks at 90.0% or below).
+  merge-blocking from Phase 1; it blocks at 90.0% or below). *(As built: the bar is 100% in
+  all five packages, and the bare "merge-blocking" above reads correctly only with the
+  2026-08-25 exemption attached — the required `ci` check withholds the merge button from a
+  contributor but not from the repository owner, `enforce_admins` being deliberately off for
+  the sole maintainer. See §2c.)*
 - No security invariant is weakened: loopback-only bind; mandatory-token-or-fail-startup;
   SSE same-origin; no subprocess spawner; no SSRF; secrets never in SQLite/SSE/logs.
 - Ground-truth tokens are **read, never inferred**; every displayed dollar traces to

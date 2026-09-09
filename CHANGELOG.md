@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `GET /api/changes` reports what the corpus poll found since a given moment: each session is labelled `new`, `updated` or `unknown`, with a counter for each, so a client can tell "nothing changed" from "cannot tell" (`ChangesDto` in `packages/shared`).
+- Failed agents are classified: migration 17 adds `agents.outcome_cause`, written from the transcript's terminal record with six causes (`concurrency_limit`, `user_interrupt`, `permission_failed`, `dispatch_unavailable`, `terminated_early`, `unclassified`); only `terminated_early` promotes an agent to `status: error`, a status that previously had no producer, and the cause travels on the session-tree and global-DAG wire as `outcomeCause`.
+- The server serves the built dashboard from its own loopback port, so one origin carries both the API and the page; documented in the running guide.
+- Hooks installer: entries are written with `async: true` and `timeout: 5` and call `curl --silent --show-error`; an existing entry is classified as ours, ambiguous or foreign, and an ambiguous one stops the installer without echoing the command it could not classify.
+- Dashboard: an error boundary around every view, runtime guards on the DTOs a view renders, a snapshot-age stamp on the Sessions and DAG views that escalates aged provenance, a "Re-check server" button, and a stream-gap banner when the event stream's last event id shows that frames were missed.
+- Cost view: the "Today (UTC)" tile distinguishes measured, not measured and lower bound (naming the UTC hour it was observed), the top-sessions table states in dollars what it covers and what it does not, the hub node's hover and prose carry both drawn sides and their gap when they disagree, and the sankey's text alternative lists its caveats first.
+- Live view: a status frame dropped while the first snapshot was in flight triggers exactly one re-read of the snapshot once it lands, `lastActivityAt` never moves backwards, and per-session counts are capped at the served ceiling.
+- Token screen: the token never appears in an error message, the three server verdicts (rejected, unreachable, malformed) are told apart, storage access is guarded, and an empty submit is handled.
+- Tests: the five daily questions answered over HTTP in the P0 suite, dated pricing with two effective rates in the P0 harness, rollup equivalence, seed and trigger-order suites, migration checksum pins, and a static-site suite; the corpus benchmark takes `--records` and `--record-bytes` and no longer projects beyond what it measured.
+
+### Changed
+
+- `/api/cost/summary` is served from the `token_usage_rollup` materialization rather than computed over `token_usage` on every request; an equivalence suite pins both paths to the same answer.
+- `packages/shared` drops its unused `*Row` interfaces; `types/rows.ts` becomes `types/enums.ts` with named exports.
+- `formatUsd` floors sub-cent amounts symmetrically on both signs and prints `cost unreadable` for a non-finite figure; `formatRelativeTime` tolerates 90 s of clock skew and names anything further ahead as `ahead of this clock` instead of `just now`.
+- The spawner gate refuses symlinks, checks every manifest for forbidden direct dependencies and reports its denominators; the licence gate reports the `caniuse-lite` CC-BY-4.0 exception as not allowlisted rather than folding it into the allowlist.
+- The realtime contract test asserts which schema arm accepted each event, not only that one did.
+- Documentation retires the `~137 s` startup projection (wrong by 3.4-3.9x against a measured run) and labels the 34.87-39.92 s replay band as synthetic: the benchmark corpus averages 7.04 MiB per session where the real one averages 26.19 MiB.
+- Linting ignores `.claude/**`.
+
+### Fixed
+
+- The `✕ error 0` status bucket was structurally always zero because nothing produced `status: error`; the outcome classifier above is its producer.
+- The Cost tile printed a calendar-guaranteed `$0.00` for today after UTC rollover, before any transcript could have been written.
+- One-sided formatter guards let `$-0.0000` and `$NaN` reach the page, and a future-dated timestamp read as `just now`.
+- The connection chip stayed on `server unreachable` after a single failed boot-time probe, and never said `reconnecting` while the stream was reconnecting.
+- A session whose only status was null was counted under the unrecognised-status glyph.
+- The cost sankey's hub hover printed d3-sankey's larger side as a single unexplained figure, and the layout labelled a hub "all cost" when only its entering side matched the served total.
+
+
 ## [0.3.0] - 2026-08-25
 
 First versioned release of the source tree. agenthropic is run from a clone, not
@@ -36,6 +68,7 @@ this name carries documentation only. v1.0 remains the target for 2026-12-01.
 - Retention engine: a bounded, transactional prune of the events and token-usage projections with a dry-run mode, an fsync'd cost receipt written inside the delete transaction, and a static guard proving no delete ever targets the raw event, session, agent, edge or pricing tables.
 - Ingest visibility on `/api/health`: per-reason skip counters, a `replaying` or `idle` phase, the duration of the last completed corpus poll, and the number of cross-session usage collisions.
 - Corpus-scale benchmark against a synthetic corpus, and a hand-labelled hierarchy annotation format whose accuracy gate uses a one-sided Wilson lower bound (n >= 52 with zero errors) and reports "substrate unavailable" instead of passing vacuously.
+- Published documentation site at <https://ivanbbaev.github.io/agenthropic/>, built from `docs/` by the stock GitHub Pages Jekyll builder and deployed by a workflow that uses only official actions and adds no dependency to the repository.
 
 ### Changed
 
@@ -75,7 +108,7 @@ Things a reader might reasonably expect here and will not find:
 
 - No git tag. The version is `0.3.0` across the workspace; the release checklist bumps it to `1.0.0` at release time, and tagging has not been done for any version.
 - No code on npm. The root package is publishable so that the name is held, but its tarball is `README`, `LICENSE`, `CHANGELOG` and `SECURITY` only - there is no `bin`, no build output and nothing to run. Every `@agenthropic/*` workspace package stays `private` and unpublished.
-- No published documentation site. The GitHub Pages workflow exists and uses only official actions, but Pages has never been enabled on the repository, so every run has failed at `configure-pages`. Turning it on is a one-time owner action in the repository settings.
+- Merge blocking is not total. `main` requires the `ci` check as of 2026-08-25, and refuses force-pushes and deletion, but `enforce_admins` is deliberately off: a red run withholds a contributor's merge and not the sole maintainer's direct push.
 - No alerting and no webhooks. The alert port, rules engine and notification sinks are deliberately v2 work and are not on the v1.0 path.
 - Retention is implemented but nothing runs it. There is no timer and no HTTP entry point, on purpose, until the retention policy values are signed off; the default policy is a byte-identical no-op that opens no transaction.
 - The subagent-hierarchy accuracy claim is not signed off. The annotation loader and the Wilson-bound gate are built, but the hand-labelled corpus they measure against does not exist yet, so the gate reports "substrate unavailable" rather than a passing number.

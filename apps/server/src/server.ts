@@ -25,6 +25,7 @@ import { apiRoutes } from './api/routes';
 import type { SubstrateProvider } from './api/substrate-provider';
 import type { SkipReason } from './corpus/fs-port';
 import type { SqliteDatabase } from './db/connection';
+import { registerStaticSite } from './http/static-site';
 import { RealtimeHub } from './realtime/hub';
 
 export interface BuildServerOptions {
@@ -106,6 +107,14 @@ export interface BuildServerOptions {
    * fields are omitted rather than faking a zero.
    */
   readonly ingestExclusions?: () => { readonly failing: number; readonly quarantined: number };
+  /**
+   * Directory holding the built SPA, served from this same loopback origin so
+   * the product is one command and one port. When absent no static route is
+   * registered at all and every non-API path 404s exactly as before, which is
+   * what keeps the API-only harnesses in the test suite unchanged. The
+   * composition root always passes it (see config.webRoot).
+   */
+  readonly webRoot?: string;
 }
 
 const HealthResponseSchema = Type.Object(
@@ -409,6 +418,21 @@ export function buildServer(options: BuildServerOptions) {
       substrateProvider: options.substrateProvider,
       ingestExclusions: options.ingestExclusions,
     });
+  }
+
+  // The built SPA, on the same origin as the API. Registered LAST and outside
+  // the auth gate on purpose:
+  //  - the gate above keys on the ROUTED pattern and returns early for anything
+  //    that is not '/api/...', so these routes are reached unauthenticated by
+  //    design - the HTML shell holds no secret, and a browser cannot present a
+  //    Bearer header for the page it is still loading (see http/static-site.ts);
+  //  - registration order does not affect matching (Fastify prefers a static
+  //    route over the wildcard however they were added), so /api/health and
+  //    /api/stream keep their own handlers and their own gate. The wildcard
+  //    additionally refuses every path whose first segment is 'api', so an
+  //    unregistered /api/... can never be answered off the filesystem.
+  if (options.webRoot !== undefined) {
+    registerStaticSite(app, { webRoot: options.webRoot });
   }
 
   return app;

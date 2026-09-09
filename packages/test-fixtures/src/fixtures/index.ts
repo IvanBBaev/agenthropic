@@ -2,6 +2,7 @@
  * Registry + typed loader for the synthetic fixture corpus
  * (parser-spec section 4 join paths + the N3 usage-dedup case).
  */
+import { agentOutcomeErrors } from './agent-outcome-errors.js';
 import { depth2Sync } from './depth-2-sync.js';
 import { flatToolUse } from './flat-tool-use.js';
 import { legacyBareExplore } from './legacy-bare-explore.js';
@@ -19,6 +20,7 @@ const REGISTRY: Readonly<Record<FixtureName, Fixture>> = {
   'usage-dedup': usageDedup,
   'depth-2-sync': depth2Sync,
   'legacy-bare-explore': legacyBareExplore,
+  'agent-outcome-errors': agentOutcomeErrors,
 };
 
 /** All fixture names, in a stable order. */
@@ -41,3 +43,9 @@ export { EVICTED_TOOL_USE_ID, TASK_ID } from './task-notification-recovery.js';
 export { QUEUED_TASK_ID, QUEUED_TOOL_USE_ID } from './queue-operation.js';
 export { DUPLICATED_MESSAGE_ID } from './usage-dedup.js';
 export { LEGACY_CHILD_HEX, LEGACY_DECOY_HEX } from './legacy-bare-explore.js';
+export {
+  INTERRUPT_TOOL_USE_ID,
+  TERMINATED_EARLY_AGENT_ID,
+  TERMINATED_TOOL_USE_ID,
+  USER_INTERRUPT_AGENT_ID,
+} from './agent-outcome-errors.js';

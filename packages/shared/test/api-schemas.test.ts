@@ -36,6 +36,7 @@ const agentNode: AgentNodeDto = {
   type: 'subagent',
   subagentType: 'explorer',
   status: 'working',
+  outcomeCause: 'concurrency_limit',
   parentAgentId: 'agent-0',
   firstSeenAt: '2026-07-11T00:00:00Z',
   lastSeenAt: '2026-07-11T00:05:00Z',
@@ -105,6 +106,7 @@ describe('graph schemas', () => {
         type: null,
         subagentType: null,
         status: null,
+        outcomeCause: null,
         parentAgentId: null,
         firstSeenAt: null,
         lastSeenAt: null,
@@ -115,6 +117,24 @@ describe('graph schemas', () => {
   it('rejects an agent node with negative tokens or extra properties', () => {
     expect(Value.Check(AgentNodeSchema, { ...agentNode, totalTokens: -1 })).toBe(false);
     expect(Value.Check(AgentNodeSchema, { ...agentNode, secret: true })).toBe(false);
+  });
+
+  it('accepts every persisted outcome cause and rejects an unknown one', () => {
+    // The six literals are the same set migration 17's CHECK constraint holds,
+    // so a cause that reaches the DB can always be served back out. A seventh
+    // value must fail here, or the union would be decoration rather than a gate.
+    for (const outcomeCause of [
+      'concurrency_limit',
+      'user_interrupt',
+      'permission_failed',
+      'dispatch_unavailable',
+      'terminated_early',
+      'unclassified',
+    ]) {
+      expect(Value.Check(AgentNodeSchema, { ...agentNode, outcomeCause })).toBe(true);
+    }
+    expect(Value.Check(AgentNodeSchema, { ...agentNode, outcomeCause: 'failed' })).toBe(false);
+    expect(Value.Check(AgentNodeSchema, { ...agentNode, outcomeCause: '' })).toBe(false);
   });
 
   it('accepts every persisted edge source and rejects an unknown one', () => {

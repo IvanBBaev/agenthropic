@@ -1,6 +1,6 @@
 # ADR-0007: CD-5 — Transport is SSE with same-origin enforcement
 
-- **Status:** accepted — **built and holding**, re-checked 2026-08-15 (one open item: `Last-Event-ID` resumability; the origin and auth tests are CI-failing rather than merge-blocking — see the as-built updates below)
+- **Status:** accepted — **built and holding**, re-checked 2026-08-15 and re-amended **2026-08-25** (one open item: `Last-Event-ID` resumability; the origin and auth tests are merge-blocking for anyone who is not the repository owner — `main` is branch-protected on the `ci` check, with `enforce_admins: false` deliberate for a single-maintainer repository — see the as-built updates below)
 - **Date:** 2026-07-03
 - **Deciders:** Ivan Baev (project owner), via the six-lens concept-analysis-v2 workflow
 - **Source:** [`concept-analysis-v2.md` §3, row CD-5](../../../analysis/concept-analysis-v2.md#3-canonical-decision-register-v2)
@@ -42,10 +42,12 @@ still asserts a 403 on a foreign `Origin` **with and without** a valid token, an
 byte-identical 401 bodies across the four wrong-token shapes, so neither check leaks an
 oracle.
 
-Calling those assertions **merge-blocking** is the part that was wrong. They run in CI on
-every push and pull request and fail the run, but `main` is not branch-protected
-(`404 Branch not protected`, verified 2026-08-15), so a red run is a signal rather than a
-withheld merge — see [the standing correction](README.md#a-standing-correction-merge-blocking).
+Calling those assertions **merge-blocking** was wrong when written and is now only
+partly right. They run in CI on every push and pull request and fail the run; since
+2026-08-25 `main` is branch-protected on the `ci` check, so that failure withholds a
+merge from a contributor, while the owner stays exempt by design
+(`enforce_admins: false`) — see
+[the standing correction](README.md#a-standing-correction-merge-blocking).
 
 The `Last-Event-ID` gap is unchanged: the server still emits only a `retry:` directive, a
 reconnecting client still resubscribes to the live feed instead of being caught up on the

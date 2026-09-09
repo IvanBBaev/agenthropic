@@ -1,6 +1,6 @@
 # ADR-0003: CD-1 — Ingest source of truth, decided by the Phase-0 diff
 
-- **Status:** accepted — JSONL-primary branch **built and holding** (see the as-built update below); ~~formal Phase-0 spike pending~~ *(the `WP-S7` gate this ADR depends on was overridden by the owner on 2026-07-11, not passed — see [ADR-0010](adr-cd-8-phase-0-spike.md))*; **amended 2026-08-15** — the P0 proof cited below is CI-failing, not merge-blocking (`main` is not branch-protected)
+- **Status:** accepted — JSONL-primary branch **built and holding** (see the as-built update below); ~~formal Phase-0 spike pending~~ *(the `WP-S7` gate this ADR depends on was overridden by the owner on 2026-07-11, not passed — see [ADR-0010](adr-cd-8-phase-0-spike.md))*; **amended 2026-08-15**, re-amended **2026-08-25** — the P0 proof cited below runs in CI on every push and, now that `main` is branch-protected on the `ci` check, is merge-blocking for anyone who is not the repository owner (`enforce_admins: false`, deliberate — agenthropic has one maintainer whose normal mode is a direct push to `main`)
 - **Date:** 2026-07-03
 - **Deciders:** Ivan Baev (project owner), via the six-lens concept-analysis-v2 workflow
 - **Source:** [`concept-analysis-v2.md` §3, row CD-1](../../../analysis/concept-analysis-v2.md#3-canonical-decision-register-v2)
@@ -67,8 +67,9 @@ to select it was bypassed.
 The half of that which is true is the important half: the test runs in CI on every push and
 pull request, and it fails the run if appending hook events changes the DAG dump — so a
 regression that let hooks write structure could not pass quietly. The half that is not true
-is the enforcement: `main` is not branch-protected (`404 Branch not protected`, verified
-2026-08-15), so a red run is a signal rather than a withheld merge. See
+was the enforcement: `main` was unprotected when this was written. Since 2026-08-25 it is
+protected on the `ci` check, so a red run does withhold a merge — from a contributor; the
+owner remains exempt by design (`enforce_admins: false`). See
 [the standing correction](README.md#a-standing-correction-merge-blocking).
 
 Neither the four-hooks finding nor the absence of `SubagentStart` has changed, and neither

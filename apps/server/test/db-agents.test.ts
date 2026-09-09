@@ -46,6 +46,7 @@ describe('upsertAgent (WP-D6)', () => {
         parentAgentId: null,
         firstSeenAt: TS,
         lastSeenAt: TS,
+        outcomeCause: null,
       }),
     ).toEqual({ inserted: true });
     expect(
@@ -58,6 +59,7 @@ describe('upsertAgent (WP-D6)', () => {
         parentAgentId: ROOT_ID,
         firstSeenAt: TS,
         lastSeenAt: TS,
+        outcomeCause: null,
       }),
     ).toEqual({ inserted: true });
 
@@ -91,6 +93,7 @@ describe('upsertAgent (WP-D6)', () => {
       parentAgentId: null,
       firstSeenAt: TS,
       lastSeenAt: TS,
+      outcomeCause: null,
     });
     upsertAgent(temp.db, {
       id: CHILD_ID,
@@ -101,6 +104,7 @@ describe('upsertAgent (WP-D6)', () => {
       parentAgentId: ROOT_ID,
       firstSeenAt: TS,
       lastSeenAt: TS,
+      outcomeCause: null,
     });
 
     // A re-upsert of an existing row is NOT a first sighting.
@@ -114,6 +118,7 @@ describe('upsertAgent (WP-D6)', () => {
         parentAgentId: ROOT_ID,
         firstSeenAt: TS,
         lastSeenAt: '2026-07-11T00:05:00Z',
+        outcomeCause: null,
       }),
     ).toEqual({ inserted: false });
 
@@ -127,6 +132,49 @@ describe('upsertAgent (WP-D6)', () => {
     expect(child?.last_seen_at).toBe('2026-07-11T00:05:00Z');
   });
 
+  it("never lets fresh liveness un-fail a sticky 'error' row", () => {
+    // The `'error'` arm of AGENT_STATUS_CASE, pinned. It is the ONLY thing
+    // standing between a failed agent and a silent recovery, and the sequence
+    // that would cause one is ordinary rather than exotic: the parent
+    // transcript is compacted, the errored `tool_result` scrolls out of the
+    // retained window, the next re-ingest observes no outcome at all, and
+    // `statusForOutcome(null)` therefore returns liveness. `last_seen_at` has
+    // advanced meanwhile, so every condition of the "inferred states yield to
+    // fresh evidence" arm below it is satisfied. Absence of the evidence is
+    // not evidence of recovery — a terminal that was OBSERVED outranks a
+    // later reading that merely failed to observe it again.
+    insertAgent(temp.db, ROOT_ID, SESSION_ID);
+    upsertAgent(temp.db, {
+      id: CHILD_ID,
+      sessionId: SESSION_ID,
+      type: 'subagent',
+      subagentType: 'general-purpose',
+      status: 'error',
+      parentAgentId: ROOT_ID,
+      firstSeenAt: TS,
+      lastSeenAt: TS,
+      outcomeCause: 'terminated_early',
+    });
+    expect(readAgent(CHILD_ID)?.status).toBe('error');
+
+    upsertAgent(temp.db, {
+      id: CHILD_ID,
+      sessionId: SESSION_ID,
+      type: 'subagent',
+      subagentType: 'general-purpose',
+      status: 'working',
+      parentAgentId: ROOT_ID,
+      firstSeenAt: TS,
+      lastSeenAt: '2026-07-11T00:09:00Z',
+      outcomeCause: null,
+    });
+
+    const errored = readAgent(CHILD_ID);
+    expect(errored?.status).toBe('error');
+    // The replay is not ignored — it is only barred from the status column.
+    expect(errored?.last_seen_at).toBe('2026-07-11T00:09:00Z');
+  });
+
   it('does not overwrite the immutable owning session_id on conflict', () => {
     upsertAgent(temp.db, {
       id: ROOT_ID,
@@ -137,6 +185,7 @@ describe('upsertAgent (WP-D6)', () => {
       parentAgentId: null,
       firstSeenAt: TS,
       lastSeenAt: TS,
+      outcomeCause: null,
     });
 
     const otherSession = 'session-2';
@@ -150,6 +199,7 @@ describe('upsertAgent (WP-D6)', () => {
       parentAgentId: null,
       firstSeenAt: TS,
       lastSeenAt: TS,
+      outcomeCause: null,
     });
 
     const root = readAgent(ROOT_ID);
@@ -169,6 +219,7 @@ describe('upsertAgent (WP-D6)', () => {
       subagentType: null,
       parentAgentId: null,
       firstSeenAt: TS,
+      outcomeCause: null,
     } as const;
     upsertAgent(temp.db, { ...seed, status: 'working', lastSeenAt: TS });
 
@@ -205,6 +256,7 @@ describe('upsertAgent (WP-D6)', () => {
       parentAgentId: null,
       firstSeenAt: TS,
       lastSeenAt: TS,
+      outcomeCause: null,
     });
 
     expect(readAgent(ROOT_ID)?.status).toBe('working');
@@ -221,6 +273,7 @@ describe('upsertAgent (WP-D6)', () => {
         parentAgentId: 'no-such-parent',
         firstSeenAt: TS,
         lastSeenAt: TS,
+        outcomeCause: null,
       }),
     ).toThrow(/FOREIGN KEY/i);
   });

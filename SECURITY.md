@@ -261,6 +261,26 @@ when the local port cannot be determined; that a 401 body never echoes the token
 that constructing the config without `DASHBOARD_TOKEN` throws.
 
 One caveat, stated plainly because the workflow file states it too: CI runs these gates
-on every push and pull request, but making a red gate *block a merge* requires a GitHub
-branch-protection rule. That is an owner setting on github.com and is not something this
-repository can attest.
+on every push and pull request, and since **2026-08-25** a red gate also withholds the
+merge button, because `main` requires the `ci` status check - the job id in
+`.github/workflows/ci.yml`, lowercase, not the workflow's display name. Until that date
+this paragraph ended "making a red gate *block a merge* requires a GitHub branch-protection
+rule. That is an owner setting on github.com and is not something this repository can
+attest." The rule now exists; force-pushes to `main` and deletion of `main` are refused for
+everyone.
+
+The one exemption is deliberate, and it travels with every "merge-blocking" claim in this
+repository: `enforce_admins` is off, so a red run withholds the merge button from a
+*contributor* and not from the repository owner. agenthropic has exactly one maintainer
+whose normal working mode is a direct push to `main`, and turning admin enforcement on would
+lock the sole maintainer out of their own repository. That is a stated design choice, not an
+oversight and not something still to be done. Verify:
+
+```sh
+gh api repos/IvanBBaev/agenthropic/branches/main/protection \
+  --jq '{contexts: .required_status_checks.contexts, enforce_admins: .enforce_admins.enabled}'
+# -> {"contexts":["ci"],"enforce_admins":false}
+```
+
+The standing write-up lives in
+[the decisions index](docs/site/contributing/decisions/README.md#a-standing-correction-merge-blocking).

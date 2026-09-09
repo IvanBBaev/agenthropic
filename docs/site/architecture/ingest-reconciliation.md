@@ -293,10 +293,80 @@ the system at all (DESIGN §3; concept-analysis-v2 §5, Strengths).
 ### 6.1 The checkpoint that makes a restart cheap without making it trusting
 
 The fingerprint map lives in process memory, so a restart starts blank and every session
-counts as changed. That is correct, and on a small corpus it is also free — but on the
-measured corpus (12.80 GiB across 1855 sessions) a full cold replay projects to roughly
-**137 s of boot-time work**, paid again on every restart, for sessions whose bytes have not
-moved in months.
+counts as changed. That is correct, and on a small corpus it is also free — but a full cold
+replay of the whole corpus is **tens of seconds of boot-time work**, paid again on every
+restart, for sessions whose bytes have not moved in months.
+
+> **Correction and direct measurement — 2026-09-01.** This paragraph used to read: "on the
+> measured corpus (12.80 GiB across **1855 sessions**) a full cold replay projects to roughly
+> **137 s of boot-time work**". Two things were wrong with it.
+>
+> - **The unit.** `1855` counts **subagent transcripts**, one per `agent-<hex>.jsonl` file.
+>   The census of record ([`parser-spec.md` §4.2](../../analysis/parser-spec.md)) is **141
+>   sessions** across 20 slugs, 54 of them with any subagent at all. Read as a session count,
+>   1855 overstates the corpus by roughly 13x.
+> - **The 137 s was a projection, not a measurement** — and it was projected onto exactly
+>   that wrong scale: an ×11.1 linear extrapolation from a 200-clone benchmark slice up to a
+>   **1855-session** target.
+>
+> Cold replay has since been **measured directly at census scale**:
+> `apps/server/bench/corpus-scale.ts` now runs at 141 sessions instead of extrapolating. Two
+> runs on an M4 Mac Mini (Node v22.23.2, darwin arm64, 10 cores) over a corpus of **996.4 MiB
+> / 141 sessions** — run A **39.92 s** (283 ms/session, 25.0 MB/s, 1-min load 7.07 → 10.52),
+> run B **34.87 s** (247 ms/session, 28.6 MB/s, 1-min load 10.28 → 9.59). In both, the sampled
+> event-loop max is about the wall time: cold replay blocks the loop as **one synchronous
+> stall**, not as many small ones.
+>
+> **Resolved 2026-09-01 — the ≈137 s is retired as wrong, not carried as "unverified".**
+> This paragraph used to say the two figures "must not be rescaled into each other", the
+> projection claiming 12.80 GiB against 0.97 GiB measured. That refusal was correct, and it
+> is precisely what left the question answerable: had the figures been merged on a guessed
+> factor, the discrepancy that resolves them would have been erased. What settled it was
+> **provenance, not rescaling** — the 12.80 GiB was never a measurement either:
+>
+> | quantity | MiB per session |
+> |---|---|
+> | implied by the projection, 12.80 GiB / 1855 | **7.0659** |
+> | measured corpus, 996.4 MiB / 141 | **7.0667** |
+>
+> Two supposedly independent quantities do not agree to **0.011%** by chance. It is one
+> clone size multiplied by two different session counts — the same 13x
+> transcripts-for-sessions error expressed in bytes instead of counts, which is why it
+> outlived the round of corrections that fixed the counts. Corrected, the projection
+> targeted **the exact scale since measured**, so ≈137 s and the measured
+> **34.87–39.92 s** are directly comparable: the projection **overstated cold replay by
+> 3.43–3.92x**. The argument this section rests on is unchanged — a cold replay is still a
+> multi-tens-of-seconds synchronous stall paid on every boot.
+>
+> **Open 2026-09-01 — the band is measured; its transfer to the real corpus is not.**
+> This is the weaker claim that replaces the retired projection, and it is deliberately not
+> the same sentence as "unverified". `34.87–39.92 s` is a real measurement of a real ingest
+> run — over a **synthetic** corpus. `corpus-scale.ts` never reads `~/.claude/projects`; it
+> refuses to by design and plants a generated tree instead, whose per-session size is two
+> literals, `DEFAULT_RECORDS` × `DEFAULT_RECORD_BYTES` = 1800 × 4100 = **7.038 MiB**
+> (≈7.07 with subagents). That constant is also the entire provenance of the `996.4 MiB` and
+> `12.80 GiB` above — both are it, multiplied by a session count.
+>
+> Measured on disk the same day, the real corpus does not have that shape:
+>
+> | | sessions | subagent transcripts | total | per session |
+> |---|---|---|---|---|
+> | census of record (2026-07-06) | 141 | 1855 | — | — |
+> | benchmark default | 141 | — | 996.4 MiB | **7.07 MiB** |
+> | WP-S1 five-session median | 5 | — | — | 14.55 MiB |
+> | on disk (2026-09-01) | 51 | 2477 | 1335.5 MiB | **26.19 MiB** |
+>
+> Total bytes agree within 34%, but the **per-session** axis is off by **3.7x** — and 1.8x
+> the WP-S1 median the defaults were calibrated against. That axis is the one that matters
+> here, because a session is parsed as a unit: any per-session superlinearity lands exactly
+> where the benchmark is furthest from reality. Linear-in-bytes would put real cold replay
+> near ~47–53 s, which is a bound, not a measurement.
+>
+> None of this makes the band wrong, and the argument above does not depend on it — a
+> multi-tens-of-seconds stall is a multi-tens-of-seconds stall at either shape. What is
+> unestablished is that the measured band **transfers**. Settling it means rerunning with
+> `--records` / `--record-bytes` at the real shape; that is not done here, because a
+> benchmark rerun changes a number the owner has to stand behind. Tracked as **BENCH-SHAPE**.
 
 Migration 9 added `ingest_checkpoints` and the watcher grew an **optional** `checkpoints`
 dependency: supply it and the fingerprint map is hydrated from the database on the first
@@ -617,8 +687,16 @@ The DAG-rebuild acceptance criterion is written to cover both branches explicitl
 
 Three tests are named **release-blockers** — they must be green **and merge-blocking** in CI
 before Phase 3 can be considered done, and no other feature work substitutes for them
-(concept-analysis-v2 §3, CD-8; §4.3, QA lens). The QA lens calls the third one "the make-or-break
-test both externals omit" (concept-analysis-v2 §4.3):
+(concept-analysis-v2 §3, CD-8; §4.3, QA lens). *(As built: the three tests are green in CI,
+and the "merge-blocking" half became true on 2026-08-25, when `main` became branch-protected
+on the `ci` check — a red run now withholds the merge button from a contributor, though not
+from the repository owner, whose `enforce_admins` exemption is deliberate because the sole
+maintainer's normal working mode is a direct push to `main` — full write-up in
+[the standing correction](../contributing/decisions/README.md#a-standing-correction-merge-blocking).
+Phase 3 is still not done for a different reason: the hierarchy ≥95% bar is unmeasured —
+see §11.)*
+The QA lens calls the third one "the make-or-break test both externals omit"
+(concept-analysis-v2 §4.3):
 
 | # | Test | Proves |
 |---|---|---|
@@ -678,10 +756,20 @@ dependency edge in the build graph, not a note in a README (development-plan §1
 > therefore not satisfied** — "hierarchy ≥95% vs. the labeled corpus" has never been scored,
 > because the labeled corpus does not exist yet (the `LABEL-ME` trees are still blank
 > templates); the gate reports `NOT CERTIFIED` at `n = 0` against a required `n ≥ 52`. Two
-> smaller readings also need correcting: the P0 tests are **CI-failing, not merge-blocking**
-> as §10 words it, because `main` carries no branch-protection rule; and the CD-8 hard stop
-> described here was ultimately crossed by **explicit owner override on 2026-07-11**, not by
-> a ratified `WP-S7` GO — which is why the spike numbers stay `PROVISIONAL`.
+> smaller readings also needed correcting, and only one of them still does. The first has
+> since been overtaken: this note used to read "the P0 tests are **CI-failing, not
+> merge-blocking** as §10 words it, because `main` carries no branch-protection rule," which
+> was true until **2026-08-25**. `main` is branch-protected now — the required check context
+> is `ci` (lowercase, the job id in `.github/workflows/ci.yml`), force-pushes and branch
+> deletion are refused — so §10's wording holds, with the exemption that must travel with it:
+> **merge-blocking for anyone who is not the repository owner**, and CI-failing but
+> bypassable for the owner, because `enforce_admins` is deliberately off in a
+> single-maintainer repository whose normal working mode is a direct push to `main`. The
+> full write-up is
+> [the standing correction](../contributing/decisions/README.md#a-standing-correction-merge-blocking).
+> The second reading is unchanged: the CD-8 hard stop described here was ultimately crossed
+> by **explicit owner override on 2026-07-11**, not by a ratified `WP-S7` GO — which is why
+> the spike numbers stay `PROVISIONAL`.
 
 ## What's undecided
 

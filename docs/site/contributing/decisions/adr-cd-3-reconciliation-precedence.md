@@ -1,6 +1,6 @@
 # ADR-0005: CD-3 — Reconciliation precedence
 
-- **Status:** accepted, **partly moot as built 2026-07-30** — JSONL-authoritative tokens hold and are P0-proven; the cross-source precedence and the two-phase `agent_id` backfill were never needed; **amended 2026-08-15** — the token-reconciliation proof is CI-failing rather than merge-blocking, and the parser thresholds it runs against are still PROVISIONAL (see the as-built updates below)
+- **Status:** accepted, **partly moot as built 2026-07-30** — JSONL-authoritative tokens hold and are P0-proven; the cross-source precedence and the two-phase `agent_id` backfill were never needed; **amended 2026-08-15**, re-amended **2026-08-25** — the token-reconciliation proof is merge-blocking for anyone who is not the repository owner (`main` is branch-protected on the `ci` check; `enforce_admins: false`, deliberate for a single-maintainer repository), and the parser thresholds it runs against are still PROVISIONAL (see the as-built updates below)
 - **Date:** 2026-07-03
 - **Deciders:** Ivan Baev (project owner), via the six-lens concept-analysis-v2 workflow
 - **Source:** [`concept-analysis-v2.md` §3, row CD-3](../../../analysis/concept-analysis-v2.md#3-canonical-decision-register-v2)
@@ -66,12 +66,16 @@ corpus.
 
 ## As-built update — 2026-08-15
 
-**Verdict: unchanged; "and it is merge-blocking" overstates the enforcement.** The P0
-token-reconciliation proof is exactly as described — Σ `token_usage` per session checked
-against an independently written in-test reader, so a shared bug in the production summing
-path cannot make both sides agree — and it runs in CI on every push, failing the run on a
-mismatch. It does not withhold a merge: `main` is not branch-protected (`404 Branch not
-protected`, verified 2026-08-15); see
+**Verdict: unchanged; "and it is merge-blocking" overstated the enforcement when written.**
+The P0 token-reconciliation proof is exactly as described — Σ `token_usage` per session
+checked against an independently written in-test reader, so a shared bug in the production
+summing path cannot make both sides agree — and it runs in CI on every push, failing the run
+on a mismatch. Until 2026-08-25 that was the whole of it: `main` was unprotected (`404 Branch
+not protected`, verified 2026-08-15), so a red run withheld nothing. Since 2026-08-25 `main`
+is branch-protected on the `ci` check, so the failure does withhold a merge from a
+contributor — but not from the repository owner, who is exempt by design
+(`enforce_admins: false`) because this repository has a single maintainer whose normal mode
+is a direct push to `main`; see
 [the standing correction](README.md#a-standing-correction-merge-blocking).
 
 Nothing else here has moved. The `UNIQUE (message_id, bucket)` key still does the work that

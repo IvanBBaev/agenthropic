@@ -46,19 +46,27 @@ properly — the file is tracked and the GitHub API reports this repository's li
 closed in public. Publishing them is an owner action; see
 [open decisions](#open-decisions--follow-ups).
 
-**One governance control that is worth stating plainly, because it is the gap everything
-else on this site depends on:** `main` is **not branch-protected**. Queried again on
-2026-08-15, `gh api repos/IvanBBaev/agenthropic/branches/main/protection` still answers
-`404 Branch not protected`. CD-7 requires the coverage gate to *block merges*, and the
-gate itself is real — CI runs the security gate, typecheck, lint, format check, the web
-production build, the full test suite with its 100% coverage thresholds, and the license
-gate on every push and pull request, and it fails on a violation. What is missing is the
-rule that turns a red run into a withheld merge button. Until that rule exists, every
-"merge-blocking" claim in this documentation set describes an intent rather than a
-mechanism, and should be read that way. The gap is tracked in
-[`RELEASE.md`](../../../RELEASE.md) as a human-owned pre-tag blocker rather than silently
-assumed away; enabling it is an owner action on github.com and cannot be done from inside
-the repository, which is why no commit and no document can close it.
+**One governance control that is worth stating plainly, because everything else on this
+site used to depend on the gap in it:** `main` is **branch-protected as of 2026-08-25**.
+CD-7 requires the coverage gate to *block merges*, and the gate itself was always real —
+CI runs the security gate, typecheck, lint, format check, the web production build, the
+full test suite with its 100% coverage thresholds, and the license gate on every push and
+pull request, and it fails on a violation. What was missing until 2026-08-25 was the rule
+that turns a red run into a withheld merge button, so every "merge-blocking" claim in this
+documentation set described an intent rather than a mechanism.
+
+The rule now exists: the `ci` check is required on `main`, and force-pushes and branch
+deletion are refused. Verify with
+`gh api repos/IvanBBaev/agenthropic/branches/main/protection --jq '.required_status_checks.contexts'`.
+
+**Read the "merge-blocking" claims with one exemption, which is deliberate and stated
+rather than assumed:** `enforce_admins` is off, so the repository owner can still push to
+`main` over a red run. That is a choice, not an oversight — agenthropic has one
+maintainer, whose normal mode is a direct push to `main`, and admin enforcement would
+replace a documented gap with a ceremony the sole maintainer must route around. The
+practical reading: a red run withholds the merge button from a contributor, and does not
+withhold it from Ivan. Closing that last half is a setting on github.com which no commit
+and no document in this repository can change.
 
 ## 1. Security disclosure policy (`SECURITY.md`)
 
@@ -319,11 +327,14 @@ attest to having done it, not to prove it via the diff.
 - **Two checklist items are missing from the built PR template** — the clean-room /
   attribution box and the `WORKLOG.md` attestation (see [§4](#4-pull-request-template-githubpull_request_templatemd)).
   Restoring them is a small edit to a file outside this page's lane.
-- **Enabling branch protection on `main`** is the single highest-leverage governance
-  action still outstanding, and it is the owner's alone: it converts a CI suite that
-  already exists and already fails correctly into something that actually prevents a bad
-  merge. Nothing in this repository can perform it, and no document should be read as
-  having done so.
+- ~~**Enabling branch protection on `main`** is the single highest-leverage governance
+  action still outstanding~~ — **done 2026-08-25.** It was the owner's alone, and nothing
+  in this repository could have performed it; it converted a CI suite that already existed
+  and already failed correctly into something that actually prevents a bad merge. What
+  remains outstanding is smaller and deliberate: `enforce_admins` is off, so the conversion
+  is complete for a contributor and partial for the sole maintainer — see
+  [scope](#scope-policy-now-artifacts-later) for why that exemption is a design choice
+  rather than a half-finished setting.
 
 ## See also
 
