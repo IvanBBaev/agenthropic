@@ -44,6 +44,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of them on this id; the schema-19 boot admits 61/61 with no `unknown model id` line
   (`docs/measurement/time-to-understand-log.md` §0.6–0.7). The gate itself is unchanged: the
   cure for an unknown id is a price row, never a relaxed check.
+- Tests: `apps/web/test/realtime-wire-shape.test.ts` pins the two hand-narrowed sibling arms to
+  the shared types as it already pinned `ingest-failed`. An exhaustive `satisfies
+  Record<keyof AgentStatusChangedEvent, true>` field list makes a field added to, removed from or
+  renamed in the shared schema a compile error in `apps/web`, and a drop-one-field sweep proves
+  `isAgentStatusChangedEvent` refuses a frame missing any of them; a `SessionIngestedEvent`-typed
+  frame pins the one field `ingestedSessionId` reads. Each pin was mutation-checked (a field
+  added, `sessionId` renamed, the guard's `agentId` check removed): all three went red.
 
 ### Changed
 
