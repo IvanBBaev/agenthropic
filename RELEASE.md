@@ -85,16 +85,20 @@ Run each gate locally on the release commit; the six below plus the web producti
       only executes a line without asserting on it satisfies the gate and proves nothing,
       and no threshold can detect that. Three cheap ways to manufacture a 100% are
       guarded by tests that read the configs and sources as text — lowering a threshold,
-      adding a coverage `exclude`, and reintroducing an ignore pragma — but **the guard
-      is not uniform across the five packages, so read this before ticking the box.**
+      adding a coverage `exclude`, and reintroducing an ignore pragma — **and since
+      2026-09-26 all five packages guard all three; the paragraph below is the history of
+      the gap that closed.**
       `apps/server`, `packages/core`, `packages/shared` and `packages/test-fixtures`
-      assert all three. `apps/web` asserts only the pragma sweep: it cannot assert the
-      absence of an `exclude`, because it legitimately carries one (`src/main.tsx`,
-      `src/vite-env.d.ts`), and it does not assert its four thresholds either. So a
-      change that widened the web exclude list or lowered the web thresholds would pass
-      CI silently. Diff `apps/web/vitest.config.ts` by hand on the release commit;
-      `docs/site/contributing/testing.md` §"Three asymmetries" records this as a real gap
-      in the mechanism rather than a technicality.
+      assert all three by asserting there is no `exclude`. Until 2026-09-26 `apps/web`
+      asserted only the pragma sweep: it cannot assert the absence of an `exclude`,
+      because it legitimately carries one (`src/main.tsx`, `src/vite-env.d.ts`), and it
+      did not assert its four thresholds either, so a change that widened the web exclude
+      list or lowered the web thresholds would have passed CI silently. It now pins the
+      exact thresholds object and the exact exclude list
+      (`apps/web/test/honesty.test.tsx`, four mutations killed; `docs/site/contributing/testing.md`
+      §"Three asymmetries" has the record). Reading `apps/web/vitest.config.ts` on the
+      release commit is still cheap and still worth doing, but it is no longer the only
+      defence.
       _(Historical notes: until 2026-07-30 `apps/web` ran `vitest run` without
       `--coverage`, so its configured thresholds silently never executed;
       `packages/test-fixtures` was outside the gate scope entirely until it was pulled

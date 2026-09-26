@@ -71,7 +71,8 @@ snapshot in §4–§5.
 >    pinned to 100 in every package, with guard tests proving the figure cannot be faked —
 >    though not uniformly: `apps/web` asserts only the pragma sweep, because it
 >    legitimately carries a coverage `exclude`, so widening that list or lowering its four
->    thresholds would pass CI silently. See
+>    thresholds would pass CI silently (**closed 2026-09-26**: the web guard now pins the
+>    exact thresholds and exclude list). See
 >    [`../site/contributing/testing.md`](../site/contributing/testing.md).
 > 2. **All 14 items of the parser gate are IMPLEMENTED — but "implemented" is not
 >    "measured".** #7 (legacy bare-`Explore`) and N1 (`<task-notification>`) fire **zero**
