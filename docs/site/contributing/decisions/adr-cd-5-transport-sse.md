@@ -1,6 +1,6 @@
 # ADR-0007: CD-5 — Transport is SSE with same-origin enforcement
 
-- **Status:** accepted — **built and holding**, re-checked 2026-08-15 and re-amended **2026-08-25** (one open item: `Last-Event-ID` resumability; the origin and auth tests are merge-blocking for anyone who is not the repository owner — `main` is branch-protected on the `ci` check, with `enforce_admins: false` deliberate for a single-maintainer repository — see the as-built updates below)
+- **Status:** accepted — **built and holding**, re-checked 2026-08-15 and re-amended **2026-08-25** (one open item until 2026-09-26: `Last-Event-ID` resumability, now built as a bounded replay; the origin and auth tests are merge-blocking for anyone who is not the repository owner — `main` is branch-protected on the `ci` check, with `enforce_admins: false` deliberate for a single-maintainer repository — see the as-built updates below)
 - **Date:** 2026-07-03
 - **Deciders:** Ivan Baev (project owner), via the six-lens concept-analysis-v2 workflow
 - **Source:** [`concept-analysis-v2.md` §3, row CD-5](../../../analysis/concept-analysis-v2.md#3-canonical-decision-register-v2)
@@ -103,3 +103,10 @@ cross-origin `Origin` on `/api/stream` is rejected; no wildcard CORS."
   channel carries a strictly larger same-origin/attack-surface burden to secure correctly.
 - **Polling** — rejected: defeats the "<30s time-to-understand" daily-question metric and the
   live-status-board requirement (`concept-analysis-v2.md` §6, "Product / business").
+
+**As-built addendum 2026-09-26 — the open item closed.** `RealtimeHub` keeps the last 256
+frames and `/api/stream` replays every buffered frame after the request's `Last-Event-ID`
+(which `EventSource` sends on its own reconnect) before the client joins live fan-out, in one
+synchronous step. Transport, origin check and auth gate are unchanged. Bounded, stated: a
+client gone longer than the window, or reconnecting across a server restart (ids restart at
+1), still misses frames, and the dashboard still reports the id gap it can see.

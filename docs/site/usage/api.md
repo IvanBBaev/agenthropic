@@ -201,7 +201,7 @@ path is now literal — see the table's "As built" column.)*
 
 | Property | As built |
 |---|---|
-| Resumability | **Reconnect, not replay.** The server sends a `retry:` hint and the browser's `EventSource` auto-reconnects; there is no `Last-Event-ID` handling and no `events_raw.seq` replay. Frames emitted while a client was disconnected are **lost**. The SPA compensates by treating any stream event as a cue to refetch persisted truth, so the displayed state re-converges — but a client that needs a gapless event log must read `GET /api/sessions/:id/events`, not the stream. |
+| Resumability | **Reconnect with bounded replay (since 2026-09-26; until then reconnect only).** The server sends a `retry:` hint and the browser's `EventSource` auto-reconnects, sending the last frame id it saw as `Last-Event-ID`; the hub keeps the last 256 frames and replays those after that id, in order, before live frames resume (and before the `: connected` comment). A header that is not a plain decimal id is ignored. Frames older than the window, and frames lost across a server restart (ids restart at 1), are still **lost**, and the dashboard reports them as a stream gap. The SPA compensates by treating any stream event as a cue to refetch persisted truth, so the displayed state re-converges — but a client that needs a gapless event log must read `GET /api/sessions/:id/events`, not the stream. |
 | What it pushes | Three typed frames only — `session-ingested` (a session was persisted; refetch), `agent-status-changed` (one agent moved between status buckets, including into `unknown` via the missing-Stop watchdog), and `ingest-failed` (a session's ingest failed; a typed arm of the closed shared union since 2026-09-09 — until then it rode a generic catch-all arm, now deleted — shaped `{ "type": "ingest-failed", "payload": { sessionId, reason, attempt, willRetry, occurredAt } }` with a sanitized, single-line, path-free reason, `attempt` a 1-based integer and `willRetry` false once the session is quarantined. The `payload` envelope is the documented wire shape and is deliberately kept although the other two frames carry `occurredAt` at the top level: the SPA carries no schema library and narrows this frame by hand, so the bytes are the contract. It narrows the other two frames by hand as well; all three narrowings are pinned to the shared TypeScript types in `apps/web/test/realtime-wire-shape.test.ts` (since 2026-09-26 for `agent-status-changed` and `session-ingested`), so a server-side field change fails the web typecheck instead of failing silently in the browser. The SPA renders it as a dismissible banner on the live board, because a quarantined session never reaches the read API and would otherwise be invisible). **The union is closed (D5):** an unknown `event:` name is not a fourth kind the client should tolerate; the browser's `EventSource` never delivers a named event with no registered listener, so such a frame is never rendered, and because every frame carries the hub's `id:` sequence it still surfaces as a gap at the next frame that is heard, where the live board counts it — dropped and counted, never rendered. Not a generic row-delta feed over `sessions`/`agents`/`orchestration_edges`/`token_usage`. |
 
 **The event-push model.** `/api/stream` is a fan-out off already-committed projection
@@ -233,7 +233,16 @@ replay against `events_raw.seq` (a `readSince()` the design sketch named for `WP
 the literal mechanism. Treat resumability as a fixed requirement and its exact protocol
 as _(planned)_.
 
-> **As built:** the mechanism chosen was **browser auto-reconnect, not replay**. The
+>
+> **Amended 2026-09-26 — resumability built.** The note below was the as-built state until
+> that date. `RealtimeHub` now keeps a bounded buffer (256 frames by default) and the stream
+> route replays every buffered frame after the request's `Last-Event-ID` before joining live
+> fan-out, in one synchronous step so nothing is sent twice or skipped. Limits, stated: frames
+> older than the buffer are gone; ids restart per process, so a reconnect across a restart
+> can still miss frames undetected by id alone (the SPA's refetch on reconnect repairs the
+> state); there is still no `events_raw.seq` cursor.
+>
+> **As built (until 2026-09-26):** the mechanism chosen was **browser auto-reconnect, not replay**. The
 > server emits a `retry:` hint and nothing else; no `Last-Event-ID` is read or honoured,
 > and no `events_raw.seq` cursor is exposed on the stream. That is a real gap against
 > `WP-U1`'s "resumable" wording and is recorded here rather than papered over: a client
@@ -629,7 +638,7 @@ code actually does.
 | Every route (read + write) is `timingSafeEqual`-gated | **Fixed** — `WP-U2`, `WP-A8` Done-when | Holds for every `/api/*` route including `/api/health` and `POST /api/hooks/event`. `WP-A8` was cut, so it contributes nothing |
 | Loopback-only bind for the whole server | **Fixed** — `WP-U0`; security model rule 1 | Holds. `HOST = '127.0.0.1'` is an exported constant with no configuration path |
 | `GET /sessions/:id/tree` reads `orchestration_edges` | **Fixed path & mechanism** — `WP-U3` Done-when | Mechanism holds; path is `/api/sessions/:id/tree` |
-| Stream is resumable | **Fixed requirement**; exact resume protocol _(planned)_ | **Not met as stated.** Browser auto-reconnect only — no `Last-Event-ID`, no replay. Frames sent while disconnected are lost |
+| Stream is resumable | **Fixed requirement**; exact resume protocol _(planned)_ | **Met since 2026-09-26, bounded:** `Last-Event-ID` replay from a 256-frame window. Until then browser auto-reconnect only, and frames sent while disconnected were lost; beyond the window, or across a restart, they still are |
 | Cost/delegation/global-DAG/token/events endpoint paths | _(planned shape — exact path undecided)_ — `WP-U4`/`WP-U3` name the resource, not the route | All decided: `/api/cost/summary`, `/api/sessions/:id/cost-analysis`, `/api/cost/delegation-savings`, `/api/dag/global`, `/api/sessions/:id/events`, and — outside the design-era list — `/api/changes` (WP-U11). **No token-usage endpoint exists** — token figures are folded into the other payloads |
 | Alerts CRUD paths | _(planned shape — exact path undecided)_ — `WP-A8` names the surface, not the route | **Cut.** `WP-A8`/`WP-A9` will not be built on the v1.0 path; v2.0 requires KC-5 |
 | Underlying stack (Fastify, TypeBox) | _(leaning — unconfirmed)_ per the project's `CLAUDE.md`; treated here as the working assumption because the sources name it, not because it is locked | Confirmed and shipped: Fastify with `@fastify/type-provider-typebox`, `additionalProperties: false` on every response schema |

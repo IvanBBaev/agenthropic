@@ -207,6 +207,15 @@ function extractToken(request: FastifyRequest, allowQueryToken: boolean): string
   return undefined;
 }
 
+/**
+ * The `Last-Event-ID` request header as a frame id, or undefined when it is
+ * absent, repeated, or not a plain decimal integer the hub could have issued.
+ */
+export function parseLastEventId(header: string | string[] | undefined): number | undefined {
+  if (typeof header !== 'string' || !/^\d{1,15}$/.test(header)) return undefined;
+  return Number(header);
+}
+
 export function buildServer(options: BuildServerOptions) {
   const { token, schemaVersion } = options;
   const heartbeatIntervalMs = options.heartbeatIntervalMs ?? 15_000;
@@ -311,6 +320,12 @@ export function buildServer(options: BuildServerOptions) {
     });
     raw.write(`retry: ${sseRetryMs}\n\n`);
     let closed = false;
+    // Both declared before `write` can run: the replay inside `hub.subscribe`
+    // writes through `write`, which may reap the stream - and so run `close`,
+    // which reads both - before `subscribe` has returned. A `const` assigned
+    // later would still be in its temporal dead zone at that moment.
+    let unsubscribe = (): void => {};
+    let heartbeat: ReturnType<typeof setInterval> | undefined = undefined;
     /**
      * One frame out, plus the backlog check that bounds a stalled peer.
      *
@@ -332,9 +347,20 @@ export function buildServer(options: BuildServerOptions) {
     };
     // Subscribe BEFORE the ': connected' comment goes out: a client that has
     // seen 'connected' is provably subscribed to hub fan-out already.
-    const unsubscribe = hub.subscribe(write);
+    //
+    // WP-U1 "resumable" (2026-09-26): EventSource sends `Last-Event-ID` on its
+    // own reconnect, and the hub replays the buffered frames after it before
+    // live fan-out resumes. Anything that is not a plain decimal id is ignored
+    // rather than guessed at - the stream then behaves exactly as a fresh one.
+    unsubscribe = hub.subscribe(write, parseLastEventId(request.headers['last-event-id']));
+    if (closed) {
+      // Reaped by the replay itself (a backlog past the bound): the stream is
+      // already torn down, so it must not stay subscribed to live fan-out.
+      unsubscribe();
+      return;
+    }
     raw.write(': connected\n\n');
-    const heartbeat = setInterval(() => {
+    heartbeat = setInterval(() => {
       // The heartbeat is the reaper for an IDLE stalled peer: with no events
       // to fan out, nothing else would ever call `write`, so a dead socket
       // holding a backlog would sit unexamined until the next ingest tick -

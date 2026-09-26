@@ -118,7 +118,8 @@ export function livePatchCount(session: BoardSession): number {
  * The later of a row's recorded activity and an event's observation time.
  *
  * Added 2026-09-03 (LV-1). The stream offers no ordering or uniqueness
- * guarantee - the hub keeps no replay buffer, and EventSource redelivers on
+ * guarantee - the hub kept no replay buffer then (a bounded one since
+ * 2026-09-26, which adds replays rather than removing them), and EventSource redelivers on
  * reconnect at the server's discretion - so a frame can arrive after a newer
  * one, or arrive twice. Writing its occurredAt through unconditionally made the
  * card's only freshness cue move BACKWARDS on such a frame, and the board then

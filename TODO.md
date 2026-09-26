@@ -1063,6 +1063,29 @@ not counted._
   different delivery ids store two rows. Mutations killed: installer endpoint path, content
   type, and the delivery-id header name (the last was invisible until the two-firings case was
   added). The real-session confirmation half remains the owner's.
+- [x] **WP-IN8, parser-gate #10 — "CC-version detection for provenance" was never built.**
+  Only the branch-on-shape half existed; `parser-spec.md` counted #10 green on that. Added
+  `ParsedSession.claudeCodeVersions` in `packages/core` (sorted distinct per-record `version`
+  strings across main, subagent and sidecar files; optional on the type, always present on the
+  output, like `outcomes`); parsing still never branches on it. Three tests (two fixtures, a
+  session spanning an upgrade with duplicates and non-string values, a version-less session);
+  core 338 → 341 at 100%. **Not persisted** — no reader needs it; a column would be a
+  migration and a UI question, left until one asks.
+- [x] **WP-U1 — "resumable" was never built.** The stream wrote a `retry:` hint and nothing
+  else; frames published during a reconnect were lost (recorded in `api.md` and ADR CD-5 as a
+  gap, never on this board). `RealtimeHub` now keeps the last 256 frames (`replayCapacity`,
+  0 disables) and `/api/stream` replays every buffered frame after the request's
+  `Last-Event-ID` — which `EventSource` sends by itself on reconnect, so the SPA needed no
+  change — before live fan-out and before `: connected`, in one synchronous step. A header
+  that is not a plain decimal id is ignored. Found and fixed while writing it: the replay
+  writes through the route's `write`, which can reap the stream, and `close` read
+  `unsubscribe` and `heartbeat` from their temporal dead zone — both hoisted, a writer that
+  throws during replay is dropped and counted, and a stream reaped by its own replay is
+  unsubscribed at once (tested with a 1-byte backlog bound). A guard meant to skip ids "from
+  an earlier process" survived mutation because it was dead code; removed, and the real
+  restart limit written down instead (an old id inside the new process's range cannot be
+  recognised). Nine tests; mutations killed: replay off-by-one, buffer never filled, the
+  reaped-during-replay check. Web comments that said "no replay buffer" amended.
 - [x] **Stale docs:** `api.md` credited `WP-IN2` with a `readSince()` that was never built;
   the WP-D1 row cited `types/rows.ts` (now `enums.ts`).
 

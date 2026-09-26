@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The event stream is resumable: the server keeps the last 256 frames and, when a browser
+  reconnects with `Last-Event-ID` (which `EventSource` sends by itself), replays the frames it
+  missed before live frames resume. A longer absence, or a reconnect across a server restart,
+  can still miss frames; the dashboard keeps reporting those as a stream gap.
+- The parser reports which Claude Code versions wrote a session (`claudeCodeVersions`), for
+  provenance only; parsing still branches on directory shape, never on the version.
 - Security gate: `pnpm run gate:spawner` now enforces no-SSRF, the half of `WP-F5` that was
   never built. Server-process source (`apps/server/src/`, `packages/*/src/`) fails CI on
   `fetch(`, a node network module (`http`, `https`, `http2`, `net`, `tls`, `dgram`, `dns`), an
