@@ -535,6 +535,17 @@ consequence is that a change widening the web exclude list, or lowering the web
 thresholds, would not trip a guard. That is a real gap in the mechanism, not a
 technicality.
 
+*(Closed 2026-09-26.* The web `coverage honesty` block in `apps/web/test/honesty.test.tsx`
+now also pins the evaluated shape of `vitest.config.ts`, read as text like the other four:
+the `thresholds` object must be exactly `lines`/`branches`/`functions`/`statements` at
+`100` with no extra key, `include` exactly `'src/**'`, and `exclude` exactly
+`['src/main.tsx', 'src/vite-env.d.ts']`, each of which must exist on disk. It cannot assert
+the absence of an `exclude`, so it pins the list instead — the asymmetry in *form* stays,
+the gap in *effect* is gone. Four mutations were each killed: `branches: 99`, a third
+exclude entry, an extra `perFile` threshold key, and the exclude moved into a variable.
+Importing the config was tried first and rejected: `vitest/config` does not load under
+jsdom, and the file is outside the web `tsconfig` project.)*
+
 Third, 100% means 100% of `src/**` — not of the repository. Every package's coverage
 `include` is `src/**`, so two areas of live code never enter a denominator at all:
 `hooks/install.mjs`, which is exercised in earnest by `apps/server/test/hooks-installer.test.ts`

@@ -455,6 +455,10 @@ milestone record, not a second copy._
   macrotask (old assertion 3 of 3 red, new one 3 of 3 green) and by removing it (new one red).
   The test now waits for the eventual close and asserts a stream existed. No product code
   changed.
+- **The web coverage guard caught up with the other four packages.** `RELEASE.md` §1 had
+  told the release reader to diff `apps/web/vitest.config.ts` by hand, because nothing
+  stopped a lowered web threshold or a widened web `exclude`. The web honesty block now pins
+  the exact thresholds object and the exact exclude list; four mutations each fail it.
 - **Documentation drift found on the way:** the migration ledger stopped at 18 and three pages
   said "eighteen migrations" although 19 already existed. Ledger rows 19 and 20 added, counts
   set to twenty.

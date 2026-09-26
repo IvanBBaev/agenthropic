@@ -186,6 +186,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Coverage gate: `apps/web` was the one package whose thresholds and coverage `exclude` list
+  no test guarded, so lowering a web threshold or taking another file out of the web
+  denominator passed CI. `apps/web/test/honesty.test.tsx` now pins the exact thresholds object
+  (four keys, all `100`, no extras), `include` as `'src/**'` and `exclude` as exactly
+  `src/main.tsx` and `src/vite-env.d.ts`, each of which must exist. Four mutations each fail it.
 - Tests: `apps/web/test/app.test.tsx` "bounces back to the entry screen … 401" asserted the SSE
   stream closed at the instant the entry screen appeared, but React 19 runs the Shell's closing
   effect cleanup after that commit when the 401 arrives outside `act`, so it failed about once

@@ -1006,6 +1006,14 @@ exit and proof live in the plan. Dated one-word answers under D1…D8 are the si
     `testing.md` (per package), `contributing/index.md`, `comparison.md` ×2, `faq.md`,
     `roadmap.md`, `what-is-agenthropic.md` ×2 and the analysis README; gate outputs re-dated
     in `testing.md` and `licensing.md`. Historical readings kept, not overwritten.
+  - **R1 §1 gap closed 2026-09-26** (found in the rehearsal above, where the box tells the
+    reader to diff `apps/web/vitest.config.ts` by hand): the web honesty block now pins the
+    exact thresholds object and the exact `exclude` list, read as text like the other four
+    packages (importing the config fails under jsdom and is outside the web tsconfig).
+    Mutations killed: `branches: 99`, a third exclude entry, an extra `perFile` key, the
+    exclude moved into a variable. Web tests 860 → 862. `RELEASE.md` §1, `testing.md`
+    "Three asymmetries", `CONTRIBUTING.md` (which also said "raising" for "lowering") and
+    PROJECT-STATE amended. No box ticked.
 - [ ] **Wave 5 · by 2026-12-01 (KC-4)** — release commit, `v1.0.0` tag, push (Ivan) ·
   post-tag CI/Pages/badges green, `DONE.md` closed, this board reduced to the KC-5 items
   (orchestrator). One week of buffer; the critical path is D1 → Wave 3's 14 days → R3.
