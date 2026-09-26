@@ -186,6 +186,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Tests: `apps/web/test/app.test.tsx` "bounces back to the entry screen … 401" asserted the SSE
+  stream closed at the instant the entry screen appeared, but React 19 runs the Shell's closing
+  effect cleanup after that commit when the 401 arrives outside `act`, so it failed about once
+  in seventeen coverage runs. It now waits for the eventual close and first asserts that a
+  stream existed. Proved both ways: with the close deferred one macrotask the old assertion
+  failed 3 of 3 and the new one passes 3 of 3; with the close removed the new one fails.
 - Server-side served-honesty audit (2026-09-23): a stored rate that is negative, non-finite or
   non-numeric no longer prices tokens on the session, tree and DAG routes or 500s the cost summary
   (the tokens are served as unpriced), and `upsertPricingRate` now refuses such a rate at write

@@ -158,7 +158,18 @@ describe('shell with a stored token', () => {
     await screen.findByLabelText('Dashboard token');
     expect(screen.getByRole('status').textContent).toContain('rejected the stored token');
     expect(sessionStorage.getItem(TOKEN_KEY)).toBeNull();
-    expect(MockEventSource.instances.every((source) => source.closed)).toBe(true);
+    // The 401 lands from a promise outside `act`, so React 19 runs the Shell's
+    // effect cleanup - the one that closes the stream - AFTER the commit that
+    // puts the entry screen on the page. The screen can be findable a tick
+    // before the close, and asserting at once failed this test about once in
+    // seventeen coverage runs (2026-09-26; deferring the close one macrotask
+    // failed it 3 of 3). The lock and unmount tests below go through `act` and
+    // are deterministic. What this test owes is the eventual state - and a
+    // stream must have existed for "every one is closed" to mean anything.
+    expect(MockEventSource.instances.length).toBeGreaterThan(0);
+    await waitFor(() =>
+      expect(MockEventSource.instances.every((source) => source.closed)).toBe(true),
+    );
   });
 
   it('shows server unreachable on the chip when the health probe fails', async () => {

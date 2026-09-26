@@ -377,6 +377,48 @@ PROVISIONAL), Ivan's two physical KC acts, or no-commit-without-an-explicit-ask.
   passing, 100% on all four axes in all five packages** (shared's statement count moved 83 → 84 —
   the one new schema line — and nothing else moved).
 
+### 2026-09-26 · D10 closed as migration 20, and the last two realtime arms pinned
+
+> The work between 2026-09-04 and 2026-09-25 (the Closing board's Waves 0–2, the defect and
+> honesty waves) is recorded on the `TODO.md` Closing board and in `CHANGELOG.md`
+> `[Unreleased]`; its milestone entry here is the Wave-4 R2 item and has not been written yet.
+
+- **Sonnet 5 priced at the official rate (D10).** The seed carried `claude-sonnet-5` at 3 / 15.
+  The platform pricing page, re-read 2026-09-26, says the $2 / $10 launch price "is now the
+  standard price" and the scheduled increase to $3 / $15 "will not occur" — so 3 / 15 was never
+  in force and every Sonnet 5 dollar shown was 1.5× too high, on every bucket. Migration 20
+  (`model-pricing-sonnet-5-official`) rewrites the five seeded floor rows in place (2 / 10,
+  cache read 0.2, writes 2.5 / 4) instead of adding a later-dated row, which would have kept the
+  cancelled price in force for every earlier message. No row is added (still 40); an operator's
+  Sonnet 5 row at any other instant is untouched; stored usage re-prices on the next read,
+  because the rollup does not store the rate. The other seed models were re-checked against the
+  same page and are unchanged. Still PROVISIONAL — the WP-C1 ratification tick is Ivan's.
+- **Proved, not asserted.** Checksum `1ab85d62…` identical under tsx, vitest and
+  `node --experimental-strip-types`. Four new migration tests (fresh database, in-place rewrite
+  with every other row byte-identical, operator row at another instant, read-time re-pricing
+  with the rollup unchanged); mutation input 2 → 3 killed by five tests. Every dollar
+  expectation that read the seeded Sonnet rate was re-derived by hand; migration 19's tests
+  are now bounded to `<= 19`.
+- **The two hand-narrowed realtime arms are pinned** (the L4 follow-up). An exhaustive
+  `satisfies Record<keyof AgentStatusChangedEvent, true>` field list makes a shared-schema
+  field change a compile error in `apps/web`; a drop-one-field sweep proves
+  `isAgentStatusChangedEvent` reads every field; a `SessionIngestedEvent`-typed frame pins
+  `ingestedSessionId`. Three mutations (field added, `sessionId` renamed, the `agentId` check
+  removed) — all red.
+- **A pre-existing test race, found by the final gate run and fixed.** The web test for a 401
+  on the stored token asserted the SSE stream closed the moment the entry screen appeared;
+  React 19 runs the closing effect cleanup after that commit when the 401 lands outside `act`,
+  so it failed about once in seventeen coverage runs. Proved by deferring the close one
+  macrotask (old assertion 3 of 3 red, new one 3 of 3 green) and by removing it (new one red).
+  The test now waits for the eventual close and asserts a stream existed. No product code
+  changed.
+- **Documentation drift found on the way:** the migration ledger stopped at 18 and three pages
+  said "eighteen migrations" although 19 already existed. Ledger rows 19 and 20 added, counts
+  set to twenty.
+- **Gates under Node 22:** all eight green — typecheck, lint, format, web build, 3,060 tests
+  (web 860 · shared 94 · test-fixtures 139 · core 338 · server 1629) at 100% coverage,
+  `gate:spawner`, `gate:licenses`. Pushed to `claude/fervent-maxwell-2hmdro`.
+
 ### Still open, and owned by Ivan — not by any agent
 - ~~**Everything above is UNCOMMITTED.**~~ **Closed 2026-07-30** — committed and pushed
   as `9b6c6b3` on Ivan's explicit instruction (198 files, +27 133 / −1 113). CI is
