@@ -227,8 +227,9 @@ same-origin exemption for a valid token presented cross-origin — both checks a
 
 **Resumability, as a design constraint, not yet a mechanism.** `WP-U1`'s Done-when names
 "resumable" as a requirement but the sources do not fix *how* — e.g., a `Last-Event-ID`
-replay against `events_raw.seq` (which `WP-IN2`'s `readSince()` already supports for
-replay-on-startup) is a plausible shape given the schema, but no source states this as
+replay against `events_raw.seq` (a `readSince()` the design sketch named for `WP-IN2` — *corrected
+2026-09-26: never built; `events_raw` has no `seq` column and the port has only `append` and
+`readAll`, see [the data model](../architecture/data-model.md)*) is a plausible shape given the schema, but no source states this as
 the literal mechanism. Treat resumability as a fixed requirement and its exact protocol
 as _(planned)_.
 
