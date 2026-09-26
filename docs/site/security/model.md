@@ -411,15 +411,20 @@ packages and Definition-of-Done that turn each rule into CI-blocking code).
   > guards does not exist yet, and **the rule is satisfied by absence rather than by
   > enforcement.**
   >
-  > **No automated check currently defends it.** `WP-F5`
-  > (`scripts/check-no-spawner.mjs`) scans for the subprocess family, wide binds,
-  > WebSocket-server patterns and dynamic evaluation — it has **no pattern for
-  > outbound HTTP**, so an added `fetch()` or `node:https` import would pass it. An
+  > **Amended 2026-09-26: an automated check now defends it.** `WP-F5`
+  > (`scripts/check-no-spawner.mjs`) gained the outbound-network family its work package
+  > always named: in `apps/server/src/` and `packages/*/src/` it fails on `fetch(`, a node
+  > network module (`http`/`https`/`http2`/`net`/`tls`/`dgram`/`dns`), an HTTP client
+  > import, a `WebSocket`/`EventSource` client or `XMLHttpRequest`, and it refuses an HTTP
+  > client package in those packages' manifests. The rest of this note is the record of
+  > the gap it closed. **Until that date no automated check defended it.** The gate
+  > scanned for the subprocess family, wide binds,
+  > WebSocket-server patterns and dynamic evaluation — it had **no pattern for
+  > outbound HTTP**, so an added `fetch()` or `node:https` import would have passed it. An
   > earlier version of this note claimed the gate would catch such a dial; that was
   > wrong, and it contradicted §3's own accurate enumeration of what the gate covers.
-  > The `WP-A4`/`WP-A10` negative tests remain the Done-when for the future dispatcher,
-  > and anything that introduces an outbound client before then is caught by code
-  > review alone.
+  > The `WP-A4`/`WP-A10` negative tests remain the Done-when for the future dispatcher;
+  > until then an outbound client is caught by the gate, with review as the second line.
 
 ### 7. Remote access via tunnel only
 
@@ -623,6 +628,8 @@ As built today:
   no-spawner/no-wide-bind/no-eval and license static gates running in CI.
 - **Satisfied by absence:** no subprocess surface, no outbound dial of any kind (the
   webhook dispatcher does not exist yet), no `ANTHROPIC_API_KEY` anywhere in the tree.
+  The first two absences are also gate-enforced: the subprocess family since Phase 1, the
+  outbound-network family in server-process code since 2026-09-26.
 - **Running (signed D3, 2026-09-08):** the `WP-D10` retention sweeper, chained after
   each successful daily backup — `events` rows older than 90 days are pruned in
   bounded runs with a journal receipt, backup files older than 30 days expire behind

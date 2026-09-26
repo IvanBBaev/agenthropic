@@ -40,9 +40,11 @@
 >   `apps/web/src/api.ts` — the browser bundle calling this server's own relative `/api`
 >   paths — in `scripts/time-to-understand.mjs`, a local measurement script, and in four
 >   server test files that probe this server's own `/api/stream`. None is the server
->   process and none takes a URL from ingested data.) Note also that
->   **no automated gate defends this**: `scripts/check-no-spawner.mjs` has no
->   outbound-HTTP pattern, so the absence is upheld by review, not by CI.
+>   process and none takes a URL from ingested data.) ~~Note also that
+>   **no automated gate defends this**~~ — **since 2026-09-26 a gate does:**
+>   `scripts/check-no-spawner.mjs` (`WP-F5`) fails CI on an outbound network primitive or
+>   HTTP client in server-process source or manifests. Until then the absence was upheld
+>   by review alone.
 >
 > The security *rules* on this page do hold today, because they are project-wide and
 > not alerting-specific: the server dials nothing derived from an ingested payload,
@@ -181,11 +183,13 @@ arrived inside an ingested event.
   alerting surface: "SSRF test proves no payload-URL dial-out." The Phase 5 exit gate in
   `docs/analysis/development-plan.md` restates the same requirement as a release
   blocker, not a nice-to-have.
-- **Belt-and-suspenders static gate _(planned)_:** the same build-failing static check that
-  guards against a request-driven subprocess spawner (`scripts/check-no-spawner.mjs`,
-  `WP-F5`) is meant to grow an SSRF-shaped pattern so CI turns red on such a code path,
-  independent of the dedicated negative test. Today it has none (the caveat above), so
-  until this lane lands the rule is upheld by review, not by CI.
+- **Belt-and-suspenders static gate — built 2026-09-26:** the same build-failing static
+  check that guards against a request-driven subprocess spawner (`scripts/check-no-spawner.mjs`,
+  `WP-F5`) now carries the outbound-network family, scoped to server-process source and
+  manifests, so CI turns red on a new outbound dial independent of the dedicated negative
+  test. When the dispatcher lands, its one line that dials an operator-configured target
+  takes an inline `spawner-gate-allow` marker, which the gate prints on every run; the
+  `WP-A10` negative corpus still has to prove no payload URL reaches it.
 
 ```
                     ┌──────────────────────────┐

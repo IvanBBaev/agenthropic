@@ -45,6 +45,8 @@ export interface SpawnerFindings {
   scannedFiles: number;
   scanRoots: number;
   scannedManifests: number;
+  /** Server-process files (apps/server/src, packages/NAME/src) also checked for outbound network calls (WP-F5 no-SSRF). */
+  outboundScannedFiles: number;
 }
 
 export declare const INLINE_ALLOW: string;

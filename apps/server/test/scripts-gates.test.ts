@@ -123,7 +123,8 @@ describe('check-no-spawner: scanTree / formatReport', () => {
     expect(report.stdout.at(-1)).toBe(
       'check-no-spawner: OK (1 files scanned across 4 roots + repo-root config; ' +
         '0 allowlisted; 0 line(s) inline-exempt; 0 package.json manifests checked ' +
-        'for forbidden direct dependencies and wide-bind scripts)',
+        'for forbidden direct dependencies and wide-bind scripts; ' +
+        '1 server-process files checked for outbound network calls)',
     );
   });
 
@@ -348,6 +349,120 @@ describe('check-no-spawner: scanTree / formatReport', () => {
     const report = formatSpawnerReport(findings);
     expect(report.exitCode).toBe(1);
     expect(report.stderr).toContain('  tools/  (1 source file(s) or unfollowed entr(y/ies))');
+  });
+});
+
+// --- check-no-spawner: WP-F5 no-SSRF half (2026-09-26) ----------------------
+//
+// These fixture lines are ordinary literals: the outbound patterns apply only to
+// server-process SOURCE (`apps/server/src/`, `packages/*/src/`), and this file
+// lives under `apps/server/test/`, so none of them trips the gate on this repo.
+
+describe('check-no-spawner: no outbound network calls from server-process code', () => {
+  const OUTBOUND_CASES: ReadonlyArray<[string, string]> = [
+    ['outbound fetch( call', "const r = await fetch('http://example.test/');"],
+    ['outbound fetch( call', 'const r = await fetch (payload.url);'],
+    ['node network module', "import { request } from 'node:https';"],
+    ['node network module', "import http from 'http';"],
+    ['node network module', "import { connect } from 'node:net';"],
+    ['node network module', "const tls = await import('node:tls');"],
+    ['node network module', "import { lookup } from 'node:dns/promises';"],
+    ['HTTP client import', "import axios from 'axios';"],
+    ['HTTP client import', "import got from 'got';"],
+    ['HTTP client import', "const { request } = require('undici');"],
+    ['HTTP client import', "const f = await import('node-fetch');"],
+    ['WebSocket / EventSource client', "const ws = new WebSocket('wss://example.test');"],
+    ['WebSocket / EventSource client', 'const es = new EventSource(url);'],
+    ['XMLHttpRequest', 'const xhr = new XMLHttpRequest();'],
+  ];
+
+  it.each(OUTBOUND_CASES)('fails [%s] in apps/server/src: %s', (label, line) => {
+    const { root } = makeFixture();
+    write(root, 'apps/server/src/dial.ts', `${line}\n`);
+
+    const findings = scanTree(root);
+    expect(findings.offenders).toEqual([`apps/server/src/dial.ts:1  [${label}]  ${line}`]);
+    expect(findings.outboundScannedFiles).toBe(1);
+    expect(formatSpawnerReport(findings).exitCode).toBe(1);
+  });
+
+  it('covers every package library, not only the server', () => {
+    const { root } = makeFixture();
+    write(root, 'packages/core/src/dial.ts', "import axios from 'axios';\n");
+
+    const findings = scanTree(root);
+    expect(findings.offenders).toEqual([
+      "packages/core/src/dial.ts:1  [HTTP client import]  import axios from 'axios';",
+    ]);
+  });
+
+  it('leaves browser code, tests, scripts and package-root config out of scope by path', () => {
+    const { root } = makeFixture();
+    const line = "const r = await fetch('http://127.0.0.1:4317/api/health');";
+    write(root, 'apps/web/src/api.ts', `${line}\n`);
+    write(root, 'apps/server/test/loopback.test.ts', `${line}\n`);
+    write(root, 'packages/shared/test/loopback.test.ts', `${line}\n`);
+    write(root, 'scripts/measure.mjs', `${line}\n`);
+    write(root, 'apps/server/vitest.config.ts', "import http from 'node:http';\n");
+
+    const findings = scanTree(root);
+    expect(findings.offenders).toEqual([]);
+    expect(findings.scannedFiles).toBe(5);
+    expect(findings.outboundScannedFiles).toBe(0);
+    expect(formatSpawnerReport(findings).stdout.at(-1)).toContain(
+      '0 server-process files checked for outbound network calls',
+    );
+  });
+
+  it('does not flag ordinary words and look-alike identifiers', () => {
+    const { root } = makeFixture();
+    write(
+      root,
+      'apps/server/src/words.ts',
+      [
+        '// we got there; a request was made; the needle moved',
+        'export const prefetch = (n: number) => n;',
+        "export const label = 'network';",
+        "import { createHash } from 'node:crypto';",
+        "import { join } from 'node:path';",
+      ].join('\n') + '\n',
+    );
+
+    const findings = scanTree(root);
+    expect(findings.offenders).toEqual([]);
+    expect(findings.outboundScannedFiles).toBe(1);
+  });
+
+  it('honours an inline opt-out on an outbound line and names the rule it suppressed', () => {
+    // The shape v2.0's dispatcher (WP-A4) would need: one reviewed line that
+    // dials an operator-configured target, loud on every run.
+    const { root } = makeFixture();
+    write(
+      root,
+      'apps/server/src/dispatch.ts',
+      `const r = await fetch(target.url); // ${INLINE_ALLOW}\n`,
+    );
+
+    const findings = scanTree(root);
+    expect(findings.offenders).toEqual([]);
+    expect(findings.inlineAllowSites).toEqual([
+      'apps/server/src/dispatch.ts:1  [outbound fetch( call]',
+    ]);
+  });
+
+  it('refuses an HTTP client package in a server-process manifest, not in the web one', () => {
+    const { root } = makeFixture();
+    write(root, 'apps/server/package.json', JSON.stringify({ dependencies: { axios: '1' } }));
+    write(root, 'packages/core/package.json', JSON.stringify({ devDependencies: { got: '14' } }));
+    write(root, 'apps/web/package.json', JSON.stringify({ dependencies: { ky: '1' } }));
+    write(root, 'package.json', JSON.stringify({ devDependencies: { undici: '6' } }));
+
+    const findings = scanTree(root);
+    expect([...findings.offenders].sort()).toEqual([
+      'apps/server/package.json  [HTTP client package]  dependencies.axios',
+      'packages/core/package.json  [HTTP client package]  devDependencies.got',
+    ]);
+    expect(findings.scannedManifests).toBe(4);
   });
 });
 

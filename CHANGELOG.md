@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Security gate: `pnpm run gate:spawner` now enforces no-SSRF, the half of `WP-F5` that was
+  never built. Server-process source (`apps/server/src/`, `packages/*/src/`) fails CI on
+  `fetch(`, a node network module (`http`, `https`, `http2`, `net`, `tls`, `dgram`, `dns`), an
+  HTTP client package import, a `WebSocket` or `EventSource` client or `XMLHttpRequest`, and
+  the server and library manifests may not declare an HTTP client package. Browser code and
+  tests stay out of scope by path. The OK line now also reports how many server-process files
+  were checked (93 today, all clean).
 - `GET /api/changes` reports what the corpus poll found since a given moment: each session is labelled `new`, `updated` or `unknown`, with a counter for each, so a client can tell "nothing changed" from "cannot tell" (`ChangesDto` in `packages/shared`).
 - Failed agents are classified: migration 17 adds `agents.outcome_cause`, written from the transcript's terminal record with six causes (`concurrency_limit`, `user_interrupt`, `permission_failed`, `dispatch_unavailable`, `terminated_early`, `unclassified`); only `terminated_early` promotes an agent to `status: error`, a status that previously had no producer, and the cause travels on the session-tree and global-DAG wire as `outcomeCause`.
 - The server serves the built dashboard from its own loopback port, so one origin carries both the API and the page; documented in the running guide.

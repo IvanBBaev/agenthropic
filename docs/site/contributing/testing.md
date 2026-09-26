@@ -380,7 +380,7 @@ CD/acceptance criterion" that `WP-X4`'s Done-when requires:
 | `events_raw` exposes no UPDATE/DELETE path | CD-4, CD-7; concept-analysis-v2 §6 | Data integrity |
 | Server **fails startup** when `DASHBOARD_TOKEN` is unset | CD-7 | Security |
 | No-spawner grep/static gate fails the build on a `child_process` import | CD-7; `WP-F5` | Security |
-| An SSRF test proves no outbound dial to a payload-supplied URL | CD-7; `WP-F5` | Security |
+| An SSRF test proves no outbound dial to a payload-supplied URL | CD-7; `WP-F5` | Security — static half live since 2026-09-26 (`gate:spawner` refuses outbound primitives in server-process code, tested in `apps/server/test/scripts-gates.test.ts`); the dynamic test waits for a dispatcher to exist |
 | SSE rejects a cross-origin connection | CD-5, CD-7 | Security |
 
 This table is illustrative of the *categories and traceable anchors* the 12-scenario
@@ -597,7 +597,8 @@ when invoked through a symlinked path, where they previously exited 0 without ch
 config; 1 allowlisted; 5 line(s) inline-exempt; 6 package.json manifests checked for forbidden
 direct dependencies and wide-bind scripts)` and `check-licenses: OK (406 packages / 428 installed
 versions; 405 allowlisted, 1 under a documented exception)`. Both exit 0; the package count moved
-with the dependency tree, not with the gate.)*
+with the dependency tree, not with the gate. Later the same day the spawner line gained the
+no-SSRF clause `; 93 server-process files checked for outbound network calls)`.)*
 
 And the standing caveat that no coverage number escapes: 100% line and branch coverage
 records that every line and branch **executed**, not that every behaviour was

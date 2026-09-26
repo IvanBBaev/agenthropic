@@ -106,7 +106,7 @@ Run each gate locally on the release commit; the six below plus the web producti
       after that. Earlier revisions of this box quoted 90/90/90/90 thresholds, a
       four-package scope, and per-package figures below 100% — all three are superseded.)_
 - [ ] `pnpm run gate:spawner` — WP-F5 static no-spawner / no-wide-bind / no-WebSocket /
-      no-eval gate over `apps/`, `packages/`, `scripts/`, `hooks/`
+      no-eval gate, plus (since 2026-09-26) no outbound network call in server-process code, over `apps/`, `packages/`, `scripts/`, `hooks/`
       ([`scripts/check-no-spawner.mjs`](scripts/check-no-spawner.mjs)). The allowlist is
       logged on every run — **read it**; it must contain only the policy file itself.
 - [ ] `pnpm run gate:licenses` — the CD-9 allowlist gate (see §4).
@@ -141,10 +141,15 @@ trail).
       with audited inline markers, never whole-file.
 - [ ] **No SSRF — no code path dials a payload-supplied URL.** v1.0 ships **no**
       webhook/alert dispatcher at all (the A-track is post-1.0, roadmap §6), so the
-      strongest form holds: there is no outbound-dial feature to misuse. **Verified by
-      review and by the grep below — not by `gate:spawner`,** which carries no
-      outbound-HTTP pattern at all and would pass a newly added `fetch()` without
-      comment. Run:
+      strongest form holds: there is no outbound-dial feature to misuse. **Since
+      2026-09-26 `gate:spawner` enforces it (§1):** server-process source
+      (`apps/server/src/`, `packages/*/src/`) may not call `fetch(`, import a node
+      network module (`http`/`https`/`http2`/`net`/`tls`/`dgram`/`dns`), import an HTTP
+      client package or open a `WebSocket`/`EventSource`/`XMLHttpRequest` client, and
+      the server and library manifests may not declare an HTTP client package; its OK
+      line names how many server-process files it checked. Until that date the gate
+      carried no outbound pattern and this box rested on review and the grep below,
+      which stays as a cheap cross-check. Run:
       `grep -rnE "\bfetch\(|node:https?|\baxios\b|\bundici\b" apps/server/src packages/*/src`
       — expect empty (matches in `apps/web/src` are the browser bundle calling this
       server's own relative `/api` paths, and are not the server process). The full

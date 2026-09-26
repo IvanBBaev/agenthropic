@@ -459,6 +459,12 @@ milestone record, not a second copy._
   told the release reader to diff `apps/web/vitest.config.ts` by hand, because nothing
   stopped a lowered web threshold or a widened web `exclude`. The web honesty block now pins
   the exact thresholds object and the exact exclude list; four mutations each fail it.
+- **The no-SSRF half of `WP-F5`, built.** The Phase-1 row was ticked with only the spawner
+  half in place; no-SSRF, a CD-7 CI-blocking condition, rested on a release-time grep. The
+  gate now refuses outbound network primitives and HTTP clients in server-process source
+  and manifests (93 files clean today). Nineteen new gate tests; six mutations of the gate
+  each killed. Eight documents that said "upheld by review, not by CI" carry a dated
+  correction.
 - **Documentation drift found on the way:** the migration ledger stopped at 18 and three pages
   said "eighteen migrations" although 19 already existed. Ledger rows 19 and 20 added, counts
   set to twenty.

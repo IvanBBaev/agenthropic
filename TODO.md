@@ -230,6 +230,20 @@ files / 1540 tests, 100/100/100/100 in all five packages**. New PROVISIONAL cons
   (`scripts/check-no-spawner.mjs`) · F6 license scan (`scripts/check-licenses.mjs`) ·
   F7 security contract tests (`apps/server/test/security-contract.test.ts` — **GREEN**,
   turned by WP-U0) · F8 backup/tested-restore (`db/backup.ts` + `test/backup.test.ts`).
+  - **Correction 2026-09-26 — F5 was ticked half-built.** `WP-F5` is "static no-spawner +
+    **no-SSRF** gate" (development-plan; roadmap Phase 1 "no-spawner + no-SSRF static gates
+    (F5)"), and CD-7 makes no-SSRF CI-blocking, but `check-no-spawner.mjs` never carried an
+    outbound pattern: the invariant rested on `RELEASE.md` §2's grep and review (the docs
+    said so honestly; this row did not). **Now built:** an outbound-network family applied to
+    server-process source (`apps/server/src/`, `packages/*/src/`) — `fetch(`, node
+    `http`/`https`/`http2`/`net`/`tls`/`dgram`/`dns`, 13 HTTP client packages as specifiers,
+    `WebSocket`/`EventSource` clients, `XMLHttpRequest` — plus an HTTP-client denylist for
+    the server and library manifests; browser code and tests are out of scope by path. OK
+    line gains `; 93 server-process files checked for outbound network calls`, still exit 0
+    on this repo. `scripts-gates.test.ts` 41 → 60; six gate mutations each killed (fetch
+    pattern off, `net` dropped, `got` dropped, scope widened to every file, manifest check
+    off, scope narrowed to packages). The dynamic SSRF test stays the v2.0 dispatcher's
+    Done-when (`WP-A4`/`WP-A10`).
 - [x] **Data (D):** WP-D1 ports+shared types (`packages/shared/src/ports`, `types/rows.ts`) ·
   D2 SQLite/WAL — **better-sqlite3 only**, pragmas asserted at open · D3 migration runner ·
   D4 `events_raw` append-only substrate (proven in `test/events-raw.test.ts`) ·
