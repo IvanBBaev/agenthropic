@@ -1014,6 +1014,10 @@ exit and proof live in the plan. Dated one-word answers under D1…D8 are the si
     exclude moved into a variable. Web tests 860 → 862. `RELEASE.md` §1, `testing.md`
     "Three asymmetries", `CONTRIBUTING.md` (which also said "raising" for "lowering") and
     PROJECT-STATE amended. No box ticked.
+  - **Doc drift fixed 2026-09-26:** `testing.md` "Third" still said the gate scripts have "no
+    unit tests whatsoever"; `apps/server/test/scripts-gates.test.ts` (41 tests, in `4b3cd2d`)
+    drives each gate's pure core against fixture trees. Amended with a dated note; what still
+    holds (scripts outside every coverage denominator, CLI wrappers unexecuted) is kept.
 - [ ] **Wave 5 · by 2026-12-01 (KC-4)** — release commit, `v1.0.0` tag, push (Ivan) ·
   post-tag CI/Pages/badges green, `DONE.md` closed, this board reduced to the KC-5 items
   (orchestrator). One week of buffer; the critical path is D1 → Wave 3's 14 days → R3.

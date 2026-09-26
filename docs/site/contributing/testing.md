@@ -551,7 +551,14 @@ Third, 100% means 100% of `src/**` — not of the repository. Every package's co
 `hooks/install.mjs`, which is exercised in earnest by `apps/server/test/hooks-installer.test.ts`
 against a throwaway temp directory but is measured by nothing; and the two CI gate scripts
 `scripts/check-no-spawner.mjs` and `scripts/check-licenses.mjs`, which have no unit tests
-whatsoever and are exercised only by being executed in CI. Both gates do run on every CI
+whatsoever and are exercised only by being executed in CI. *(Superseded in part, noted
+2026-09-26: since `4b3cd2d` each gate — and the Node-major guard
+`scripts/check-node-version.mjs` — exposes a pure core (`scanTree` / `evaluateLicenses` /
+`evaluateNodeVersion` plus a formatter) that `apps/server/test/scripts-gates.test.ts` drives
+against throwaway fixture trees, so "catches what it claims to catch" is now tested, not only
+"exits 0 on this repo". What still holds: the scripts sit outside every coverage
+denominator, and their CLI wrappers are deliberately left unexecuted by tests, because
+running them would need another subprocess exemption.)* Both gates do run on every CI
 invocation and both currently pass — the spawner gate reports `OK (235 files scanned
 across 4 roots + repo-root config; 1 allowlisted)` and the license gate `OK (412 installed
 packages, all licenses allowlisted)`, measured 2026-08-15; re-measured 2026-09-19 as
