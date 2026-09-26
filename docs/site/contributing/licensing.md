@@ -46,7 +46,9 @@ important limit of what that CI gate can and cannot prove
 >   then `check-licenses: OK (412 packages / 429 installed versions; 411 allowlisted,
 >   1 under a documented exception)`. *(Corrected 2026-09-24: that count listed a name once per license
 >   it appeared under; counted as unique names the same tree reads `OK (407 packages / 429
->   installed versions; 406 allowlisted, 1 under a documented exception)`.)* An exception that matches nothing in the
+>   installed versions; 406 allowlisted, 1 under a documented exception)`. Re-measured 2026-09-26:
+>   `OK (406 packages / 428 installed versions; 405 allowlisted, 1 under a documented
+>   exception)`.)* An exception that matches nothing in the
 >   installed tree is named on every run rather than failing it — deliberately, so a
 >   dependency bump that retires the package does not go red — which is how a dropped
 >   package cannot leave a standing permission behind unnoticed. The
@@ -59,13 +61,15 @@ important limit of what that CI gate can and cannot prove
 >   *(re-measured 2026-09-19: 272 files, same 1 allowlisted, same 6 manifests; re-measured
 >   again 2026-09-23: **282 files**, still 1 allowlisted and 6 manifests, still exit 0;
 >   since 2026-09-24 the line ends `...checked for forbidden direct dependencies and
->   wide-bind scripts)`, at 308 files)*.
+>   wide-bind scripts)`, at 308 files; re-measured 2026-09-26: **313 files**, same shape, exit
+>   0)*.
 >   Its scope is wider than the work-package title suggests — it walks `apps/`,
 >   `packages/`, `scripts/` and `hooks/` in full (source, tests, and package-root
 >   config such as `vite.config.ts`, which is exactly where a dev-server bind would be
 >   widened) plus the repo-root config files, and it forbids four families of pattern,
 >   not one: the whole subprocess API surface, dynamic code evaluation, wide network
->   binds, and WebSocket servers. Since 2026-09-07 it also opens the root and every
+>   binds, and WebSocket servers — plus, since 2026-09-26 and in server-process source
+>   only, a fifth: outbound network calls (`WP-F5`'s no-SSRF half). Since 2026-09-07 it also opens the root and every
 >   workspace `package.json` (six manifests) and fails on a **direct** dependency named
 >   for a subprocess or WebSocket package (`execa`, `cross-spawn`, `shelljs`,
 >   `node-pty`, `ws`, `socket.io`, anything containing `websocket`), so `pnpm add execa`
@@ -366,6 +370,12 @@ is a security gate first and a provenance gate second — but because the one
 artifact this project *does* copy wholesale (`hoangsonww`'s webhook code) sits one
 file away from the exact route this gate exists to forbid, it functions as part of
 the same per-artifact scoping discipline that CD-9 describes.
+
+*(As-built 2026-09-26: the no-SSRF half of the title now exists too. The gate applies an
+outbound-network pattern family to server-process source — `apps/server/src/` and
+`packages/*/src/` — and refuses an HTTP client package in those manifests; browser code
+and tests are out of scope by path. Its OK line gained `; N server-process files checked
+for outbound network calls`, 93 on 2026-09-26.)*
 
 The shipped gate is broader than that Done-when in both scope and coverage. It scans
 `apps/`, `packages/`, `scripts/` and `hooks/` rather than `apps/server` alone, it

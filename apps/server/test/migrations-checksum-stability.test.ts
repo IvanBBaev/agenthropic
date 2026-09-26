@@ -19,11 +19,12 @@
  * The normaliser cancels the classes a transform is free to vary - comments
  * (including annotations a transform INJECTS, such as vite's `@__PURE__` block
  * annotation), whitespace, and separators that are redundant before a closing
- * bracket. After it, vitest agrees with tsx on 14 of the 19, up from 0 - and so
+ * bracket. After it, vitest agrees with tsx on 15 of the 20, up from 0 - and so
  * does `node --experimental-strip-types`, on the same ids (1-6, 8, 9, 10, 12,
- * 13, 17, 18, 19), also up from 0. Re-measured 2026-09-01 by running all
+ * 13, 17, 18, 19, 20), also up from 0. Re-measured 2026-09-01 by running all
  * three, again on 2026-09-10 when migration 18 was appended, and again under
- * tsx and vitest on 2026-09-26 when migration 19 was appended.
+ * tsx and vitest on 2026-09-26 when migration 19 was appended, and under all
+ * three on 2026-09-26 when migration 20 was appended.
  *
  * Migration 17 (`agents-outcome-cause`) is the twelfth, appended after the H-1
  * measurement above, and it agrees for a reason its body states: one `db.exec`
@@ -34,7 +35,8 @@
  * a JS `0.5` would have been re-printed `.5` by tsx and put it in the residual
  * set next to 7 and 11. Migration 19 (`model-pricing-opus-5-5`) is the
  * fourteenth, the same shape with five rows; its `0.2` lives in the SQL text
- * for the same reason.
+ * for the same reason. Migration 20 (`model-pricing-sonnet-5-official`) is the
+ * fifteenth, the same five-row shape, with `0.2` and `2.5` in the SQL text.
  *
  * It does NOT reach full executor independence, and that is not fixable while
  * the recorded checksums must stay byte-identical. The differences that survive
@@ -65,7 +67,8 @@
  * re-measured byte-identical, 17 of 17. Migration 19's entry followed on
  * 2026-09-26 the same way, with the eighteen above it re-measured
  * byte-identical under tsx, 18 of 18, and the vitest table re-measured
- * identical as well. A row may be APPENDED to these tables; an existing row
+ * identical as well. Migration 20's entry followed later the same day, with
+ * the nineteen above it re-measured byte-identical under tsx, 19 of 19. A row may be APPENDED to these tables; an existing row
  * changing value is drift, not a re-pin.
  *
  * WHY THIS FILE CARRIES `spawner-gate-allow` MARKERS. The no-spawner gate
@@ -82,7 +85,7 @@
  * one `scripts/check-licenses.mjs` uses for its sanctioned `pnpm licenses` call
  * - and it is per-line, so any OTHER forbidden line added to this file is still
  * caught. The alternative was to delete the tsx runs, which would demote
- * OPERATOR_CHECKSUMS from a measurement re-taken on every CI run to nineteen
+ * OPERATOR_CHECKSUMS from a measurement re-taken on every CI run to twenty
  * transcribed strings that nothing checks against the shipped file. That trade
  * is not worth making: the pins exist precisely to be a measurement.
  */
@@ -120,12 +123,13 @@ const OPERATOR_CHECKSUMS: Readonly<Record<number, string>> = {
   17: '05ff7a6f95a7ff9432e38bd164c593b95c163fdcd1e461008a75e3fea01f1c41',
   18: 'ec11bd686759b257661764839b23befa7813e89846328f79ce1c3bd48888ce8a',
   19: '4efb01c611acb6d2723aed7beb74d1e82ec676b970adf64857ce1d40537a6920',
+  20: '1ab85d628e8fc59a527933d0bb247289f733f4bac43cb5e24d2de53092dbbaed',
 };
 
 /**
- * The same nineteen, computed inside this vitest process. Spelled as the
+ * The same twenty, computed inside this vitest process. Spelled as the
  * operator table plus the five overrides, so a migration the two executors
- * agree on - which is every one not listed here, migrations 17, 18 and 19
+ * agree on - which is every one not listed here, migrations 17 to 20
  * included - cannot drift in one table without drifting in the other.
  */
 const IN_PROCESS_CHECKSUMS: Readonly<Record<number, string>> = {

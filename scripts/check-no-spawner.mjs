@@ -91,6 +91,26 @@
 //   GG5 "No dynamic code evaluation" did not cover the node vm module. A quoted
 //       `vm` / `node:vm` specifier is now forbidden.
 //
+// AMENDED 2026-09-26 (WP-F5, the no-SSRF half). The work package was always
+// "static no-spawner + no-SSRF gate" (development-plan WP-F5; roadmap Phase 1:
+// "no-spawner + no-SSRF static gates (F5)"), and CD-7 lists no-SSRF among the
+// CI-blocking boundary conditions. Only the spawner half was ever built: this
+// gate carried no outbound-network pattern, so a `fetch()` added to the server
+// passed CI and the invariant rested on a grep in RELEASE.md §2 run once per
+// release. v1.0 has no outbound-dial feature at all, so the strongest form of
+// the rule holds and is now enforced: server-process source - `apps/server/src/`
+// and `packages/*/src/`, the scope of that release grep - may not reach for an
+// outbound network primitive (`fetch(`, the node http/https/http2/net/tls/dgram/
+// dns modules, an HTTP client package, a WebSocket / EventSource client,
+// XMLHttpRequest), and the server and library manifests may not declare an HTTP
+// client package. Browser code in apps/web (which calls this server's own
+// relative /api paths) and tests (which call the loopback server they started)
+// are out of scope by path, not by exemption. The day v2.0's webhook dispatcher
+// (WP-A4) lands, it lands as an inline-marked, reviewed exemption on the one
+// line that dials an operator-configured target - never a payload URL - and the
+// negative corpus (WP-A10) proves the rest. Same honesty limit as everything
+// above: a regex stops the idiomatic reintroduction, not a deliberate evasion.
+//
 // Two escape hatches, both explicit and auditable:
 //   - ALLOWLIST: whole files that legitimately contain the patterns - only this
 //     policy file itself (it DEFINES the patterns). check-licenses.mjs is NOT
@@ -174,6 +194,47 @@ const SUBPROCESS_WRAPPERS = [
   'zx',
   'nano-spawn',
   'spawndamnit',
+];
+
+// --- WP-F5 no-SSRF: outbound network primitives in server-process code --------
+// Paths (repo-relative, `/`-separated) whose code runs inside the server process
+// or is imported by it. Everything else is out of scope by path.
+const SERVER_PROCESS_SOURCE = [/^apps\/server\/src\//, /^packages\/[^/]+\/src\//];
+
+// HTTP client packages, shared by the source pattern and the manifest denylist so
+// the two lists cannot drift apart (the GG4 rule). Several are ordinary words
+// (`got`, `request`, `needle`), so they are matched only as module specifiers.
+const HTTP_CLIENTS = [
+  'axios',
+  'undici',
+  'got',
+  'node-fetch',
+  'cross-fetch',
+  'isomorphic-fetch',
+  'ky',
+  'ofetch',
+  'superagent',
+  'request',
+  'needle',
+  'phin',
+  'make-fetch-happen',
+];
+
+/** @type {Array<[string, RegExp]>} */
+const OUTBOUND_PATTERNS = [
+  // `\b` keeps `prefetch(` out; `.fetch(` on some object still matches, which is
+  // the conservative direction for a rule whose v1.0 form is "no outbound dial".
+  ['outbound fetch( call', /\bfetch\s*\(/],
+  ['node network module', /['"`](node:)?(https?|http2|net|tls|dgram|dns)(\/[^'"`]*)?['"`]/],
+  [
+    'HTTP client import',
+    new RegExp(
+      `(?:\\bfrom\\s+|\\bimport\\s+|\\bimport\\(\\s*|\\brequire\\(\\s*)['"]` +
+        `(?:${HTTP_CLIENTS.join('|')})(?:/[^'"]*)?['"]`,
+    ),
+  ],
+  ['WebSocket / EventSource client', /\bnew\s+(WebSocket|EventSource)\s*\(/],
+  ['XMLHttpRequest', /\bXMLHttpRequest\b/],
 ];
 
 /** @type {Array<[string, RegExp]>} */
@@ -287,6 +348,14 @@ function scriptWidensBind(command) {
   }
   return false;
 }
+
+// Manifests whose package runs in (or is imported by) the server process. The
+// root and apps/web manifests are out of scope, like their source.
+const SERVER_PROCESS_MANIFESTS = [
+  /^apps\/server\/package\.json$/,
+  /^packages\/[^/]+\/package\.json$/,
+];
+const HTTP_CLIENT_DEPENDENCY = new RegExp(`^(${HTTP_CLIENTS.join('|')})$`);
 
 const DEPENDENCY_FIELDS = [
   'dependencies',
@@ -414,6 +483,7 @@ export function scanTree(rootDir) {
     scannedFiles: 0,
     scanRoots: 0,
     scannedManifests: 0,
+    outboundScannedFiles: 0,
   };
 
   const scanDirs = [];
@@ -488,6 +558,13 @@ export function scanTree(rootDir) {
       continue;
     }
     findings.scannedFiles += 1;
+    const serverProcess = SERVER_PROCESS_SOURCE.some((prefix) =>
+      prefix.test(rel.split('\\').join('/')),
+    );
+    if (serverProcess) findings.outboundScannedFiles += 1;
+    const patterns = serverProcess
+      ? [...FORBIDDEN_PATTERNS, ...OUTBOUND_PATTERNS]
+      : FORBIDDEN_PATTERNS;
     const lines = readFileSync(file, 'utf8').split('\n');
     lines.forEach((line, index) => {
       if (line.includes(INLINE_ALLOW)) {
@@ -496,9 +573,9 @@ export function scanTree(rootDir) {
         // it suppressed, while a marker on a line no pattern would have flagged
         // is dead weight that will be copied to the next line someone wants past
         // the gate.
-        const suppressed = FORBIDDEN_PATTERNS.filter(([, pattern]) => pattern.test(line)).map(
-          ([label]) => label,
-        );
+        const suppressed = patterns
+          .filter(([, pattern]) => pattern.test(line))
+          .map(([label]) => label);
         if (suppressed.length > 0) {
           findings.inlineAllowSites.push(`${rel}:${index + 1}  [${suppressed.join(', ')}]`);
         } else {
@@ -506,7 +583,7 @@ export function scanTree(rootDir) {
         }
         return;
       }
-      for (const [label, pattern] of FORBIDDEN_PATTERNS) {
+      for (const [label, pattern] of patterns) {
         if (pattern.test(line)) {
           findings.offenders.push(`${rel}:${index + 1}  [${label}]  ${line.trim()}`);
         }
@@ -556,6 +633,9 @@ export function scanTree(rootDir) {
       findings.offenders.push(`${rel}  [unparseable manifest]  ${String(error)}`);
       continue;
     }
+    const serverProcessManifest = SERVER_PROCESS_MANIFESTS.some((pattern) =>
+      pattern.test(rel.split('\\').join('/')),
+    );
     for (const field of DEPENDENCY_FIELDS) {
       const block = parsed[field];
       if (block === null || typeof block !== 'object') continue;
@@ -564,6 +644,10 @@ export function scanTree(rootDir) {
           if (pattern.test(name)) {
             findings.offenders.push(`${rel}  [${label}]  ${field}.${name}`);
           }
+        }
+        // WP-F5 no-SSRF: an HTTP client in a server-process package.
+        if (serverProcessManifest && HTTP_CLIENT_DEPENDENCY.test(name)) {
+          findings.offenders.push(`${rel}  [HTTP client package]  ${field}.${name}`);
         }
       }
     }
@@ -701,7 +785,8 @@ export function formatReport(findings) {
       `+ repo-root config; ${findings.skippedAllowlisted.length} allowlisted; ` +
       `${findings.inlineAllowSites.length} line(s) inline-exempt; ` +
       `${findings.scannedManifests} package.json manifests checked for forbidden direct dependencies ` +
-      `and wide-bind scripts)`,
+      `and wide-bind scripts; ${findings.outboundScannedFiles} server-process files checked for ` +
+      `outbound network calls)`,
   );
   return { stdout, stderr, exitCode: 0 };
 }

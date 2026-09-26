@@ -7,6 +7,7 @@ import {
   type Migration,
 } from '../src/db/migrations';
 import { openDatabase, type SqliteDatabase } from '../src/db/connection';
+import { getCostSummary } from '../src/api/queries';
 import { createMigratedTempDb, insertSession, type TempDb } from './helpers';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -1144,6 +1145,8 @@ describe('migration runner (WP-D3)', () => {
    * refused by the halt gate for want of these rows). Same shape and same
    * guarantees as migration 18, proven the same way.
    */
+  const throughMigration19 = migrations.filter((m) => m.id <= 19);
+
   describe('migration 19 (model-pricing-opus-5-5)', () => {
     const FLOOR = '2026-01-01T00:00:00.000Z';
     const OFFICIAL_RATES: ReadonlyArray<{ model: string; bucket: string; usd_per_mtok: number }> = [
@@ -1179,8 +1182,10 @@ describe('migration runner (WP-D3)', () => {
     }
 
     it('seeds claude-opus-5-5 with the official per-bucket rates at the canonical floor', () => {
+      // The fresh database is at the latest schema; migration 20 touches only
+      // claude-sonnet-5, so the opus-5-5 rows read exactly as 19 wrote them.
       temp = createMigratedTempDb();
-      expect(currentSchemaVersion(temp.db)).toBe(19);
+      expect(currentSchemaVersion(temp.db)).toBe(20);
       expect(opus55Rows(temp.db)).toEqual(
         OFFICIAL_RATES.map((row) => ({ ...row, effective_from: FLOOR })),
       );
@@ -1206,13 +1211,13 @@ describe('migration runner (WP-D3)', () => {
         const before = pricingRows(db);
         expect(before).toHaveLength(35);
 
-        expect(runMigrations(db).appliedIds).toEqual([19]);
+        expect(runMigrations(db, throughMigration19).appliedIds).toEqual([19]);
 
         const after = pricingRows(db) as Array<{ model: string }>;
         expect(after).toHaveLength(40);
         expect(after.filter((r) => r.model !== 'claude-opus-5-5')).toEqual(before);
         // Second run: nothing pending, nothing rewritten.
-        expect(runMigrations(db).appliedIds).toEqual([]);
+        expect(runMigrations(db, throughMigration19).appliedIds).toEqual([]);
         expect(pricingRows(db)).toEqual(after);
       });
     });
@@ -1234,7 +1239,7 @@ describe('migration runner (WP-D3)', () => {
           'INSERT INTO model_pricing (model, bucket, usd_per_mtok, effective_from) VALUES (?, ?, ?, ?)',
         ).run('claude-opus-5-5', 'output', 30, '2026-11-01');
 
-        expect(runMigrations(db).appliedIds).toEqual([19]);
+        expect(runMigrations(db, throughMigration19).appliedIds).toEqual([19]);
 
         expect(opus55Rows(db)).toEqual([
           ...OFFICIAL_RATES.map((row) => ({ ...row, effective_from: FLOOR })).slice(0, 4),
@@ -1266,9 +1271,144 @@ describe('migration runner (WP-D3)', () => {
             .all();
         expect(rollupRates()).toEqual([{ rate_effective_from: '', tokens: 1000 }]);
 
-        expect(runMigrations(db).appliedIds).toEqual([19]);
+        expect(runMigrations(db, throughMigration19).appliedIds).toEqual([19]);
 
         expect(rollupRates()).toEqual([{ rate_effective_from: FLOOR, tokens: 1000 }]);
+      });
+    });
+  });
+
+  /**
+   * Migration 20: the official Sonnet 5 rate (open decision D10). The seed
+   * priced `claude-sonnet-5` at 3 / 15 with derived cache rates; the pricing
+   * page (fetched 2026-09-26) lists 2 / 10 and says the scheduled 3 / 15 never
+   * took effect. The correction rewrites the seed's floor rows in place rather
+   * than adding a dated row, so the cancelled price never enters history.
+   */
+  describe('migration 20 (model-pricing-sonnet-5-official)', () => {
+    const FLOOR = '2026-01-01T00:00:00.000Z';
+    const at = (rows: ReadonlyArray<{ bucket: string; usd_per_mtok: number }>): unknown[] =>
+      rows.map((row) => ({ model: 'claude-sonnet-5', ...row, effective_from: FLOOR }));
+    // https://platform.claude.com/docs/en/about-claude/pricing, fetched 2026-09-26.
+    const OFFICIAL_RATES = [
+      { bucket: 'cache_read', usd_per_mtok: 0.2 },
+      { bucket: 'cache_write_1h', usd_per_mtok: 4 },
+      { bucket: 'cache_write_5m', usd_per_mtok: 2.5 },
+      { bucket: 'input', usd_per_mtok: 2 },
+      { bucket: 'output', usd_per_mtok: 10 },
+    ];
+    // What migrations 7 + 11 wrote: input 3, output 15, cache derived 0.1x / 2.0x / 1.25x.
+    const SEED_RATES = [
+      { bucket: 'cache_read', usd_per_mtok: 3 * 0.1 },
+      { bucket: 'cache_write_1h', usd_per_mtok: 3 * 2.0 },
+      { bucket: 'cache_write_5m', usd_per_mtok: 3 * 1.25 },
+      { bucket: 'input', usd_per_mtok: 3 },
+      { bucket: 'output', usd_per_mtok: 15 },
+    ];
+
+    function sonnet5Rows(db: SqliteDatabase): unknown[] {
+      return db
+        .prepare(
+          `SELECT model, bucket, usd_per_mtok, effective_from FROM model_pricing
+            WHERE model = 'claude-sonnet-5'
+            ORDER BY model, bucket, effective_from`,
+        )
+        .all();
+    }
+
+    function withSchema19Db(slug: string, body: (db: SqliteDatabase) => void): void {
+      const dir = mkdtempSync(join(tmpdir(), `agenthropic-mig20-${slug}-`));
+      const db = openDatabase(join(dir, 'v19.db'));
+      try {
+        runMigrations(db, throughMigration19);
+        expect(currentSchemaVersion(db)).toBe(19);
+        body(db);
+      } finally {
+        db.close();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+
+    it('prices claude-sonnet-5 at the official per-bucket rates on a fresh database', () => {
+      temp = createMigratedTempDb();
+      expect(currentSchemaVersion(temp.db)).toBe(20);
+      expect(sonnet5Rows(temp.db)).toEqual(at(OFFICIAL_RATES));
+    });
+
+    it('rewrites the five seeded floor rows in place and leaves every other row byte-identical', () => {
+      withSchema19Db('rewrite', (db) => {
+        expect(sonnet5Rows(db)).toEqual(at(SEED_RATES));
+        const before = pricingRows(db) as Array<{ model: string }>;
+        expect(before).toHaveLength(40);
+
+        expect(runMigrations(db).appliedIds).toEqual([20]);
+
+        const after = pricingRows(db) as Array<{ model: string }>;
+        // A correction, not an addition: no row is added, so the cancelled
+        // 3 / 15 does not survive as an earlier dated rate.
+        expect(after).toHaveLength(40);
+        expect(sonnet5Rows(db)).toEqual(at(OFFICIAL_RATES));
+        expect(after.filter((r) => r.model !== 'claude-sonnet-5')).toEqual(
+          before.filter((r) => r.model !== 'claude-sonnet-5'),
+        );
+        // Second run: nothing pending, nothing rewritten.
+        expect(runMigrations(db).appliedIds).toEqual([]);
+        expect(pricingRows(db)).toEqual(after);
+      });
+    });
+
+    it('leaves an operator-authored claude-sonnet-5 row at another instant alone', () => {
+      withSchema19Db('operator-rows', (db) => {
+        db.prepare(
+          'INSERT INTO model_pricing (model, bucket, usd_per_mtok, effective_from) VALUES (?, ?, ?, ?)',
+        ).run('claude-sonnet-5', 'output', 12, '2026-11-01');
+
+        expect(runMigrations(db).appliedIds).toEqual([20]);
+
+        expect(sonnet5Rows(db)).toEqual([
+          ...at(OFFICIAL_RATES),
+          {
+            model: 'claude-sonnet-5',
+            bucket: 'output',
+            usd_per_mtok: 12,
+            effective_from: '2026-11-01T00:00:00.000Z',
+          },
+        ]);
+      });
+    });
+
+    it('re-prices stored sonnet-5 usage at read time without touching the rollup', () => {
+      withSchema19Db('rollup', (db) => {
+        insertSession(db, 'sess-20');
+        const insertUsage = db.prepare(
+          `INSERT INTO token_usage
+             (session_id, agent_id, message_id, model, bucket, tokens, is_compaction_baseline, occurred_at)
+           VALUES ('sess-20', NULL, 'msg-20', 'claude-sonnet-5', ?, ?, 0, '2026-09-20T00:00:00.000Z')`,
+        );
+        insertUsage.run('input', 1_000_000);
+        insertUsage.run('output', 100_000);
+        const rollup = (): unknown[] =>
+          db
+            .prepare(
+              `SELECT bucket, rate_effective_from, tokens FROM token_usage_rollup
+                WHERE model = 'claude-sonnet-5' ORDER BY bucket`,
+            )
+            .all();
+        const rollupBefore = rollup();
+        expect(rollupBefore).toEqual([
+          { bucket: 'input', rate_effective_from: FLOOR, tokens: 1_000_000 },
+          { bucket: 'output', rate_effective_from: FLOOR, tokens: 100_000 },
+        ]);
+        // 1M input @ $3 + 100k output @ $15 = 3 + 1.5.
+        expect(getCostSummary(db, 10).totals.costUsd).toBeCloseTo(4.5, 9);
+
+        expect(runMigrations(db).appliedIds).toEqual([20]);
+
+        // Only `usd_per_mtok` moved, which migration 16's UPDATE trigger does not
+        // watch: the rollup keys are unchanged and the read applies the new rate.
+        expect(rollup()).toEqual(rollupBefore);
+        // 1M input @ $2 + 100k output @ $10 = 2 + 1 - exactly two thirds of before.
+        expect(getCostSummary(db, 10).totals.costUsd).toBeCloseTo(3, 9);
       });
     });
   });

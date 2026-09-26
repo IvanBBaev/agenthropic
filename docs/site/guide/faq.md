@@ -23,7 +23,7 @@ Every answer below links to the deeper reference page for the full detail.
 >   the root is at `0.3.0` with no npm release and every workspace package is
 >   `private: true`, so a checkout is the only way to run it.
 >   Test figures, re-measured **2026-09-18**: **131 test files / 2428 tests** *(re-measured
->   again 2026-09-23: **140 test files / 2621 tests**)*, with **100%
+>   again 2026-09-23: **140 test files / 2621 tests**; 2026-09-26: **167 test files / 3060 tests**)*, with **100%
 >   statements, branches, functions and lines** enforced in **all five** packages. Two
 >   things that figure does not mean. It is not *unconditionally* merge-blocking — it blocks
 >   a merge only for someone who is not the repository owner: `main` has been

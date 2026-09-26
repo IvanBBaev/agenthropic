@@ -292,7 +292,9 @@ describe('createSseClient', () => {
  * and throw the rest away, including the server's frame number.
  *
  * apps/server/src/realtime/hub.ts writes `id: <n>` on every frame from a
- * monotonic counter and keeps NO replay buffer. That number is therefore the
+ * monotonic counter and kept NO replay buffer (since 2026-09-26 a bounded one,
+ * replayed after `Last-Event-ID`; a gap now means frames beyond it or a
+ * restart). That number is therefore the
  * only evidence a tab can have that frames were published while it was not
  * listening - and it matters most for `ingest-failed`, because no refetch can
  * recover a failure notice lost in a gap: it is gone for the life of the tab.

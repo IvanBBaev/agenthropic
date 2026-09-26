@@ -130,7 +130,7 @@ only way to run it is the Quickstart above, from a checkout. Nothing below
 describes a download.
 
 What actually runs today — checked against the code, not against the plan — is the
-loopback-bound, token-gated server; the SQLite substrate with eighteen migrations and
+loopback-bound, token-gated server; the SQLite substrate with twenty migrations and
 an append-only `events_raw` table; JSONL corpus ingest with replay-on-startup and
 tail-follow polling that re-reads only new bytes; the persisted subagent DAG; the cost
 engine, including dated per-model pricing, compaction repricing and a delegation-savings
@@ -237,10 +237,10 @@ the dashboard even by accident.
 **100% test coverage — statements, branches, functions and lines — pinned in all five
 packages** (`packages/shared`, `packages/core`, `packages/test-fixtures`,
 `apps/server`, `apps/web`), with zero coverage-ignore pragmas anywhere under `src/`
-and guard tests that fail the build if one appears. Last local full run: **140 test
-files, 2621 tests, 100% on all four axes in every package** (2026-09-23; the figure
-moves as the tree does - the 2026-09-18 reading of the same line was 131 files / 2428
-tests, and it moved because tests were added, not because any of them changed verdict). CI runs the same command on every push to `main` and on every
+and guard tests that fail the build if one appears. Last local full run: **167 test
+files, 3060 tests, 100% on all four axes in every package** (2026-09-26; the figure
+moves as the tree does - the 2026-09-23 reading was 140 files / 2621 and the 2026-09-18
+one 131 files / 2428 tests, and it moved because tests were added, not because any of them changed verdict). CI runs the same command on every push to `main` and on every
 pull request, so a
 regression turns the run red and, since 2026-08-25, withholds the merge button from anyone
 who is not the repository owner — see the branch-protection note above for that exemption.

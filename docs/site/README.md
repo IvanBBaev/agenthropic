@@ -13,7 +13,7 @@ later without touching page content.
 > existed**. Implementation began **2026-07-11** (by explicit owner override of the CD-8
 > no-code-before-Phase-0 gate), so pages that describe agenthropic as "pre-code" or
 > "bootstrap phase" are design history, not current truth. What runs today: the
-> loopback-bound, token-gated Fastify server; the SQLite/WAL substrate with eighteen
+> loopback-bound, token-gated Fastify server; the SQLite/WAL substrate with twenty
 > migrations and a daily backup timer; JSONL corpus ingest with replay-on-startup and
 > tail-follow polling that re-reads only new bytes; the persisted subagent DAG; the cost
 > engine (compaction repricing + delegation savings); the hook receiver and its installer;
@@ -26,7 +26,7 @@ later without touching page content.
 >
 > Test figures, re-measured 2026-09-18 on the working tree: **131 test files / 2428 tests**,
 > with **100% statements, branches, functions and lines** enforced in **all five** packages —
-> *(re-measured again 2026-09-23: **140 test files / 2621 tests**, same 100% on all four axes in
+> *(re-measured again 2026-09-23: **140 test files / 2621 tests**; and 2026-09-26: **167 test files / 3060 tests**, same 100% on all four axes in
 > all five packages - a dated measurement, not a constant)* —
 > `packages/test-fixtures` is no longer an exclusion, it is inside the gate. Two things that
 > figure does not mean: the thresholds block a *contributor's* merge but not the sole

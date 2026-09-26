@@ -60,7 +60,10 @@ and the quantified acceptance criteria in
 >   commit; treat them as a dated measurement, not a constant. *(Re-measured 2026-09-23:
 >   **140 test files / 2621 tests**, still green — `apps/server` 90/1358, `apps/web`
 >   22/726, `packages/core` 16/314, `packages/test-fixtures` 5/139, `packages/shared`
->   7/84. Coverage still 100% on all four axes in every package.)*
+>   7/84. Coverage still 100% on all four axes in every package. Re-measured 2026-09-26:
+  **167 test files / 3060 tests**, still green — `apps/server` 115/1629, `apps/web` 23/860,
+  `packages/core` 17/338, `packages/test-fixtures` 5/139, `packages/shared` 7/94; 100% on
+  all four axes in every package.)*
 > - **The coverage gate is no longer ">90%" anywhere in the repo. It is 100.** All five
 >   packages run `vitest run --coverage` and all five pin `lines`/`branches`/`functions`/
 >   `statements` at `100`, and all five are currently at 100 on every one of those four
@@ -377,7 +380,7 @@ CD/acceptance criterion" that `WP-X4`'s Done-when requires:
 | `events_raw` exposes no UPDATE/DELETE path | CD-4, CD-7; concept-analysis-v2 §6 | Data integrity |
 | Server **fails startup** when `DASHBOARD_TOKEN` is unset | CD-7 | Security |
 | No-spawner grep/static gate fails the build on a `child_process` import | CD-7; `WP-F5` | Security |
-| An SSRF test proves no outbound dial to a payload-supplied URL | CD-7; `WP-F5` | Security |
+| An SSRF test proves no outbound dial to a payload-supplied URL | CD-7; `WP-F5` | Security — static half live since 2026-09-26 (`gate:spawner` refuses outbound primitives in server-process code, tested in `apps/server/test/scripts-gates.test.ts`); the dynamic test waits for a dispatcher to exist |
 | SSE rejects a cross-origin connection | CD-5, CD-7 | Security |
 
 This table is illustrative of the *categories and traceable anchors* the 12-scenario
@@ -532,12 +535,30 @@ consequence is that a change widening the web exclude list, or lowering the web
 thresholds, would not trip a guard. That is a real gap in the mechanism, not a
 technicality.
 
+*(Closed 2026-09-26.* The web `coverage honesty` block in `apps/web/test/honesty.test.tsx`
+now also pins the evaluated shape of `vitest.config.ts`, read as text like the other four:
+the `thresholds` object must be exactly `lines`/`branches`/`functions`/`statements` at
+`100` with no extra key, `include` exactly `'src/**'`, and `exclude` exactly
+`['src/main.tsx', 'src/vite-env.d.ts']`, each of which must exist on disk. It cannot assert
+the absence of an `exclude`, so it pins the list instead — the asymmetry in *form* stays,
+the gap in *effect* is gone. Four mutations were each killed: `branches: 99`, a third
+exclude entry, an extra `perFile` threshold key, and the exclude moved into a variable.
+Importing the config was tried first and rejected: `vitest/config` does not load under
+jsdom, and the file is outside the web `tsconfig` project.)*
+
 Third, 100% means 100% of `src/**` — not of the repository. Every package's coverage
 `include` is `src/**`, so two areas of live code never enter a denominator at all:
 `hooks/install.mjs`, which is exercised in earnest by `apps/server/test/hooks-installer.test.ts`
 against a throwaway temp directory but is measured by nothing; and the two CI gate scripts
 `scripts/check-no-spawner.mjs` and `scripts/check-licenses.mjs`, which have no unit tests
-whatsoever and are exercised only by being executed in CI. Both gates do run on every CI
+whatsoever and are exercised only by being executed in CI. *(Superseded in part, noted
+2026-09-26: since `4b3cd2d` each gate — and the Node-major guard
+`scripts/check-node-version.mjs` — exposes a pure core (`scanTree` / `evaluateLicenses` /
+`evaluateNodeVersion` plus a formatter) that `apps/server/test/scripts-gates.test.ts` drives
+against throwaway fixture trees, so "catches what it claims to catch" is now tested, not only
+"exits 0 on this repo". What still holds: the scripts sit outside every coverage
+denominator, and their CLI wrappers are deliberately left unexecuted by tests, because
+running them would need another subprocess exemption.)* Both gates do run on every CI
 invocation and both currently pass — the spawner gate reports `OK (235 files scanned
 across 4 roots + repo-root config; 1 allowlisted)` and the license gate `OK (412 installed
 packages, all licenses allowlisted)`, measured 2026-08-15; re-measured 2026-09-19 as
@@ -571,6 +592,13 @@ counts unique names, and the line reads `OK (407 packages / 429 installed versio
 allowlisted, 1 under a documented exception)`. The dependency tree did not change; the earlier
 412 / 411 figures were the double count. All three gate scripts also now recognise themselves
 when invoked through a symlinked path, where they previously exited 0 without checking.)*
+
+*(Re-measured 2026-09-26: `check-no-spawner: OK (313 files scanned across 4 roots + repo-root
+config; 1 allowlisted; 5 line(s) inline-exempt; 6 package.json manifests checked for forbidden
+direct dependencies and wide-bind scripts)` and `check-licenses: OK (406 packages / 428 installed
+versions; 405 allowlisted, 1 under a documented exception)`. Both exit 0; the package count moved
+with the dependency tree, not with the gate. Later the same day the spawner line gained the
+no-SSRF clause `; 93 server-process files checked for outbound network calls)`.)*
 
 And the standing caveat that no coverage number escapes: 100% line and branch coverage
 records that every line and branch **executed**, not that every behaviour was

@@ -129,4 +129,17 @@ export interface ParsedSession {
    * parser found none".
    */
   outcomes?: ParsedAgentOutcome[];
+  /**
+   * Every distinct Claude Code `version` string seen on any record of the
+   * session (main transcript, subagent transcripts and sidecars), sorted.
+   * Parser-gate item #10 (phase0-probe.md): version is detected for
+   * PROVENANCE only - parsing branches on directory shape, never on this list,
+   * because both layouts coexist within the same versions. Several entries mean
+   * the session spans a Claude Code upgrade, which is ordinary.
+   *
+   * Optional on the type, always present on `parseSession`'s output, for the
+   * same additive reason as `outcomes`; empty means no record carried a string
+   * `version`, not "unknown version".
+   */
+  claudeCodeVersions?: string[];
 }

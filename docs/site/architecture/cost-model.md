@@ -266,6 +266,11 @@ enforces it. Two honest departures from the CD-4 sketch:
   18 that day refused 27 of 61 sessions on it. Five explicit rows again, because Opus 5.5's
   published cache-read rate is 0.05× input, a third ratio no derivation covers: eight
   models, 40 rows, the same floor, the same PROVISIONAL label.
+- **Migration 20 (2026-09-26) corrected `claude-sonnet-5` from the seed's 3 / 15 to the
+  official 2 / 10** (open decision D10), cache buckets included. The pricing page says the
+  scheduled 3 / 15 increase never took effect, so the five floor rows are rewritten in place
+  rather than superseded by a later-dated row; no row is added, and stored Sonnet 5 usage
+  re-prices at read time without a re-ingest.
 
 **What is genuinely undecided:** the *authoritative dated source* for these rates and
 the *refresh cadence* that keeps the staleness-fails-CI test honest as the model lineup

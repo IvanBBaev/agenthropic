@@ -867,6 +867,51 @@ describe('coverage honesty', () => {
     // just deletes the test.
     expect(offenders).toEqual([]);
   });
+
+  // Added 2026-09-26. Until then this block guarded only the pragma, so the two
+  // other ways to buy a number - lowering a threshold or widening `exclude` -
+  // passed CI in this package alone (`docs/site/contributing/testing.md`,
+  // "Three asymmetries", and `RELEASE.md` §1 recorded it as a real gap). The
+  // other four packages assert there is no `exclude` at all; this one
+  // legitimately has one, so it pins the exact list instead. The config is read
+  // as TEXT, like theirs: importing it is not possible here (`vitest/config`
+  // does not load under jsdom, and the file is outside this tsconfig project).
+  const VITEST_CONFIG = readFileSync(resolve(process.cwd(), 'vitest.config.ts'), 'utf8');
+
+  /** The single match of `pattern` in the config; two matches fail loudly. */
+  function onlyMatch(pattern: RegExp): string {
+    const matches = [...VITEST_CONFIG.matchAll(pattern)];
+    expect(matches, String(pattern)).toHaveLength(1);
+    return matches[0]![1]!;
+  }
+
+  it('keeps every coverage threshold at exactly 100, with no extra threshold keys', () => {
+    // An exact object, not four lookups: a per-glob or per-file threshold added
+    // beside the four would be a lower bar for some files that checks on the
+    // four keys alone could not see.
+    const body = onlyMatch(/thresholds:\s*\{([^}]*)\}/g);
+    const entries = Object.fromEntries(
+      [...body.matchAll(/(\w+):\s*([^,\s]+)/g)].map((m) => [m[1], m[2]]),
+    );
+    expect(entries).toEqual({ lines: '100', branches: '100', functions: '100', statements: '100' });
+  });
+
+  it('measures all of src/ except exactly the two named entry files', () => {
+    expect(onlyMatch(/include:\s*\[([^\]]*)\]/g).trim()).toBe("'src/**'");
+    // `main.tsx` is the DOM mount (exercised by the browser, not jsdom) and
+    // `vite-env.d.ts` holds only type declarations. A third entry is a decision
+    // to take a file out of the denominator, so it has to be made here, in a
+    // diff a reviewer sees, not in the config alone.
+    const excluded = [...onlyMatch(/exclude:\s*\[([^\]]*)\]/g).matchAll(/'([^']*)'/g)].map(
+      (m) => m[1]!,
+    );
+    expect(excluded).toEqual(['src/main.tsx', 'src/vite-env.d.ts']);
+    // An exclude naming a file that no longer exists hides nothing today but
+    // would silently hide whatever is created under that name tomorrow.
+    for (const file of excluded) {
+      expect(statSync(resolve(process.cwd(), file)).isFile(), file).toBe(true);
+    }
+  });
 });
 
 /**

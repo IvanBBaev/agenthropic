@@ -31,7 +31,7 @@ this page (full grading rationale: [the moat §3](the-moat.md)).
 > `timingSafeEqual`, no spawner, no SSRF (the server makes no outbound network request at
 > all). Test figures, re-measured 2026-09-18: **131 test files / 2428 tests**, with **100%
 > statements, branches, functions and lines** enforced in **all five** packages
-> *(re-measured again 2026-09-23: **140 test files / 2621 tests**, same 100%)* —
+> *(re-measured again 2026-09-23: **140 test files / 2621 tests**; 2026-09-26: **167 test files / 3060 tests**, same 100%)* —
 > `packages/test-fixtures` is inside the gate, not excluded from it. Three P0 moat
 > proofs run green in CI on every push and pull request — Σ tokens against an
 > independently written reader, a byte-identical double replay, and the DAG rebuilt from
@@ -293,7 +293,7 @@ governs what is copied-with-attribution versus clean-room reimplemented all live
 > tail-follow polling; the persisted subagent DAG; the cost engine; the hook receiver and
 > its installer; the status watchdog; the SSE hub; the read API; and all four dashboard
 > views plus a per-session cost-analysis panel. Re-measured 2026-09-18: **131 test files /
-> 2428 tests** *(and again 2026-09-23: **140 test files / 2621 tests**)*, with **100%
+> 2428 tests** *(and again 2026-09-23: **140 test files / 2621 tests**; 2026-09-26: **167 test files / 3060 tests**)*, with **100%
 > statements, branches, functions and lines** enforced in **all five** packages — `packages/test-fixtures` was folded inside the gate rather than left
 > out of it. Retention runs under a signed policy as of 2026-09-10: `events` rows older
 > than 90 days and backup files older than 30 days (never below the newest 7) are pruned

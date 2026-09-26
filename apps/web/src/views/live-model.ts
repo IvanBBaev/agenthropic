@@ -36,6 +36,13 @@ export function bucketCount(
  * Structural guard for the SSE payload - the stream delivers parsed-but-
  * untyped JSON, so the board only applies frames that carry the full
  * agent-status-changed shape (see @agenthropic/shared realtime schema).
+ *
+ * The type predicate is a promise the compiler takes on trust, so
+ * `test/realtime-wire-shape.test.ts` checks it (2026-09-26): its field list is
+ * `satisfies Record<keyof AgentStatusChangedEvent, true>`, making a field added,
+ * removed or renamed in the shared schema a compile error, and it proves this
+ * guard refuses a frame missing any one of those fields. A new field must be
+ * checked here AND listed there.
  */
 export function isAgentStatusChangedEvent(data: unknown): data is AgentStatusChangedEvent {
   if (typeof data !== 'object' || data === null) return false;
@@ -111,7 +118,8 @@ export function livePatchCount(session: BoardSession): number {
  * The later of a row's recorded activity and an event's observation time.
  *
  * Added 2026-09-03 (LV-1). The stream offers no ordering or uniqueness
- * guarantee - the hub keeps no replay buffer, and EventSource redelivers on
+ * guarantee - the hub kept no replay buffer then (a bounded one since
+ * 2026-09-26, which adds replays rather than removing them), and EventSource redelivers on
  * reconnect at the server's discretion - so a frame can arrive after a newer
  * one, or arrive twice. Writing its occurredAt through unconditionally made the
  * card's only freshness cue move BACKWARDS on such a frame, and the board then
