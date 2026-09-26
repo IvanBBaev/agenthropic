@@ -201,7 +201,7 @@ describe('Phase-1 schema', () => {
   });
 
   describe('model_pricing (WP-C1)', () => {
-    it('is seeded with the WP-C1 approximate list prices (2026-01-01 floor) for all seven models', () => {
+    it('is seeded with the WP-C1 approximate list prices (2026-01-01 floor) for all eight models', () => {
       const rows = temp.db
         .prepare('SELECT model, bucket, usd_per_mtok, effective_from FROM model_pricing')
         .all() as Array<{
@@ -226,8 +226,13 @@ describe('Phase-1 schema', () => {
       expect(rate('claude-opus-4-8', 'cache_read')).toBeCloseTo(0.5);
       expect(rate('claude-opus-4-8', 'cache_write_5m')).toBeCloseTo(6.25);
       expect(rate('claude-opus-4-8', 'cache_write_1h')).toBeCloseTo(10);
-      expect(rate('claude-sonnet-5', 'input')).toBe(3);
-      expect(rate('claude-sonnet-5', 'output')).toBe(15);
+      // Migration 20 (D10): Sonnet 5 at the official 2 / 10, rewritten over the seed's
+      // cancelled 3 / 15 at the same floor, cache rates included (pricing page, 2026-09-26).
+      expect(rate('claude-sonnet-5', 'input')).toBe(2);
+      expect(rate('claude-sonnet-5', 'output')).toBe(10);
+      expect(rate('claude-sonnet-5', 'cache_read')).toBe(0.2);
+      expect(rate('claude-sonnet-5', 'cache_write_5m')).toBe(2.5);
+      expect(rate('claude-sonnet-5', 'cache_write_1h')).toBe(4);
       expect(rate('claude-fable-5', 'input')).toBe(10);
       expect(rate('claude-fable-5', 'output')).toBe(50);
       expect(rate('claude-haiku-4-5-20251001', 'input')).toBe(1);

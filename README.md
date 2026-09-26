@@ -130,7 +130,7 @@ only way to run it is the Quickstart above, from a checkout. Nothing below
 describes a download.
 
 What actually runs today — checked against the code, not against the plan — is the
-loopback-bound, token-gated server; the SQLite substrate with eighteen migrations and
+loopback-bound, token-gated server; the SQLite substrate with twenty migrations and
 an append-only `events_raw` table; JSONL corpus ingest with replay-on-startup and
 tail-follow polling that re-reads only new bytes; the persisted subagent DAG; the cost
 engine, including dated per-model pricing, compaction repricing and a delegation-savings

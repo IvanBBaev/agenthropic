@@ -74,7 +74,8 @@ describe('getGlobalDag rollup scoping (M-5)', () => {
     expect(byId.get('g-sub1')).toMatchObject({ totalTokens: 1_000_000, unpricedTokens: 0 });
     expect(byId.get('g-sub1')?.costUsd).toBeCloseTo(10, 9);
     expect(byId.get('h-sub1')).toMatchObject({ totalTokens: 200_000, unpricedTokens: 0 });
-    expect(byId.get('h-sub1')?.costUsd).toBeCloseTo(3, 9);
+    // 200k sonnet-5 output at $10/Mtok (migration 20) = $2.
+    expect(byId.get('h-sub1')?.costUsd).toBeCloseTo(2, 9);
     // Unknown model: tokens surface as unpriced, never silently priced.
     expect(byId.get('h-main')).toMatchObject({
       totalTokens: 5000,
