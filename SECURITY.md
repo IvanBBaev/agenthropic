@@ -270,7 +270,10 @@ The server makes no outbound request of any kind today: no telemetry, no update 
 no webhook dispatcher (alerting is post-1.0 and not built). `ANTHROPIC_API_KEY` appears
 nowhere under `apps/`, `packages/`, `hooks/` or `scripts/` - the dashboard process does
 not hold it and no code path reads it. The SSRF class of bug therefore currently has no
-surface to land on; a change that introduced one would be in scope.
+surface to land on; a change that introduced one would be in scope. Since 2026-09-26 the
+absence is also enforced: `pnpm run gate:spawner` fails CI on an outbound network
+primitive or HTTP client in `apps/server/src/` or `packages/*/src/`, or an HTTP client
+package in those manifests.
 
 ## Operator responsibilities
 

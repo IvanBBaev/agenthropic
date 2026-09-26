@@ -230,7 +230,21 @@ files / 1540 tests, 100/100/100/100 in all five packages**. New PROVISIONAL cons
   (`scripts/check-no-spawner.mjs`) · F6 license scan (`scripts/check-licenses.mjs`) ·
   F7 security contract tests (`apps/server/test/security-contract.test.ts` — **GREEN**,
   turned by WP-U0) · F8 backup/tested-restore (`db/backup.ts` + `test/backup.test.ts`).
-- [x] **Data (D):** WP-D1 ports+shared types (`packages/shared/src/ports`, `types/rows.ts`) ·
+  - **Correction 2026-09-26 — F5 was ticked half-built.** `WP-F5` is "static no-spawner +
+    **no-SSRF** gate" (development-plan; roadmap Phase 1 "no-spawner + no-SSRF static gates
+    (F5)"), and CD-7 makes no-SSRF CI-blocking, but `check-no-spawner.mjs` never carried an
+    outbound pattern: the invariant rested on `RELEASE.md` §2's grep and review (the docs
+    said so honestly; this row did not). **Now built:** an outbound-network family applied to
+    server-process source (`apps/server/src/`, `packages/*/src/`) — `fetch(`, node
+    `http`/`https`/`http2`/`net`/`tls`/`dgram`/`dns`, 13 HTTP client packages as specifiers,
+    `WebSocket`/`EventSource` clients, `XMLHttpRequest` — plus an HTTP-client denylist for
+    the server and library manifests; browser code and tests are out of scope by path. OK
+    line gains `; 93 server-process files checked for outbound network calls`, still exit 0
+    on this repo. `scripts-gates.test.ts` 41 → 60; six gate mutations each killed (fetch
+    pattern off, `net` dropped, `got` dropped, scope widened to every file, manifest check
+    off, scope narrowed to packages). The dynamic SSRF test stays the v2.0 dispatcher's
+    Done-when (`WP-A4`/`WP-A10`).
+- [x] **Data (D):** WP-D1 ports+shared types (`packages/shared/src/ports`, `types/rows.ts` — since WP-U12 `types/enums.ts`; the dead `*Row` types were deleted) ·
   D2 SQLite/WAL — **better-sqlite3 only**, pragmas asserted at open · D3 migration runner ·
   D4 `events_raw` append-only substrate (proven in `test/events-raw.test.ts`) ·
   D6 sessions+agents · D7 `orchestration_edges` · D8 `token_usage`.
@@ -701,6 +715,13 @@ files / 1540 tests, 100/100/100/100 in all five packages**. New PROVISIONAL cons
   (compiles only while the envelope exists; the flat shape → `null` is documented as a test),
   LiveView docblock amended. Peer's follow-up worth a line, not a wave: `session-ingested` and
   `agent-status-changed` are still narrowed by hand in `live-model.ts` with no type pin.
+  **Follow-up closed 2026-09-26:** both arms are now pinned in `realtime-wire-shape.test.ts`
+  (`agent-status-changed` in `live-model.ts`, `session-ingested` in `LiveView.tsx`, where it
+  actually lives). The status guard gets an exhaustive `satisfies Record<keyof
+  AgentStatusChangedEvent, true>` field list plus a drop-one-field sweep; the ingest reader gets a
+  typed frame. Mutation-checked, restored byte-identical (`cmp`): a field added to the shared
+  schema → `tsc -b apps/web` red on the field list; `sessionId` renamed → red on the typed frame;
+  the guard's `agentId` check removed → `refuses a frame missing agentId` red. Web tests +9.
 - **Exit gate (= the v1.0 definition, best-path §6.1):** all 5 daily questions answerable — **5
   of 5 ✅** as of 2026-09-02. This read **3 of 5 ✅, 2 RED** on 2026-09-01, the day the claim was
   first tested end-to-end instead of asserted
@@ -924,6 +945,18 @@ exit and proof live in the plan. Dated one-word answers under D1…D8 are the si
     1.5× too high; whether the seed's figure was ever right is itself unratified (WP-C1).
     Recommended default: migration 19 with the official five-bucket rows at the same floor,
     shipped together with the WP-C1 ratification tick.
+    **Decided and applied 2026-09-26** (Ivan, in chat: "продължавай" after the D10 offer) as
+    **migration 20** — 19 had meanwhile gone to `claude-opus-5-5`. The pricing page re-read that
+    day settles the "was the seed ever right" half too: footnote 3 says the $2 / $10 launch
+    price "is now the standard price" and the scheduled 3 / 15 increase "will not occur", so the
+    five floor rows are rewritten in place (`ON CONFLICT DO UPDATE`), not superseded by a dated
+    row. Still 40 rows; the other seed models re-checked against the same page and unchanged
+    (opus-4-8 5/25/0.5, fable-5 10/50/1, haiku-4-5 1/5/0.1). Checksum `1ab85d62…`, identical
+    under tsx, vitest and `node --experimental-strip-types`. Four new migration tests; every
+    existing dollar expectation that read the seeded Sonnet rate re-derived by hand (api-cost,
+    cost-summary cache, aggregate-savings, dag-scoping), and the rollup tie test's sonnet inputs moved
+    200k → 300k so every slice stays exactly $3. Mutation (input 2 → 3) killed by 5 tests.
+    Server 1625 → 1629. **The WP-C1 ratification tick stays Ivan's.**
 - [ ] **Wave 3 · 2026-10-13 → 2026-11-08 — Ivan's, no new features** — fill the 60 claims,
   run the hierarchy gate, drop PROVISIONAL (closes WP-X2 + LABEL-ME) · stopwatch run on five
   sessions (closes the `<30s` clause) · **friction log, 14 consecutive days** (Step-0 box;
@@ -970,9 +1003,135 @@ exit and proof live in the plan. Dated one-word answers under D1…D8 are the si
     0 missing targets, 0 kramdown-vs-GitHub differences) — only a naive slug rule that
     keeps the `_` emphasis markers would break them, and neither renderer uses it.
     Nothing changed. The same check surfaced a real Pages-only defect: `jekyll-relative-links` 0.6.1 does not rewrite a `.md` link whose text wraps onto a second source line (`LINK_TEXT_REGEX` stops at a newline), so the live `telegram.html` and `testing.html` carried raw `.md#…` hrefs that land on the unrendered Markdown file. 15 such links across 8 site pages (`cost-model.md`, `ingest-reconciliation.md`, `contributing/index.md`, `licensing.md`, `testing.md`, `faq.md`, `troubleshooting.md`, `telegram.md`) joined onto one source line each, blockquote and list prefixes preserved; rescan 0, `format:check` green, leak grep 0. A full read-only link audit followed the same day (1289 links across 89 `docs/**/*.md` sources; 0 missing local targets, 0 missing live pages of 81 expected, 0 dead external links, 1 external probe blocked by a 403 that a browser passes). The 35 links in 14 files from `docs/` to repo-root files (`README.md`, `CONTRIBUTING.md`, `TODO.md`, `DONE.md`, `RELEASE.md`, `SECURITY.md`, `CHANGELOG.md`, `LICENSE`) 404ed on Pages because the repo root is outside the Pages source; they now point at the GitHub `blob/main` URL (rescan 0), and two directory links (`external-docs-review.md` → `due-diligence/projects/`, `cold-replay-2026-09.md` → `runs/2026-09-09/`) point at the GitHub `tree/main` URL, since a directory without a README has no Pages index. The audit also found that the Primer footer's "Improve this page" link on all 82 pages was `edit/main/<page>` without the `docs/` segment (the Pages API reports `source.path` as `/` under a workflow build); `.github/workflows/pages.yml` now pins `github.source: { branch: main, path: /docs }` in the generated `_config.yml`. Verified against the pinned `jekyll-github-metadata` 2.16.1 source (`SiteGitHubMunger#github_namespace` deep-merges a `github:` config hash over its drop; `EditLinkTag#parts` joins `repository_url / edit / branch / path / page.path`) and then against a local build of the pinned github-pages 232 stack (Jekyll 3.10.0 + jekyll-github-metadata 2.16.1 + Primer 0.6.0 loaded from a scratch gem home on the system Ruby 2.6, `PAGES_REPO_NWO` set, no token): all 84 rendered pages carry `edit/main/docs/<page>`, 0 without; the live build on the next push is the final confirmation (Ivan's act). The same local build reproduced a Pages-only rendering defect the live site has today: Liquid runs before kramdown and treats `{{DASHBOARD_TOKEN}}` as a variable, so the copyable curl hook command on `hooks-installer.html` (×2), `running.html` and `hooks.html` read `Authorization: Bearer ` with nothing after it and the `{{…}}` mention vanished; the five spots are now wrapped in `{% raw %}` / `{% endraw %}` inside HTML comments (hidden on GitHub, honoured by Liquid), and the rebuilt pages show the template verbatim with no Liquid warning. `format:check` green after each batch, leak grep 0. Row stays open. Docs-truth sweep #3 (2026-09-19; four narrow agents after a first single agent died of context thrashing): every finding verified against the code before applying. 8 findings on the two security pages (the auth gate covers `/api/*` with the SPA carve-out; retention is signed and running under D3) and 39 substitutions on ten more files: `configuration.md` documents `DASHBOARD_WEB_ROOT` and counts eleven variables; `getting-started.md` no longer says the server hosts no UI or lacks a `start` script (`pnpm start` builds the SPA and the server serves it on the API's own origin, the dev SPA is the second-process route, curl expands the hook token at fire time); `hooks-installer.md` / `hooks.md` show `"async": true` and `--show-error`, name the per-firing `deliveryId` in the idempotency key and withdraw the byte-identical-Stop-body claim (amended 2026-09-02); `the-moat.md` no longer says retention is switched off and gains as-built notes for `orchestration_edges` / `token_usage`; `private: true` replaced by "publishable (`publishConfig.access: public`) but never published"; `README.md` counts nine read endpoints, six optional health fields, 30-day / floor-7 backups and CI on push to `main` plus PRs; `dashboard.md` twelve routes; `cost-model.md` attribution order (parser hard join, writer resolves `null` to the session id, migration 8 back-fills only pre-resolution rows) and migration-11 checksum wording; `docs/site/README.md` eighteen migrations, re-verified 2026-09-19. Left unverified on purpose: the Tailscale/Origin behaviour note, the WP-X9 wording, the `CostEngine` design name, the cost-model boot measurement, the "12-scenario" catalogue count, the simple10 licence row, branch protection, the 2026-09-10 wiring date. Raw-guard check, `format:check` and leak grep green. Row stays open. Docs-truth sweep #4 (2026-09-22; five agents over the pages the first three sweeps had not covered: architecture, `api.md` / `running.md` / `troubleshooting.md` / `telegram.md`, the guide pages and `testing.md`, the root community files plus `licensing.md` / `governance.md` / `STYLE-GUIDE.md`, and the ADRs): every finding verified against the code before applying; 67 substitutions across 27 files. Headline corrections: `dag-moat.md` states the as-built parent-resolution order (`directory` first, then `tool_use`, `queue_operation`, `task_notification`, `legacy_explore`), names migration 13 as the authority and the real migration-12 index names, and says `SubagentStop` carries a status verdict, never an edge; `ingest-reconciliation.md` reads compaction boundaries from `compactMetadata`, not the `PreCompact` hook; `data-model.md` and the ADR index count migration 18 as ten pricing rows; `api.md` and `troubleshooting.md` list all six optional health fields; `running.md` shows the real three-step `start` (Node-major guard first) and `--show-error`; `troubleshooting.md` no longer says hooks are liveness-only — a late `Stop` / `SubagentStop` reverts a watchdog `unknown` — and the retention window and cadence are the signed D3 policy; `telegram.md` marks the SSRF static gate as planned (no such pattern in `check-no-spawner.mjs`), counts the four test-side `fetch` sites and the `waiting`/unset watchdog inputs; `faq.md`, `SECURITY.md` and `STYLE-GUIDE.md` say the root package is unpublished (not `private: true`, which the workspace packages are) and retention is signed; `comparison.md`, `roadmap.md` (KC-2 row now MET) and `STYLE-GUIDE.md` count three P0 moat proofs plus the fourth over real HTTP, and the static-gate list drops the non-existent SSRF guard; `testing.md` counts eight fixtures and annotations, closes OPEN-2 (migration 4) and the retention TTL; `CONTRIBUTING.md` says `main` requires the `ci` check with `enforce_admins` off; `RELEASE.md` lists all seven CI commands (web build added, no box ticked) and the real auth enforcement points; `licensing.md` says an unused exception is reported, not fatal; `governance.md` records the community files in `ef40885`, only `CODE_OF_CONDUCT.md` missing, branch protection closed and four registered hooks; the ADRs gain dated as-built addenda (Normalizer/Projection stages exist since 2026-08-09 over parser output, fourth P0 proof, fifth edge mechanism, time-to-understand aid present but unmeasured, closing plan accepted 2026-09-08, five ADRs carry the desktop-probe update). The brief given to the agents wrongly said `source` has four values (migration 13 makes it five); no lane repeated the slip, and the three pages still saying four were fixed on top. Left unverified on purpose: GitHub-side state, measured figures, the 2026-09-10 wiring dates, the bot handle, the launchd deployment, design-era names and counts. Raw-guard, `format:check`, leak grep and `RELEASE.md` box-tick checks green. Row stays open. Docs-truth sweep #5 (2026-09-23; six agents, lanes J–O over architecture overview/glossary, security threat-model/remote-access, operations backup-restore, guide what-is-agenthropic, PR template, six ADRs + ADR template, `hooks/README.md`, the analysis entry point/README/closing plan, `parser-spec.md`, `DOCS-PLAN.md`): 29 findings verified against the code, all applied (plus 3 cross-lane: `testing.md` names the fourth P0 file; `open-decisions.md` gets dated D3 notes, Decided cells left to the owner); records only for the corpus figure, the CLAUDE.md/DESIGN.md quotations in `threat-model.md`, branch-protection state, the 412-package licence count and the Claude Code 2.1.251 payload claims. Raw-guard, `format:check`, leak grep and `RELEASE.md` box-tick checks green. Row stays open. Truth sweep #6 (2026-09-23; five agents, lanes P–T over server hooks/api/corpus, db/ingest/retention, core + shared, web/scripts/installer, fixtures/annotations/measurement docs): 48 code-comment and fixture-annotation findings verified against the code, all applied as 51 substitutions across 40 files (one duplicate dropped; the log reference block in the owner's time-to-understand measurement log left to Ivan). Owner items recorded, not edited: two stale comments inside checksummed migration 10, the `Shell.tsx` user-facing "every route is auth-gated" string, path numbering in `parse-session.ts` and a few dated-history comments. Suspected script defects reported, not fixed: `time-to-understand.mjs` answers the fleet Q4 per session, lists sessions without paging past 200, and its `[::1]` allow entry never matches (fails closed). All seven CI gates green (131 files / 2,428 tests, 100% coverage), leak grep 0, `RELEASE.md` untouched. Row stays open. Sweep #6 follow-up (2026-09-23; two agents): nine owner items settled in comments and one string (`parse-session.ts` renumbered to the real `resolveParent` order, `runner.ts`, `corpus-watcher.ts` pricing re-admission, `envelope.ts` + `install.mjs` no-retry sender, `top-burners.ts`, `dto-guards.ts` four exemptions, `CostView.tsx` four additions, `Shell.tsx:237` `/api/*`, `index.ts` M-13→M-18) plus four web test comments; the three `time-to-understand.mjs` defects fixed (IPv6 loopback, pagination, fleet Q4 savings). Still open for Ivan: migration 10's two stale comments (checksummed), `impl-review-2026-08-09.md:90` merging M-13 with M-18, T12. Seven gates green, 2,428 tests, 100% coverage. Row stays open.
+  - **R1 rehearsed again 2026-09-26** on `af10c87` (branch `claude/fervent-maxwell-2hmdro`,
+    clean tree), on Ivan's "continue by the roadmap": all seven CI commands plus `gate:node`
+    exit 0 — 167 test files / 3,060 tests, 100% ×4 in five packages; spawner 313 files, the
+    policy file the only allowlisted one; licences 406 packages / 428 installed versions, one
+    documented exception. §2 no-SSRF grep empty, corpus write-symbol grep matches only the two
+    in-file comments, no `0.0.0.0` in server source; §3 P0 4 files / 19 tests; §5
+    `backup.test.ts` 4/4, and the live-drill command run against a **scratch** database at
+    schema 20 printed `restore drill OK` (proves the command, not the live drill — that box
+    stays Ivan's). `apps/web/vitest.config.ts` unchanged since `2f8d103`. CI's latest `main`
+    run is `success` on `4b3cd2d`; the branch commits have no CI run (`ci.yml` fires on
+    `main` pushes and PRs). Branch protection and Pages were not re-checked (no `gh`). No box
+    ticked. **R2 figures refreshed the same day:** the 2026-09-23 "140 / 2621" reading was
+    already stale on `main` (server 1,358 → 1,625 before this session's work), now dated
+    2026-09-26 "167 / 3060" beside it in `README.md`, `RELEASE.md` §1, the site README,
+    `testing.md` (per package), `contributing/index.md`, `comparison.md` ×2, `faq.md`,
+    `roadmap.md`, `what-is-agenthropic.md` ×2 and the analysis README; gate outputs re-dated
+    in `testing.md` and `licensing.md`. Historical readings kept, not overwritten.
+  - **R1 §1 gap closed 2026-09-26** (found in the rehearsal above, where the box tells the
+    reader to diff `apps/web/vitest.config.ts` by hand): the web honesty block now pins the
+    exact thresholds object and the exact `exclude` list, read as text like the other four
+    packages (importing the config fails under jsdom and is outside the web tsconfig).
+    Mutations killed: `branches: 99`, a third exclude entry, an extra `perFile` key, the
+    exclude moved into a variable. Web tests 860 → 862. `RELEASE.md` §1, `testing.md`
+    "Three asymmetries", `CONTRIBUTING.md` (which also said "raising" for "lowering") and
+    PROJECT-STATE amended. No box ticked.
+  - **Doc drift fixed 2026-09-26:** `testing.md` "Third" still said the gate scripts have "no
+    unit tests whatsoever"; `apps/server/test/scripts-gates.test.ts` (41 tests, in `4b3cd2d`)
+    drives each gate's pure core against fixture trees. Amended with a dated note; what still
+    holds (scripts outside every coverage denominator, CLI wrappers unexecuted) is kept.
 - [ ] **Wave 5 · by 2026-12-01 (KC-4)** — release commit, `v1.0.0` tag, push (Ivan) ·
   post-tag CI/Pages/badges green, `DONE.md` closed, this board reduced to the KC-5 items
   (orchestrator). One week of buffer; the critical path is D1 → Wave 3's 14 days → R3.
+
+### WP audit 2026-09-26 — every ticked v1.0 work package against its Done-when
+
+_Prompted by WP-F5, found ticked with only its spawner half built. Four read-only auditors
+compared each `[x]` WP in tracks F, D, IN, C, U and X (S, A, X11 and the deferred IN11 out
+of scope) with its development-plan Done-when and with the code; every finding below was
+re-verified here before it was acted on. Deviations already recorded as owner-decided were
+not counted._
+
+- [x] **WP-D10 — "redacted re-ingest byte-identical + idempotent" had no test.** The code was
+  right (redaction runs before the idempotency key); nothing proved it. Added: `redactSecrets`
+  determinism and idempotence (`hooks-redact.test.ts`), and a SQLite-backed route test posting
+  a secret-bearing body, its redelivery, and the stored redacted payload itself — one row,
+  bytes unchanged (`hooks-routes.test.ts`). Mutation "key computed over the unredacted body"
+  is killed by the new test only.
+- [x] **WP-IN9 — "every row attributed to exactly one agent" was proven for one fixture.**
+  The P0 reconciliation suite now asserts it over the whole registry: no NULL or dangling
+  `agent_id`, the agent belongs to the row's session, a message's five bucket rows never
+  split across agents, and subagent-attributed rows exist (non-vacuous). Mutation
+  `agentId ?? sessionId → ?? null` in `db/token-usage.ts` killed by the new test only.
+- [x] **WP-X8 — no end-to-end smoke from the installed command to `events_raw`.** New
+  `hooks-end-to-end.test.ts` reads method, URL, content type, delivery-id header and token
+  variable out of the generated command string (curl is not run: no subprocess in tests),
+  replays it with `fetch` against the real server on loopback over the SQLite store, for every
+  registered event; a no-token request is refused; two firings with identical stdin and
+  different delivery ids store two rows. Mutations killed: installer endpoint path, content
+  type, and the delivery-id header name (the last was invisible until the two-firings case was
+  added). The real-session confirmation half remains the owner's.
+- [x] **WP-IN8, parser-gate #10 — "CC-version detection for provenance" was never built.**
+  Only the branch-on-shape half existed; `parser-spec.md` counted #10 green on that. Added
+  `ParsedSession.claudeCodeVersions` in `packages/core` (sorted distinct per-record `version`
+  strings across main, subagent and sidecar files; optional on the type, always present on the
+  output, like `outcomes`); parsing still never branches on it. Three tests (two fixtures, a
+  session spanning an upgrade with duplicates and non-string values, a version-less session);
+  core 338 → 341 at 100%. **Not persisted** — no reader needs it; a column would be a
+  migration and a UI question, left until one asks.
+- [x] **WP-U1 — "resumable" was never built.** The stream wrote a `retry:` hint and nothing
+  else; frames published during a reconnect were lost (recorded in `api.md` and ADR CD-5 as a
+  gap, never on this board). `RealtimeHub` now keeps the last 256 frames (`replayCapacity`,
+  0 disables) and `/api/stream` replays every buffered frame after the request's
+  `Last-Event-ID` — which `EventSource` sends by itself on reconnect, so the SPA needed no
+  change — before live fan-out and before `: connected`, in one synchronous step. A header
+  that is not a plain decimal id is ignored. Found and fixed while writing it: the replay
+  writes through the route's `write`, which can reap the stream, and `close` read
+  `unsubscribe` and `heartbeat` from their temporal dead zone — both hoisted, a writer that
+  throws during replay is dropped and counted, and a stream reaped by its own replay is
+  unsubscribed at once (tested with a 1-byte backlog bound). A guard meant to skip ids "from
+  an earlier process" survived mutation because it was dead code; removed, and the real
+  restart limit written down instead (an old id inside the new process's range cannot be
+  recognised). Nine tests; mutations killed: replay off-by-one, buffer never filled, the
+  reaped-during-replay check. Web comments that said "no replay buffer" amended.
+- [x] **Stale docs:** `api.md` credited `WP-IN2` with a `readSince()` that was never built;
+  the WP-D1 row cited `types/rows.ts` (now `enums.ts`).
+
+**Open decisions from the audit (Ivan)** — found, verified here, deliberately not built. Each is a
+one-word answer; the recommended default is first.
+
+- [ ] **D11 — Q5 has no dashboard reader.** `GET /api/changes` closed WP-U11 on the server, but
+  nothing in `apps/web/src` calls it, while the Phase-4 exit gate asks the *views* to answer
+  the five questions — the "true of the server, false of the dashboard" pattern this board
+  already caught twice. **(a)** a minimal "changed since" list on the Sessions view, text
+  only, like D4 (one agent lane, ~1 day) · (b) amend the gate to "answerable through the
+  documented API" and say so in `RELEASE.md` §6.
+- [ ] **D12 — WP-U7 "D3 force+tree, live".** The tree is a hand-rolled layered SVG (no
+  force graph) and does not subscribe to SSE (`SessionsView.tsx:37`, "an open owner
+  decision" never raised here). **(a)** amend the WP: layered tree stays, "live" means the
+  refresh control that exists · (b) subscribe the tree to `session-ingested` /
+  `agent-status-changed` and refetch the selected tree (small) · (c) build the force layout
+  (large).
+- [ ] **D13 — WP-C6 "staleness-fails-CI" cannot mean what it says.** The golden fixtures are
+  synthetic and use `synthetic-model-a/b`, which the seed deliberately does not price (the P0
+  harness adds its own rows), so a literal "every corpus model+bucket has a seeded row" test
+  would be red today, or circular if the fixtures borrowed seeded ids. What actually stopped
+  the 52/60 and 27/61 stale-seed outages was the runtime `PricingError` halt plus a real-corpus
+  boot. **(a)** amend C6 to "unknown model halts ingest loudly (runtime) + a real-corpus boot
+  in the release checklist", adding that boot line to `RELEASE.md` · (b) keep C6 open.
+- [ ] **D14 — WP-X1 "≥3 real sessions, redacted, manifested, all four pathologies".** All eight
+  fixtures are synthetic by design (`fixtures/types.ts:6-8`); crashed-no-Stop and
+  two-concurrent-instances are not represented; there is no pathology manifest. **(a)** accept
+  synthetic fixtures as the CI corpus (the real corpus stays local, as LABEL-ME's already
+  does) and add the two missing pathologies synthetically (agent lane) · (b) promote redacted
+  real sessions (needs your corpus and a redaction pass).
+- [ ] **D15 — WP-X5 "a PR dropping below the threshold is blocked (demonstrated)".** Never
+  demonstrated. **(a)** one throwaway PR lowering coverage, red `ci` run recorded, PR closed
+  (needs your go-ahead to open it) · (b) accept the gate's configuration as the evidence.
+- [ ] **D16 — WP-X10 "WORKLOG presence check".** None exists; WORKLOG is a git-excluded local
+  file. **(a)** drop the clause — a tracked check for an untracked file cannot run in CI ·
+  (b) a local-only warning script.
+- [ ] **D17 — WP-C1 "refresh cadence".** No cadence is defined; the seed has been refreshed
+  three times by outage (migrations 18-20). **(a)** a `RELEASE.md` line: re-read the pricing
+  page and boot the real corpus before every tag · (b) a dated calendar cadence.
+- [ ] **D18 — WP-C2 "PricingProvider port".** No port interface; `loadPricing` is a plain
+  function and the dated resolver is met. **(a)** accept as met in substance · (b) add the
+  interface (trivial, but an interface with one implementation and no second caller).
+- [ ] **D19 — `token_usage.is_compaction_baseline` is written as 0 and read by nothing.**
+  Repricing happens at analysis time (`docs/site/architecture/hooks.md`), so the column is
+  dead. **(a)** keep it, documented as reserved · (b) drop it in a migration.
 
 ### Post-1.0 / v2.0 · Alerting core _(off the v1.0 critical path — best-path §6.1; **entered only via KC-5**: 14 consecutive days of real daily v1.0 use + ≥3 friction-log entries wanting alerts — roadmap §6. If that evidence never materializes, v2.0 never starts, and that is a success of the roadmap, not a failure.)_
 - [ ] **WP-A2** alert/webhook schema · **A3** secret `token_ref` resolver · **A4** no-SSRF

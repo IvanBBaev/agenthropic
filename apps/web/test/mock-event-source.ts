@@ -5,8 +5,10 @@
  *
  * AMENDED 2026-09-03 (LV-2): frames now carry `lastEventId`, which the double
  * previously left empty for every frame. The server numbers every frame it
- * publishes (`id: <n>` in apps/server/src/realtime/hub.ts) and keeps no replay
- * buffer, so that number is the only evidence a client has that frames went
+ * publishes (`id: <n>` in apps/server/src/realtime/hub.ts) and - until
+ * 2026-09-26 - kept no replay buffer; it now replays a bounded window after
+ * `Last-Event-ID`, so a gap means frames older than that window, or a restart.
+ * Either way the number is the only evidence a client has that frames went
  * missing - a double that cannot express it cannot test for it. The id is
  * OPTIONAL and sticky in the way the SSE spec makes it sticky: a frame emitted
  * without one inherits the last id seen, exactly as a browser EventSource

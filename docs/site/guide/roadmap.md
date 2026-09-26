@@ -34,7 +34,7 @@ paired-capture corpus. See [the Phase-0 corpus probe](../../analysis/phase0-prob
 > the persisted subagent DAG; the cost engine; the hook receiver and its installer; the
 > status watchdog; the SSE hub; the read API; and all four dashboard views plus a
 > per-session cost-analysis panel. **131 test files / 2428 tests pass** (re-measured
-> 2026-09-18; re-measured again 2026-09-23 as **140 test files / 2621 tests**), with
+> 2026-09-18; re-measured again 2026-09-23 as **140 test files / 2621 tests**; 2026-09-26: **167 test files / 3060 tests**), with
 > **100%** statements/branches/functions/lines enforced in all five packages. The three P0 moat proofs (plus a fourth P0 proof that answers the five daily questions over real HTTP) are green in CI on every push and pull request,
 > and since **2026-08-25** they are **merge-blocking for anyone who is not the repository
 > owner**: `main` requires the `ci` check, so a red run withholds a contributor's merge
@@ -313,8 +313,9 @@ building and publishing.
 > included, because `getFixture` and the fixture builders are real code whose defects fail
 > silently through every test that consumes them — and the static guards, which do turn
 > the build red on a deliberately introduced spawner, wide bind, WebSocket server, dynamic
-> `eval`, or disallowed license (no static SSRF guard exists — the server has no outbound
-> HTTP client, and the no-SSRF invariant is held by review, not by a script).
+> `eval`, or disallowed license — and, since 2026-09-26, on an outbound network call or HTTP
+> client in server-process code (until then no static SSRF guard existed and the invariant
+> was held by review).
 >
 > Two clauses of the exit gate were open for the whole of this project's life, and both were
 > owner actions rather than code. Both were performed on **2026-08-25**:

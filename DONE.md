@@ -377,6 +377,110 @@ PROVISIONAL), Ivan's two physical KC acts, or no-commit-without-an-explicit-ask.
   passing, 100% on all four axes in all five packages** (shared's statement count moved 83 → 84 —
   the one new schema line — and nothing else moved).
 
+### 2026-08-25 → 2026-09-26 · 0.3.0, the closing plan, Waves 0–2, and the hardening wave
+
+_Written 2026-09-26 as a Wave-4 R2 item, from the three commits of the span (`40f1524`,
+`39e565a`, `4b3cd2d`) and the `TODO.md` Closing board rows. The per-item detail — commands,
+counts, mutation results — lives there and in `CHANGELOG.md` `[Unreleased]`; this is the
+milestone record, not a second copy._
+
+- **`40f1524` (2026-08-25) — defect wave D-5…D-8 and 0.3.0.** A symlinked session directory
+  was walked and fingerprinted (D-5; the guard consolidated into `corpus/corpus-paths.ts`);
+  a session whose subagents all failed to price showed `$0.00` beside "no subagent ran"
+  (D-6); the coverage banner overstated what excluded sessions are missing from (D-7); the
+  SSE backlog reap freed nothing because it called `end()` (D-8). Two comments that cited a
+  non-existent equivalence suite were corrected. Version 0.3.0 across the root and all five
+  packages. The same day `main` began requiring the `ci` check and Pages went live.
+- **`39e565a` (2026-09-09) — the defect and honesty waves 2026-08-25 → 09-08, and the
+  closing plan.** `GET /api/changes`; migration 17 `agents.outcome_cause` with the six-cause
+  classifier; the cost summary served from the `token_usage_rollup` materialization with
+  equivalence, seed and trigger-order suites and migration checksum pins; the single-port
+  static site; the hooks installer's ours/ambiguous/foreign classifier; the web error
+  boundary, DTO guards, provenance stamps and stream-gap banner. The closing plan
+  (`docs/analysis/closing-plan-2026-09-08.md`) and decisions **D1–D8** were accepted by Ivan
+  on 2026-09-09; this commit is D1's "commit the whole tree", CI and Pages green on it.
+- **Closing-board Waves 0–2 (2026-09-09 → 09-10, dispatched early; committed partly in
+  `39e565a` and the rest in `4b3cd2d` — migration 18, L6's `.nvmrc`, L9, L10 and L11 are in
+  the latter).** L1 `sessionCount` /
+  `hasMore` on the cost summary; L2 two-sided `hubIsWhole`; L3 the reconnect-attempt chip
+  (D6); L4 the closed three-arm realtime union (D5, WP-U14); L5 `outcomeCause` in the session
+  tree (D4, WP-U13 UI half); L6 NODE-PIN (`.nvmrc` 22, `engines`, the run-time guard); L7 the
+  gate docs; L8 BENCH-SHAPE measured at the real shape (81.68–92.29 s, **unratified**);
+  L9 retention wired on the signed D3 values (WP-D10 closed); L10 the LABEL-ME rendering
+  kit; L11 the time-to-understand kit — whose real-corpus boot found 52 of 60 sessions
+  unpriced, fixed by migration 18. **KC-2 met**, ticked 2026-09-18.
+- **Docs-truth sweeps #3–#6 (2026-09-19 → 09-23)** re-verified the public corpus against the
+  code (hundreds of substitutions, each checked before applying), fixed the Pages-only link
+  and Liquid defects, and settled the owner items the sweeps could settle.
+- **`4b3cd2d` (2026-09-26) — the hardening wave.** Transient read failures heal with backoff
+  re-reads; session and agent anchors are monotonic; timestamps are canonical at the ingest
+  boundary; status writes are scoped to the owning session and a cross-session
+  `SubagentStop` is refused; retention gained exact budgets, all-or-nothing journal
+  receipts and a staged restore that checks before touching the target; the hooks
+  installer writes atomically and its curl ignores `curlrc`/proxy; the spawner, licence and
+  Node-version gates were tightened; it also carries migrations 18 and 19 — 19 prices
+  `claude-opus-5-5` after a real-corpus boot refused 27 of 61 sessions. CI `success` on that
+  SHA.
+- **Still Ivan's from this span:** the BENCH-SHAPE tick, the KC-3 tick (2026-10-12), D9
+  (recommended "no for v1.0"), and everything in Wave 3.
+
+### 2026-09-26 · D10 closed as migration 20, and the last two realtime arms pinned
+
+- **Sonnet 5 priced at the official rate (D10).** The seed carried `claude-sonnet-5` at 3 / 15.
+  The platform pricing page, re-read 2026-09-26, says the $2 / $10 launch price "is now the
+  standard price" and the scheduled increase to $3 / $15 "will not occur" — so 3 / 15 was never
+  in force and every Sonnet 5 dollar shown was 1.5× too high, on every bucket. Migration 20
+  (`model-pricing-sonnet-5-official`) rewrites the five seeded floor rows in place (2 / 10,
+  cache read 0.2, writes 2.5 / 4) instead of adding a later-dated row, which would have kept the
+  cancelled price in force for every earlier message. No row is added (still 40); an operator's
+  Sonnet 5 row at any other instant is untouched; stored usage re-prices on the next read,
+  because the rollup does not store the rate. The other seed models were re-checked against the
+  same page and are unchanged. Still PROVISIONAL — the WP-C1 ratification tick is Ivan's.
+- **Proved, not asserted.** Checksum `1ab85d62…` identical under tsx, vitest and
+  `node --experimental-strip-types`. Four new migration tests (fresh database, in-place rewrite
+  with every other row byte-identical, operator row at another instant, read-time re-pricing
+  with the rollup unchanged); mutation input 2 → 3 killed by five tests. Every dollar
+  expectation that read the seeded Sonnet rate was re-derived by hand; migration 19's tests
+  are now bounded to `<= 19`.
+- **The two hand-narrowed realtime arms are pinned** (the L4 follow-up). An exhaustive
+  `satisfies Record<keyof AgentStatusChangedEvent, true>` field list makes a shared-schema
+  field change a compile error in `apps/web`; a drop-one-field sweep proves
+  `isAgentStatusChangedEvent` reads every field; a `SessionIngestedEvent`-typed frame pins
+  `ingestedSessionId`. Three mutations (field added, `sessionId` renamed, the `agentId` check
+  removed) — all red.
+- **A pre-existing test race, found by the final gate run and fixed.** The web test for a 401
+  on the stored token asserted the SSE stream closed the moment the entry screen appeared;
+  React 19 runs the closing effect cleanup after that commit when the 401 lands outside `act`,
+  so it failed about once in seventeen coverage runs. Proved by deferring the close one
+  macrotask (old assertion 3 of 3 red, new one 3 of 3 green) and by removing it (new one red).
+  The test now waits for the eventual close and asserts a stream existed. No product code
+  changed.
+- **The web coverage guard caught up with the other four packages.** `RELEASE.md` §1 had
+  told the release reader to diff `apps/web/vitest.config.ts` by hand, because nothing
+  stopped a lowered web threshold or a widened web `exclude`. The web honesty block now pins
+  the exact thresholds object and the exact exclude list; four mutations each fail it.
+- **The no-SSRF half of `WP-F5`, built.** The Phase-1 row was ticked with only the spawner
+  half in place; no-SSRF, a CD-7 CI-blocking condition, rested on a release-time grep. The
+  gate now refuses outbound network primitives and HTTP clients in server-process source
+  and manifests (93 files clean today). Nineteen new gate tests; six mutations of the gate
+  each killed. Eight documents that said "upheld by review, not by CI" carry a dated
+  correction.
+- **An audit of every ticked v1.0 work package against its Done-when.** Four read-only
+  auditors over tracks F, D, IN, C, U and X, every finding re-verified before use. Built: the
+  resumable SSE stream (WP-U1, bounded `Last-Event-ID` replay), Claude Code version detection
+  (parser-gate #10), and the tests three met-but-unproven clauses lacked (WP-D10 redaction
+  idempotence, WP-IN9 per-row attribution, WP-X8 install-to-`events_raw`). Each new test was
+  shown to fail on a matching regression; writing U1 also surfaced and fixed a
+  temporal-dead-zone bug in the stream route's reap path, and one guard that mutation showed
+  to be dead code. Nine findings that are product or process calls went to the board as
+  decisions D11–D19, not code.
+- **Documentation drift found on the way:** the migration ledger stopped at 18 and three pages
+  said "eighteen migrations" although 19 already existed. Ledger rows 19 and 20 added, counts
+  set to twenty.
+- **Gates under Node 22:** all eight green — typecheck, lint, format, web build, 3,060 tests
+  (web 860 · shared 94 · test-fixtures 139 · core 338 · server 1629) at 100% coverage,
+  `gate:spawner`, `gate:licenses`. Pushed to `claude/fervent-maxwell-2hmdro`.
+
 ### Still open, and owned by Ivan — not by any agent
 - ~~**Everything above is UNCOMMITTED.**~~ **Closed 2026-07-30** — committed and pushed
   as `9b6c6b3` on Ivan's explicit instruction (198 files, +27 133 / −1 113). CI is

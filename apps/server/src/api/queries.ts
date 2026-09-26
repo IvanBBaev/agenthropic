@@ -685,7 +685,7 @@ export interface CostSummaryProbe {
  *   Such a write also rewrites the affected rollup slice through migration
  *   16's `model_pricing` triggers, on that other connection and so equally
  *   invisible here. So the table's full content rides in the key verbatim —
- *   ~40 rows (PROVISIONAL: the WP-C1 seed plus migration 18), a trivial read next to the
+ *   ~40 rows (PROVISIONAL: the WP-C1 seed plus migrations 18-20), a trivial read next to the
  *   rollup scan being avoided, and the one thing that makes a cross-connection
  *   repricing visible to this cache at all.
  *

@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The event stream is resumable: the server keeps the last 256 frames and, when a browser
+  reconnects with `Last-Event-ID` (which `EventSource` sends by itself), replays the frames it
+  missed before live frames resume. A longer absence, or a reconnect across a server restart,
+  can still miss frames; the dashboard keeps reporting those as a stream gap.
+- The parser reports which Claude Code versions wrote a session (`claudeCodeVersions`), for
+  provenance only; parsing still branches on directory shape, never on the version.
+- Security gate: `pnpm run gate:spawner` now enforces no-SSRF, the half of `WP-F5` that was
+  never built. Server-process source (`apps/server/src/`, `packages/*/src/`) fails CI on
+  `fetch(`, a node network module (`http`, `https`, `http2`, `net`, `tls`, `dgram`, `dns`), an
+  HTTP client package import, a `WebSocket` or `EventSource` client or `XMLHttpRequest`, and
+  the server and library manifests may not declare an HTTP client package. Browser code and
+  tests stay out of scope by path. The OK line now also reports how many server-process files
+  were checked (93 today, all clean).
 - `GET /api/changes` reports what the corpus poll found since a given moment: each session is labelled `new`, `updated` or `unknown`, with a counter for each, so a client can tell "nothing changed" from "cannot tell" (`ChangesDto` in `packages/shared`).
 - Failed agents are classified: migration 17 adds `agents.outcome_cause`, written from the transcript's terminal record with six causes (`concurrency_limit`, `user_interrupt`, `permission_failed`, `dispatch_unavailable`, `terminated_early`, `unclassified`); only `terminated_early` promotes an agent to `status: error`, a status that previously had no producer, and the cause travels on the session-tree and global-DAG wire as `outcomeCause`.
 - The server serves the built dashboard from its own loopback port, so one origin carries both the API and the page; documented in the running guide.
@@ -44,6 +57,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of them on this id; the schema-19 boot admits 61/61 with no `unknown model id` line
   (`docs/measurement/time-to-understand-log.md` §0.6–0.7). The gate itself is unchanged: the
   cure for an unknown id is a price row, never a relaxed check.
+- Migration 20 corrects `claude-sonnet-5` from the seed's 3 / 15 to the official rate (input 2,
+  output 10, cache read 0.2, five-minute cache write 2.5, one-hour cache write 4 USD per MTok),
+  read from the platform pricing page on 2026-09-26, which says the $2 / $10 launch price is now
+  standard and the scheduled increase to $3 / $15 will not occur. Every Sonnet 5 dollar shown
+  before it was 1.5x too high. The five seeded floor rows are rewritten in place rather than
+  superseded by a later-dated row, so the cancelled price never becomes history; no row is
+  added (still 40), a Sonnet 5 row an operator wrote at another instant is untouched, and stored
+  usage re-prices on the next read without a re-ingest. PROVISIONAL like the rest of the seed.
+- Tests: `apps/web/test/realtime-wire-shape.test.ts` pins the two hand-narrowed sibling arms to
+  the shared types as it already pinned `ingest-failed`. An exhaustive `satisfies
+  Record<keyof AgentStatusChangedEvent, true>` field list makes a field added to, removed from or
+  renamed in the shared schema a compile error in `apps/web`, and a drop-one-field sweep proves
+  `isAgentStatusChangedEvent` refuses a frame missing any of them; a `SessionIngestedEvent`-typed
+  frame pins the one field `ingestedSessionId` reads. Each pin was mutation-checked (a field
+  added, `sessionId` renamed, the guard's `agentId` check removed): all three went red.
 
 ### Changed
 
@@ -171,6 +199,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Tests: a 2026-09-26 audit of every ticked v1.0 work package against its Done-when found
+  three clauses the code met but no test proved. Redaction is now proven deterministic and
+  idempotent, and a redelivered or re-ingested secret-bearing hook event stores one row with
+  unchanged bytes (WP-D10). Every `token_usage` row is proven attributed to exactly one agent
+  of its own session across the whole fixture registry (WP-IN9). The request the installed hook
+  command sends is proven to reach `events_raw` through the real loopback server, including the
+  per-firing delivery id (WP-X8). Each new test was shown to fail on a matching regression.
+- Coverage gate: `apps/web` was the one package whose thresholds and coverage `exclude` list
+  no test guarded, so lowering a web threshold or taking another file out of the web
+  denominator passed CI. `apps/web/test/honesty.test.tsx` now pins the exact thresholds object
+  (four keys, all `100`, no extras), `include` as `'src/**'` and `exclude` as exactly
+  `src/main.tsx` and `src/vite-env.d.ts`, each of which must exist. Four mutations each fail it.
+- Tests: `apps/web/test/app.test.tsx` "bounces back to the entry screen … 401" asserted the SSE
+  stream closed at the instant the entry screen appeared, but React 19 runs the Shell's closing
+  effect cleanup after that commit when the 401 arrives outside `act`, so it failed about once
+  in seventeen coverage runs. It now waits for the eventual close and first asserts that a
+  stream existed. Proved both ways: with the close deferred one macrotask the old assertion
+  failed 3 of 3 and the new one passes 3 of 3; with the close removed the new one fails.
 - Server-side served-honesty audit (2026-09-23): a stored rate that is negative, non-finite or
   non-numeric no longer prices tokens on the session, tree and DAG routes or 500s the cost summary
   (the tokens are served as unpriced), and `upsertPricingRate` now refuses such a rate at write

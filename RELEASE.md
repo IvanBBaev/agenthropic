@@ -71,8 +71,8 @@ Run each gate locally on the release commit; the six below plus the web producti
 - [ ] `pnpm run typecheck`
 - [ ] `pnpm run lint`
 - [ ] `pnpm run format:check`
-- [ ] `pnpm run test` — the full workspace suite (**140 test files / 2621 tests** on a
-      local run of 2026-09-23, up from 131 / 2428 on 2026-09-18; the figure moves as the
+- [ ] `pnpm run test` — the full workspace suite (**167 test files / 3060 tests** on a
+      local run of 2026-09-26, up from 140 / 2621 on 2026-09-23 and 131 / 2428 on 2026-09-18; the figure moves as the
       tree does, so re-measure on the release commit rather than trusting this line). Coverage: **all five** packages —
       `@agenthropic/server`, `@agenthropic/web`, `@agenthropic/core`,
       `@agenthropic/shared` and `@agenthropic/test-fixtures` — run `vitest run --coverage`
@@ -85,16 +85,20 @@ Run each gate locally on the release commit; the six below plus the web producti
       only executes a line without asserting on it satisfies the gate and proves nothing,
       and no threshold can detect that. Three cheap ways to manufacture a 100% are
       guarded by tests that read the configs and sources as text — lowering a threshold,
-      adding a coverage `exclude`, and reintroducing an ignore pragma — but **the guard
-      is not uniform across the five packages, so read this before ticking the box.**
+      adding a coverage `exclude`, and reintroducing an ignore pragma — **and since
+      2026-09-26 all five packages guard all three; the paragraph below is the history of
+      the gap that closed.**
       `apps/server`, `packages/core`, `packages/shared` and `packages/test-fixtures`
-      assert all three. `apps/web` asserts only the pragma sweep: it cannot assert the
-      absence of an `exclude`, because it legitimately carries one (`src/main.tsx`,
-      `src/vite-env.d.ts`), and it does not assert its four thresholds either. So a
-      change that widened the web exclude list or lowered the web thresholds would pass
-      CI silently. Diff `apps/web/vitest.config.ts` by hand on the release commit;
-      `docs/site/contributing/testing.md` §"Three asymmetries" records this as a real gap
-      in the mechanism rather than a technicality.
+      assert all three by asserting there is no `exclude`. Until 2026-09-26 `apps/web`
+      asserted only the pragma sweep: it cannot assert the absence of an `exclude`,
+      because it legitimately carries one (`src/main.tsx`, `src/vite-env.d.ts`), and it
+      did not assert its four thresholds either, so a change that widened the web exclude
+      list or lowered the web thresholds would have passed CI silently. It now pins the
+      exact thresholds object and the exact exclude list
+      (`apps/web/test/honesty.test.tsx`, four mutations killed; `docs/site/contributing/testing.md`
+      §"Three asymmetries" has the record). Reading `apps/web/vitest.config.ts` on the
+      release commit is still cheap and still worth doing, but it is no longer the only
+      defence.
       _(Historical notes: until 2026-07-30 `apps/web` ran `vitest run` without
       `--coverage`, so its configured thresholds silently never executed;
       `packages/test-fixtures` was outside the gate scope entirely until it was pulled
@@ -102,7 +106,7 @@ Run each gate locally on the release commit; the six below plus the web producti
       after that. Earlier revisions of this box quoted 90/90/90/90 thresholds, a
       four-package scope, and per-package figures below 100% — all three are superseded.)_
 - [ ] `pnpm run gate:spawner` — WP-F5 static no-spawner / no-wide-bind / no-WebSocket /
-      no-eval gate over `apps/`, `packages/`, `scripts/`, `hooks/`
+      no-eval gate, plus (since 2026-09-26) no outbound network call in server-process code, over `apps/`, `packages/`, `scripts/`, `hooks/`
       ([`scripts/check-no-spawner.mjs`](scripts/check-no-spawner.mjs)). The allowlist is
       logged on every run — **read it**; it must contain only the policy file itself.
 - [ ] `pnpm run gate:licenses` — the CD-9 allowlist gate (see §4).
@@ -137,10 +141,15 @@ trail).
       with audited inline markers, never whole-file.
 - [ ] **No SSRF — no code path dials a payload-supplied URL.** v1.0 ships **no**
       webhook/alert dispatcher at all (the A-track is post-1.0, roadmap §6), so the
-      strongest form holds: there is no outbound-dial feature to misuse. **Verified by
-      review and by the grep below — not by `gate:spawner`,** which carries no
-      outbound-HTTP pattern at all and would pass a newly added `fetch()` without
-      comment. Run:
+      strongest form holds: there is no outbound-dial feature to misuse. **Since
+      2026-09-26 `gate:spawner` enforces it (§1):** server-process source
+      (`apps/server/src/`, `packages/*/src/`) may not call `fetch(`, import a node
+      network module (`http`/`https`/`http2`/`net`/`tls`/`dgram`/`dns`), import an HTTP
+      client package or open a `WebSocket`/`EventSource`/`XMLHttpRequest` client, and
+      the server and library manifests may not declare an HTTP client package; its OK
+      line names how many server-process files it checked. Until that date the gate
+      carried no outbound pattern and this box rested on review and the grep below,
+      which stays as a cheap cross-check. Run:
       `grep -rnE "\bfetch\(|node:https?|\baxios\b|\bundici\b" apps/server/src packages/*/src`
       — expect empty (matches in `apps/web/src` are the browser bundle calling this
       server's own relative `/api` paths, and are not the server process). The full
@@ -360,5 +369,16 @@ a further-changed working tree - `pnpm -r test`, `gate:spawner` and `gate:licens
 not the restore drill or the `gh api` checks: all three exited 0, at 140 test files / 2621
 tests with the same 100% in all five packages, 282 files scanned by the spawner gate, and
 412 packages / 429 installed versions under the license gate with the same one documented
-exception. That is a re-measurement, not a second rehearsal.)* A rehearsal ticks no box: every box on this page
+exception. That is a re-measurement, not a second rehearsal.)* *(Second rehearsal 2026-09-26 on
+`af10c87` (branch `claude/fervent-maxwell-2hmdro`, clean tree): all seven CI commands plus
+`gate:node` exited 0 at 167 test files / 3060 tests with 100% in all five packages; the spawner
+gate scanned 313 files with only the policy file allowlisted; the license gate read 406 packages /
+428 installed versions, 405 allowlisted, 1 documented exception. §2's no-SSRF grep was empty and
+the corpus write-symbol grep matched only the two in-file comments; §3 P0 4 files / 19 tests
+green; §5 `backup.test.ts` 4/4, and the §5 live-drill command, run against a scratch database
+migrated to schema 20 rather than the owner's, printed `restore drill OK` - which proves the
+command, not the live drill. `apps/web/vitest.config.ts` is unchanged since `2f8d103` (exclude
+list two entries, thresholds 100 ×4). Not re-checked: branch protection and Pages (no `gh` in
+that session); CI's latest `main` run was `success` on `4b3cd2d`, and the branch commits have no
+CI run because `ci.yml` fires on pushes to `main` and on pull requests only.)* A rehearsal ticks no box: every box on this page
 is ticked on the release commit only. The record is on the `TODO.md` Wave 4 row.

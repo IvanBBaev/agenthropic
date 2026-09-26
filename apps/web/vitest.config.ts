@@ -15,7 +15,9 @@ import { defineConfig } from 'vitest/config';
 // @types/d3-sankey optional-geometry fields) are now reached by real tests
 // through the exported `toFlowNode` / `toFlowLink` converters and the
 // injectable `pathFor` seam - see test/honesty.test.tsx. A static test in that
-// file fails if the pragma ever comes back.
+// file fails if the pragma ever comes back, and since 2026-09-26 it also pins
+// the thresholds below and the exact exclude list: a change here that lowers a
+// bar or takes another file out of the denominator must change that test too.
 export default defineConfig({
   test: {
     environment: 'jsdom',

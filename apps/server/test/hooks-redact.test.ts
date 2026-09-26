@@ -96,6 +96,30 @@ describe('maskCredentialShapes (WP-IN14)', () => {
 });
 
 describe('redactSecrets (WP-IN14)', () => {
+  // WP-D10 Done-when: "Redaction deterministic; redacted re-ingest byte-identical +
+  // idempotent" (2026-09-26 audit: no test proved either property). The route
+  // computes the idempotency key over the REDACTED payload, so both properties are
+  // what makes a redelivered - or re-ingested - event dedupe to zero new rows.
+  const SECRET_BEARING = {
+    hook_event_name: 'UserPromptSubmit',
+    api_key: 'sk-ant-api03-supersecretvalue',
+    prompt: 'use Bearer abc.def.ghi and sk-ant-api03-supersecretvalue please',
+    nested: [{ authorization: 'Bearer xyz' }, { token_count: 42, note: 'plain' }],
+  };
+
+  it('is deterministic: the same input always redacts to byte-identical output', () => {
+    const first = JSON.stringify(redactSecrets(deepFreeze(structuredClone(SECRET_BEARING))));
+    const second = JSON.stringify(redactSecrets(deepFreeze(structuredClone(SECRET_BEARING))));
+    expect(second).toBe(first);
+    expect(first).not.toContain('supersecretvalue');
+  });
+
+  it('is idempotent: redacting an already-redacted payload changes nothing', () => {
+    const once = redactSecrets(SECRET_BEARING);
+    const twice = redactSecrets(deepFreeze(structuredClone(once)));
+    expect(JSON.stringify(twice)).toBe(JSON.stringify(once));
+  });
+
   it('replaces secret-named fields whatever the value type', () => {
     const input = deepFreeze({
       api_key: 'sk-live-whatever',

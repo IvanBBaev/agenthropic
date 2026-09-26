@@ -18,9 +18,9 @@ and price rates are illustrative pending those migrations; every bucket dimensio
 constraint, and invariant named in the tables is sourced.
 
 > **Update — 2026-07 (as built).** The paragraph above described the pre-code state.
-> Implementation began 2026-07-11, and the schema is now **real**: **eighteen** ordered,
+> Implementation began 2026-07-11, and the schema is now **real**: **twenty** ordered,
 > idempotent, in-code migrations in `apps/server/src/db/migrations.ts` (thirteen when this
-> note was first written; the ledger table below is current as of 2026-09-19), each applied inside
+> note was first written; the ledger table below is current as of 2026-09-26), each applied inside
 > a transaction that also records its id, name and a **sha-256 content checksum** in the
 > runner's own `schema_version` table (running the runner twice applies nothing). The SQL
 > blocks on this page have been replaced with the **actual migration DDL**; the original
@@ -98,6 +98,8 @@ leaves the schema byte-identical.
 | 16 | `token-usage-rollup` | `token_usage_rollup` (`WITHOUT ROWID`) + its index, seeded from `token_usage`, then six triggers that keep it exact under every mutation of `token_usage` or `model_pricing` |
 | 17 | `agents-outcome-cause` | `ALTER TABLE agents ADD COLUMN outcome_cause`, nullable, with an inline six-value CHECK |
 | 18 | `model-pricing-opus-5-fable-5-1` | Ten explicit rate rows — all five buckets for each of the two model ids the real corpus exposed as unpriced |
+| 19 | `model-pricing-opus-5-5` | Five explicit rate rows for `claude-opus-5-5`, the next model id the real corpus exposed as unpriced |
+| 20 | `model-pricing-sonnet-5-official` | Rewrites the five seeded `claude-sonnet-5` floor rows to the official 2 / 10 rate (decision D10); adds no row |
 
 Three properties of that list are worth stating explicitly, because they are the reason
 the ledger table exists at all.
@@ -716,12 +718,13 @@ CREATE TABLE model_pricing (
 
 Eight models at one `effective_from` floor of `2026-01-01` — five from the original seed
 (migrations 7 and 11), each expanded into all five buckets, two added explicitly by
-migration 18 on 2026-09-10 and one by migration 19 on 2026-09-26:
+migration 18 on 2026-09-10 and one by migration 19 on 2026-09-26. Migration 20 (2026-09-26)
+adds no model; it corrects the seeded Sonnet 5 rows in place:
 
 | `model` | input $/Mtok | output $/Mtok |
 |---|---|---|
 | `claude-opus-4-8` | 5 | 25 |
-| `claude-sonnet-5` | 3 | 15 |
+| `claude-sonnet-5` (corrected by migration 20) | 2 | 10 |
 | `claude-fable-5` | 10 | 50 |
 | `claude-haiku-4-5-20251001` | 1 | 5 |
 | `<synthetic>` | 0 | 0 |
@@ -729,7 +732,7 @@ migration 18 on 2026-09-10 and one by migration 19 on 2026-09-26:
 | `claude-fable-5-1` (migration 18) | 10 | 50 |
 | `claude-opus-5-5` (migration 19) | 4 | 20 |
 
-For the five seed models the three cache buckets are **derived** from the input rate rather
+For the four other seed models the three cache buckets are **derived** from the input rate rather
 than listed separately: `cache_read` at 0.1×, `cache_write_5m` at 1.25×, `cache_write_1h`
 at 2.0×. Migration 18's two models carry all five buckets **explicitly**, copied from the
 platform pricing page fetched 2026-09-10: Opus 5 reads cache at 0.50 and writes it at 6.25
@@ -738,7 +741,9 @@ platform pricing page fetched 2026-09-10: Opus 5 reads cache at 0.50 and writes 
 have priced every Fable 5.1 cache read four times too high, which is why the derivation was
 not reused. Migration 19's Opus 5.5 reads cache at 0.20 — 0.05× its input rate, a third
 ratio no derivation covers — and writes it at 5 / 8, copied from the same page fetched
-2026-09-26. All 40 rows carry the same PROVISIONAL label.
+2026-09-26. Migration 20 writes Sonnet 5's five rows explicitly too (cache read 0.20, writes
+2.50 / 4 — the standard ratios, spelled out so every figure sits in the checksummed SQL). All
+40 rows carry the same PROVISIONAL label.
 
 Two details in that table are load-bearing rather than cosmetic. The keys are the **exact
 `message.model` byte-strings** emitted in the corpus, verified 2026-07-13 against
@@ -795,8 +800,18 @@ JavaScript literals, so the content checksum comes out identical under every exe
 repo runs (`apps/server/test/migration-checksum-pin.test.ts` explains why a JavaScript
 `0.5` would not). One figure it deliberately leaves alone: the pricing page fetched the
 same day lists Sonnet 5 at 2 / 10 where the seed carries 3 / 15. That is a rate change,
-not a coverage gap, and it waits for the owner's decision as a migration 19 rather than
-being folded in here.
+not a coverage gap, and it waited for the owner's decision (D10) rather than being folded in
+here.
+
+**Migration 20 is that decision (2026-09-26).** The pricing page re-read that day says the
+$2 / $10 launch price "is now the standard price" and that the scheduled increase to $3 / $15
+"will not occur" — so 3 / 15 was never in force, and every Sonnet 5 dollar shown before it
+was 1.5× too high on every bucket. The correction therefore rewrites the seed's five floor
+rows in place through the same `ON CONFLICT DO UPDATE` rather than adding a later-dated row,
+which would have kept the cancelled price in force for every earlier message. Only
+`usd_per_mtok` changes, which migration 16's rollup trigger deliberately does not watch (the
+rate is applied at read time), so stored Sonnet 5 usage re-prices on the next read with no
+re-ingest. A Sonnet 5 row an operator wrote at any other instant is left alone.
 
 ## `ingest_checkpoints` — durable replay memory
 

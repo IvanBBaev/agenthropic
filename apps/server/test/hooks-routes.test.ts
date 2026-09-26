@@ -583,3 +583,71 @@ describe('the delivery id over the transport that actually exists', () => {
     expect(keys[0]).toBe(keys[1]);
   });
 });
+
+/**
+ * WP-D10 Done-when, on the real storage path (added 2026-09-26 - the audit found
+ * the clause "redacted re-ingest byte-identical + idempotent" proven nowhere: the
+ * duplicate-delivery test above posts a body with no secret, and the redaction
+ * test posts once). Uses the SQLite store so "byte-identical" means the bytes in
+ * `events_raw.payload`, not an in-memory object.
+ */
+describe('POST /api/hooks/event - redacted re-ingest (WP-D10)', () => {
+  let temp: TempDb;
+  let app: FastifyInstance;
+  let clock: Date;
+
+  const SECRET_BODY = {
+    hook_event_name: 'UserPromptSubmit',
+    session_id: 'session-1',
+    api_key: 'sk-ant-api03-supersecretvalue',
+    prompt: 'my key is sk-ant-api03-supersecretvalue',
+    nested: { authorization: 'Bearer abc.def.ghi' },
+  };
+
+  beforeEach(async () => {
+    temp = createMigratedTempDb();
+    clock = FIXED_NOW;
+    app = buildServer({ token: TEST_TOKEN, schemaVersion: 1 });
+    await registerHookRoutes(app, { eventStore: new SqliteEventStore(temp.db), now: () => clock });
+    await app.ready();
+  });
+
+  afterEach(async () => {
+    await app.close();
+    temp.cleanup();
+  });
+
+  function storedRows(): Array<{ idempotency_key: string; payload: string }> {
+    return temp.db
+      .prepare('SELECT idempotency_key, payload FROM events_raw ORDER BY id')
+      .all() as Array<{ idempotency_key: string; payload: string }>;
+  }
+
+  it('a redelivered secret-bearing event stores one row whose bytes never change', async () => {
+    const post = (payload: unknown) =>
+      app.inject({
+        method: 'POST',
+        url: HOOK_EVENT_PATH,
+        payload: payload as object,
+        headers: AUTH,
+      });
+
+    expect((await post(SECRET_BODY)).json()).toEqual({ stored: true });
+    const [original] = storedRows();
+    expect(original?.payload).not.toContain('supersecretvalue');
+    expect(original?.payload).not.toContain('abc.def.ghi');
+
+    clock = new Date('2026-07-18T10:00:05.000Z');
+    expect((await post(SECRET_BODY)).json()).toEqual({ stored: false });
+
+    // Re-ingesting the REDACTED payload itself - what a replay from the store
+    // hands back - must also dedupe: redaction is idempotent, and the key is
+    // computed over the redacted form.
+    clock = new Date('2026-07-18T10:00:09.000Z');
+    expect((await post(JSON.parse(original!.payload))).json()).toEqual({ stored: false });
+
+    const rows = storedRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toEqual(original);
+  });
+});

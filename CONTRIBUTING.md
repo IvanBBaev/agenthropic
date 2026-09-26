@@ -83,11 +83,11 @@ packages: `apps/server`, `apps/web`, `packages/core`, `packages/shared` and
 `packages/test-fixtures`. Every one of them runs `vitest run --coverage`, and every
 `vitest.config.ts` sets all four thresholds to `100`. A PR that drops below that fails the
 run. Three cheap ways to buy a 100% are guarded by tests that read the configs and sources
-as text - raising a threshold, adding a coverage `exclude`, and suppressing a line with an
-ignore pragma. The guard is not uniform, though: `apps/web` asserts only the pragma sweep,
-because it legitimately carries an `exclude` (`src/main.tsx`, `src/vite-env.d.ts`), so
-widening that list or lowering the web thresholds would not trip anything. That gap is
-real and is written up, with the rest of the mechanics, in
+as text - lowering a threshold, adding a coverage `exclude`, and suppressing a line with an
+ignore pragma. All five packages guard all three. `apps/web` legitimately carries an
+`exclude` (`src/main.tsx`, `src/vite-env.d.ts`), so instead of asserting there is none it
+pins that exact list and the exact thresholds object (since 2026-09-26; until then it
+guarded only the pragma). The mechanics are written up in
 [`docs/site/contributing/testing.md`](docs/site/contributing/testing.md).
 
 One caveat, stated plainly because the docs state it too: `main` requires the `ci` status

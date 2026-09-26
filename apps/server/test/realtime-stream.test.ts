@@ -6,7 +6,7 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { buildServer } from '../src/server';
+import { buildServer, parseLastEventId } from '../src/server';
 import { RealtimeHub, type RealtimeEvent } from '../src/realtime/hub';
 import { TEST_TOKEN } from './helpers';
 
@@ -163,5 +163,64 @@ describe('/api/stream with RealtimeHub', () => {
     });
     expect(response.status).toBe(403);
     expect(hub.subscriberCount).toBe(0);
+  });
+
+  it('resumes from Last-Event-ID: the frames missed while away arrive first', async () => {
+    // WP-U1 "resumable" (2026-09-26): EventSource sends Last-Event-ID on its own
+    // reconnect; the stream now replays what was published in between.
+    const hub = new RealtimeHub();
+    const baseUrl = await listen(hub);
+    for (let i = 0; i < 4; i += 1) hub.publish(testEvent);
+
+    const controller = new AbortController();
+    const response = await fetch(`${baseUrl}/api/stream`, {
+      headers: { authorization: `Bearer ${TEST_TOKEN}`, 'last-event-id': '2' },
+      signal: controller.signal,
+    });
+    expect(response.status).toBe(200);
+    const received = await readUntil(response.body!.getReader(), ': connected');
+    const ids = [...received.matchAll(/^id: (\d+)$/gm)].map((match) => Number(match[1]));
+    expect(ids).toEqual([3, 4]);
+    // Replayed frames precede the ': connected' marker, so a client that has
+    // seen it has every missed frame and is live.
+    expect(received.indexOf('id: 4')).toBeLessThan(received.indexOf(': connected'));
+    expect(hub.subscriberCount).toBe(1);
+    controller.abort();
+  });
+
+  it('a stream reaped by its own replay is torn down, not left subscribed', async () => {
+    const hub = new RealtimeHub();
+    app = buildServer({
+      token: TEST_TOKEN,
+      schemaVersion: 7,
+      heartbeatIntervalMs: 60_000,
+      hub,
+      // Smaller than one frame: the first replayed frame trips the bound.
+      maxStreamBacklogBytes: 1,
+    });
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const baseUrl = `http://127.0.0.1:${app.addresses()[0]?.port}`;
+    hub.publish(testEvent);
+    hub.publish(testEvent);
+
+    const response = await fetch(`${baseUrl}/api/stream`, {
+      headers: { authorization: `Bearer ${TEST_TOKEN}`, 'last-event-id': '0' },
+    }).catch((error: unknown) => error);
+    // Whether the socket dies before or after the headers reach the client is
+    // a race; what must hold either way is that nothing stays subscribed.
+    if (response instanceof Response) await response.body?.cancel().catch(() => undefined);
+    await waitFor(() => hub.subscriberCount === 0);
+    hub.publish(testEvent);
+    expect(hub.subscriberCount).toBe(0);
+    expect(hub.droppedSubscribers).toBe(0);
+  });
+
+  it('parses Last-Event-ID strictly: a plain decimal id or nothing', () => {
+    expect(parseLastEventId('0')).toBe(0);
+    expect(parseLastEventId('42')).toBe(42);
+    for (const header of [undefined, '', ' 4', '4 ', '-1', '1e3', '0x10', 'abc', '1'.repeat(16)]) {
+      expect(parseLastEventId(header), String(header)).toBeUndefined();
+    }
+    expect(parseLastEventId(['1', '2'])).toBeUndefined();
   });
 });

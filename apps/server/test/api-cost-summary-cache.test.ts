@@ -6,14 +6,14 @@
  * COUNTING rollup executions through the probe seam, never by timing.
  *
  * Seeded rates (WP-C1 migration): claude-fable-5 input $10 / output $50,
- * claude-sonnet-5 input $3 / output $15 per Mtok.
+ * claude-sonnet-5 input $2 / output $10 per Mtok (migration 20).
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { getCostSummary, getSessionProjectSlug, type CostSummaryProbe } from '../src/api/queries';
 import { openDatabase, type SqliteDatabase } from '../src/db/connection';
 import { createMigratedTempDb, insertSession, type TempDb } from './helpers';
 
-// Same seed as api-cost.test.ts: c1 $10 + c2 $15 + c3 $10 = $35 priced;
+// Same seed as api-cost.test.ts: c1 $10 + c2 $10 + c3 $10 = $30 priced;
 // c4 (unknown model) + c5 (no timestamp) = 700 unpriced tokens.
 function seed(db: SqliteDatabase): void {
   db.exec(`
@@ -57,7 +57,7 @@ describe('getCostSummary cache (M-19)', () => {
     const { probe, scans } = makeProbe();
     const first = getCostSummary(temp.db, 10, probe);
     expect(scans()).toBe(1);
-    expect(first.totals.costUsd).toBeCloseTo(35, 9);
+    expect(first.totals.costUsd).toBeCloseTo(30, 9);
 
     const second = getCostSummary(temp.db, 10, probe);
     expect(scans()).toBe(1);
@@ -68,7 +68,7 @@ describe('getCostSummary cache (M-19)', () => {
 
   it('invalidates on fresh ingest rows (token_usage INSERT)', () => {
     const { probe, scans } = makeProbe();
-    expect(getCostSummary(temp.db, 10, probe).totals.costUsd).toBeCloseTo(35, 9);
+    expect(getCostSummary(temp.db, 10, probe).totals.costUsd).toBeCloseTo(30, 9);
     temp.db
       .prepare(
         `INSERT INTO token_usage (session_id, agent_id, message_id, model, bucket, tokens, is_compaction_baseline, occurred_at)
@@ -77,12 +77,12 @@ describe('getCostSummary cache (M-19)', () => {
       .run();
     const after = getCostSummary(temp.db, 10, probe);
     expect(scans()).toBe(2);
-    expect(after.totals.costUsd).toBeCloseTo(45, 9);
+    expect(after.totals.costUsd).toBeCloseTo(40, 9);
   });
 
   it('invalidates on retention-style DELETEs', () => {
     const { probe, scans } = makeProbe();
-    expect(getCostSummary(temp.db, 10, probe).totals.costUsd).toBeCloseTo(35, 9);
+    expect(getCostSummary(temp.db, 10, probe).totals.costUsd).toBeCloseTo(30, 9);
     temp.db.prepare(`DELETE FROM token_usage WHERE message_id = 'c2'`).run();
     const after = getCostSummary(temp.db, 10, probe);
     expect(scans()).toBe(2);
@@ -91,11 +91,11 @@ describe('getCostSummary cache (M-19)', () => {
 
   it('invalidates on an in-place rewrite that changes no row count (the upsert DO UPDATE arm)', () => {
     const { probe, scans } = makeProbe();
-    expect(getCostSummary(temp.db, 10, probe).totals.costUsd).toBeCloseTo(35, 9);
+    expect(getCostSummary(temp.db, 10, probe).totals.costUsd).toBeCloseTo(30, 9);
     temp.db.prepare(`UPDATE token_usage SET tokens = 2000000 WHERE message_id = 'c1'`).run();
     const after = getCostSummary(temp.db, 10, probe);
     expect(scans()).toBe(2);
-    expect(after.totals.costUsd).toBeCloseTo(45, 9);
+    expect(after.totals.costUsd).toBeCloseTo(40, 9);
   });
 
   it('invalidates on a model_pricing edit made by ANOTHER connection (sqlite3 CLI seeding)', () => {
@@ -103,7 +103,7 @@ describe('getCostSummary cache (M-19)', () => {
     // pricing fingerprint carries the invalidation alone: the server
     // connection's own change counter must NOT move.
     const { probe, scans } = makeProbe();
-    expect(getCostSummary(temp.db, 10, probe).totals.costUsd).toBeCloseTo(35, 9);
+    expect(getCostSummary(temp.db, 10, probe).totals.costUsd).toBeCloseTo(30, 9);
     const changesBefore = (temp.db.prepare('SELECT total_changes() AS n').get() as { n: number }).n;
 
     const operator = openDatabase(temp.path);
@@ -117,10 +117,10 @@ describe('getCostSummary cache (M-19)', () => {
     const changesAfter = (temp.db.prepare('SELECT total_changes() AS n').get() as { n: number }).n;
     expect(changesAfter).toBe(changesBefore);
 
-    // c1 reprices 1M input fable at $20 -> totals $45; served fresh, never stale.
+    // c1 reprices 1M input fable at $20 -> totals $40; served fresh, never stale.
     const after = getCostSummary(temp.db, 10, probe);
     expect(scans()).toBe(2);
-    expect(after.totals.costUsd).toBeCloseTo(45, 9);
+    expect(after.totals.costUsd).toBeCloseTo(40, 9);
   });
 
   it('recomputes when topN differs, then caches the new shape', () => {

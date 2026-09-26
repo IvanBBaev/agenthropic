@@ -60,7 +60,11 @@ SSRF test, because there is no outbound network call anywhere in `apps/server` �
 yet ([ADR-0008](adr-cd-6-ports-and-adapters.md): `AlertSink` has no adapter; alerts
 are post-1.0). "No outbound dial to a payload-supplied URL" is currently true because
 there is no outbound dial at all. When alerting is built, this criterion needs a real
-test; today it has nothing to test.
+test; today it has nothing to test. *(As-built addendum 2026-09-26: the static half of
+`WP-F5`'s no-SSRF gate now exists — `scripts/check-no-spawner.mjs` fails CI on an outbound
+network primitive or HTTP client in server-process source or manifests — so the absence is
+enforced rather than merely observed. The dynamic SSRF test is still the future
+dispatcher's Done-when.)*
 
 ## As-built update — 2026-08-15
 

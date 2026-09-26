@@ -20,7 +20,8 @@ the source and decided never to repeat.
 > timing-safe compare on every `/api/*` route, same-origin-before-auth SSE, the
 > no-spawner/no-wide-bind/no-eval static gate running in CI, and hook-payload
 > redaction at the ingest boundary. The SSRF mitigation is currently satisfied by
-> absence — no outbound-dialing code exists at all (the webhook sink is post-1.0).
+> absence — no outbound-dialing code exists at all (the webhook sink is post-1.0) — and,
+> since 2026-09-26, that absence is gate-enforced in server-process code (`WP-F5`).
 > None of the invariants was relaxed. The rival findings and attacker models below
 > are the historical record and remain accurate; per-section as-built notes mark
 > what changed — see [status](#status-and-whats-not-yet-built) at the end.

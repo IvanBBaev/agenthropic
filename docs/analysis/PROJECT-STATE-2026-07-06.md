@@ -71,7 +71,8 @@ snapshot in §4–§5.
 >    pinned to 100 in every package, with guard tests proving the figure cannot be faked —
 >    though not uniformly: `apps/web` asserts only the pragma sweep, because it
 >    legitimately carries a coverage `exclude`, so widening that list or lowering its four
->    thresholds would pass CI silently. See
+>    thresholds would pass CI silently (**closed 2026-09-26**: the web guard now pins the
+>    exact thresholds and exclude list). See
 >    [`../site/contributing/testing.md`](../site/contributing/testing.md).
 > 2. **All 14 items of the parser gate are IMPLEMENTED — but "implemented" is not
 >    "measured".** #7 (legacy bare-`Explore`) and N1 (`<task-notification>`) fire **zero**
@@ -151,6 +152,10 @@ snapshot in §4–§5.
 >    61 (§0.6), and migration 19 adds that id's five rows, so the schema is now **19**.
 >    Dollars stay **PROVISIONAL**
 >    until LABEL-ME; the Sonnet 5 rate question (D10) is open and Ivan's.
+>    **Later on 2026-09-26:** D10 answered by Ivan's go-ahead in chat; migration 20 rewrites
+>    the seeded `claude-sonnet-5` rows to the official 2 / 10 (pricing page re-read that day:
+>    the scheduled 3 / 15 never took effect), so the schema is now **20**. The WP-C1
+>    ratification tick is still Ivan's.
 > 4. **Measured on the 2026-09-18 working tree, not estimated:** the eight local gates —
 >    `gate:node`, `gate:spawner`, typecheck, lint, prettier, the web production build,
 >    `test`, `gate:licenses` — all green; **131 test files / 2428 tests, 100% statements,

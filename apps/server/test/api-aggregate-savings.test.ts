@@ -2,10 +2,10 @@
  * M-9 (aggregate half) - GET /api/cost/delegation-savings against a real
  * migrated temp-file database.
  *
- * Seeded rates (WP-C1, migration 7): output $/Mtok is claude-fable-5 50,
- * claude-sonnet-5 15, claude-opus-4-8 25, claude-haiku-4-5-20251001 5. Every
- * expectation below is written so the arithmetic is checkable by hand from
- * those four numbers.
+ * Seeded rates (WP-C1, migration 7; sonnet-5 from migration 20): output
+ * $/Mtok is claude-fable-5 50, claude-sonnet-5 10, claude-opus-4-8 25,
+ * claude-haiku-4-5-20251001 5. Every expectation below is written so the
+ * arithmetic is checkable by hand from those four numbers.
  *
  * The scope counters are the point of this endpoint as much as the dollars
  * are: an aggregate computed over an unstated subset would be a lie, so each
@@ -30,12 +30,12 @@ const AT = '2026-07-10T01:00:00Z';
  * ancestor-derived top-tier models differ per subagent), `s-solo` does not.
  *
  * Hand arithmetic for `s-deleg`:
- * - a-1 runs 1 Mtok output on sonnet = $15 actual; its nearest usage-bearing
+ * - a-1 runs 1 Mtok output on sonnet = $10 actual; its nearest usage-bearing
  *   ancestor is the main agent on fable, so the hypothetical is 1 Mtok at
- *   fable output = $50, savings $35.
+ *   fable output = $50, savings $40.
  * - a-2 runs 1 Mtok output on haiku = $5 actual; its ancestor a-1 settled on
- *   sonnet, so the hypothetical is $15, savings $10.
- * Totals: actual $20, hypothetical $65, savings $45.
+ *   sonnet, so the hypothetical is $10, savings $5.
+ * Totals: actual $15, hypothetical $60, savings $45.
  */
 function seed(db: SqliteDatabase): void {
   db.exec(`
@@ -120,8 +120,8 @@ describe('/api/cost/delegation-savings (M-9 aggregate)', () => {
     const response = await app.inject({ method: 'GET', url: URL, headers: AUTH });
     expect(response.statusCode).toBe(200);
     const body = response.json();
-    expect(body.actualUsd).toBeCloseTo(20, 9);
-    expect(body.hypotheticalUsd).toBeCloseTo(65, 9);
+    expect(body.actualUsd).toBeCloseTo(15, 9);
+    expect(body.hypotheticalUsd).toBeCloseTo(60, 9);
     expect(body.savingsUsd).toBeCloseTo(45, 9);
     expect(body.isEstimate).toBe(true);
     expect(body.basis).toBe('stored-usage-rows');
@@ -151,11 +151,11 @@ describe('/api/cost/delegation-savings (M-9 aggregate)', () => {
     });
     expect(response.statusCode).toBe(200);
     const body = response.json();
-    // 2 Mtok output at opus $25/Mtok = $50 hypothetical against $20 actual;
-    // savings is the per-agent max(0, ...) sum: (25-15) + (25-5) = $30.
-    expect(body.actualUsd).toBeCloseTo(20, 9);
+    // 2 Mtok output at opus $25/Mtok = $50 hypothetical against $15 actual;
+    // savings is the per-agent max(0, ...) sum: (25-10) + (25-5) = $35.
+    expect(body.actualUsd).toBeCloseTo(15, 9);
     expect(body.hypotheticalUsd).toBeCloseTo(50, 9);
-    expect(body.savingsUsd).toBeCloseTo(30, 9);
+    expect(body.savingsUsd).toBeCloseTo(35, 9);
     expect(body.hypotheticalModels).toEqual(['claude-opus-4-8']);
   });
 
@@ -264,9 +264,10 @@ describe('/api/cost/delegation-savings (M-9 aggregate)', () => {
     expect(body.sessionsPriced).toBe(2);
     expect(body.subagentsPriced).toBe(3);
     expect(body.subagentsSkipped).toBe(0);
-    // The new session repeats the a-1 arithmetic: $15 actual, $50 at fable.
-    expect(body.actualUsd).toBeCloseTo(35, 9);
-    expect(body.savingsUsd).toBeCloseTo(80, 9);
+    // The new session repeats the a-1 arithmetic: $10 actual, $50 at fable,
+    // savings $40 - on top of the base $15 actual and $45 savings.
+    expect(body.actualUsd).toBeCloseTo(25, 9);
+    expect(body.savingsUsd).toBeCloseTo(85, 9);
   });
 
   it('rethrows a non-pricing failure instead of laundering it into a skip note', () => {
