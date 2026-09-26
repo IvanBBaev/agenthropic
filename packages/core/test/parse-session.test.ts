@@ -2557,3 +2557,67 @@ describe('parseSession — outcomes on agent-outcome-errors (WP-U10)', () => {
     ]);
   });
 });
+
+// --- parser-gate #10: Claude Code version detection (provenance only) -------
+
+describe('parseSession — Claude Code version detection (parser-gate #10)', () => {
+  // Added 2026-09-26. The gate had counted #10 green on its "branch on directory
+  // shape" half alone; the "detect the version for provenance" half read nothing.
+
+  it('reports the version a fixture was written by', () => {
+    expect(parseSession(getFixture('flat-tool-use')).claudeCodeVersions).toEqual(['2.0.0']);
+    expect(parseSession(getFixture('legacy-bare-explore')).claudeCodeVersions).toEqual(['2.1.70']);
+  });
+
+  it('collects every distinct version across main and subagent transcripts, sorted', () => {
+    const SESSION = 'cccccccc-dddd-4eee-8fff-000000000000';
+    const line = (timestamp: string, version: unknown) =>
+      jline({
+        sessionId: SESSION,
+        type: 'user',
+        timestamp,
+        version,
+        message: { role: 'user', content: 'x' },
+      });
+    const result = parseSession(
+      substrate([
+        {
+          path: `${SESSION}.jsonl`,
+          lines: [
+            line('2026-04-01T00:00:00.000Z', '2.1.199'),
+            line('2026-04-01T00:00:01.000Z', '2.1.198'),
+            // Duplicates collapse; a non-string or empty value is not a version.
+            line('2026-04-01T00:00:02.000Z', '2.1.199'),
+            line('2026-04-01T00:00:03.000Z', 7),
+            line('2026-04-01T00:00:04.000Z', ''),
+          ],
+        },
+        {
+          path: `${SESSION}/subagents/agent-dddd4444.jsonl`,
+          lines: [line('2026-04-01T00:00:05.000Z', '2.1.200')],
+        },
+      ]),
+    );
+    expect(result.claudeCodeVersions).toEqual(['2.1.198', '2.1.199', '2.1.200']);
+  });
+
+  it('reports an empty list, not a guess, when no record carries a version', () => {
+    const SESSION = 'dddddddd-eeee-4fff-8000-111111111111';
+    const result = parseSession(
+      substrate([
+        {
+          path: `${SESSION}.jsonl`,
+          lines: [
+            jline({
+              sessionId: SESSION,
+              type: 'user',
+              timestamp: '2026-04-01T00:00:00.000Z',
+              message: { role: 'user', content: 'x' },
+            }),
+          ],
+        },
+      ]),
+    );
+    expect(result.claudeCodeVersions).toEqual([]);
+  });
+});

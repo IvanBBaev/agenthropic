@@ -908,5 +908,29 @@ export function parseSession(substrate: SessionSubstrate): ParsedSession {
 
   const usage: DedupedUsage[] = dedupeUsageByMessageId(extractUsageRows(transcripts));
 
-  return { sessionId, agents, edges, usage, outcomes };
+  return {
+    sessionId,
+    agents,
+    edges,
+    usage,
+    outcomes,
+    claudeCodeVersions: collectClaudeCodeVersions(files),
+  };
+}
+
+/**
+ * Parser-gate #10 (added 2026-09-26; the gate had counted it green on the
+ * branch-on-shape half alone). Reads the per-record `version` field for
+ * provenance and nothing else - see `ParsedSession.claudeCodeVersions`.
+ */
+function collectClaudeCodeVersions(files: readonly ParsedFile[]): string[] {
+  const versions = new Set<string>();
+  for (const file of files) {
+    for (const value of recordValues(file.records)) {
+      if (typeof value !== 'object' || value === null) continue;
+      const version = (value as { version?: unknown }).version;
+      if (typeof version === 'string' && version !== '') versions.add(version);
+    }
+  }
+  return [...versions].sort();
 }

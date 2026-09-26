@@ -643,7 +643,8 @@ describe('shell with a stored token', () => {
     expect(screen.queryByTestId('missed-frames')).toBeNull();
 
     // Frame 2 was published and never arrived. The sequence is the only
-    // evidence of it that will ever exist - the server keeps no replay buffer.
+    // evidence of it that will ever exist - beyond the server's bounded replay
+    // window (2026-09-26) a missed frame is not sent again.
     act(() => source.emit('agent-status-changed', { sessionId: 's-1' }, { id: '3' }));
     expect(screen.getByTestId('missed-frames').textContent).toBe('1 missed frame');
 

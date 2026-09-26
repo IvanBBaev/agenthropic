@@ -23,7 +23,11 @@
  * nothing on screen to say so.
  *
  * - The server numbers every frame it publishes (`id: <n>`, see
- *   apps/server/src/realtime/hub.ts) and keeps no replay buffer. This wrapper
+ *   apps/server/src/realtime/hub.ts) and kept no replay buffer. (Amended
+ *   2026-09-26: the hub now keeps the last 256 frames and replays those after
+ *   the `Last-Event-ID` EventSource sends on its own reconnect, so a short
+ *   disconnect loses nothing; a longer one, or one across a server restart,
+ *   still leaves a gap, and the tracking below is what reports it.) This wrapper
  *   read only `data` and discarded the number, so frames published while the
  *   tab was not listening left no trace at all. The sequence is now tracked and
  *   the missing range is reported through onFrameGap. It is a DETECTION, never

@@ -160,3 +160,93 @@ describe('RealtimeHub (WP-U1)', () => {
     expect(hub.droppedSubscribers).toBe(0);
   });
 });
+
+/**
+ * WP-U1 "resumable" (added 2026-09-26). Until then the hub kept nothing, so a
+ * client that reconnected - EventSource does so on its own, sending the last id
+ * it saw as `Last-Event-ID` - lost every frame published in between.
+ */
+describe('RealtimeHub resumption from Last-Event-ID (WP-U1)', () => {
+  const idsOf = (frames: readonly string[]): number[] =>
+    frames.map((frame) => Number(/^id: (\d+)\n/.exec(frame)?.[1]));
+
+  function publishN(hub: RealtimeHub, n: number): void {
+    for (let i = 0; i < n; i += 1) hub.publish(ingestedEvent);
+  }
+
+  it('replays the frames after the given id, in order, then continues live', () => {
+    const hub = new RealtimeHub();
+    publishN(hub, 5);
+    const frames: string[] = [];
+    hub.subscribe((frame) => frames.push(frame), 2);
+    expect(idsOf(frames)).toEqual([3, 4, 5]);
+    hub.publish(ingestedFailedLike());
+    expect(idsOf(frames)).toEqual([3, 4, 5, 6]);
+  });
+
+  it('replays nothing without an id, or for an id already current', () => {
+    const hub = new RealtimeHub();
+    publishN(hub, 3);
+    const fresh: string[] = [];
+    const current: string[] = [];
+    hub.subscribe((frame) => fresh.push(frame));
+    hub.subscribe((frame) => current.push(frame), 3);
+    expect(fresh).toEqual([]);
+    expect(current).toEqual([]);
+  });
+
+  it('replays nothing for an id beyond this hub, e.g. one from before a restart', () => {
+    // A restarted server numbers from 1 again, so a client may come back with an
+    // id this process has not reached; no buffered frame is larger, so nothing
+    // is replayed and live frames continue. (An old id INSIDE this process's
+    // range cannot be recognised at all - see the note on `subscribe`.)
+    const hub = new RealtimeHub();
+    publishN(hub, 3);
+    const frames: string[] = [];
+    hub.subscribe((frame) => frames.push(frame), 40);
+    expect(frames).toEqual([]);
+    hub.publish(ingestedEvent);
+    expect(idsOf(frames)).toEqual([4]);
+  });
+
+  it('keeps only the newest frames: an older id is replayed what is left', () => {
+    const hub = new RealtimeHub({ replayCapacity: 2 });
+    publishN(hub, 5);
+    const frames: string[] = [];
+    hub.subscribe((frame) => frames.push(frame), 0);
+    // Frames 1-3 have left the buffer; the client sees 4 after its 0, a gap the
+    // dashboard's id-sequence check already counts and discloses.
+    expect(idsOf(frames)).toEqual([4, 5]);
+  });
+
+  it('replays nothing with a zero capacity, and refuses an invalid one', () => {
+    const hub = new RealtimeHub({ replayCapacity: 0 });
+    publishN(hub, 3);
+    const frames: string[] = [];
+    hub.subscribe((frame) => frames.push(frame), 1);
+    expect(frames).toEqual([]);
+    expect(() => new RealtimeHub({ replayCapacity: -1 })).toThrow(RangeError);
+    expect(() => new RealtimeHub({ replayCapacity: 1.5 })).toThrow(RangeError);
+  });
+
+  it('drops a writer that throws during replay: counted, never subscribed', () => {
+    const hub = new RealtimeHub();
+    publishN(hub, 2);
+    let calls = 0;
+    const unsubscribe = hub.subscribe(() => {
+      calls += 1;
+      throw new Error('socket gone');
+    }, 0);
+    expect(calls).toBe(1);
+    expect(hub.droppedSubscribers).toBe(1);
+    expect(hub.subscriberCount).toBe(0);
+    hub.publish(ingestedEvent);
+    expect(calls).toBe(1);
+    unsubscribe(); // a no-op, and safe to call
+    expect(hub.subscriberCount).toBe(0);
+  });
+});
+
+function ingestedFailedLike(): RealtimeEvent {
+  return ingestFailedEvent;
+}
