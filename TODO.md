@@ -701,6 +701,13 @@ files / 1540 tests, 100/100/100/100 in all five packages**. New PROVISIONAL cons
   (compiles only while the envelope exists; the flat shape → `null` is documented as a test),
   LiveView docblock amended. Peer's follow-up worth a line, not a wave: `session-ingested` and
   `agent-status-changed` are still narrowed by hand in `live-model.ts` with no type pin.
+  **Follow-up closed 2026-09-26:** both arms are now pinned in `realtime-wire-shape.test.ts`
+  (`agent-status-changed` in `live-model.ts`, `session-ingested` in `LiveView.tsx`, where it
+  actually lives). The status guard gets an exhaustive `satisfies Record<keyof
+  AgentStatusChangedEvent, true>` field list plus a drop-one-field sweep; the ingest reader gets a
+  typed frame. Mutation-checked, restored byte-identical (`cmp`): a field added to the shared
+  schema → `tsc -b apps/web` red on the field list; `sessionId` renamed → red on the typed frame;
+  the guard's `agentId` check removed → `refuses a frame missing agentId` red. Web tests +9.
 - **Exit gate (= the v1.0 definition, best-path §6.1):** all 5 daily questions answerable — **5
   of 5 ✅** as of 2026-09-02. This read **3 of 5 ✅, 2 RED** on 2026-09-01, the day the claim was
   first tested end-to-end instead of asserted
