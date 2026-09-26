@@ -60,6 +60,9 @@ const PRICING_SEED: ReadonlyArray<{
   // prefix; haiku also carries a date suffix) would make every real ingest
   // halt. Do not "normalize" the id on the read side; add the exact string.
   { model: 'claude-opus-4-8', inputUsdPerMtok: 5, outputUsdPerMtok: 25 },
+  // 3 / 15 is NOT the rate a current database holds: it was a scheduled price
+  // that never took effect, and migration 20 rewrites these five floor rows to
+  // the official 2 / 10. Left as-is here because this array is frozen (above).
   { model: 'claude-sonnet-5', inputUsdPerMtok: 3, outputUsdPerMtok: 15 },
   { model: 'claude-fable-5', inputUsdPerMtok: 10, outputUsdPerMtok: 50 },
   { model: 'claude-haiku-4-5-20251001', inputUsdPerMtok: 1, outputUsdPerMtok: 5 },

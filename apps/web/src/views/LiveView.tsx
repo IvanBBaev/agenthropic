@@ -145,7 +145,11 @@ interface StreamGapNotice {
   readonly observation: number;
 }
 
-/** Session id carried by a `session-ingested` frame, when readable. */
+/**
+ * Session id carried by a `session-ingested` frame, when readable. The one
+ * field read here is pinned to the shared `SessionIngestedEvent` type in
+ * `test/realtime-wire-shape.test.ts`, so renaming it server-side fails `tsc`.
+ */
 export function ingestedSessionId(data: unknown): string | null {
   if (typeof data !== 'object' || data === null) return null;
   const sessionId = (data as { sessionId?: unknown }).sessionId;
