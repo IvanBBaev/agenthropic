@@ -313,8 +313,9 @@ building and publishing.
 > included, because `getFixture` and the fixture builders are real code whose defects fail
 > silently through every test that consumes them — and the static guards, which do turn
 > the build red on a deliberately introduced spawner, wide bind, WebSocket server, dynamic
-> `eval`, or disallowed license (no static SSRF guard exists — the server has no outbound
-> HTTP client, and the no-SSRF invariant is held by review, not by a script).
+> `eval`, or disallowed license — and, since 2026-09-26, on an outbound network call or HTTP
+> client in server-process code (until then no static SSRF guard existed and the invariant
+> was held by review).
 >
 > Two clauses of the exit gate were open for the whole of this project's life, and both were
 > owner actions rather than code. Both were performed on **2026-08-25**:

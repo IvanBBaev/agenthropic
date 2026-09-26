@@ -68,7 +68,8 @@ important limit of what that CI gate can and cannot prove
 >   config such as `vite.config.ts`, which is exactly where a dev-server bind would be
 >   widened) plus the repo-root config files, and it forbids four families of pattern,
 >   not one: the whole subprocess API surface, dynamic code evaluation, wide network
->   binds, and WebSocket servers. Since 2026-09-07 it also opens the root and every
+>   binds, and WebSocket servers — plus, since 2026-09-26 and in server-process source
+>   only, a fifth: outbound network calls (`WP-F5`'s no-SSRF half). Since 2026-09-07 it also opens the root and every
 >   workspace `package.json` (six manifests) and fails on a **direct** dependency named
 >   for a subprocess or WebSocket package (`execa`, `cross-spawn`, `shelljs`,
 >   `node-pty`, `ws`, `socket.io`, anything containing `websocket`), so `pnpm add execa`
@@ -369,6 +370,12 @@ is a security gate first and a provenance gate second — but because the one
 artifact this project *does* copy wholesale (`hoangsonww`'s webhook code) sits one
 file away from the exact route this gate exists to forbid, it functions as part of
 the same per-artifact scoping discipline that CD-9 describes.
+
+*(As-built 2026-09-26: the no-SSRF half of the title now exists too. The gate applies an
+outbound-network pattern family to server-process source — `apps/server/src/` and
+`packages/*/src/` — and refuses an HTTP client package in those manifests; browser code
+and tests are out of scope by path. Its OK line gained `; N server-process files checked
+for outbound network calls`, 93 on 2026-09-26.)*
 
 The shipped gate is broader than that Done-when in both scope and coverage. It scans
 `apps/`, `packages/`, `scripts/` and `hooks/` rather than `apps/server` alone, it
