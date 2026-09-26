@@ -71,8 +71,8 @@ Run each gate locally on the release commit; the six below plus the web producti
 - [ ] `pnpm run typecheck`
 - [ ] `pnpm run lint`
 - [ ] `pnpm run format:check`
-- [ ] `pnpm run test` — the full workspace suite (**140 test files / 2621 tests** on a
-      local run of 2026-09-23, up from 131 / 2428 on 2026-09-18; the figure moves as the
+- [ ] `pnpm run test` — the full workspace suite (**167 test files / 3060 tests** on a
+      local run of 2026-09-26, up from 140 / 2621 on 2026-09-23 and 131 / 2428 on 2026-09-18; the figure moves as the
       tree does, so re-measure on the release commit rather than trusting this line). Coverage: **all five** packages —
       `@agenthropic/server`, `@agenthropic/web`, `@agenthropic/core`,
       `@agenthropic/shared` and `@agenthropic/test-fixtures` — run `vitest run --coverage`
@@ -360,5 +360,16 @@ a further-changed working tree - `pnpm -r test`, `gate:spawner` and `gate:licens
 not the restore drill or the `gh api` checks: all three exited 0, at 140 test files / 2621
 tests with the same 100% in all five packages, 282 files scanned by the spawner gate, and
 412 packages / 429 installed versions under the license gate with the same one documented
-exception. That is a re-measurement, not a second rehearsal.)* A rehearsal ticks no box: every box on this page
+exception. That is a re-measurement, not a second rehearsal.)* *(Second rehearsal 2026-09-26 on
+`af10c87` (branch `claude/fervent-maxwell-2hmdro`, clean tree): all seven CI commands plus
+`gate:node` exited 0 at 167 test files / 3060 tests with 100% in all five packages; the spawner
+gate scanned 313 files with only the policy file allowlisted; the license gate read 406 packages /
+428 installed versions, 405 allowlisted, 1 documented exception. §2's no-SSRF grep was empty and
+the corpus write-symbol grep matched only the two in-file comments; §3 P0 4 files / 19 tests
+green; §5 `backup.test.ts` 4/4, and the §5 live-drill command, run against a scratch database
+migrated to schema 20 rather than the owner's, printed `restore drill OK` - which proves the
+command, not the live drill. `apps/web/vitest.config.ts` is unchanged since `2f8d103` (exclude
+list two entries, thresholds 100 ×4). Not re-checked: branch protection and Pages (no `gh` in
+that session); CI's latest `main` run was `success` on `4b3cd2d`, and the branch commits have no
+CI run because `ci.yml` fires on pushes to `main` and on pull requests only.)* A rehearsal ticks no box: every box on this page
 is ticked on the release commit only. The record is on the `TODO.md` Wave 4 row.

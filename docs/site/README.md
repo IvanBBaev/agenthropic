@@ -26,7 +26,7 @@ later without touching page content.
 >
 > Test figures, re-measured 2026-09-18 on the working tree: **131 test files / 2428 tests**,
 > with **100% statements, branches, functions and lines** enforced in **all five** packages —
-> *(re-measured again 2026-09-23: **140 test files / 2621 tests**, same 100% on all four axes in
+> *(re-measured again 2026-09-23: **140 test files / 2621 tests**; and 2026-09-26: **167 test files / 3060 tests**, same 100% on all four axes in
 > all five packages - a dated measurement, not a constant)* —
 > `packages/test-fixtures` is no longer an exclusion, it is inside the gate. Two things that
 > figure does not mean: the thresholds block a *contributor's* merge but not the sole

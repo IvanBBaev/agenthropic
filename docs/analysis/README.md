@@ -82,6 +82,11 @@ while the app itself stays **loopback-only**.
 > thresholds held in all five packages, 412 packages under the license gate with one
 > documented exception, Pages answering `HTTP/2 200`. The bar is met on the working tree;
 > the release commit re-measures it.
+>
+> **Re-measured 2026-09-26** (second R1 rehearsal, on `af10c87`, clean tree): 167 test files /
+> 3060 tests, the 100 thresholds held in all five packages, 406 packages / 428 installed
+> versions under the license gate with one documented exception (the earlier 412 was a
+> double count, corrected 2026-09-24). Pages not re-checked in that session.
 
 ---
 

@@ -60,7 +60,10 @@ and the quantified acceptance criteria in
 >   commit; treat them as a dated measurement, not a constant. *(Re-measured 2026-09-23:
 >   **140 test files / 2621 tests**, still green — `apps/server` 90/1358, `apps/web`
 >   22/726, `packages/core` 16/314, `packages/test-fixtures` 5/139, `packages/shared`
->   7/84. Coverage still 100% on all four axes in every package.)*
+>   7/84. Coverage still 100% on all four axes in every package. Re-measured 2026-09-26:
+  **167 test files / 3060 tests**, still green — `apps/server` 115/1629, `apps/web` 23/860,
+  `packages/core` 17/338, `packages/test-fixtures` 5/139, `packages/shared` 7/94; 100% on
+  all four axes in every package.)*
 > - **The coverage gate is no longer ">90%" anywhere in the repo. It is 100.** All five
 >   packages run `vitest run --coverage` and all five pin `lines`/`branches`/`functions`/
 >   `statements` at `100`, and all five are currently at 100 on every one of those four
@@ -571,6 +574,12 @@ counts unique names, and the line reads `OK (407 packages / 429 installed versio
 allowlisted, 1 under a documented exception)`. The dependency tree did not change; the earlier
 412 / 411 figures were the double count. All three gate scripts also now recognise themselves
 when invoked through a symlinked path, where they previously exited 0 without checking.)*
+
+*(Re-measured 2026-09-26: `check-no-spawner: OK (313 files scanned across 4 roots + repo-root
+config; 1 allowlisted; 5 line(s) inline-exempt; 6 package.json manifests checked for forbidden
+direct dependencies and wide-bind scripts)` and `check-licenses: OK (406 packages / 428 installed
+versions; 405 allowlisted, 1 under a documented exception)`. Both exit 0; the package count moved
+with the dependency tree, not with the gate.)*
 
 And the standing caveat that no coverage number escapes: 100% line and branch coverage
 records that every line and branch **executed**, not that every behaviour was
