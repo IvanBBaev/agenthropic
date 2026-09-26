@@ -244,7 +244,7 @@ files / 1540 tests, 100/100/100/100 in all five packages**. New PROVISIONAL cons
     pattern off, `net` dropped, `got` dropped, scope widened to every file, manifest check
     off, scope narrowed to packages). The dynamic SSRF test stays the v2.0 dispatcher's
     Done-when (`WP-A4`/`WP-A10`).
-- [x] **Data (D):** WP-D1 ports+shared types (`packages/shared/src/ports`, `types/rows.ts`) ·
+- [x] **Data (D):** WP-D1 ports+shared types (`packages/shared/src/ports`, `types/rows.ts` — since WP-U12 `types/enums.ts`; the dead `*Row` types were deleted) ·
   D2 SQLite/WAL — **better-sqlite3 only**, pragmas asserted at open · D3 migration runner ·
   D4 `events_raw` append-only substrate (proven in `test/events-raw.test.ts`) ·
   D6 sessions+agents · D7 `orchestration_edges` · D8 `token_usage`.
@@ -1035,6 +1035,36 @@ exit and proof live in the plan. Dated one-word answers under D1…D8 are the si
 - [ ] **Wave 5 · by 2026-12-01 (KC-4)** — release commit, `v1.0.0` tag, push (Ivan) ·
   post-tag CI/Pages/badges green, `DONE.md` closed, this board reduced to the KC-5 items
   (orchestrator). One week of buffer; the critical path is D1 → Wave 3's 14 days → R3.
+
+### WP audit 2026-09-26 — every ticked v1.0 work package against its Done-when
+
+_Prompted by WP-F5, found ticked with only its spawner half built. Four read-only auditors
+compared each `[x]` WP in tracks F, D, IN, C, U and X (S, A, X11 and the deferred IN11 out
+of scope) with its development-plan Done-when and with the code; every finding below was
+re-verified here before it was acted on. Deviations already recorded as owner-decided were
+not counted._
+
+- [x] **WP-D10 — "redacted re-ingest byte-identical + idempotent" had no test.** The code was
+  right (redaction runs before the idempotency key); nothing proved it. Added: `redactSecrets`
+  determinism and idempotence (`hooks-redact.test.ts`), and a SQLite-backed route test posting
+  a secret-bearing body, its redelivery, and the stored redacted payload itself — one row,
+  bytes unchanged (`hooks-routes.test.ts`). Mutation "key computed over the unredacted body"
+  is killed by the new test only.
+- [x] **WP-IN9 — "every row attributed to exactly one agent" was proven for one fixture.**
+  The P0 reconciliation suite now asserts it over the whole registry: no NULL or dangling
+  `agent_id`, the agent belongs to the row's session, a message's five bucket rows never
+  split across agents, and subagent-attributed rows exist (non-vacuous). Mutation
+  `agentId ?? sessionId → ?? null` in `db/token-usage.ts` killed by the new test only.
+- [x] **WP-X8 — no end-to-end smoke from the installed command to `events_raw`.** New
+  `hooks-end-to-end.test.ts` reads method, URL, content type, delivery-id header and token
+  variable out of the generated command string (curl is not run: no subprocess in tests),
+  replays it with `fetch` against the real server on loopback over the SQLite store, for every
+  registered event; a no-token request is refused; two firings with identical stdin and
+  different delivery ids store two rows. Mutations killed: installer endpoint path, content
+  type, and the delivery-id header name (the last was invisible until the two-firings case was
+  added). The real-session confirmation half remains the owner's.
+- [x] **Stale docs:** `api.md` credited `WP-IN2` with a `readSince()` that was never built;
+  the WP-D1 row cited `types/rows.ts` (now `enums.ts`).
 
 ### Post-1.0 / v2.0 · Alerting core _(off the v1.0 critical path — best-path §6.1; **entered only via KC-5**: 14 consecutive days of real daily v1.0 use + ≥3 friction-log entries wanting alerts — roadmap §6. If that evidence never materializes, v2.0 never starts, and that is a success of the roadmap, not a failure.)_
 - [ ] **WP-A2** alert/webhook schema · **A3** secret `token_ref` resolver · **A4** no-SSRF

@@ -193,6 +193,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Tests: a 2026-09-26 audit of every ticked v1.0 work package against its Done-when found
+  three clauses the code met but no test proved. Redaction is now proven deterministic and
+  idempotent, and a redelivered or re-ingested secret-bearing hook event stores one row with
+  unchanged bytes (WP-D10). Every `token_usage` row is proven attributed to exactly one agent
+  of its own session across the whole fixture registry (WP-IN9). The request the installed hook
+  command sends is proven to reach `events_raw` through the real loopback server, including the
+  per-firing delivery id (WP-X8). Each new test was shown to fail on a matching regression.
 - Coverage gate: `apps/web` was the one package whose thresholds and coverage `exclude` list
   no test guarded, so lowering a web threshold or taking another file out of the web
   denominator passed CI. `apps/web/test/honesty.test.tsx` now pins the exact thresholds object

@@ -224,6 +224,43 @@ describe('P0 proof 1 - sum(token_usage) equals the independent JSONL sum exactly
     }
   });
 
+  it('P0: every token_usage row is attributed to exactly one agent of its own session', () => {
+    // WP-IN9 Done-when: "After backfill every row attributed to exactly one agent"
+    // (development-plan). Until 2026-09-26 only the session-sum half was proven:
+    // the test above selects agent_id and never asserts it, and the schema has no
+    // FK from token_usage to agents, so nothing else enforces it either.
+    const unattributed = db
+      .prepare(
+        `SELECT tu.session_id, tu.message_id, tu.bucket, tu.agent_id
+           FROM token_usage tu
+           LEFT JOIN agents a ON a.id = tu.agent_id AND a.session_id = tu.session_id
+          WHERE tu.agent_id IS NULL OR a.id IS NULL`,
+      )
+      .all();
+    expect(unattributed).toEqual([]);
+
+    // "Exactly one": the five bucket rows of one message never split across agents.
+    const split = db
+      .prepare(
+        `SELECT session_id, message_id, COUNT(DISTINCT agent_id) AS agents
+           FROM token_usage
+          GROUP BY session_id, message_id
+         HAVING COUNT(DISTINCT agent_id) <> 1`,
+      )
+      .all();
+    expect(split).toEqual([]);
+
+    // Not vacuous: the corpus attributes usage to subagents, not only to mains.
+    const subagentRows = db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM token_usage tu
+           JOIN agents a ON a.id = tu.agent_id AND a.session_id = tu.session_id
+          WHERE a.type = 'subagent'`,
+      )
+      .get() as { n: number };
+    expect(subagentRows.n).toBeGreaterThan(0);
+  });
+
   it('P0: per (session, model, bucket) sums match the independent sums with integer equality', () => {
     const expectedSums = new Map<string, number>();
     for (const message of deduped.values()) {
