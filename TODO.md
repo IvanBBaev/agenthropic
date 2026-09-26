@@ -1089,6 +1089,50 @@ not counted._
 - [x] **Stale docs:** `api.md` credited `WP-IN2` with a `readSince()` that was never built;
   the WP-D1 row cited `types/rows.ts` (now `enums.ts`).
 
+**Open decisions from the audit (Ivan)** — found, verified here, deliberately not built. Each is a
+one-word answer; the recommended default is first.
+
+- [ ] **D11 — Q5 has no dashboard reader.** `GET /api/changes` closed WP-U11 on the server, but
+  nothing in `apps/web/src` calls it, while the Phase-4 exit gate asks the *views* to answer
+  the five questions — the "true of the server, false of the dashboard" pattern this board
+  already caught twice. **(a)** a minimal "changed since" list on the Sessions view, text
+  only, like D4 (one agent lane, ~1 day) · (b) amend the gate to "answerable through the
+  documented API" and say so in `RELEASE.md` §6.
+- [ ] **D12 — WP-U7 "D3 force+tree, live".** The tree is a hand-rolled layered SVG (no
+  force graph) and does not subscribe to SSE (`SessionsView.tsx:37`, "an open owner
+  decision" never raised here). **(a)** amend the WP: layered tree stays, "live" means the
+  refresh control that exists · (b) subscribe the tree to `session-ingested` /
+  `agent-status-changed` and refetch the selected tree (small) · (c) build the force layout
+  (large).
+- [ ] **D13 — WP-C6 "staleness-fails-CI" cannot mean what it says.** The golden fixtures are
+  synthetic and use `synthetic-model-a/b`, which the seed deliberately does not price (the P0
+  harness adds its own rows), so a literal "every corpus model+bucket has a seeded row" test
+  would be red today, or circular if the fixtures borrowed seeded ids. What actually stopped
+  the 52/60 and 27/61 stale-seed outages was the runtime `PricingError` halt plus a real-corpus
+  boot. **(a)** amend C6 to "unknown model halts ingest loudly (runtime) + a real-corpus boot
+  in the release checklist", adding that boot line to `RELEASE.md` · (b) keep C6 open.
+- [ ] **D14 — WP-X1 "≥3 real sessions, redacted, manifested, all four pathologies".** All eight
+  fixtures are synthetic by design (`fixtures/types.ts:6-8`); crashed-no-Stop and
+  two-concurrent-instances are not represented; there is no pathology manifest. **(a)** accept
+  synthetic fixtures as the CI corpus (the real corpus stays local, as LABEL-ME's already
+  does) and add the two missing pathologies synthetically (agent lane) · (b) promote redacted
+  real sessions (needs your corpus and a redaction pass).
+- [ ] **D15 — WP-X5 "a PR dropping below the threshold is blocked (demonstrated)".** Never
+  demonstrated. **(a)** one throwaway PR lowering coverage, red `ci` run recorded, PR closed
+  (needs your go-ahead to open it) · (b) accept the gate's configuration as the evidence.
+- [ ] **D16 — WP-X10 "WORKLOG presence check".** None exists; WORKLOG is a git-excluded local
+  file. **(a)** drop the clause — a tracked check for an untracked file cannot run in CI ·
+  (b) a local-only warning script.
+- [ ] **D17 — WP-C1 "refresh cadence".** No cadence is defined; the seed has been refreshed
+  three times by outage (migrations 18-20). **(a)** a `RELEASE.md` line: re-read the pricing
+  page and boot the real corpus before every tag · (b) a dated calendar cadence.
+- [ ] **D18 — WP-C2 "PricingProvider port".** No port interface; `loadPricing` is a plain
+  function and the dated resolver is met. **(a)** accept as met in substance · (b) add the
+  interface (trivial, but an interface with one implementation and no second caller).
+- [ ] **D19 — `token_usage.is_compaction_baseline` is written as 0 and read by nothing.**
+  Repricing happens at analysis time (`docs/site/architecture/hooks.md`), so the column is
+  dead. **(a)** keep it, documented as reserved · (b) drop it in a migration.
+
 ### Post-1.0 / v2.0 · Alerting core _(off the v1.0 critical path — best-path §6.1; **entered only via KC-5**: 14 consecutive days of real daily v1.0 use + ≥3 friction-log entries wanting alerts — roadmap §6. If that evidence never materializes, v2.0 never starts, and that is a success of the roadmap, not a failure.)_
 - [ ] **WP-A2** alert/webhook schema · **A3** secret `token_ref` resolver · **A4** no-SSRF
   webhook dispatcher · **A5** rules engine (cost/stuck/error) · **A6** Telegram sink · **A7**

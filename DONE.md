@@ -465,6 +465,15 @@ milestone record, not a second copy._
   and manifests (93 files clean today). Nineteen new gate tests; six mutations of the gate
   each killed. Eight documents that said "upheld by review, not by CI" carry a dated
   correction.
+- **An audit of every ticked v1.0 work package against its Done-when.** Four read-only
+  auditors over tracks F, D, IN, C, U and X, every finding re-verified before use. Built: the
+  resumable SSE stream (WP-U1, bounded `Last-Event-ID` replay), Claude Code version detection
+  (parser-gate #10), and the tests three met-but-unproven clauses lacked (WP-D10 redaction
+  idempotence, WP-IN9 per-row attribution, WP-X8 install-to-`events_raw`). Each new test was
+  shown to fail on a matching regression; writing U1 also surfaced and fixed a
+  temporal-dead-zone bug in the stream route's reap path, and one guard that mutation showed
+  to be dead code. Nine findings that are product or process calls went to the board as
+  decisions D11–D19, not code.
 - **Documentation drift found on the way:** the migration ledger stopped at 18 and three pages
   said "eighteen migrations" although 19 already existed. Ledger rows 19 and 20 added, counts
   set to twenty.
