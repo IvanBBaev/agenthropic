@@ -4,12 +4,13 @@
  * orchestration edges.
  *
  * Honesty rules encoded here:
- * - `source` is the edge's persisted provenance (the four structural join
- *   paths) served verbatim - inferred edges must stay distinguishable.
+ * - `source` is the edge's persisted provenance (one of the five
+ *   `OrchestrationEdgeSource` values, `legacy_explore` included) served
+ *   verbatim - inferred edges must stay distinguishable.
  * - `costUsd` is always tokens x dated price over PRICED rows only; tokens
  *   that could not be priced are surfaced in `unpricedTokens`, never silently
  *   folded into a dollar figure.
- * - `outcomeCause` is served as the five-valued enum it is persisted as, never
+ * - `outcomeCause` is served as the six-valued enum it is persisted as, never
  *   collapsed to a boolean: 19 of the 33 observed causes are
  *   `concurrency_limit`, a scheduling fact with no failed agent in it, and
  *   only 2 are `terminated_early`. Flattening would invent 33 failures.

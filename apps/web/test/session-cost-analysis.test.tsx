@@ -19,7 +19,7 @@
  * fetch is mocked: nothing here touches a server or the real ~/.claude tree.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { UNREADABLE_TOKENS, UNREADABLE_USD } from '../src/format';
 import { NO_FIGURE_META } from '../src/views/status';
 import { analysisErrorText, SessionCostAnalysis } from '../src/views/SessionCostAnalysis';
@@ -234,7 +234,16 @@ describe('SessionCostAnalysis', () => {
   it('refuses to put a sign on a difference it cannot read', async () => {
     // Nothing on the client validates this DTO at runtime, so whatever `json()`
     // hands back is what gets rendered; a non-finite delta is not excluded by
-    // anything this component controls. It matters because `NaN >= 0` is false,
+    // anything this component controls.
+    // AMENDED 2026-09-23 (K5, lane K): `dto-guards` now DOES validate the body
+    // before it reaches this component, so the first sentence is no longer
+    // literally true - but the case it describes is untouched. Rule 1 of
+    // dto-guards is "shape, not sanity": a numeric leaf is tested with
+    // `typeof x === 'number'`, which admits `NaN` on purpose, because JSON has
+    // no literal for it and a guard that rejected it would turn one unreadable
+    // figure into a blank panel. So a non-finite delta still arrives here, and
+    // this test stays reachable.
+    // It matters because `NaN >= 0` is false,
     // so the plain signing would have printed a MINUS in front of a figure that
     // has no direction at all - a fabricated claim that the repricing came in
     // under the naive sum.
@@ -265,6 +274,44 @@ describe('SessionCostAnalysis', () => {
     // tile already tells the reader the figure could not be read, which is the
     // louder and the truer of the two statements.
     expect(screen.queryByTestId('delta-signal')).toBeNull();
+  });
+
+  it('says whether a session is mispriced is unknown when the difference cannot be read', async () => {
+    // KK6. `Math.abs(NaN) >= 0.01` is false, so the signal test alone went
+    // silent exactly when the number could not be read: no banner, no
+    // description on the table, and a tile saying "unreadable" with nothing
+    // telling the reader what that means for the mispricing question.
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        200,
+        costAnalysis({
+          compaction: {
+            naiveUsd: 3.0,
+            repricedUsd: Number.NaN,
+            deltaUsd: Number.NaN,
+            compactionCount: 1,
+            segments: [compactionSegment()],
+          },
+        }),
+      ),
+    );
+    renderPanel();
+    await screen.findByTestId('session-analysis');
+
+    const notice = screen.getByTestId('delta-unknown');
+    expect(notice.textContent).toContain('could not be computed');
+    expect(notice.textContent).toContain('mispriced is unknown');
+    const table = screen.getByRole('table', { name: 'compaction segments' });
+    const describedBy = table.getAttribute('aria-describedby') ?? '';
+    expect(describedBy.length).toBeGreaterThan(0);
+    expect(document.getElementById(describedBy)).toBe(notice);
+  });
+
+  it('shows no unknown-difference notice when the difference is readable', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, richAnalysis()));
+    renderPanel();
+    await screen.findByTestId('session-analysis');
+    expect(screen.queryByTestId('delta-unknown')).toBeNull();
   });
 
   it('says a session was never compacted instead of showing a $0 repricing', async () => {
@@ -301,6 +348,62 @@ describe('SessionCostAnalysis', () => {
     expect(rows[0]?.textContent).toContain('~ $0.90'); // hypothetical: modelled
     expect(rows[0]?.textContent).toContain('~ $0.70');
     expect(rows[1]?.textContent).toContain('claude-opus-4');
+  });
+
+  // "Would have run on" is a column whose whole content is a model name, and
+  // the three dollar figures beside it are derived FROM that model. A blank
+  // name leaves the row asserting a counterfactual with no counterfactual in
+  // it - the one cell that says what was assumed goes missing while the
+  // arithmetic built on the assumption stays.
+  it('names a blank hypothetical model rather than leaving the cell empty', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        200,
+        costAnalysis({
+          delegationSavings: {
+            actualUsd: 0.2,
+            hypotheticalUsd: 0.9,
+            savingsUsd: 0.7,
+            perAgent: [agentSavings({ hypotheticalModel: '' })],
+            skippedAgentIds: [],
+            isEstimate: true,
+          },
+        }),
+      ),
+    );
+    renderPanel();
+    await screen.findByTestId('session-analysis');
+
+    const row = screen
+      .getByRole('table', { name: 'delegation savings per agent' })
+      .querySelector('tbody tr');
+    expect(row?.textContent).toContain('blank model name ("")');
+    expect(row?.textContent).toContain(NO_FIGURE_META.symbol);
+  });
+
+  it('names a whitespace-only hypothetical model, which renders as nothing', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        200,
+        costAnalysis({
+          delegationSavings: {
+            actualUsd: 0.2,
+            hypotheticalUsd: 0.9,
+            savingsUsd: 0.7,
+            perAgent: [agentSavings({ hypotheticalModel: ' ' })],
+            skippedAgentIds: [],
+            isEstimate: true,
+          },
+        }),
+      ),
+    );
+    renderPanel();
+    await screen.findByTestId('session-analysis');
+
+    const row = screen
+      .getByRole('table', { name: 'delegation savings per agent' })
+      .querySelector('tbody tr');
+    expect(row?.textContent).toContain('blank model name (" ")');
   });
 
   it('labels the two levels for the slice they measure, not as session dollars', async () => {
@@ -651,6 +754,123 @@ describe('SessionCostAnalysis', () => {
   });
 
   /**
+   * M1 (2026-09-23, lane-M). The floor notice counted dearer subagents with
+   * `hypotheticalUsd < actualUsd`, and a comparison against a non-finite figure
+   * is false rather than unknown. So a subagent whose estimate arrived as NaN -
+   * `dto-guards.ts` promises `typeof === 'number'`, which NaN satisfies - was
+   * counted as "not dearer", indistinguishable from one measured to be cheaper.
+   * The panel then printed "Saved ~$X" with no notice at all, which is the page
+   * asserting that every subagent it priced came out at or below the top-tier
+   * alternative - a claim it did not make and could not have made.
+   */
+  it('reports a subagent it could not compare as unknown, not as not-dearer', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        200,
+        costAnalysis({
+          delegationSavings: {
+            actualUsd: 0.4,
+            hypotheticalUsd: 0.9,
+            savingsUsd: 0.7,
+            perAgent: [
+              agentSavings({ actualUsd: 0.2, hypotheticalUsd: 0.9, savingsUsd: 0.7 }),
+              // The defeating row: `NaN < 0.2` is false, so this subagent used
+              // to be silently filed with the cheap ones.
+              agentSavings({
+                agentId: 'deadbeef-9999-8888-7777-666666666666',
+                actualUsd: 0.2,
+                hypotheticalUsd: Number.NaN,
+                savingsUsd: 0,
+              }),
+            ],
+            skippedAgentIds: [],
+            isEstimate: true,
+          },
+        }),
+      ),
+    );
+    renderPanel();
+    await screen.findByTestId('session-analysis');
+
+    const floor = screen.getByTestId('delegation-floor');
+    expect(floor.textContent).toContain('1 of 2 subagents could not be compared');
+    expect(floor.textContent).toContain('is unknown');
+    // A caveat only a sighted reader meets is not a caveat (CA-4): the group
+    // that holds the three figures must name this paragraph too.
+    expect(
+      screen.getByRole('group', { name: 'delegation savings' }).getAttribute('aria-describedby'),
+    ).toContain('analysis-delegation-floor');
+  });
+
+  it('separates the dearer subagents from the ones it could not compare', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        200,
+        costAnalysis({
+          delegationSavings: {
+            actualUsd: 2.2,
+            hypotheticalUsd: 0.8,
+            savingsUsd: 0,
+            perAgent: [
+              agentSavings({ actualUsd: 1.0, hypotheticalUsd: 0.4, savingsUsd: 0 }),
+              // Unreadable on the measured side rather than the modelled one.
+              agentSavings({
+                agentId: 'deadbeef-9999-8888-7777-666666666666',
+                actualUsd: Number.NaN,
+                hypotheticalUsd: 0.4,
+                savingsUsd: 0,
+              }),
+              agentSavings({
+                agentId: 'deadbeef-9999-8888-7777-555555555555',
+                actualUsd: 0.2,
+                hypotheticalUsd: Number.POSITIVE_INFINITY,
+                savingsUsd: 0,
+              }),
+            ],
+            skippedAgentIds: [],
+            isEstimate: true,
+          },
+        }),
+      ),
+    );
+    renderPanel();
+    await screen.findByTestId('session-analysis');
+
+    const floor = screen.getByTestId('delegation-floor');
+    // Both facts, in the same paragraph, neither standing in for the other:
+    // one subagent is known to have cost more, two are not known either way.
+    expect(floor.textContent).toContain('1 subagent cost MORE');
+    expect(floor.textContent).toContain('2 of 3 subagents could not be compared');
+    expect(floor.textContent).toContain('covers the other 1');
+  });
+
+  it('keeps the uncomparable notice grammatical for a single subagent', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        200,
+        costAnalysis({
+          delegationSavings: {
+            actualUsd: 0.2,
+            hypotheticalUsd: 0,
+            savingsUsd: 0,
+            perAgent: [
+              agentSavings({ actualUsd: 0.2, hypotheticalUsd: Number.NaN, savingsUsd: 0 }),
+            ],
+            skippedAgentIds: [],
+            isEstimate: true,
+          },
+        }),
+      ),
+    );
+    renderPanel();
+    await screen.findByTestId('session-analysis');
+
+    const floor = screen.getByTestId('delegation-floor');
+    expect(floor.textContent).toContain('1 of 1 subagent could not be compared');
+    expect(floor.textContent).toContain('whether it cost more');
+  });
+
+  /**
    * CA-4, the F-18 defect one element over. A table is a navigable landmark:
    * a reader can jump straight into "delegation savings per agent" and hear
    * its accessible name and its cells. The caveats that make those cells
@@ -707,6 +927,37 @@ describe('SessionCostAnalysis', () => {
     const error = await screen.findByTestId('analysis-error');
     expect(error.textContent).toContain(expected);
     expect(screen.queryByTestId('session-analysis')).toBeNull();
+  });
+
+  it('retries a failed analysis for the same session and renders the result', async () => {
+    // KK6. Clicking "analyse" again for the same session changes no selection
+    // state, so without a retry of its own the error was terminal.
+    fetchMock.mockResolvedValueOnce(jsonResponse(500, { error: 'Internal server error.' }));
+    renderPanel();
+    await screen.findByTestId('analysis-error');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, richAnalysis()));
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(screen.getByTestId('analysis-loading')).toBeTruthy();
+    await screen.findByTestId('session-analysis');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(fetchMock.mock.calls[0]?.[0]);
+    expect(screen.queryByTestId('analysis-error')).toBeNull();
+  });
+
+  it('aborts a retried request on unmount', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(500, { error: 'Internal server error.' }));
+    const { unmount } = renderPanel();
+    await screen.findByTestId('analysis-error');
+
+    const pending = deferred<Response>();
+    fetchMock.mockReturnValueOnce(pending.promise);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    const [, init] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect((init.signal as AbortSignal).aborted).toBe(false);
+    unmount();
+    expect((init.signal as AbortSignal).aborted).toBe(true);
   });
 
   it('calls onAuthRejected on 401 without rendering an error sentence', async () => {

@@ -11,15 +11,18 @@
  * sorts object keys recursively, making the key independent of JSON property
  * order on the wire.
  *
- * RECURRENCE vs REDELIVERY (why `deliveryId` exists). Claude Code's `Stop`
- * stdin is byte-identical on every turn of a session - it carries session_id,
- * transcript_path, cwd, hook_event_name and stop_hook_active, and nothing
- * turn-specific. Content alone therefore cannot distinguish "this event
- * happened again" (turn 2) from "this event was delivered twice" (a retry):
- * hashing content only collapses a 50-turn session into a single `Stop` row and
- * guts the WP-D5 liveness timeline. Only the SENDER knows which of the two it
- * is doing, so the sender stamps each FIRING with a fresh id and reuses that id
- * across that firing's own retries (see hooks/install.mjs).
+ * RECURRENCE vs REDELIVERY (why `deliveryId` exists). Content equality cannot
+ * distinguish "this event happened again" (turn 2) from "this event was
+ * delivered twice" (a retry) in general: two firings may carry identical bytes,
+ * and nothing in the hook contract promises a turn-varying field (a `Stop` body
+ * usually differs per turn via prompt_id / last_assistant_message, but that is
+ * not guaranteed - hooks/README.md, amended 2026-09-02). Hashing content only
+ * can therefore collapse genuine recurrences into one row and gut the WP-D5
+ * liveness timeline. Only the SENDER knows which of the two it
+ * is doing, so the sender stamps each FIRING with a fresh id, which a client
+ * that retries should reuse across that firing's own retries. The command
+ * hooks/install.mjs generates mints one id per firing but never retries (no
+ * `--retry`), so from that sender every delivery is a distinct firing.
  *
  * Trade-off, stated plainly:
  *  - a client that mints one id per firing gets one row per genuine event and

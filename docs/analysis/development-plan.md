@@ -20,8 +20,8 @@ and the CD decision(s) it implements.
 > critical path, checked that every CD-1…CD-10 is covered, and produced twelve corrections.
 > **Those corrections are applied in this document** — the WP ids and dependencies below are
 > the canonical, post-verification set, not the raw drafts. Status legend and open items
-> live in [`../../TODO.md`](../../TODO.md); completed milestones in
-> [`../../DONE.md`](../../DONE.md).
+> live in [`../../TODO.md`](https://github.com/IvanBBaev/agenthropic/blob/main/TODO.md); completed milestones in
+> [`../../DONE.md`](https://github.com/IvanBBaev/agenthropic/blob/main/DONE.md).
 
 ---
 
@@ -447,4 +447,4 @@ Every canonical decision is implemented by ≥1 WP (verifier-confirmed `ok:true`
 _Decomposition + adversarial verification workflow (8 track owners + 1 verifier), Opus /
 high effort, ~452k subagent tokens. Implements [`concept-analysis-v2.md`](concept-analysis-v2.md)
 CD-1…CD-10 against the design of record in `docs/ai/DESIGN.md`. Open work:
-[`../../TODO.md`](../../TODO.md) · completed: [`../../DONE.md`](../../DONE.md)._
+[`../../TODO.md`](https://github.com/IvanBBaev/agenthropic/blob/main/TODO.md) · completed: [`../../DONE.md`](https://github.com/IvanBBaev/agenthropic/blob/main/DONE.md)._

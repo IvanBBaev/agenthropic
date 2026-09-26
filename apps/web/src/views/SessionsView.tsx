@@ -7,6 +7,13 @@
  * `queue_operation` / `legacy_explore`), and the session's unattributed usage
  * bucket is shown even when it is zero.
  *
+ * AMENDED 2026-09-23 (lane-EP): the list in that sentence was exhaustive of
+ * what the SCHEMA can hold, not of what can arrive, and this view used to draw
+ * anything outside it dashed and title it `inferred (<raw>)` - naming a
+ * derivation on the sole evidence that the word was not `tool_use`. A source
+ * this build cannot place now gets a third, dotted stroke and says so. The
+ * vocabulary and the legend both live in `views/provenance.ts`.
+ *
  * Review item M-9: every listed session also carries an "analyse" action that
  * opens the same per-session cost analysis the cost view offers for its top-5,
  * so cost analysability is not limited to the sessions that happen to rank.
@@ -30,18 +37,34 @@
  * only way to re-read was an unsignposted full page reload. The view still does
  * NOT subscribe to SSE: making these views live is an open owner decision, and
  * this wave only makes their staleness visible and actionable.
+ *
+ * AMENDED 2026-09-09 (L5, WP-U13): the panel also says WHY a run ended, when
+ * the server observed an outcome. `outcomeCause` had been persisted and served
+ * on every agent node since WP-U10 and rendered nowhere - the database knew the
+ * reason and the reader was never told. See `outcomeCauseText` below for what
+ * each of the six causes renders as, why a NULL one renders as nothing at all,
+ * and why the surface is not filtered to `status === 'error'`.
  */
 import { useEffect, useState } from 'react';
 import { fetchSessions, fetchSessionTree } from '../api';
 import { readNowMs, useNowMs } from '../clock';
-import type { AgentNodeDto, OrchestrationEdgeDto, SessionSummaryDto, SessionTreeDto } from '../dto';
-import { agentTypeLabel, formatTokens, formatUsd, projectLabel, shortId } from '../format';
+import type { AgentNodeDto, SessionSummaryDto, SessionTreeDto } from '../dto';
+import {
+  agentTypeLabel,
+  formatTokens,
+  formatUsd,
+  projectLabel,
+  quoteRawValue,
+  shortId,
+} from '../format';
 import { describeAgentGraph } from './chart-summary';
-import { computeLayeredLayout } from './layout/layered';
+import { computeLayeredLayout, fallbackLayerNotice } from './layout/layered';
+import { edgeProvenance, EDGE_PROVENANCE_LEGEND } from './provenance';
 import { SessionCostAnalysis } from './SessionCostAnalysis';
 import { snapshotAge } from './snapshot';
-import { statusMeta } from './status';
+import { statusMeta, UNRECOGNISED_STATUS_LABEL } from './status';
 import type { ViewProps } from './types';
+import { UnpricedNote, unpricedTitleSuffix } from './unpriced';
 
 /** Page size for the selectable session list. */
 export const SESSION_LIST_LIMIT = 50;
@@ -72,9 +95,82 @@ function agentLabel(agent: AgentNodeDto): string {
   return agentTypeLabel(agent.subagentType, agent.type);
 }
 
-function edgeTitle(edge: OrchestrationEdgeDto): string {
-  const provenance = edge.source === 'tool_use' ? 'observed' : 'inferred';
-  return `${provenance} (${edge.source})`;
+/**
+ * Every outcome cause the server can persist, mirroring
+ * `AgentOutcomeCauseSchema` in @agenthropic/shared. Typed off the DTO field
+ * instead of a hand-written union, so a cause renamed in the schema fails the
+ * build here rather than quietly reaching a reader as `unrecognised`.
+ */
+type OutcomeCause = NonNullable<AgentNodeDto['outcomeCause']>;
+
+const AGENT_OUTCOME_CAUSES: readonly OutcomeCause[] = [
+  'concurrency_limit',
+  'user_interrupt',
+  'permission_failed',
+  'dispatch_unavailable',
+  'terminated_early',
+  'unclassified',
+];
+
+/** Parenthetical naming a payload that carried no cause field at all. */
+export const ABSENT_OUTCOME_CAUSE_REASON = 'no cause word sent';
+
+/**
+ * L5 (2026-09-09), WP-U13 / decision D4: "the cause as text on error rows in
+ * the Live view and the session tree, no new view, no colour".
+ *
+ * The text one persisted outcome cause renders as - or `null`, meaning render
+ * nothing at all.
+ *
+ * WHY THIS IS NOT FILTERED TO `status === 'error'`. A literal reading of D4
+ * would show exactly ONE of the six causes, because `ERROR_CAUSES` in
+ * `apps/server/src/ingest/normalize-session.ts` is the one-element set
+ * `{ terminated_early }` on purpose: on the measured corpus 19 of 33 observed
+ * outcomes are `concurrency_limit` (a spawn that was REFUSED - the agent never
+ * ran) and 7 are `user_interrupt` (a person stopped it), and promoting those
+ * would invent 33 failures where there are 2. "Error rows" names where these
+ * outcomes come from - a parent-side `is_error` tool_result - not a filter that
+ * throws five sixths of them away. So the cause is rendered for ANY agent that
+ * carries one, whatever its status.
+ *
+ * The four answers, kept apart the way `status.ts` keeps its three words apart:
+ *  - `null` -> nothing at all. NULL means no outcome was observed, which is
+ *    explicitly NOT a claim that the agent succeeded (see the `outcomeCause`
+ *    docblock in the shared graph schema), so it must never render as "ok", as
+ *    "succeeded", or as a dash a reader could take for a zero.
+ *  - a known cause -> the persisted token, VERBATIM. A friendlier paraphrase
+ *    would have to decide whether a refused spawn is a failure; it is not, and
+ *    the token says only what was recorded.
+ *  - a string this build does not know -> `unrecognised (<raw>)`, reusing the
+ *    word `status.ts` already owns for this condition. Shown with its raw
+ *    value, never folded into a known cause and never dropped.
+ *  - anything that is not a string -> the field did not arrive. `dto-guards.ts`
+ *    deliberately does not narrow this enum at the boundary, so a server that
+ *    stops sending it reaches this function with `undefined`; "no cause word
+ *    was sent" is a different fact from "no outcome was observed", and the two
+ *    must not be spelled the same way.
+ *
+ * AMENDED 2026-09-23 (lane-P). The third bullet said "shown with its raw
+ * value", and that held for every raw value that has something to show. The
+ * guards check containers and load-bearing numbers and deliberately NOT
+ * strings, so `''` and `'  '` are causes this function receives - and they
+ * rendered as `unrecognised ()` in a list titled "observed agent outcomes":
+ * a row that exists solely to name a cause, naming none. The raw value is now
+ * quoted through the shared `quoteRawValue`, which is exactly what `status.ts`
+ * does with an unrecognised status word - one convention, not two.
+ *
+ * The fourth bullet's parenthetical stays UNQUOTED on purpose: it states a
+ * condition this build wrote itself, and the quotes mean "these are the
+ * server's own bytes".
+ */
+export function outcomeCauseText(cause: unknown): string | null {
+  if (cause === null) return null;
+  if (typeof cause !== 'string') {
+    return `${UNRECOGNISED_STATUS_LABEL} (${ABSENT_OUTCOME_CAUSE_REASON})`;
+  }
+  return (AGENT_OUTCOME_CAUSES as readonly string[]).includes(cause)
+    ? cause
+    : `${UNRECOGNISED_STATUS_LABEL} (${quoteRawValue(cause)})`;
 }
 
 /** SVG tree of the persisted agents + edges; a pure render of the layout. */
@@ -139,6 +235,26 @@ function TreePanel({
   // nothing, and reads to an auditor as though the caveat had been given.
   const cycleNoticeId = `tree-cycle-notice-${tree.sessionId}`;
   const chartDescribedBy = layout.cyclicNodes > 0 ? `${cycleNoticeId} ${summaryId}` : summaryId;
+  // L5 (2026-09-09): the observed outcomes as their own rows, one per agent
+  // that has one. They are not drawn INSIDE the diagram: role="img" hides the
+  // SVG subtree, so a cause that lived only in a node's <title> would be a fact
+  // the picture knows and this reader is never told - the defect class this
+  // file keeps fixing. The rows are read from `tree.agents` (the payload as
+  // served) rather than from the layout, so an agent the layout could not place
+  // still has its outcome said. The node titles carry the same text for a
+  // reader who hovers.
+  //
+  // AMENDED 2026-09-09 (L5): `chartDescribedBy` above is no longer what the
+  // chart is described by - `describedBy` is. Same rule as DG-3: the id is
+  // named only while the block is rendered, because an idref that resolves to
+  // nothing describes nothing and reads to an auditor as though the fact had
+  // been given.
+  const outcomes = tree.agents.flatMap((agent) => {
+    const cause = outcomeCauseText(agent.outcomeCause);
+    return cause === null ? [] : [{ agent, cause }];
+  });
+  const outcomesId = `tree-outcomes-${tree.sessionId}`;
+  const describedBy = outcomes.length > 0 ? `${chartDescribedBy} ${outcomesId}` : chartDescribedBy;
   return (
     <div>
       {/* The caveat escalates with the fact rather than sitting at one volume:
@@ -172,40 +288,41 @@ function TreePanel({
           element can never disagree. */}
       {layout.cyclicNodes > 0 && (
         <p className="muted" id={cycleNoticeId}>
-          {layout.cyclicNodes} agent{layout.cyclicNodes === 1 ? '' : 's'} sit in a cycle and are
-          placed on a fallback layer.
+          {fallbackLayerNotice(layout.cyclicNodes, layout.belowCycleNodes)}
         </p>
       )}
       <div className="chart-scroll">
         <svg
           role="img"
           aria-label={`agent tree for session ${tree.sessionId}`}
-          aria-describedby={chartDescribedBy}
+          aria-describedby={describedBy}
           width={layout.width}
           height={layout.height}
           viewBox={`0 0 ${String(layout.width)} ${String(layout.height)}`}
         >
-          {layout.edges.map((edge) => (
-            <line
-              key={edge.payload.id}
-              className={
-                edge.payload.source === 'tool_use' ? 'edge edge-observed' : 'edge edge-inferred'
-              }
-              x1={edge.x1}
-              y1={edge.y1}
-              x2={edge.x2}
-              y2={edge.y2}
-            >
-              <title>{edgeTitle(edge.payload)}</title>
-            </line>
-          ))}
+          {layout.edges.map((edge) => {
+            const sourceProvenance = edgeProvenance(edge.payload.source);
+            return (
+              <line
+                key={edge.payload.id}
+                className={sourceProvenance.className}
+                x1={edge.x1}
+                y1={edge.y1}
+                x2={edge.x2}
+                y2={edge.y2}
+              >
+                <title>{sourceProvenance.title}</title>
+              </line>
+            );
+          })}
           {layout.nodes.map((placed) => {
             const agent = placed.node;
             const meta = statusMeta(agent.status);
+            const cause = outcomeCauseText(agent.outcomeCause);
             return (
               <g key={agent.id} className={meta.className} data-testid={`tree-node-${agent.id}`}>
                 <title>
-                  {`${agentLabel(agent)} ${shortId(agent.id)} - ${meta.label} - ${formatTokens(agent.totalTokens)} tokens, ${formatUsd(agent.costUsd)}${agent.unpricedTokens > 0 ? `, ~${formatTokens(agent.unpricedTokens)} unpriced` : ''}${asOf}`}
+                  {`${agentLabel(agent)} ${shortId(agent.id)} - ${meta.label} - ${formatTokens(agent.totalTokens)} tokens, ${formatUsd(agent.costUsd)}${unpricedTitleSuffix(agent.unpricedTokens)}${cause === null ? '' : ` - outcome ${cause}`}${asOf}`}
                 </title>
                 <circle cx={placed.x} cy={placed.y} r={8} fill="currentColor" />
                 <text className="node-symbol" x={placed.x} y={placed.y + 4} textAnchor="middle">
@@ -222,22 +339,33 @@ function TreePanel({
       <p className="chart-summary" id={summaryId}>
         {summary}
       </p>
+      {outcomes.length > 0 && (
+        <div id={outcomesId} data-testid="tree-outcomes">
+          <p className="muted">
+            Observed outcomes, verbatim as recorded from the parent-side result that answered each
+            spawn. A cause is not by itself a failure: concurrency_limit means the spawn was refused
+            and the agent never ran, and user_interrupt means a person stopped it. An agent absent
+            from this list had no outcome recorded - which is not a claim that it succeeded.
+          </p>
+          <ul className="muted" aria-label="observed agent outcomes">
+            {outcomes.map(({ agent, cause }) => (
+              <li key={agent.id}>
+                {agentLabel(agent)} {shortId(agent.id)} - {cause}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       <p className="legend-inline muted" aria-label="edge provenance legend">
-        — observed (tool_use) ┄ inferred (directory, task_notification, queue_operation,
-        legacy_explore)
+        {EDGE_PROVENANCE_LEGEND}
       </p>
       <p className="unattributed" data-testid="unattributed">
         Unattributed to any agent: {formatTokens(tree.unattributed.totalTokens)} tokens ·{' '}
         {formatUsd(tree.unattributed.costUsd)}
-        {tree.unattributed.unpricedTokens > 0 && (
-          <>
-            {' '}
-            ·{' '}
-            <span className="unpriced">
-              ~ {formatTokens(tree.unattributed.unpricedTokens)} unpriced
-            </span>
-          </>
-        )}
+        {/* A3 (2026-09-23): see views/unpriced.tsx. This line is the page's
+            only statement about usage no agent claimed, so a withdrawn clause
+            here says the unattributed dollars are the whole of it. */}
+        <UnpricedNote tokens={tree.unattributed.unpricedTokens} lead=" · " />
       </p>
     </div>
   );
@@ -365,13 +493,32 @@ export function SessionsView({ token, onAuthRejected }: ViewProps) {
               could not find a session conclude it was not ingested, when it
               was simply older than the page. LiveView already discloses this
               ordering for the same endpoint. */}
-          {list.total > list.sessions.length && (
+          {/* AMENDED 2026-09-23 (A2). The `&&` above had two failure modes,
+              and both end with this paragraph absent - which on this pane is
+              the statement that the rows are the whole list. A `total` that
+              arrives non-finite (shape is all `dto-guards.ts` promises of it)
+              fails `>`; so does a `total` SMALLER than the rows served, which
+              a consistent server cannot produce - the same self-contradicting
+              payload CV-5 names at the foot of the cost table. Neither is a
+              complete list, and neither may be silent. */}
+          {!Number.isFinite(list.total) ? (
+            <p className="muted" data-testid="list-truncation-unknown">
+              The session count served with this list came back unreadable, so whether these rows
+              are the whole corpus or its newest slice is unknown.
+            </p>
+          ) : list.total > list.sessions.length ? (
             <p className="muted" data-testid="list-truncation">
               Showing {list.sessions.length} of {list.total} sessions - the server pages by most
               recent activity first, so this is the newest slice as of that read: the rest are
               older, and a session started since is in neither figure.
             </p>
-          )}
+          ) : list.total < list.sessions.length ? (
+            <p className="muted" data-testid="list-count-disagreement">
+              These {list.sessions.length} rows outnumber the {list.total} sessions the same read
+              counts, so the served rows and the served count disagree - neither figure describes
+              this list on its own.
+            </p>
+          ) : null}
           <ul className="session-list" aria-label="session list">
             {list.sessions.map((session) => {
               const meta = statusMeta(session.status);
@@ -396,12 +543,8 @@ export function SessionsView({ token, onAuthRejected }: ViewProps) {
                       {session.agentCount} agent{session.agentCount === 1 ? '' : 's'} ·{' '}
                       {formatUsd(session.totalCostUsd)}
                     </span>
-                    {session.unpricedTokens > 0 && (
-                      <span className="unpriced">
-                        {' '}
-                        · ~ {formatTokens(session.unpricedTokens)} unpriced
-                      </span>
-                    )}
+                    {/* A3 (2026-09-23): see views/unpriced.tsx. */}
+                    <UnpricedNote tokens={session.unpricedTokens} lead=" · " />
                   </button>
                   <button
                     type="button"

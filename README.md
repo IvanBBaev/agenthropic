@@ -3,7 +3,7 @@
 <!-- badges:start -->
 
 [![CI](https://img.shields.io/github/actions/workflow/status/IvanBBaev/agenthropic/ci.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=CI)](https://github.com/IvanBBaev/agenthropic/actions/workflows/ci.yml)
-![Node](https://img.shields.io/badge/node-%3E%3D22-5FA04E?style=flat-square&logo=nodedotjs&logoColor=white)
+![Node](https://img.shields.io/badge/node-22-5FA04E?style=flat-square&logo=nodedotjs&logoColor=white)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 
 <!-- badges:end -->
@@ -25,8 +25,21 @@ dated price — token counts are read from the JSONL, never inferred).
 > source, so `npm install agenthropic` will not give you a dashboard. The package
 > exists to hold the name; the instructions below are the actual install.
 
-Requires **Node 22+** and **pnpm** (the repo pins `pnpm@11.11.0` via `packageManager`,
-so `corepack enable` is enough).
+Requires **Node 22, and only 22**, and **pnpm** (the repo pins `pnpm@11.11.0` via
+`packageManager`, so `corepack enable` is enough). `.nvmrc` names the Node major,
+`engines.node` is `>=22 <23` with `engine-strict` in `.npmrc`, and `pnpm test` / `pnpm start`
+refuse any other major up front with a pointed message (`scripts/check-node-version.mjs`)
+instead of failing later in a native-binding cascade; `nvm use` reads `.nvmrc`.
+
+**AMENDED 2026-09-23 (J-1).** "`pnpm test` / `pnpm start`" was the guard's whole reach when
+that sentence was written; it is now wider. `scripts/check-node-version.mjs` prefixes the root
+`start`, `test` and `gate:node`, `apps/server`'s `dev`, `start`, `bench` and `test`,
+`apps/web`'s `dev` and `test`, and the `test` script of `packages/shared`, `packages/core` and
+`packages/test-fixtures` - every entry point that loads the native binding, plus the root
+scripts. It is deliberately absent from `typecheck`, `lint`, `format`, `format:check`,
+`hooks:install`, `apps/web build` and `render-claims`, none of which touch `better-sqlite3`.
+Because it is a package-script prefix rather than a runtime hook, a direct `npx vitest` or
+`tsx` invocation still bypasses it and you get the cascade.
 
 ### Run it — one command, one port
 
@@ -117,15 +130,16 @@ only way to run it is the Quickstart above, from a checkout. Nothing below
 describes a download.
 
 What actually runs today — checked against the code, not against the plan — is the
-loopback-bound, token-gated server; the SQLite substrate with thirteen migrations and
+loopback-bound, token-gated server; the SQLite substrate with eighteen migrations and
 an append-only `events_raw` table; JSONL corpus ingest with replay-on-startup and
 tail-follow polling that re-reads only new bytes; the persisted subagent DAG; the cost
 engine, including dated per-model pricing, compaction repricing and a delegation-savings
-estimate; the hook receiver and its installer; the SSE realtime hub; seven read
+estimate; the hook receiver and its installer; the SSE realtime hub; nine read
 endpoints; and all four dashboard views (live status, session tree, global DAG, cost
 flow) plus a per-session cost-analysis panel.
 
-The three P0 reconciliation proofs run green in CI on every push and pull request — Σ
+The three P0 reconciliation proofs run green in CI on every push to `main` and on every
+pull request — Σ
 tokens against an independently-written reader, a byte-identical double replay, and the
 DAG rebuilt from JSONL alone after a simulated outage — alongside a 12-scenario negative
 catalogue. This paragraph used to go on to say that calling them *merge-blocking* would be
@@ -142,12 +156,14 @@ on would lock the sole maintainer out of their own repository. The standing writ
 the verify command, is
 [in the decisions index](docs/site/contributing/decisions/README.md#a-standing-correction-merge-blocking).
 
-Retention is deliberately half-built. The mechanism — pruning, an audit journal,
-backup-file expiry, a runner — is implemented and covered by tests, but the *policy*,
-meaning how many days of what is kept, is unset pending a decision about how a
-retention TTL can coexist with an append-only substrate. The shipped default is a
-no-op and no runner is started at boot, so an unconfigured deployment keeps everything
-and grows without bound.
+Retention runs under a signed policy as of 2026-09-10. The mechanism — pruning, an
+audit journal, backup-file expiry, a runner — is implemented and covered by tests, and
+the v1.0 policy (D3, signed 2026-09-08) is wired into the composition root: `events`
+rows older than 90 days and backup files older than 30 days (never below the newest 7)
+are pruned by a runner chained after each successful daily backup; boot logs a dry run
+and deletes nothing; `0` switches a rule off. `token_usage` — the cost ground truth — is
+**never** pruned in v1.0, by decision, so that one table still grows without bound while
+`events` is bounded. The append-only `events_raw` is never a delete target.
 
 The design spine came first and still governs: ten canonical decisions (CD-1…CD-10), a
 75-work-package development plan, a 44-page docs corpus, and a Phase-0 feasibility spike
@@ -174,9 +190,10 @@ Four honesty notes, kept here deliberately rather than buried in a footnote:
 The recurring design decision in this codebase is what to do when a number is not
 known, and the answer is always the same: say nothing rather than say zero.
 
-`GET /api/health` carries four optional fields — cumulative ingest skips, the boot
-ingest phase, the duration of the last completed corpus pass, and the count of
-cross-session usage collisions — and each of them is **omitted** when the underlying
+`GET /api/health` carries six optional fields — cumulative ingest skips, the boot
+ingest phase, the duration of the last completed corpus pass, the count of
+cross-session usage collisions, and the counts of sessions whose latest ingest failed
+and of those quarantined until their bytes or the pricing table change — and each of them is **omitted** when the underlying
 seam is absent or has not yet produced a reading. A `lastTickDurationMs` of `0` would
 read as "the poll is instant", which is the wrong fact, not a harmless placeholder; an
 absent field says "no pass has finished yet", which is the right one. The response
@@ -206,8 +223,8 @@ subset is the same class of lie as a silent `$0`.
 Loopback-only bind (`127.0.0.1`) · no browser-driven subprocess spawner ·
 mandatory auth token or the server refuses to start · same-origin SSE · no SSRF ·
 remote access via SSH/Tailscale tunnel only · SQLite WAL, with a daily backup timer
-(24 h, expiring at 14 days but never below the newest 7 files — all three numbers
-PROVISIONAL) and a restore path that refuses any image failing
+(24 h; files expire at 30 days but never below the newest 7 — the signed v1.0 retention
+numbers, D3 2026-09-08, overridable per window) and a restore path that refuses any image failing
 `PRAGMA integrity_check`.
 
 The ingest side is read-only against `~/.claude/projects` by construction: the
@@ -220,9 +237,11 @@ the dashboard even by accident.
 **100% test coverage — statements, branches, functions and lines — pinned in all five
 packages** (`packages/shared`, `packages/core`, `packages/test-fixtures`,
 `apps/server`, `apps/web`), with zero coverage-ignore pragmas anywhere under `src/`
-and guard tests that fail the build if one appears. Last local full run: **106 test
-files, 1554 tests, 100% on all four axes in every package** (2026-08-15; the figure
-moves as the tree does). CI runs the same command on every push and pull request, so a
+and guard tests that fail the build if one appears. Last local full run: **140 test
+files, 2621 tests, 100% on all four axes in every package** (2026-09-23; the figure
+moves as the tree does - the 2026-09-18 reading of the same line was 131 files / 2428
+tests, and it moved because tests were added, not because any of them changed verdict). CI runs the same command on every push to `main` and on every
+pull request, so a
 regression turns the run red and, since 2026-08-25, withholds the merge button from anyone
 who is not the repository owner — see the branch-protection note above for that exemption.
 

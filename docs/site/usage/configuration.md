@@ -11,34 +11,42 @@
 > `token_ref`) was never built and is v2.0 material. The **security invariants were
 > binding then and remain binding now.**
 
-> **Update — 2026-07 (as built).** The configuration surface is built and is smaller and
-> more decided than this page assumes. Verified against `apps/server/src/config.ts`:
+> **Update — 2026-07 (as built; revised 2026-09).** The configuration surface is built
+> and is smaller and more decided than this page assumes. Verified against
+> `apps/server/src/config.ts`:
 >
 > - **Configuration is environment variables and nothing else.** There is no config
 >   file, no JSON/YAML/`.env` loader, and therefore **no precedence question** — the
 >   `(planned)` precedence discussion below describes a layering that was never built.
->   `loadConfig(env)` reads seven variables and throws on anything unparseable rather
+>   `loadConfig(env)` reads eleven variables and throws on anything unparseable rather
 >   than falling back to a default.
 > - **The full env surface:** `DASHBOARD_TOKEN` (mandatory, **minimum 16 characters**),
 >   `DASHBOARD_PORT` (default **4317**), `DASHBOARD_DB_PATH` (default
 >   **`data/agenthropic.db`**), `DASHBOARD_INGEST` (`1`/`true`/`0`/`false`, default on),
 >   **`CLAUDE_PROJECTS_DIR`** (the corpus-root override this page says may not exist —
->   it does), `DASHBOARD_POLL_INTERVAL_MS` (default 3000) and
->   `DASHBOARD_WATCHDOG_MINUTES` (default 10). An eighth variable,
->   **`DASHBOARD_INSTANCE`**, reaches the server outside `loadConfig` — the composition
->   root passes it straight to the corpus identity resolver.
+>   it does), `DASHBOARD_POLL_INTERVAL_MS` (default 3000),
+>   `DASHBOARD_WATCHDOG_MINUTES` (default 10), `DASHBOARD_WEB_ROOT` (the built SPA
+>   directory the single-port server serves next to `/api`; default `apps/web/dist`,
+>   resolved from the server module's own location rather than the working directory),
+>   and the three retention knobs
+>   `DASHBOARD_RETENTION_EVENTS_DAYS` (default 90), `DASHBOARD_RETENTION_BACKUP_DAYS`
+>   (default 30) and `DASHBOARD_RETENTION_BACKUP_KEEP_MIN` (default 7). One more
+>   variable, **`DASHBOARD_INSTANCE`**, reaches the server outside `loadConfig` — the
+>   composition root passes it straight to the corpus identity resolver.
 > - **The bind host has no variable at all.** It is the exported constant
 >   `HOST = '127.0.0.1'`. Not overridable, not even by env.
 > - **The two poll/watchdog defaults are PROVISIONAL (LABEL-ME)** — marked so in the
 >   source, not yet ratified. Do not quote them as tuned values.
-> - **Retention: the mechanism is built, the policy is deliberately unset, and nothing
->   calls it.** See [Backup directory and retention](#backup-directory-and-retention)
->   below for what that
->   means in practice. **Redaction is live** — applied at the hook ingest boundary before
->   anything is stored, though its policy is likewise pending sign-off.
+> - **Retention runs under the v1.0 policy signed on 2026-09-08 (D3):** `events` rows
+>   older than 90 days are pruned, `token_usage` is never pruned, backup files older
+>   than 30 days expire behind a keep-7 floor. The runner is chained onto the daily
+>   backup and runs only after a successful write; boot logs a dry run. See
+>   [Backup directory and retention](#backup-directory-and-retention) below.
+>   **Redaction is live** — applied at the hook ingest boundary before anything is
+>   stored, though its policy is pending sign-off.
 > - **Backups run on a schedule.** A daily timer writes an online backup next to the
->   database and expires old ones behind a keep-minimum floor. The cadence and window are
->   constants, not settings.
+>   database, then the retention pass expires old ones behind the keep-minimum floor.
+>   The cadence is a constant; the window and the floor are the settings above.
 > - **The alerting rows in the table below do not exist.** No `alert_rules`, no
 >   `webhook_targets`, no `token_ref` resolver, no Telegram token handling — that whole
 >   slice is v2.0, gated behind KC-5. See [Telegram alerts](telegram.md).
@@ -63,7 +71,7 @@ though there is no `.env` file support; they must be actual environment variable
 ## Reference table
 
 **As built — the environment the server reads today.** There is no config file and no
-other variable; anything not in this table cannot be configured. The first seven rows are
+other variable; anything not in this table cannot be configured. The first eleven rows are
 what `loadConfig` parses; `DASHBOARD_INSTANCE` is read separately, by the corpus identity
 resolver.
 
@@ -76,7 +84,25 @@ resolver.
 | `CLAUDE_PROJECTS_DIR` | optional | unset → the canonical `~/.claude/projects` | Corpus root override — where session transcripts are read from | Empty string counts as unset, so a stray `CLAUDE_PROJECTS_DIR=` cannot silently mean the working directory |
 | `DASHBOARD_POLL_INTERVAL_MS` | optional | `3000` — **PROVISIONAL (LABEL-ME), not ratified** | Tail-follow poll cadence (`WP-IN5`) | Positive integer |
 | `DASHBOARD_WATCHDOG_MINUTES` | optional | `10` — **PROVISIONAL (LABEL-ME), not ratified** | Inactivity window after which the missing-Stop watchdog marks an agent `unknown` (`WP-IN12`) | Positive integer |
+| `DASHBOARD_RETENTION_EVENTS_DAYS` | optional | `90` — signed v1.0 policy (D3, 2026-09-08) | Age window for normalized `events` rows; the daily retention pass prunes older rows after a successful backup (`WP-D10`) | Non-negative integer up to `36500` (100 years); `0` disables the rule; empty counts as unset |
+| `DASHBOARD_RETENTION_BACKUP_DAYS` | optional | `30` — signed v1.0 policy | Age window for backup files in `<dirname(DASHBOARD_DB_PATH)>/backups` | Non-negative integer up to `36500` (100 years); `0` disables the rule; empty counts as unset |
+| `DASHBOARD_RETENTION_BACKUP_KEEP_MIN` | optional | `7` — signed v1.0 policy | Keep-minimum floor for backup files: the newest N survive whatever the window says; the floor wins over the age | Positive integer (never below 1) |
+| `DASHBOARD_WEB_ROOT` | optional | `apps/web/dist`, resolved from the server module's own location (`import.meta.url`), not from the working directory | Directory of the built SPA that the single-port server serves alongside `/api`; when the bundle is absent every non-`/api` path answers `503` with a "not built yet, run `pnpm start`" message | Free-form path; empty string counts as unset |
 | `DASHBOARD_INSTANCE` | optional | the machine's hostname | The `instance` label stamped on every persisted agent and orchestration edge | Free-form string; unset falls back to `hostname()` |
+
+**What "integer" means in those rows (parsing hardened 2026-09).** Every numeric variable
+goes through one helper, `parseDigits`: plain decimal digits (`/^\d+$/`) that also survive
+`Number.isSafeInteger`. Anything else is a startup error rather than a coercion, because
+`Number()` alone is far too lenient for configuration - it reads whitespace as `0` and
+accepts hex, exponent, signed and decimal-point spellings. So `DASHBOARD_PORT=" 80"`,
+`0x1F`, `+80`, `4e3` and `80.0` all fail loudly instead of quietly becoming a port.
+`DASHBOARD_POLL_INTERVAL_MS` carries one extra bound: it is capped at **2147483647**, Node's
+timer ceiling, because a larger `setInterval` delay is silently clamped to 1 ms - a value
+meant as "poll once a month" would otherwise spin. `DASHBOARD_WATCHDOG_MINUTES` has no
+ceiling beyond the safe-integer range. And `DASHBOARD_DB_PATH=` (set but empty) counts as
+**unset**, the same house rule `CLAUDE_PROJECTS_DIR` and `DASHBOARD_WEB_ROOT` follow:
+`better-sqlite3` opens `''` as an anonymous temporary database, so the empty value would
+discard every row at exit and put the backups under a working-directory-relative path.
 
 There is **no** listen-host variable: the bind is the exported constant
 `HOST = '127.0.0.1'` with no configuration path at all.
@@ -100,8 +126,8 @@ resolved or withdrawn; see the `As built` column.*
 | SQLite database path | _(planned — exact path undecided)_ | _(planned)_ | Location of the single WAL-mode SQLite file (+ its `-wal`/`-shm` siblings) | `WP-D2`; [data model](../architecture/data-model.md) | Decided: `DASHBOARD_DB_PATH`, default `data/agenthropic.db` |
 | WAL mode / `foreign_keys` | **Fixed**, not a toggle | asserted `ON` on every connection open | Journal mode and FK enforcement pragma-checked at connect time, not merely configured once | `WP-D2`; DESIGN §8 | Holds — both pragmas are set *and* read back on every open, and a mismatch throws rather than warns |
 | Backup directory | _(planned)_ | _(planned)_ | Where `WP-F8`'s online-backup artifacts (`agenthropic-<ts>.db`) land | `WP-F8`; [backup & restore](../operations/backup-restore.md) §2 | Derived, not configured: `<dirname(DASHBOARD_DB_PATH)>/backups`. The naming convention shipped as designed |
-| Backup retention window | _(planned — no default days fixed)_ | _(planned)_ | How long backup files are kept before the pruning step deletes them | `WP-D10`; [backup & restore](../operations/backup-restore.md) §4 | 14 days behind a floor of 7, as compiled-in **PROVISIONAL** constants — not a setting. Row-level retention is a different matter: built, unset, and uncalled |
-| `model_pricing` source | Fixed requirement; seed content/refresh mechanism _(planned)_ | seeded, versioned, dated (`effective_from`, `verified_on`) | Per-token rates keyed by `model` × `service_tier` × `speed` × `inference_geo`, driving every dollar figure shown | `WP-C1`; DESIGN §4; [data model](../architecture/data-model.md) | Table exists and is seeded by migration 7, keyed `(model, bucket, effective_from)`. **There is no `verified_on` column**, and the seeded rates are marked as awaiting ratification. There is no refresh mechanism and no configuration for one |
+| Backup retention window | _(planned — no default days fixed)_ | _(planned)_ | How long backup files are kept before the pruning step deletes them | `WP-D10`; [backup & restore](../operations/backup-restore.md) §4 | Decided (D3, 2026-09-08): 30 days behind a floor of 7, as the defaults of `DASHBOARD_RETENTION_BACKUP_DAYS` / `DASHBOARD_RETENTION_BACKUP_KEEP_MIN`. Row-level retention is signed too: `events` at 90 days (`DASHBOARD_RETENTION_EVENTS_DAYS`), `token_usage` never |
+| `model_pricing` source | Fixed requirement; seed content/refresh mechanism _(planned)_ | seeded, versioned, dated (`effective_from`, `verified_on`) | Per-token rates keyed by `model` × `service_tier` × `speed` × `inference_geo`, driving every dollar figure shown | `WP-C1`; DESIGN §4; [data model](../architecture/data-model.md) | Table exists and is seeded by migrations 7/11 (five models, cache buckets derived) and 18 (`claude-opus-5`, `claude-fable-5-1`, all five buckets explicit, 2026-09-10), keyed `(model, bucket, effective_from)`. **There is no `verified_on` column**, and the seeded rates are marked as awaiting ratification. There is no refresh mechanism and no configuration for one |
 | Alert rules (`alert_rules`) | Operator-configured | none by default | Cost-threshold, stuck-agent, and error trigger conditions | `WP-A2`, `WP-A5`; Phase 5, roadmap | **Does not exist** — v2.0, KC-5-gated |
 | Webhook targets (`webhook_targets`) | Operator-configured | none by default | Outbound delivery destinations (Telegram today); dialed **only** from this operator-set table, never from an event payload | `WP-A2`, `WP-A4`; [Telegram alerts](telegram.md) | **Does not exist** — v2.0, KC-5-gated |
 | Telegram bot token | **Mandatory when Telegram alerting is enabled** | none — held by reference only | The `@baev_bot_bot` bot token, resolved through `token_ref` (`launchd` env or a `chmod 600` dotfile), never a raw column value | `WP-A3`, `WP-A6`; CD-10 | **Does not exist** — no `token_ref` resolver, no Telegram code path, nothing to enable |
@@ -300,12 +326,12 @@ including the tested-restore drill and the reference `launchd` scheduling shape:
 >
 > - **Backup is a scheduled job, not just a function.** `backupDatabase(db, destPath)`
 >   uses the online-backup API (safe under a live WAL database) and
->   `restoreDatabase(src, dest)` reopens the copy with the same pragma assertions and
->   **refuses to return a database that fails `PRAGMA integrity_check`**. On top of that,
+>   `restoreDatabase(src, dest)` copies the backup to a staged `<dest>.restoring` file,
+>   opens it with the same pragma assertions and **refuses to swap in a database that
+>   fails `PRAGMA integrity_check`** — `dest` is left as it was. On top of that,
 >   the composition root schedules the job — see below.
-> - **Retention: the mechanism exists, the policy is blank on purpose, and nothing runs
->   it.** All three of those are true at once, and stating only one of them would
->   mislead. See below.
+> - **Retention runs.** The v1.0 policy was signed on 2026-09-08 (D3) and the runner is
+>   chained onto the daily backup job, strictly after a successful write. See below.
 > - **Redaction IS live.** It runs at the hook ingest boundary, before the payload is
 >   hashed into the idempotency key or written anywhere, and uses key-based plus
 >   value-based matching with an allowlist so token *counts* survive the scrub. Its
@@ -315,72 +341,84 @@ including the tested-restore drill and the reference `launchd` scheduling shape:
 ### The daily backup job
 
 The server schedules its own backups. At startup the composition root calls
-`scheduleDailyBackups(db, <dirname(DASHBOARD_DB_PATH)>/backups)`, and each pass writes
-`agenthropic-<timestamp>.db` into that directory and then runs an expiry sweep over it.
-Three constants govern it, and **none of them is an environment variable** — the backup
-directory is derived from the database path and the rest are compiled in:
+`scheduleDailyBackups(db, <dirname(DASHBOARD_DB_PATH)>/backups, retention)`, and each
+pass writes `agenthropic-<timestamp>.db` into that directory and then — only if that
+write succeeded — runs the retention pass described in the next section, which prunes
+expired `events` rows and expires old backup files. The backup directory is derived
+from the database path; the cadence is compiled in; the windows are settings:
 
-| Constant | Value | Meaning |
+| Setting | Value | Meaning |
 |---|---|---|
-| `BACKUP_INTERVAL_MS` | 24 hours | How often a pass fires. |
-| `BACKUP_MAX_AGE_DAYS` | 14 | Backups older than this are eligible for deletion. |
-| `BACKUP_KEEP_MINIMUM` | 7 | Safety floor: the newest seven always survive, whatever the window says. |
+| `BACKUP_INTERVAL_MS` (constant) | 24 hours | How often a pass fires. |
+| `DASHBOARD_RETENTION_BACKUP_DAYS` | 30 (`0` disables) | Backups older than this are eligible for deletion. |
+| `DASHBOARD_RETENTION_BACKUP_KEEP_MIN` | 7 | Safety floor: the newest seven always survive, whatever the window says. |
 
-All three are **PROVISIONAL** pending the OPEN-1 retention ratification. The floor is the
-part that is not really a policy number: however wrong the window turns out to be, a
-retention pass that could leave zero backups would be a data-loss mechanism rather than a
-retention one, so the floor holds independently of the ratification.
+The floor is the part that is not really a policy number: however wrong the window
+turns out to be, a retention pass that could leave zero backups would be a data-loss
+mechanism rather than a retention one, so the floor cannot be configured below 1 and
+wins over the age window.
 
 The reason this exists at all is recorded in the source as review M-20: `events_raw` is
 the one table that cannot be re-derived from the corpus, and *a backup capability that
 nothing ever runs is not a backup*. The timer is `unref`-ed, so it never keeps a
-process alive past server close, and a failed pass logs and waits for the next tick —
-the server outliving its backup schedule is the better failure of the two. An overlapping
-manual run is skipped rather than allowed to write into the directory concurrently.
+process alive past server close, and a failed backup logs, skips that cycle's retention
+pass and waits for the next tick — the server outliving its backup schedule is the
+better failure of the two, and nothing is ever pruned in a cycle whose backup did not
+land. An overlapping manual run is skipped rather than allowed to write into the
+directory concurrently.
 
-### Retention: mechanism built, policy unset, loader uncalled
+### Retention: the signed v1.0 policy
 
-The retention module (`apps/server/src/retention/`) is implemented and tested. It can
-express age rules for the `events` and `token_usage` projections, an age-and-floor rule
-for backup files, a per-run row cap, and a strategy for `events_raw`. `loadRetentionPolicy`
-parses these variables:
+The retention module (`apps/server/src/retention/`) is implemented, tested and — since
+the policy was signed on **2026-09-08 (decision D3)** — wired. `loadConfig` reads three
+variables for it:
 
-| Variable | Purpose |
-|---|---|
-| `DASHBOARD_RETENTION_EVENTS_DAYS` | Age limit for normalized `events` rows. |
-| `DASHBOARD_RETENTION_TOKEN_USAGE_DAYS` | Age limit for `token_usage` rows. |
-| `DASHBOARD_RETENTION_TOKEN_USAGE_ACK_COST_LOSS` | Required acknowledgement before any `token_usage` pruning may run. |
-| `DASHBOARD_RETENTION_BACKUP_DAYS` | Age limit for backup files. |
-| `DASHBOARD_RETENTION_BACKUP_DIR` | Directory the backup rule applies to (required whenever the days value is set). |
-| `DASHBOARD_RETENTION_BACKUP_KEEP_MIN` | Keep-minimum floor for that rule; never below 1. |
-| `DASHBOARD_RETENTION_MAX_ROWS_PER_RUN` | Cap on rows removed per pass. |
-| `DASHBOARD_RETENTION_RAW_EVENTS` | `keep-forever` (the only implemented strategy) or `archive-segments`. |
+| Variable | Default | Validation | Purpose |
+|---|---|---|---|
+| `DASHBOARD_RETENTION_EVENTS_DAYS` | `90` | non-negative integer up to `36500`; `0` disables | Age window for normalized `events` rows. Older rows are pruned by the daily pass. |
+| `DASHBOARD_RETENTION_BACKUP_DAYS` | `30` | non-negative integer up to `36500`; `0` disables | Age window for backup files in `<dirname(DASHBOARD_DB_PATH)>/backups`. |
+| `DASHBOARD_RETENTION_BACKUP_KEEP_MIN` | `7` | positive integer (never below 1) | Keep-minimum floor for backup files; the floor wins over the age window. |
 
-**Setting any of them changes nothing today.** Neither `loadRetentionPolicy` nor
-`createRetentionRunner` is called from outside the retention module — no scheduler, no
-route and no startup path invokes it. The variables above are *defined and inert*: they
-are documented here so the shape is legible, not because they are knobs you can turn.
+There is deliberately **no variable for `token_usage`**: those rows are the ground truth
+behind every reported dollar and are never pruned in v1.0. The wired policy has no input
+for such a window, a test proves it cannot name that table whatever the `events` window
+is, and `loadConfig` **refuses to start** if `DASHBOARD_RETENTION_TOKEN_USAGE_DAYS` is
+set to anything but the empty string, so a stale value cannot be mistaken for a working
+knob. The remaining `DASHBOARD_RETENTION_*` names the module knows
+(`_TOKEN_USAGE_ACK_COST_LOSS`, `_BACKUP_DIR`, `_MAX_ROWS_PER_RUN`, `_RAW_EVENTS`) are
+read only by the library loader `loadRetentionPolicy`, which the running server does not
+call — setting them changes nothing. The backup directory is always derived from
+`DASHBOARD_DB_PATH`, the per-run row budget is the module default (10 000), and
+`events_raw` is always kept forever.
 
-That is deliberate rather than unfinished. The module's own header states it plainly: the
-mechanism is implemented and tested, the policy — how many days of what is kept — awaits
-Ivan's ratification of OPEN-1 (retention TTL versus `events_raw` immutability) and the
-surrounding reads on OPEN-2/OPEN-3, and **`WP-D10` is therefore NOT done and must not be
-recorded as done anywhere**. Half of it exists; the numbers are blank by design.
+**How it runs.** `start()` builds the policy with `signedRetentionPolicy`, logs it in
+words together with a **dry run** (`retention policy: ...` followed by
+`retention dry run (nothing deleted): ...` — counts only; boot never deletes), and hands
+the runner to the daily backup timer. Each tick writes the backup first and runs the
+retention pass **only if that write succeeded**; the pass logs one `retention: ...` line,
+a failure is logged as `retention failed: <message>` and never crashes the server, and
+every run that actually deleted rows writes its receipt through the append-only journal
+next to the database (`<DASHBOARD_DB_PATH>.retention-journal.jsonl`) inside the delete
+transaction. `/api/health` does not report retention state; the log lines are the
+signal. The full operational picture, including the log-line grammar:
+[backup & restore](../operations/backup-restore.md) §4.
 
-Three properties are worth knowing before the policy is ever set:
+Three properties of the mechanism still hold under the signed policy:
 
-- **The default is a byte-identical no-op.** An environment with no `DASHBOARD_RETENTION_*`
-  variable yields `NO_RETENTION`, which deletes nothing, ever. A user who never configures
-  retention gets behaviour indistinguishable from a build without the module.
+- **`0` is a byte-identical no-op.** Setting both windows to `0` yields `NO_RETENTION`,
+  which deletes nothing, ever: the runner short-circuits before opening a transaction,
+  reading a row or touching the filesystem, and behaviour is indistinguishable from a
+  build without the module.
 - **`events_raw` is never a delete target.** It is the append-only substrate, enforced by
   triggers, and the prune issues no DML against it under any policy. `archive-segments` is
   parsed only so the refusal can be *explained* — configuring it is a loud error, not a
   silent no-op, because it would need a migration this lane may not make.
 - **Cost-bearing rows cost you an explicit acknowledgement.** Pruning `token_usage`
-  permanently lowers every dollar total the dashboard reports for that window, so the
-  policy must set `acknowledgeCostLoss` and the prune refuses to run without a durable
-  journal receipt. Priced rows can only leave the database with the removed dollars
-  written down first. Six tables are protected outright and can never be prune targets:
+  permanently lowers every dollar total the dashboard reports for that window, so a
+  policy that names it must set `acknowledgeCostLoss` and the prune refuses to run
+  without a durable journal receipt. The signed v1.0 policy has no way to set either:
+  it never names `token_usage` at all. Six tables are protected outright and can never
+  be prune targets:
   `events_raw`, `sessions`, `agents`, `orchestration_edges`, `model_pricing` and
   `schema_version`.
 
@@ -412,6 +450,17 @@ delegation-savings mechanics.
 >   `$0`. In the DB-backed rollups the same gap surfaces as `unpricedTokens` — counted
 >   and displayed, never folded into the dollar figure. There is still no refresh
 >   mechanism and nothing to configure for one.
+>
+> The one widening that has happened so far was a migration, not a mechanism. A boot over
+> the owner's real corpus on 2026-09-09 found 52 of 60 sessions refused at the gate for
+> `claude-opus-5` and `claude-fable-5-1`; migration 18 (2026-09-10) ships official
+> five-bucket rows for both at the seed's floor, and because the corpus watcher re-reads
+> `model_pricing` on every pass, sessions parked for want of a row are re-admitted on the
+> next tick without a restart. A boot on 2026-09-18 at schema 18 confirmed it on the same
+> machine: all 54 sessions the corpus held that day were admitted, `sessionsExcluded` 0.
+> It happened again on 2026-09-26: the corpus had moved to `claude-opus-5-5`, a boot at
+> schema 18 refused 27 of 61 sessions, and migration 19 ships that model's five rows. A
+> missing row is cured by a row, never by relaxing the gate.
 
 ## Alert rules and webhook targets
 
@@ -466,9 +515,9 @@ only restates the subset that is directly configuration-shaped.
 | Listen port default | **Planned** — undecided | Decided: `DASHBOARD_PORT`, default 4317 |
 | Config loader's env-vs-file precedence | **Planned** — `WP-U0` names a "config loader," format/precedence undecided | **Moot** — environment variables only; no file is read |
 | SQLite database path | **Planned** — undecided | Decided: `DASHBOARD_DB_PATH`, default `data/agenthropic.db` |
-| Backup directory + retention window (days) | **Planned** — requirement fixed (CD-10, `WP-F8`/`WP-D10`), numbers undecided | Backups run daily into `<dirname(DASHBOARD_DB_PATH)>/backups`, expiring at 14 days behind a floor of 7 — all PROVISIONAL constants, none configurable. Row-level retention: mechanism built and tested, policy unset and nothing calls it, blocked on OPEN-1/2/3 |
+| Backup directory + retention window (days) | **Planned** — requirement fixed (CD-10, `WP-F8`/`WP-D10`), numbers undecided | Backups run daily into `<dirname(DASHBOARD_DB_PATH)>/backups`. Retention is **signed** (D3, 2026-09-08) and wired after each successful backup: backup files expire at 30 days behind a floor of 7, `events` rows at 90 days, `token_usage` never — `DASHBOARD_RETENTION_BACKUP_DAYS` / `_BACKUP_KEEP_MIN` / `_EVENTS_DAYS` |
 | `~/.claude/projects` override mechanism | **Planned** — conventional path assumed fixed, override undecided | Decided: `CLAUDE_PROJECTS_DIR` (plus `DASHBOARD_INGEST` as a master off switch) |
-| `model_pricing` seed refresh cadence | **Planned** — versioning columns fixed (CD-4), cadence undecided | Still no cadence and no refresh mechanism; `verified_on` was never added and the seeded rates are PROVISIONAL |
+| `model_pricing` seed refresh cadence | **Planned** — versioning columns fixed (CD-4), cadence undecided | Still no cadence and no refresh mechanism; `verified_on` was never added and the seeded rates are PROVISIONAL. Coverage widens by migration only — 18 added `claude-opus-5` and `claude-fable-5-1` on 2026-09-10 — and that is the one refresh path that exists |
 | Stack underneath all of the above (Fastify, better-sqlite3, pnpm monorepo) | **Leaning — unconfirmed** (the project `CLAUDE.md`) | Confirmed and shipped |
 | Poll interval / watchdog window | *(not in the design-era table)* | `DASHBOARD_POLL_INTERVAL_MS` = 3000 and `DASHBOARD_WATCHDOG_MINUTES` = 10, both **PROVISIONAL (LABEL-ME)** — chosen, not ratified |
 | Instance label | *(not in the design-era table)* | `DASHBOARD_INSTANCE`, defaulting to the machine hostname — the non-null `instance` column that makes the global DAG queryable per instance |

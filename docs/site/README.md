@@ -13,17 +13,21 @@ later without touching page content.
 > existed**. Implementation began **2026-07-11** (by explicit owner override of the CD-8
 > no-code-before-Phase-0 gate), so pages that describe agenthropic as "pre-code" or
 > "bootstrap phase" are design history, not current truth. What runs today: the
-> loopback-bound, token-gated Fastify server; the SQLite/WAL substrate with thirteen
+> loopback-bound, token-gated Fastify server; the SQLite/WAL substrate with eighteen
 > migrations and a daily backup timer; JSONL corpus ingest with replay-on-startup and
 > tail-follow polling that re-reads only new bytes; the persisted subagent DAG; the cost
 > engine (compaction repricing + delegation savings); the hook receiver and its installer;
 > the status watchdog that ages an unobserved agent to `unknown`; the SSE realtime hub; the
 > read API; and all four dashboard views (live status, session tree, global DAG,
-> cost/Sankey) plus a per-session cost-analysis panel. Retention is **mechanism-built,
-> policy-unset** — the default is a no-op and nothing prunes.
+> cost/Sankey) plus a per-session cost-analysis panel. Retention is **signed and wired as
+> of 2026-09-10** — `events` rows older than 90 days and backup files older than 30 days
+> (never below the newest 7) are pruned after each successful daily backup; `token_usage`
+> is never pruned in v1.0, by decision.
 >
-> Test figures, re-measured 2026-08-15 on the working tree: **106 test files / 1554 tests**,
+> Test figures, re-measured 2026-09-18 on the working tree: **131 test files / 2428 tests**,
 > with **100% statements, branches, functions and lines** enforced in **all five** packages —
+> *(re-measured again 2026-09-23: **140 test files / 2621 tests**, same 100% on all four axes in
+> all five packages - a dated measurement, not a constant)* —
 > `packages/test-fixtures` is no longer an exclusion, it is inside the gate. Two things that
 > figure does not mean: the thresholds block a *contributor's* merge but not the sole
 > maintainer's push (branch protection on `main` requires the `ci` check as of 2026-08-25,
@@ -50,7 +54,7 @@ later without touching page content.
 > Amendment convention (how pages are corrected without erasing the design record):
 > [`STYLE-GUIDE.md`](STYLE-GUIDE.md) § "As-built amendments". This block is the single
 > amendment blockquote that convention allows; its contents are refreshed in place as the
-> tree moves, most recently on **2026-08-15**.
+> tree moves, most recently on **2026-09-19**.
 
 > **On the generator.** Still deferred (`DOC-P1` / ADR-0013) — but the corpus **is wired to
 > publish**: `.github/workflows/pages.yml` renders it with the stock GitHub Pages Jekyll

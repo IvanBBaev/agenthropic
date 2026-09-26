@@ -10,6 +10,18 @@
  * so a duplicate delivery inserts zero new rows and the reply reports
  * `stored: false`.
  *
+ * AMENDED 2026-09-23 (lane-Q). `stored: false` now means ONLY that, which it
+ * did not before. A POST that carried no body at all reached the handler with
+ * `request.body === undefined`; the envelope then carried `payload: undefined`,
+ * `JSON.stringify` produced no text for it, and `INSERT OR IGNORE` swallowed
+ * the resulting `payload TEXT NOT NULL` violation exactly as it swallows a
+ * duplicate key - so `append` answered `inserted: false` and this route
+ * forwarded `202 {"stored": false}`. The two outcomes are opposites: one says
+ * the server already holds the delivery, the other that it dropped it and
+ * always will. Nothing logged, counted or 5xx'd the difference. Such a request
+ * is now a 400 (see the handler), so the only path to `stored: false` is a key
+ * that was genuinely already present.
+ *
  * SECURITY: the routes live under `/api/`, so the global onRequest auth gate
  * in `buildServer` (timing-safe Bearer compare, WP-U0) covers them - this
  * plugin adds no auth bypass and never logs or echoes payloads or tokens.
@@ -30,8 +42,8 @@ export const HOOK_EVENT_PATH = '/api/hooks/event';
 
 /**
  * Header carrying the sender's per-firing delivery id (WP-IN1). It exists
- * because a `Stop` payload is byte-identical on every turn, so content alone
- * cannot tell a recurrence from a redelivery - see hooks/envelope.ts. The
+ * because content equality cannot tell a recurrence from a redelivery in
+ * general (two firings may carry identical bytes) - see hooks/envelope.ts. The
  * value is hashed into the idempotency key and NOTHING else: it is never
  * persisted, logged or echoed back.
  */
@@ -85,12 +97,33 @@ const HookHeadersSchema = Type.Object(
 );
 
 /**
+ * A delivery id the server can read as naming exactly ONE firing: a non-empty
+ * run of characters with no comma and no whitespace. The comma is the decisive
+ * one - it is the separator Node uses when it folds a repeated header - and
+ * whitespace is how other stacks spell the same fold. Every id this project's
+ * own sender mints (`$$-$(date +%s)-$RANDOM`, hooks/install.mjs) satisfies it.
+ */
+const UNAMBIGUOUS_DELIVERY_ID = /^[^\s,]+$/;
+
+/**
  * Normalize the raw header value. A header sent twice arrives as an array:
  * an ambiguous delivery id is treated as ABSENT (the conservative collapse)
  * rather than guessing which firing it names. An empty value is absent too.
+ *
+ * AMENDED 2026-09-23 (lane-Q). The array sentence describes a shape the real
+ * transport never produces: Node does not hand a Fastify handler two values
+ * for this header, it FOLDS them into one string joined with a comma. So the
+ * conservative collapse never actually happened over HTTP - the two ids were
+ * fused into a third, synthetic id (`a-one,b-two`) and hashed into the
+ * idempotency key as if the sender had named a single firing, which is exactly
+ * the guess the comment says is refused. A retry meant to dedupe against an
+ * earlier delivery therefore missed its own key and wrote a second liveness
+ * row. The array branch stays (it is still the right answer, and it is what an
+ * in-process caller can produce); the folded form now collapses the same way,
+ * so the documented promise holds for the transport that exists.
  */
 export function readDeliveryId(value: string | string[] | undefined): string | undefined {
-  return typeof value === 'string' && value.length > 0 ? value : undefined;
+  return typeof value === 'string' && UNAMBIGUOUS_DELIVERY_ID.test(value) ? value : undefined;
 }
 
 export async function registerHookRoutes(
@@ -116,6 +149,18 @@ export async function registerHookRoutes(
       },
     },
     async (request, reply) => {
+      // A request that carried no body carried no hook event. This is NOT a
+      // narrowing of accept-any-event: that gate is about the SHAPE of a JSON
+      // body (unknown hook names, extra fields, non-object bodies are all
+      // stored), and there is no body here to accept. Nor was the old
+      // behaviour acceptance - the envelope's `payload: undefined` could not
+      // be stringified, `INSERT OR IGNORE` swallowed the NOT NULL violation,
+      // and the sender was told `stored: false`, the answer that means
+      // "already held". Refusing it is the honest reading, and it keeps
+      // `stored: false` meaning exactly one thing.
+      if (request.body === undefined) {
+        return reply.code(400).send({ error: 'Hook delivery carried no body.' });
+      }
       // Redact BEFORE the envelope so the idempotency key is computed over
       // the redacted payload: a redelivered event redacts identically and
       // still dedupes to zero new rows.

@@ -53,7 +53,7 @@
 import { useEffect, useState } from 'react';
 import { fetchCostAnalysis } from '../api';
 import type { CostAnalysisDto } from '../dto';
-import { formatTokens, formatUsd, shortId } from '../format';
+import { formatTokens, formatUsd, hasVisibleText, nameOrBlank, shortId } from '../format';
 import { NO_FIGURE_META } from './status';
 
 type AnalysisState =
@@ -72,8 +72,9 @@ type AnalysisState =
  * why `ApiResult` carries the status at all.
  *
  * 503 and 422 FRAME the server's own sentence rather than restating a cause,
- * because each now has more than one: a 503 is either "no provider wired" or
- * "no corpus root on this machine", and a 422 is either an unparseable
+ * because each now has more than one: a 503 is "no provider wired", "no corpus
+ * root on this machine" or "the corpus root could not be read", and a 422 is
+ * either an unparseable
  * transcript, an unpriceable model, or a session that holds no analysable
  * records at all. An earlier version hard-coded one cause per status - so the
  * reader was told "this server has no corpus configured" about a machine whose
@@ -157,6 +158,7 @@ function messageCountLabel(messageCount: number): string {
  * looking exactly like the measured ones.
  */
 const COMPACTION_SIGNAL_ID = 'analysis-compaction-signal';
+const COMPACTION_UNKNOWN_ID = 'analysis-compaction-unknown';
 const DELEGATION_BASIS_ID = 'analysis-delegation-basis';
 const DELEGATION_SCOPE_ID = 'analysis-delegation-scope';
 const DELEGATION_FLOOR_ID = 'analysis-delegation-floor';
@@ -168,12 +170,49 @@ const DELEGATION_SKIPPED_ID = 'analysis-delegation-skipped';
  * pointing at a missing element is silently dropped by some assistive
  * technology and read as an empty string by others, so a dangling id is a
  * caveat that disappears without anyone noticing.
+ *
+ * AMENDED 2026-09-23 (lane-M): the first parameter was `dearerAgentCount`, and
+ * the rule it encodes has not changed - name the floor paragraph exactly when
+ * the floor paragraph exists. What changed is when it exists: it now also
+ * speaks for subagents whose figures could not be compared at all, so the
+ * caller passes the number of rows the paragraph speaks for rather than the
+ * number of dearer ones.
  */
-function delegationDescribedBy(dearerAgentCount: number, skippedAgentCount: number): string {
+function delegationDescribedBy(floorNoticeCount: number, skippedAgentCount: number): string {
   const ids = [DELEGATION_BASIS_ID, DELEGATION_SCOPE_ID];
-  if (dearerAgentCount > 0) ids.push(DELEGATION_FLOOR_ID);
+  if (floorNoticeCount > 0) ids.push(DELEGATION_FLOOR_ID);
   if (skippedAgentCount > 0) ids.push(DELEGATION_SKIPPED_ID);
   return ids.join(' ');
+}
+
+/**
+ * The "Would have run on" cell (2026-09-23, lane-P) - the per-session sibling
+ * of `CostView`'s `ModelCell`, with the same marker for the same reason.
+ *
+ * `hypotheticalModel` is a plain string on the wire, and `isAgentSavingsRow`
+ * in `dto-guards.ts` certifies the three dollar figures and the `agentId` and
+ * deliberately not this, so a row naming no counterfactual model is
+ * contract-valid. It rendered as an empty `<code></code>` between a real agent
+ * id and three real dollar figures: the row went on claiming what the work
+ * WOULD have cost while the cell that says what it would have run on said
+ * nothing. The assumption is the only thing that makes the other three numbers
+ * mean anything, so it is the last cell that may go quiet.
+ */
+function HypotheticalModelCell({ model }: { readonly model: string }) {
+  if (hasVisibleText(model))
+    return (
+      <td>
+        <code>{model}</code>
+      </td>
+    );
+  return (
+    <td data-testid="hypothetical-model-blank">
+      <span className={NO_FIGURE_META.className} aria-hidden="true">
+        {NO_FIGURE_META.symbol}
+      </span>{' '}
+      {nameOrBlank(model, 'model name')}
+    </td>
+  );
 }
 
 export interface SessionCostAnalysisProps {
@@ -188,6 +227,9 @@ export function SessionCostAnalysis({
   onAuthRejected,
 }: SessionCostAnalysisProps) {
   const [state, setState] = useState<AnalysisState>({ kind: 'loading' });
+  // KK6. Bumped by the Retry button. Re-selecting the same session changes no
+  // prop, so without a key of its own a failed analysis could never be re-run.
+  const [requestKey, setRequestKey] = useState(0);
 
   useEffect(() => {
     // A new session id restarts the panel at `loading`; without this the
@@ -205,7 +247,7 @@ export function SessionCostAnalysis({
       }
     });
     return () => controller.abort();
-  }, [token, sessionId, onAuthRejected]);
+  }, [token, sessionId, onAuthRejected, requestKey]);
 
   if (state.kind === 'loading') {
     return (
@@ -218,7 +260,15 @@ export function SessionCostAnalysis({
   if (state.kind === 'error') {
     return (
       <p className="empty-state" data-testid="analysis-error">
-        <span className="status-error">✕</span> {state.message}
+        <span className="status-error">✕</span> {state.message}{' '}
+        <button
+          type="button"
+          onClick={() => {
+            setRequestKey((key) => key + 1);
+          }}
+        >
+          Retry
+        </button>
       </p>
     );
   }
@@ -229,6 +279,14 @@ export function SessionCostAnalysis({
   // agree about whether there is a signal, and two copies of the comparison is
   // how they stop agreeing.
   const hasDeltaSignal = Math.abs(compaction.deltaUsd) >= DELTA_SIGNAL_USD;
+  // KK6. The comparison above is false for NaN, so on its own it went silent
+  // exactly when the difference could not be read. Unknown is its own state.
+  const deltaUnknown = !Number.isFinite(compaction.deltaUsd);
+  const compactionDescribedBy = hasDeltaSignal
+    ? COMPACTION_SIGNAL_ID
+    : deltaUnknown
+      ? COMPACTION_UNKNOWN_ID
+      : undefined;
 
   // THREE delegation states, not two, because the middle one is a lie when it
   // is rendered like the others. `perAgent` is empty either because no subagent
@@ -258,10 +316,30 @@ export function SessionCostAnalysis({
   // Their overspend is floored to $0.00 per subagent before summing, so it is
   // never netted off "Saved" - which therefore is NOT the difference between
   // the two levels above it, however much the layout suggests it is.
-  const dearerAgentCount = delegationSavings.perAgent.filter(
+  //
+  // AMENDED 2026-09-23 (lane-M). `hypotheticalUsd < agent.actualUsd` answers
+  // "is it dearer?" with false for BOTH "no" and "cannot tell", because every
+  // comparison against a non-finite number is false - and `dto-guards.ts`
+  // promises `typeof === 'number'`, which NaN satisfies, so such a row reaches
+  // this line intact. A subagent whose estimate could not be read was therefore
+  // counted with the cheap ones, and when it was the only candidate the whole
+  // paragraph disappeared: the panel printed "Saved ~$X" with no caveat, which
+  // on this page states that every priced subagent came out at or below the
+  // top-tier alternative. The comparison is now made only over rows that can be
+  // compared, and the rest are counted and said out loud - the same shape the
+  // windows and `/api/cost/summary` use, the figure carrying the count of what
+  // it leaves out.
+  const comparableAgents = delegationSavings.perAgent.filter(
+    (agent) => Number.isFinite(agent.hypotheticalUsd) && Number.isFinite(agent.actualUsd),
+  );
+  const uncomparableAgentCount = delegationSavings.perAgent.length - comparableAgents.length;
+  const dearerAgentCount = comparableAgents.filter(
     (agent) => agent.hypotheticalUsd < agent.actualUsd,
   ).length;
-  const delegationDescription = delegationDescribedBy(dearerAgentCount, skippedAgentCount);
+  const delegationDescription = delegationDescribedBy(
+    dearerAgentCount + uncomparableAgentCount,
+    skippedAgentCount,
+  );
 
   return (
     <div data-testid="session-analysis">
@@ -299,10 +377,18 @@ export function SessionCostAnalysis({
               saving.
             </p>
           )}
+          {deltaUnknown && (
+            <p className="empty-state" id={COMPACTION_UNKNOWN_ID} data-testid="delta-unknown">
+              <span className={NO_FIGURE_META.className} aria-hidden="true">
+                {NO_FIGURE_META.symbol}
+              </span>{' '}
+              The difference could not be computed, so whether this session is mispriced is unknown.
+            </p>
+          )}
           <table
             className="data-table"
             aria-label="compaction segments"
-            aria-describedby={hasDeltaSignal ? COMPACTION_SIGNAL_ID : undefined}
+            aria-describedby={compactionDescribedBy}
           >
             <thead>
               <tr>
@@ -396,13 +482,33 @@ export function SessionCostAnalysis({
           {/* CA-3. Placed under the three figures it contradicts, because a
               reader who takes them as a subtraction is not wrong about
               arithmetic - the panel is wrong about what it is showing. */}
-          {dearerAgentCount > 0 && (
+          {dearerAgentCount + uncomparableAgentCount > 0 && (
             <p className="empty-state" id={DELEGATION_FLOOR_ID} data-testid="delegation-floor">
-              <span className="status-error">✕</span> {dearerAgentCount}{' '}
-              {dearerAgentCount === 1 ? 'subagent' : 'subagents'} cost MORE than the top-tier
-              alternative would have. Each subagent&apos;s saving is floored at $0.00 before the
-              sum, so that overspend is nowhere subtracted: &quot;Saved&quot; is a sum of floors and
-              does not equal the difference between the two levels above it.
+              {dearerAgentCount > 0 && (
+                <>
+                  <span className="status-error">✕</span> {dearerAgentCount}{' '}
+                  {dearerAgentCount === 1 ? 'subagent' : 'subagents'} cost MORE than the top-tier
+                  alternative would have. Each subagent&apos;s saving is floored at $0.00 before the
+                  sum, so that overspend is nowhere subtracted: &quot;Saved&quot; is a sum of floors
+                  and does not equal the difference between the two levels above it.{' '}
+                </>
+              )}
+              {/* The unknown half of the same question, and never folded into
+                  the count above it: "cost more" and "could not be told" are
+                  different claims, and a reader who is given one number has no
+                  way to guess that the other exists. */}
+              {uncomparableAgentCount > 0 && (
+                <>
+                  <span className={NO_FIGURE_META.className} aria-hidden="true">
+                    {NO_FIGURE_META.symbol}
+                  </span>{' '}
+                  {uncomparableAgentCount} of {pricedAgentCount}{' '}
+                  {pricedAgentCount === 1 ? 'subagent' : 'subagents'} could not be compared - a
+                  figure arrived that is not a number - so whether{' '}
+                  {uncomparableAgentCount === 1 ? 'it' : 'they'} cost more than the alternative is
+                  unknown. The dearer count covers the other {comparableAgents.length}.
+                </>
+              )}
             </p>
           )}
         </>
@@ -471,9 +577,7 @@ export function SessionCostAnalysis({
                 <td>
                   <code>{shortId(agent.agentId)}</code>
                 </td>
-                <td>
-                  <code>{agent.hypotheticalModel}</code>
-                </td>
+                <HypotheticalModelCell model={agent.hypotheticalModel} />
                 <td className="num">{formatUsd(agent.actualUsd)}</td>
                 <td className="num">~ {formatUsd(agent.hypotheticalUsd)}</td>
                 <td className="num">~ {formatUsd(agent.savingsUsd)}</td>

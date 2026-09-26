@@ -200,12 +200,13 @@ forever; it can only ever fail toward visible uncertainty."*
 > come from the JSONL transcript, not from a start hook. Second, the "NOT YET
 > DECIDED" leg now has an answer in running code: the watchdog
 > (`apps/server/src/ingest/watchdog.ts`) treats `unknown` as **terminal** and never
-> flips it again itself, and a late *hook* never reverts it either — hooks contribute
-> liveness only, never status. What *does* win the status back is the JSONL
-> transcript: the ingest watcher re-ingests a changed session whole, and if the
-> transcript's final record shows a real terminal state, that JSONL-derived status
-> overwrites the watchdog's `unknown`. So: late `SubagentStop` hook → stays `unknown`;
-> late JSONL final → reverts to the transcript's truth.
+> flips it again itself. A late *hook* does revert it: `Stop` moves the main agent to
+> `waiting` and `SubagentStop` moves the subagent to `completed`, because a live hook's
+> evidence is fresher than the row by definition (`applyAgentStatus` moves any differing
+> status, `unknown` included). The JSONL transcript wins it back too: the ingest watcher
+> re-ingests a changed session whole, and if the transcript's final record shows a real
+> terminal state, that JSONL-derived status overwrites the watchdog's `unknown`. So: late
+> `SubagentStop` hook → `completed`; late JSONL final → reverts to the transcript's truth.
 
 **A concrete, citable reason this "deepens once code lands":** the `agents` table's
 `status` column, per the verbatim DDL fixed in `ai/DESIGN.md` §4 and reproduced on
@@ -216,8 +217,8 @@ constraint today:
 status TEXT CHECK(status IN ('working','waiting','completed','error')),
 ```
 
-There is **no `unknown` value in that constraint as written**. [The data model
-page](../architecture/data-model.md) flags this explicitly as a schema/roadmap
+There is **no `unknown` value in that constraint as written**.
+[The data model page](../architecture/data-model.md) flags this explicitly as a schema/roadmap
 mismatch: *"the `status` `CHECK` constraint... has no `unknown` value. But the
 missing-`SubagentStop` watchdog rule that `WP-IN12` implements... states: 'A missing
 `SubagentStop` → explicit "unknown" state...' As written, the verbatim DESIGN §4 DDL
@@ -242,10 +243,10 @@ stays permanently flagged as `unknown` for operator review. `docs/analysis/conce
 `SubagentStop` or the JSONL final arrives, does a watchdog-set 'unknown/stale' revert
 to completed or stay flagged? Needs an explicit state-transition rule."* No source
 document answers this either way — do not assume a reversion behavior that has not
-been decided. *(Resolved 2026-07 in code, split by source: a late hook never reverts
-it — hooks are liveness-only; a late JSONL final does, because whole-session
-re-ingest lets the transcript-derived status win. See the as-built note under the
-diagram above.)*
+been decided. *(Resolved in code: a late hook and a late JSONL final both revert
+it — the hook to its observed terminal (`Stop` → `waiting`, `SubagentStop` →
+`completed`), the transcript to its own truth through whole-session re-ingest. See the
+as-built note under the diagram above.)*
 
 Finally, "crashed-no-Stop" is not a hypothetical: it is one of the four named
 pathologies the Phase-0 hand-labeled corpus is required to capture as a real session,
@@ -305,7 +306,8 @@ abstract.
 > `packages/core/src/cost/compaction-repricing.ts`, holding the
 > baseline-plus-post-compaction total to a delta-of-approximately-zero invariant
 > against the JSONL oracle. No hook-time snapshot exists — the `PreCompact` hook
-> contributes liveness only, like every other hook.
+> contributes liveness only; it carries no status verdict the way `Stop` and
+> `SubagentStop` do.
 
 **What is genuinely undecided:** whether the JSONL transcript itself carries
 pre/post-compaction markers precise enough to reconstruct the baseline after the fact,
@@ -343,8 +345,8 @@ This is honestly the thinnest-sourced of the four edge cases: **no document in s
 describes a specific runtime detection or resolution mechanism for two instances
 colliding** (no described operator warning, no described conflict-resolution
 algorithm). What *is* sourced is the schema-level disambiguation key that would make
-such a collision representable rather than silently merged. [The data model
-page](../architecture/data-model.md) reproduces the `orchestration_edges` DDL with two
+such a collision representable rather than silently merged.
+[The data model page](../architecture/data-model.md) reproduces the `orchestration_edges` DDL with two
 distinct, both-`NOT NULL` columns:
 
 ```sql
@@ -376,7 +378,8 @@ rows rather than colliding into one.
 > is its own transcript file with its own UUID), so their edges can never collide
 > under a session-scoped constraint; `instance`/`host_id` remain attribution columns,
 > not disambiguators. Edge `source` provenance
-> (`tool_use`/`directory`/`task_notification`/`queue_operation`) is stored per row
+> (`tool_use`/`directory`/`task_notification`/`queue_operation`, plus the
+> `legacy_explore` heuristic join added by migration 13) is stored per row
 > and served verbatim by the API, so inferred edges stay distinguishable from
 > observed ones.
 
@@ -405,10 +408,12 @@ Two fields are always present — `status`, which is the literal `"ok"`, and
 
 | Field | Present when | What it means |
 |---|---|---|
-| `ingestSkips` | the server was built with ingest wiring | Cumulative per-reason counts of files the corpus reader declined to read, since boot (§6). An empty object means "wired, and nothing has been skipped". |
-| `ingest` | the server was built with ingest wiring | `"replaying"` between the loopback bind and the end of the startup replay pass, `"idle"` afterwards. |
+| `ingestSkips` | the server was built with ingest wiring and ingest is on | Cumulative per-reason counts of skip *events* since boot (§6): every time the corpus reader declined a file, so a file declined again on a later pass counts again (a live transcript over the size cap is re-skipped each time its session is re-read; `oversize: 3` can be one file). An empty object means "wired, and nothing has been skipped". |
+| `ingest` | the server was built with ingest wiring and ingest is on | `"replaying"` between the loopback bind and the end of the startup replay pass, `"idle"` afterwards — whether or not that pass could read the corpus. |
 | `lastTickDurationMs` | at least one watcher pass has *finished* | Wall-clock duration of the last completed corpus pass. |
-| `crossSessionUsageCollisions` | the ownership-rule seam is wired | Messages skipped since boot because another session had already ingested them. A genuine `0` **is** reported here. |
+| `crossSessionUsageCollisions` | the ownership-rule seam is wired (ingest is on) | Messages skipped since boot because another session had already ingested them. A genuine `0` **is** reported here. |
+| `sessionsExcluded` | the ingest-exclusions seam is wired | Sessions whose latest ingest attempt failed — each is either absent from every stored total or present in it only at an older extent than the corpus now holds (a session quarantined after a clean ingest keeps its last good pass), so dollar totals are a lower bound while this is non-zero. `status` stays `"ok"`: the server is surviving correctly, it is just not complete. *(Amended 2026-09-25 (OO): this used to say "counted nowhere".)* |
+| `sessionsQuarantined` | the ingest-exclusions seam is wired | The subset of excluded sessions that will not be retried until the session's bytes or the pricing table change — the ones that need a human, typically a missing price. |
 
 The omissions carry information, and it is not the information a zero would carry.
 `lastTickDurationMs` is the clearest case: the server code comments that *"no pass
@@ -429,13 +434,16 @@ just not yet current. If you probe health during a restart and act on `status` a
 you will conclude the dashboard's numbers are final when the corpus is still being
 re-read.
 
-Two things you might expect on health are **deliberately not there**:
+One thing you might expect on health is **deliberately not there**, and one is there
+only as a count:
 
-- **Per-session ingest failures.** Health answers "is this process serving requests".
-  One poisoned session does not make an otherwise healthy server degraded, and
-  reporting it here would make health lie in the other direction — red for a condition
-  the server is correctly surviving. Failures go to the server log and to the SSE
-  stream every connected client is already listening on (§6).
+- **Per-session ingest failure detail.** Health answers "is this process serving
+  requests". One poisoned session does not make an otherwise healthy server degraded, and
+  reporting it as a failure here would make health lie in the other direction — red for a
+  condition the server is correctly surviving. So the failure is *counted*
+  (`sessionsExcluded`, `sessionsQuarantined`, above) while `status` stays `"ok"`; the
+  which-session-and-why goes to the server log and to the SSE stream every connected
+  client is already listening on (§6).
 - **Backup state.** A failed backup logs and waits for the next tick; nothing on
   `/api/health` reports whether the last backup succeeded. See
   [Scheduling, as built](backup-restore.md#scheduling-as-built) — the honest way to
@@ -460,12 +468,30 @@ There are eight skip reasons, and they fall into two groups:
 | `empty-main` | shape | A main transcript with no parseable content. |
 | `non-artifact` | shape | A file under a session directory that is not a transcript artifact at all. |
 | `duplicate-session` | enumeration | The same session UUID was found under more than one project slug; one deterministic reference is kept and the rest are recorded here. |
+| `too-deep` | walk limit | A real directory under `<uuid>/subagents/**` sat deeper than `ReadLimits.maxDepth` (default 4, PROVISIONAL). The walk did not enter it, so nothing beneath it was read. |
+
+**AMENDED 2026-09-23 (J-6).** Two corrections to the sentence above the table.
+
+- **There are nine reasons, not eight.** `too-deep` is the ninth and is listed in the table
+  above. Before it existed the walk simply returned at the depth limit, so every artifact
+  beneath a too-deep directory was dropped without a counter - the silent drop this whole
+  section exists to prevent. Only the substrate walk
+  (`walkArtifacts`, `apps/server/src/corpus/disk-substrate.ts`) records it; the cheap
+  change-detection walk in `apps/server/src/corpus/fingerprint.ts` still returns silently at
+  the same depth, because it produces a fingerprint rather than a skip list.
+- **There are four groups, not two.** The table already carried three when this was written
+  (`read hazard`, `shape`, `enumeration`); `walk limit` is the fourth. The "two groups" count
+  was wrong before `too-deep` landed and is corrected here rather than in place, so the
+  original wording stays legible.
+
+The union of record is `SkipReason` in `apps/server/src/corpus/fs-port.ts`; a count stated in
+prose is a copy of it, never the source.
 
 Two log-line shapes carry them, and both are worth knowing verbatim because they are
 what you grep for:
 
 ```
-corpus ingest: skipped <relative/path.jsonl> (<reason>[, <ERRNO>]) - this session's records are NOT in the dashboard totals.
+corpus ingest: skipped <relative/path.jsonl> (<reason>[, <ERRNO>]) - this file's records are NOT in the dashboard totals (the session's other files, if any, still are).
 corpus watcher: <n> file(s) skipped this pass; skips since boot: oversize=2, unreadable=1.
 ```
 
@@ -482,13 +508,17 @@ its own line:
 
 ```
 corpus ingest failure: session <id> (attempt 2/3, will retry): <sanitized reason>
-corpus ingest failure: session <id> (attempt 3/3, quarantined until the session changes): <sanitized reason>
+corpus ingest failure: session <id> (attempt 3/3, quarantined: re-read on a change, at most every 32 passes): <sanitized reason>
 ```
 
-The retry budget is three consecutive attempts against the same file fingerprint;
-after that the session is quarantined and will not be retried **until its bytes
-change**. The verdict in the parentheses is the useful half — `will retry` means the
-watcher intends another pass, `quarantined` means it does not. The same report is
+The retry budget is three consecutive failed passes, whether or not the file changed
+between them; after that the session is quarantined. A quarantined session is re-read
+only when its bytes change, and then on a cadence that doubles with every failed
+re-read (1, 2, 4... passes, capped at 32), so a live transcript the halt gate refuses
+costs a bounded number of re-parses instead of one every poll. Each failed re-read
+logs again as `attempt 3/3`. The verdict in the parentheses is the useful half —
+`will retry` means the watcher intends another pass, `quarantined` means it will
+wait for a change. The same report is
 published on the SSE stream, so the dashboard can show it without log access, and the
 reason is sanitized before it leaves the watcher: no absolute path, no transcript
 content, no hook payload, length-capped.
@@ -527,13 +557,17 @@ If you see this line, do not restart the server until you know why a path under
 `halted by a containment violation - see the FATAL line above` line; that is one
 incident reported twice, not two.
 
-## 7. Retention — what is deleting your data (almost nothing)
+## 7. Retention — what is deleting your data (the signed policy, and only that)
 
-The short answer, as of this writing: **nothing prunes the database.** The retention
-mechanism is built and tested, but its policy is deliberately unset and its runner is
-called from nothing but its own tests. The only retention that reaches a live path is
-backup-file expiry, which runs as part of the daily backup pass. The full account,
-including why the mechanism refuses to touch `events_raw` at all, is on
+The short answer, as of 2026-09-10: **the daily pass prunes `events` rows older than 90
+days and backup files older than 30 days, never below the newest 7, and nothing else.**
+The retention mechanism is built and tested, its policy is the one the owner signed on
+2026-09-08 (D3), and its runner is chained after each *successful* daily backup inside
+its own try/catch — a failed prune is logged and never stops the backups. Boot logs a dry
+run and deletes nothing; `0` in `DASHBOARD_RETENTION_EVENTS_DAYS` or
+`DASHBOARD_RETENTION_BACKUP_DAYS` switches that rule off. `token_usage` is **never**
+pruned in v1.0, and `DASHBOARD_RETENTION_TOKEN_USAGE_DAYS` is refused at startup. The
+full account, including why the mechanism refuses to touch `events_raw` at all, is on
 [backup & restore §4](backup-restore.md#4-retention-policy).
 
 What belongs *here* is the operational residue, because it is the part that will
@@ -603,8 +637,9 @@ been designed or built, and none was surfaced as needed (§4).
 - **State reversibility after `unknown` is an open question.** `docs/analysis/concept-analysis-v2.md`
   §7, open question 5: does a late `SubagentStop` or JSONL final revert an `unknown`
   agent to `completed`, or does it stay flagged? Unresolved (§2). *(Resolved as
-  built, split by source — a late hook never reverts it; a late JSONL final does,
-  via whole-session re-ingest; see the §2 note.)*
+  built — a late hook reverts it to its observed terminal (`Stop` → `waiting`,
+  `SubagentStop` → `completed`) and a late JSONL final reverts it via whole-session
+  re-ingest; see the §2 note.)*
 - **Schema gap:** `agents.status`'s `CHECK` constraint (`working`/`waiting`/`completed`/`error`)
   has no `unknown` value yet, despite `WP-IN12` requiring one — needs a migration
   before `WP-D6`/`WP-IN12` land (§2; flagged first on
@@ -623,9 +658,10 @@ been designed or built, and none was surfaced as needed (§4).
 - **Retention vs. replay checkpoints is undecided (OPEN-1).** Whether a prune
   invalidates the affected replay checkpoints, or re-ingest excludes pruned windows,
   has not been chosen; until it is, an idle session's pruned rows stay gone and a
-  changed session's come back (§7). The retention window, the redacted-field list and
-  the backup cadence numbers are all likewise **unratified** — they exist as
-  PROVISIONAL defaults in code, not as policy.
+  changed session's come back (§7). The retention window and the backup cadence
+  numbers are no longer PROVISIONAL — they are the policy the owner signed on 2026-09-08
+  (D3). The redacted-field list is the one item on that list still carried as a default
+  in code rather than as signed policy.
 - **This page's target links** — [security model](../security/model.md),
   [threat model](../security/threat-model.md),
   [backup & restore](backup-restore.md),

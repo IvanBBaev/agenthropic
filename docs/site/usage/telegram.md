@@ -36,10 +36,11 @@
 >   the source tree, and the server has **no outbound HTTP client of any kind** — its
 >   runtime dependencies are Fastify, TypeBox and `better-sqlite3`, and nothing under
 >   `apps/server/src` or `packages/*/src` calls `fetch`, imports `node:http`/`node:https`,
->   or pulls in an HTTP library. (`fetch` does appear twice in the repository, in
+>   or pulls in an HTTP library. (`fetch` does appear elsewhere in the repository: in
 >   `apps/web/src/api.ts` — the browser bundle calling this server's own relative `/api`
->   paths — and in `scripts/time-to-understand.mjs`, a local measurement script. Neither
->   is the server process and neither takes a URL from ingested data.) Note also that
+>   paths — in `scripts/time-to-understand.mjs`, a local measurement script, and in four
+>   server test files that probe this server's own `/api/stream`. None is the server
+>   process and none takes a URL from ingested data.) Note also that
 >   **no automated gate defends this**: `scripts/check-no-spawner.mjs` has no
 >   outbound-HTTP pattern, so the absence is upheld by review, not by CI.
 >
@@ -144,8 +145,8 @@ rather than papered over, per the project's own documentation style:
   agent triggers this alert" as the designed outcome, and the precise upstream signal
   as open pending Phase 3/5 implementation. *(As built: `WP-IN12` shipped, and it
   resolved the ambiguity in the narrow direction — one staleness sweep on every poll
-  tick, moving an agent with no terminal signal and no recent activity from `working`
-  to `unknown` after `DASHBOARD_WATCHDOG_MINUTES` (default **10**, **PROVISIONAL**).
+  tick, moving an agent with no terminal signal and no recent activity — `working`,
+  `waiting` or still unset — to `unknown` after `DASHBOARD_WATCHDOG_MINUTES` (default **10**, **PROVISIONAL**).
   It is the only producer of `unknown`, and it deliberately never guesses `completed`.
   Nothing consumes it as an alert trigger, because there is no rules engine to consume
   it — see [the hooks installer](hooks-installer.md) for how the same signal reaches
@@ -166,8 +167,8 @@ arrived inside an ingested event.
 - **Why this rule exists at all:** `disler`'s server dials an arbitrary
   `responseWebSocketUrl` taken straight from the incoming request body — a textbook
   server-side request forgery — and DESIGN §8 names it directly: "no SSRF (never dial a
-  URL taken from an event payload — disler's bug)." [Security model rule
-  6](../security/model.md#6-no-ssrf--never-dial-a-url-taken-from-an-event-payload) is the
+  URL taken from an event payload — disler's bug)."
+  [Security model rule 6](../security/model.md#6-no-ssrf--never-dial-a-url-taken-from-an-event-payload) is the
   canonical statement of this rule for the whole project, not just alerting.
 - **What "operator-configured" means concretely:** the only place a delivery target
   comes from is a row in `webhook_targets`, created through the authenticated operator
@@ -180,10 +181,11 @@ arrived inside an ingested event.
   alerting surface: "SSRF test proves no payload-URL dial-out." The Phase 5 exit gate in
   `docs/analysis/development-plan.md` restates the same requirement as a release
   blocker, not a nice-to-have.
-- **Belt-and-suspenders static gate:** the same build-failing static check that guards
-  against a request-driven subprocess spawner also covers this — a static grep/AST gate
-  (`WP-F5`) that turns CI red on an SSRF-shaped code path, independent of the dedicated
-  negative test.
+- **Belt-and-suspenders static gate _(planned)_:** the same build-failing static check that
+  guards against a request-driven subprocess spawner (`scripts/check-no-spawner.mjs`,
+  `WP-F5`) is meant to grow an SSRF-shaped pattern so CI turns red on such a code path,
+  independent of the dedicated negative test. Today it has none (the caveat above), so
+  until this lane lands the rule is upheld by review, not by CI.
 
 ```
                     ┌──────────────────────────┐
@@ -235,8 +237,8 @@ browser)."
   SQLite/SSE/logs (0600 or launchd env only)." `WP-A10`'s negative-test corpus makes
   this a release-blocking test, not a review-time assumption: "secret-leak test proves
   no token in SQLite/browser."
-- **The UI shows the `token_ref` name only, never the secret.** [The data model
-  page](../architecture/data-model.md) states this directly, citing `WP-A9`'s alerts UI:
+- **The UI shows the `token_ref` name only, never the secret.**
+  [The data model page](../architecture/data-model.md) states this directly, citing `WP-A9`'s alerts UI:
   it "shows `token_ref` name only, never the secret." No endpoint or view is designed to
   ever return the raw bot token once it is stored.
 - **Any sample on this page (or anywhere else in the docs) uses a placeholder.**
@@ -320,9 +322,9 @@ copy are not fixed by any source:
    the token where `WP-A3`'s resolver expects it (a `launchd` environment variable, or a
    `chmod 600` dotfile), never inside a request body or a database row.
 3. **Register a `webhook_targets` row through the authenticated operator alerts API**
-   _(planned, `WP-A8`)_ — auth-gated, `timingSafeEqual`-protected, cross-origin
-   rejected, same as every other write endpoint (see [security
-   model](../security/model.md)). The request supplies the `token_ref` **name**, never
+   _(planned, `WP-A8`)_ — auth-gated and `timingSafeEqual`-protected, same as the one write
+   endpoint that exists today (`POST /api/hooks/event`); the cross-origin rejection
+   applies to the SSE stream (see [security model](../security/model.md)). The request supplies the `token_ref` **name**, never
    the secret value.
 4. **Configure an `alert_rules` row: a rule kind, its config, and the target to fire
    through** _(planned, `WP-A8`)_ — e.g. a `cost_threshold` rule with a dollar limit,

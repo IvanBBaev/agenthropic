@@ -1,23 +1,28 @@
 /**
- * WP-D10 - retention POLICY types, defaults and loader.
+ * WP-D10 - retention POLICY types, defaults and loaders.
  *
- * POLICY STATUS (read this before changing anything here). The retention
- * MECHANISM is implemented (this module, `prune.ts`, `journal.ts`,
- * `backup-files.ts`, `runner.ts` and `db/retention-queries.ts`). The retention
- * POLICY - how many days of what is kept - is NOT set and is not an agent's to
- * set: it awaits Ivan's ratification of OPEN-1 (retention TTL vs `events_raw`
- * immutability), and reads on OPEN-2/OPEN-3 for the surrounding data
- * lifecycle, in `docs/analysis/open-decisions.md`. WP-D10 is therefore NOT
- * done: half of it - the mechanism - exists, and the numbers are blank by
- * design.
+ * POLICY STATUS. The v1.0 policy is SIGNED (D3, 2026-09-08, on the closing
+ * board) and runs in production: `events` rows older than 90 days expire,
+ * backup files older than 30 days expire behind a floor of the 7 newest, and
+ * `token_usage` is NEVER pruned. `config.ts` parses the three numbers,
+ * {@link signedRetentionPolicy} turns them into a policy that cannot express a
+ * `token_usage` prune, and `index.ts` runs it after each successful daily
+ * backup (L9). `events_raw` stays append-only; OPEN-1's `archive-segments`
+ * branch is still declared-but-unbuilt and refused loudly.
  *
- * THE DEFAULT IS A NO-OP. {@link NO_RETENTION} deletes nothing, ever, and
- * {@link loadRetentionPolicy} returns exactly that for an environment with no
- * `DASHBOARD_RETENTION_*` variable set. A user who never configures retention
- * sees behaviour byte-identical to a build without this module.
+ * TWO LOADERS. {@link loadRetentionPolicy} is the library loader: it reads the
+ * full `DASHBOARD_RETENTION_*` surface, including the acknowledged
+ * `token_usage` rule and an explicit backup directory, for tooling that runs
+ * the mechanism by hand. Nothing in the server calls it. The server's own
+ * policy comes from {@link signedRetentionPolicy}, which is deliberately
+ * narrower.
  *
- * EXPRESSIVE, NOT OPINIONATED. The types below can express either branch of
- * OPEN-1 rather than hard-coding the audit's recommendation:
+ * THE LIBRARY DEFAULT IS A NO-OP. {@link NO_RETENTION} deletes nothing, ever,
+ * and {@link loadRetentionPolicy} returns exactly that for an environment with
+ * no `DASHBOARD_RETENTION_*` variable set. The signed policy with both windows
+ * at `0` is the same value: `0` is the off switch.
+ *
+ * EXPRESSIVE, NOT OPINIONATED. The types can express either branch of OPEN-1:
  *  - projections-only deletes (`events`, `token_usage`) - IMPLEMENTED;
  *  - `events_raw` segment archival (`rawEvents: 'archive-segments'`) -
  *    DECLARED but NOT implemented, and rejected loudly rather than silently
@@ -29,8 +34,7 @@
  * COST HONESTY. `token_usage` is ground truth for every dollar the dashboard
  * reports. A policy that prunes it must set `acknowledgeCostLoss` explicitly,
  * and the prune then refuses to run without a durable journal receipt (see
- * `journal.ts`). Priced rows can only leave the database with the removed
- * dollars written down first - never silently.
+ * `journal.ts`). The signed v1.0 policy never sets it at all.
  */
 
 /** Rejected policy: unparseable, out of range, or declared-but-not-implemented. */
@@ -99,6 +103,15 @@ export interface RetentionPolicy {
 /** Bound on one run's per-table deletions. A ceiling, not a retention number. */
 export const DEFAULT_MAX_ROWS_PER_RUN = 10_000;
 
+/**
+ * Upper bound for every `maxAgeDays` window: 100 years. A window becomes a
+ * cutoff through `new Date(now - days * MS_PER_DAY).toISOString()`, and a Date
+ * beyond +/-8.64e15 ms is invalid, so `toISOString()` throws. With no bound, a
+ * window of ~1e8 days loads fine and then fails every run. The row prune runs
+ * before the backup-file prune, so that failure also stops a valid backup rule.
+ */
+export const MAX_RETENTION_DAYS = 36_500;
+
 /** Safety floor for backup pruning. A guard rail, not a retention number. */
 export const DEFAULT_BACKUP_KEEP_MINIMUM = 1;
 
@@ -121,7 +134,7 @@ export const RETENTION_PROTECTED_TABLES: readonly string[] = [
   'schema_version',
 ];
 
-/** The default: nothing is ever deleted. */
+/** The no-op policy: nothing is ever deleted (the library default, not the server's). */
 export const NO_RETENTION: RetentionPolicy = {
   events: null,
   tokenUsage: null,
@@ -130,9 +143,58 @@ export const NO_RETENTION: RetentionPolicy = {
   maxRowsPerRun: DEFAULT_MAX_ROWS_PER_RUN,
 };
 
-/** True when the policy can delete nothing at all - the unconfigured default. */
+/** True when the policy can delete nothing at all (NO_RETENTION, or every window at 0). */
 export function isNoOpPolicy(policy: RetentionPolicy): boolean {
   return policy.events === null && policy.tokenUsage === null && policy.backupFiles === null;
+}
+
+/**
+ * The three numbers the signed v1.0 policy is made of (D3, 2026-09-08; parsed
+ * from the environment by `config.ts`). There is no `token_usage` field on
+ * purpose: v1.0 never prunes cost ground truth, so the shape cannot ask for it.
+ */
+export interface SignedRetentionValues {
+  /** `events` rows older than this many days expire; `0` switches the prune off. */
+  readonly eventsDays: number;
+  /** Backup files older than this many days expire; `0` switches the expiry off. */
+  readonly backupDays: number;
+  /** The newest N backup files always survive, whatever `backupDays` says. */
+  readonly backupKeepMinimum: number;
+}
+
+/**
+ * Build the policy the server runs (D3), bounded by construction:
+ *  - `tokenUsage` is ALWAYS null - no value in `values` can change that, which
+ *    makes "token_usage is never pruned" a property of the shape rather than
+ *    a configuration habit;
+ *  - `rawEvents` is always `keep-forever`;
+ *  - each window honours `0` as "off", so `{0, 0, n}` equals
+ *    {@link NO_RETENTION} and the runner short-circuits without touching the
+ *    database.
+ * The result is validated like any other policy, so a floor of `0` or a
+ * negative window is refused here, at wiring time, rather than inside a
+ * scheduled deletion.
+ */
+export function signedRetentionPolicy(
+  values: SignedRetentionValues,
+  backupDirectory: string,
+): RetentionPolicy {
+  const policy: RetentionPolicy = {
+    events: values.eventsDays === 0 ? null : { maxAgeDays: values.eventsDays },
+    tokenUsage: null,
+    rawEvents: 'keep-forever',
+    backupFiles:
+      values.backupDays === 0
+        ? null
+        : {
+            directory: backupDirectory,
+            maxAgeDays: values.backupDays,
+            keepMinimum: values.backupKeepMinimum,
+          },
+    maxRowsPerRun: DEFAULT_MAX_ROWS_PER_RUN,
+  };
+  assertRetentionPolicy(policy);
+  return policy;
 }
 
 /**
@@ -143,10 +205,10 @@ export function isNoOpPolicy(policy: RetentionPolicy): boolean {
 export function assertRetentionPolicy(policy: RetentionPolicy): void {
   assertPositiveInt('maxRowsPerRun', policy.maxRowsPerRun);
   if (policy.events !== null) {
-    assertPositiveInt('events.maxAgeDays', policy.events.maxAgeDays);
+    assertDays('events.maxAgeDays', policy.events.maxAgeDays);
   }
   if (policy.tokenUsage !== null) {
-    assertPositiveInt('tokenUsage.maxAgeDays', policy.tokenUsage.maxAgeDays);
+    assertDays('tokenUsage.maxAgeDays', policy.tokenUsage.maxAgeDays);
     if (!policy.tokenUsage.acknowledgeCostLoss) {
       throw new RetentionPolicyError(
         'Refusing to prune `token_usage` without acknowledgeCostLoss: those rows are the ' +
@@ -168,7 +230,7 @@ export function assertRetentionPolicy(policy: RetentionPolicy): void {
     if (policy.backupFiles.directory === '') {
       throw new RetentionPolicyError('backupFiles.directory must not be empty.');
     }
-    assertPositiveInt('backupFiles.maxAgeDays', policy.backupFiles.maxAgeDays);
+    assertDays('backupFiles.maxAgeDays', policy.backupFiles.maxAgeDays);
     assertPositiveInt('backupFiles.keepMinimum', policy.backupFiles.keepMinimum);
   }
 }
@@ -240,6 +302,15 @@ export function loadRetentionPolicy(env: Record<string, string | undefined>): Re
   return policy;
 }
 
+function assertDays(field: string, value: number): void {
+  assertPositiveInt(field, value);
+  if (value > MAX_RETENTION_DAYS) {
+    throw new RetentionPolicyError(
+      `Invalid retention ${field} "${String(value)}": expected a positive integer up to ${String(MAX_RETENTION_DAYS)}.`,
+    );
+  }
+}
+
 function assertPositiveInt(field: string, value: number): void {
   if (!Number.isInteger(value) || value <= 0) {
     throw new RetentionPolicyError(
@@ -252,8 +323,10 @@ function parseOptionalPositiveInt(name: string, raw: string | undefined): number
   if (raw === undefined || raw === '') {
     return null;
   }
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value <= 0) {
+  // Digits only, like `parseDigits` in config.ts: Number() alone would accept
+  // ' 30', '0x1e', '1e3' and '+5', and silently round past 2^53.
+  const value = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
+  if (!Number.isSafeInteger(value) || value <= 0) {
     throw new RetentionPolicyError(`Invalid ${name} "${raw}": expected a positive integer.`);
   }
   return value;

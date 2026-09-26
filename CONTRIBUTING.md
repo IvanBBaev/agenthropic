@@ -22,7 +22,18 @@ corrections are welcome without asking.
 
 ## Prerequisites
 
-- **Node 22 or newer.** `engines.node` is `">=22"`, and CI runs Node 22.
+- **Node 22, and only 22.** `.nvmrc` pins it, `engines.node` is `">=22 <23"` with
+  `engine-strict` set in `.npmrc`, `pnpm test` / `pnpm start` refuse any other major up front
+  (`scripts/check-node-version.mjs` — pnpm runs scripts with the first `node` on PATH, not
+  with the Node that runs pnpm), and CI reads `.nvmrc`.
+  **AMENDED 2026-09-23 (J-1):** "`pnpm test` / `pnpm start`" was the whole wiring when this
+  bullet was written. The guard now also prefixes the root `gate:node`, `apps/server`'s
+  `dev`, `start`, `bench` and `test`, `apps/web`'s `dev` and `test`, and the `test` script of
+  `packages/shared`, `packages/core` and `packages/test-fixtures`. It is deliberately **not**
+  on `typecheck`, `lint`, `format`, `format:check`, `hooks:install`, `apps/web build` or
+  `render-claims`, because none of them loads the native binding - and, being a package-script
+  prefix rather than a runtime hook, it is bypassed entirely by a direct `npx vitest` / `tsx`
+  invocation.
 - **pnpm**, which you should not install by hand: the version is pinned in the root
   `package.json` `packageManager` field (`pnpm@11.11.0`), so `corepack enable` gives you
   exactly that one. CI does the same thing.
@@ -79,8 +90,10 @@ widening that list or lowering the web thresholds would not trip anything. That 
 real and is written up, with the rest of the mechanics, in
 [`docs/site/contributing/testing.md`](docs/site/contributing/testing.md).
 
-One caveat, stated plainly because the docs state it too: `main` is not branch-protected,
-so a red CI run does not physically withhold the merge button. Treat it as blocking anyway.
+One caveat, stated plainly because the docs state it too: `main` requires the `ci` status
+check, but `enforce_admins` is off, so a red CI run withholds the merge button from a
+contributor and not from the sole maintainer, who pushes to `main` directly. Treat it as
+blocking anyway.
 
 ## Conventions
 

@@ -119,7 +119,8 @@ turned out to suffice.)*
 
 **Instance / host** — the `instance`/`host` (also written `host_id`) key carried on
 `orchestration_edges` rows (and, per the schema hedge, intended for every row) from the
-first migration, identifying which running Claude Code process on which machine produced a
+table's first migration (migration 5), identifying which running Claude Code process on which
+machine produced a
 fact. agenthropic is single-host today (one Mac Mini M4); the key exists purely so a later
 cross-machine fleet rollup (DESIGN §2.4, roadmap Phase 5+) never forces a schema migration
 (DESIGN §4). "Per-instance" is the qualifier that distinguishes a real orchestration edge
@@ -290,6 +291,18 @@ merely logged is a skip nobody notices, and "ingest finished" must never quietly
 "ingest finished, minus the files it could not read". A run reports its skips; it does not
 drop files silently.
 
+**AMENDED 2026-09-23 (J-6).** There are now **nine**. A ninth reason, `too-deep`, joined the
+union when the artifact walk stopped discarding a real directory deeper than
+`ReadLimits.maxDepth` (default 4, PROVISIONAL) and started recording it as a skip. The eight
+named above were the whole union when this entry was written: the walk simply returned at the
+depth limit, so every artifact beneath a too-deep directory vanished uncounted - the exact
+silent drop this entry says cannot happen. The union is
+`apps/server/src/corpus/fs-port.ts` (`SkipReason`); the emitting branch is `walkArtifacts` in
+`apps/server/src/corpus/disk-substrate.ts`. Note the narrower scope of the ninth: only the
+substrate walk records it. The cheap change-detection walk in
+`apps/server/src/corpus/fingerprint.ts` still returns silently at the same depth, because it
+produces a fingerprint rather than a skip list.
+
 **Duplicate session** — two corpus directories claiming the same session id. Resolved
 deterministically rather than by arrival order: the smallest-sorting `projectSlug` wins,
 and the losers are reported *before* the per-session loop and regardless of any session
@@ -373,9 +386,12 @@ deletion restricted to the two projection tables (`events` and `token_usage`) by
 persisted DAG, only rows with a known timestamp eligible to expire, and a journalled count
 of sessions whose rows straddle the cutoff — a partially-pruned session still reports a
 total, just a smaller one, which is the exact shape of a silently wrong number. The
-**policy** is not built, because it is not a code decision: the default `NO_RETENTION` is
-a byte-identical no-op that deletes nothing, ever, and it stays the default until the
-owner ratifies real numbers. `WP-D10` is therefore mechanism-done, policy-open.
+**policy** was not a code decision, and it was not made by code: the library default
+`NO_RETENTION` is a byte-identical no-op that deletes nothing, ever, and the owner signed
+the real numbers on 2026-09-08 (D3) — `events` 90 days, `token_usage` never, backup files
+30 days behind a floor of 7 — which the composition root has run since 2026-09-10 via
+`signedRetentionPolicy`. `WP-D10` is therefore done; `token_usage` still grows without
+bound in v1.0, by that decision rather than by omission.
 
 ## Hook-event reference (the twelve lifecycle events)
 
@@ -395,8 +411,10 @@ fact.
 > `UserPromptSubmit`, `Stop`, `SubagentStop`, `PreCompact` — and `SubagentStart` does
 > not exist. Every registered hook is treated identically: one `events_raw` row plus one
 > identifier-only `events` liveness row, in the same transaction. **No hook has dedicated
-> handling** — the "Dedicated" cells below are design history; hierarchy and compaction
-> baselines both come from the parsed JSONL. Unregistered event names would still be
+> structural handling** — `Stop` and `SubagentStop` additionally move an existing agent's
+> `status` (`waiting` / `completed`, UPDATE-only); the "Dedicated" cells below are design
+> history; hierarchy and compaction baselines both come from the parsed JSONL. Unregistered
+> event names would still be
 > accepted and stored (accept-any-event shipped), they are simply never sent.
 
 | Event | Confirmed in the documented nine? | Dedicated handling in agenthropic | Source |
@@ -432,7 +450,8 @@ The DESIGN §4 schema quoted above sketched a four-value `CHECK` constraint; **a
 | `unknown` | Watchdog-assigned: the agent's stop evidence never arrived within the window. A visible, honest state — never hidden, never mapped onto `working`. | Migration 4 (as built); roadmap Phase 3 |
 
 *(As built, the table above describes the vocabulary; who may speak each word is the part
-worth knowing. Ingest asserts exactly one status, `'working'`, because reading a transcript
+worth knowing. Ingest asserts `'working'` — or `'error'` when the transcript itself records a
+`terminated_early` outcome cause (migration 17) — because reading a transcript otherwise
 proves activity and never termination. `'waiting'` comes from the `Stop` hook and means
 "the main agent is idle right now" — `Stop` fires at the end of every turn, so reading it
 as an ending would be a lie. `'completed'` comes only from `SubagentStop`. `'unknown'`

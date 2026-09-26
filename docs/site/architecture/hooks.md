@@ -199,8 +199,8 @@ Two things fall out of this:
 > `orchestration_edges` / `token_usage`) in one transaction per session, bypassing
 > `events_raw` entirely — so the cross-source idempotency key (`WP-IN1` as drawn) was
 > never built. The real hook flow is: envelope → redaction → **hook-only** key
-> (`hook:` + SHA-256 over the canonicalized envelope minus `receivedAt`, computed
-> *after* redaction) → one `events_raw` row + one identifier-only `events` row, same
+> (`hook:sha256:` + SHA-256 over the canonicalized envelope minus `receivedAt` and plus
+> the per-firing `deliveryId`, computed *after* redaction) → one `events_raw` row + one identifier-only `events` row, same
 > transaction. The Normalizer (`WP-IN6`) and Projection (`WP-IN7`) stages below were
 > never built as separate stages; see
 > [ingest & reconciliation](ingest-reconciliation.md) for the as-built pipeline.
@@ -320,6 +320,21 @@ verdict belongs to whatever *observes* the ending, and three sources can:
 | `Stop` (hook) | `'waiting'` for the main agent | Claude Code fires `Stop` at the end of **every turn**, so reading it as a session ending would re-introduce the same lie; `'waiting'` (idle right now) is the honest reading |
 | The `WP-IN12` watchdog | `'unknown'` | Nobody observed an ending and activity went stale past `DASHBOARD_WATCHDOG_MINUTES` |
 
+**AMENDED 2026-09-23 (J-7).** "Ingest asserts exactly one status, ever" no longer holds, and
+the table above is missing a fourth source: ingest itself, for `'error'` only. Migration 17
+added `agents.outcome_cause`, and `apps/server/src/ingest/normalize-session.ts` promotes an
+agent to `'error'` when the transcript's terminal record states `terminated_early` ("Agent
+terminated early due to an API error"). The governing sentence is unchanged in substance -
+ingest still derives no terminal from silence or from `endedAt` - but a transcript can
+*state* an ending as well as evidence activity, and a stated failure is an observation, not
+an inference. The remaining five causes (`user_interrupt`, `concurrency_limit`,
+`permission_failed`, `dispatch_unavailable`, `unclassified`) are stored and never promoted,
+which keeps the bucket narrow; before migration 17 the `'error'` status had no producer
+anywhere in `src/`, so an operator reading zero errors was reading a bucket structurally
+incapable of being non-empty. `'completed'` still has no ingest-side producer at all, so the
+paragraph below - with no hooks installed, nothing ever reports `'completed'` - remains
+exactly true.
+
 This is the piece of the design that most needs stating plainly rather than hiding:
 **with no hooks installed, nothing ever reports `'completed'`.** Agents go `'working'` →
 `'unknown'`. That is not a defect to be papered over; it is the honest reading of the
@@ -334,6 +349,16 @@ nothing else — it cannot create an agent, delete one, re-parent one, add an ed
 touch token usage. A hook naming an agent this server has never parsed is stored as raw
 liveness and changes no row at all. The transcript remains the sole structural authority;
 hooks only ever answer the one question the transcript structurally cannot.
+
+One more refusal belongs to that rule, added 2026-09. The main agent's id **is** the session
+uuid, so a `SubagentStop` whose resolved agent id equals the session id is naming the main
+agent - and a subagent-stop can never speak for the main agent. `resolveHookStatusTarget`
+returns `null` for that delivery: it is stored as raw liveness and moves no row, because
+accepting it would stamp a sticky `'completed'` on the main agent and mirror it onto the
+session. The same refusal covers the `M-13` replay path, which resolves stored payloads
+through the same function; the replay still calls `mirrorMainAgentStatus` afterwards, where
+it is a guarded no-op for a subagent target, kept deliberately so the live and replay paths
+cannot drift apart.
 
 Two details keep that rule from quietly costing accuracy. Terminals are **sticky**: the
 upserts refuse to resurrect an observed terminal as `'working'` just because the same
@@ -383,9 +408,13 @@ multi-user attacker the token exists to stop.
 The shipped command therefore never lets a shell touch the secret. It names the *variable*
 to curl instead:
 
+<!-- {% raw %} Liquid on GitHub Pages would otherwise render the {{…}} curl template as an empty string -->
+
 ```
 --variable '%DASHBOARD_TOKEN' --expand-header 'Authorization: Bearer {{DASHBOARD_TOKEN}}'
 ```
+
+<!-- {% endraw %} -->
 
 `--variable '%NAME'` imports the environment variable into curl's own variable space, and
 the single-quoted `--expand-header` template is expanded **inside curl, after argv is
@@ -406,15 +435,21 @@ The cost of this mechanism is a version floor: `--variable`/`--expand-header` sh
 **curl 8.3.0** (September 2023), recorded as `MIN_CURL_VERSION`. That is a release fact,
 not a tunable. On an older curl the command fails at option parse and sends nothing — it
 degrades to *zero telemetry, never to a leaked token*, which is the correct direction for
-this trade. Every failure mode stays non-blocking anyway: `--silent --fail`, a hard
-`--max-time 3`, and a trailing `|| true` mean an unset variable, an old curl, or a
-dashboard that simply is not running all end the same way — a short token-free line on
-stderr and exit 0. Claude Code is never blocked by an observability tool. (Verified on
-curl 8.7.1.)
+this trade. Every failure mode stays cheap for the session: `--silent --show-error
+--fail`, a hard `--max-time 3`, a trailing `|| true`, and `"async": true` on each
+generated entry — Claude Code backgrounds the curl and continues immediately — mean an
+unset variable, an old curl, or a dashboard that simply is not running all end the same
+way: a short token-free line on the hook's captured stderr and exit 0. Claude Code is
+never blocked by an observability tool; on a Claude Code too old to know `async`, the
+5-second hook `timeout` and `--max-time 3` bound the wait instead (amended 2026-09-02:
+before that every entry was synchronous). (Verified on curl 8.7.1.)
 
 One more header rides along for a reason worth stating: `X-Agenthropic-Delivery-Id`,
 minted per firing by the shell from the hook shell's pid, the epoch second and `$RANDOM`.
-A `Stop` hook body is **byte-identical on every turn of a session**, so the server cannot
+Two firings of the same hook may legitimately carry the same bytes, and which fields a
+given Claude Code version includes is not a contract this project controls (the earlier
+claim that a `Stop` body is byte-identical on every turn was withdrawn on 2026-09-02:
+`prompt_id` and `last_assistant_message` change per turn), so the server cannot
 distinguish "this happened again" from "this was delivered twice" by content alone — only
 the sender can. The installer computes no id itself, so none is ever baked into the
 settings file, and the server uses the value as idempotency-key material only: never
@@ -439,8 +474,8 @@ Full detail: [security model](../security/model.md) and
 >   for the mechanism ([usage/hooks-installer](../usage/hooks-installer.md) — the
 >   installer is built, no longer a blocked stub).
 > - **Envelope shape:** fixed in code — the idempotency key is **hook-only**
->   (`hook:` + SHA-256 over the canonicalized envelope minus `receivedAt`, computed
->   after redaction); the cross-source byte-identical contract was never built because
+>   (`hook:sha256:` + SHA-256 over the canonicalized envelope minus `receivedAt` and
+>   plus the per-firing `deliveryId`, computed after redaction); the cross-source byte-identical contract was never built because
 >   JSONL never flows through `events_raw`.
 
 Nothing in this page was implemented when it was written — Phase 0 (the feasibility
@@ -465,7 +500,7 @@ spike) gated all production code (`CD-8`), and `HookSource` itself was Phase 2
   JSON field names of the envelope are an `WP-IN1` implementation detail not yet
   written down anywhere citable.
 
-Track status for all of the above: [`TODO.md`](../../../TODO.md) at the repo root and
+Track status for all of the above: [`TODO.md`](https://github.com/IvanBBaev/agenthropic/blob/main/TODO.md) at the repo root and
 the roadmap page, [guide/roadmap](../guide/roadmap.md).
 
 ## Related pages
@@ -477,8 +512,8 @@ the roadmap page, [guide/roadmap](../guide/roadmap.md).
   primacy, the Phase-0 probe, replay-on-startup.
 - [The DAG moat](dag-moat.md) — why `orchestration_edges` must be persisted and
   dual-path, not reconstructed at render time.
-- [Cost model](cost-model.md) — how `PreCompact` feeds the compaction-baseline
-  repricing.
+- [Cost model](cost-model.md) — how compaction boundaries parsed from the transcript
+  (`compactMetadata`, not the `PreCompact` hook) drive repricing.
 - [Glossary & reference](glossary.md) — hook-event field/status reference tables.
 - [Security model](../security/model.md) — loopback, mandatory token, no-spawner,
   no-SSRF.

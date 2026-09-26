@@ -56,7 +56,8 @@ packages ([ADR-0011](adr-cd-9-per-artifact-licensing.md)).
 
 - **The fleet hedge is still on one table.** `instance`/`host_id` remain `NOT NULL`
   on `orchestration_edges` only. Six further migrations have landed since
-  ([ADR-0006](adr-cd-4-schema-events-and-orchestration.md)'s 2026-08-15 update) and
+  ([ADR-0006](adr-cd-4-schema-events-and-orchestration.md)'s 2026-08-15 update) *(eleven
+  by 2026-09-19, eighteen in all)* and
   none of them extended the hedge, which is consistent with the scope discipline this
   ADR exists to enforce, but leaves the acceptance criterion as written **not met**.
 - **"OPCⁿ" is still undefined.** Nothing has defined or dropped it. It therefore still
@@ -64,7 +65,11 @@ packages ([ADR-0011](adr-cd-9-per-artifact-licensing.md)).
 - **"< 30s time-to-understand a session" is still UNMEASURED.** No timing study has
   been run, no instrumentation records it, and no number should be quoted for it. It
   is the one acceptance criterion in this ADR that requires a human sitting in front
-  of the dashboard to answer, and that has not happened in a way anyone recorded.
+  of the dashboard to answer, and that has not happened in a way anyone recorded. *(As
+  built — 2026-09-22: a recording aid now exists — `scripts/time-to-understand.mjs` with
+  `docs/measurement/time-to-understand-protocol.md` and a log file, all added on
+  2026-08-09 — and the log is still empty of measurements; the gate stays UNMEASURED
+  until the owner runs the protocol.)*
 
 Recording the licensing fix without restating the three that remain would leave this
 ADR reading better than the project is.
@@ -124,7 +129,7 @@ From `concept-analysis-v2.md` §6 ("Product / business") and §4.5 (Gap #7, #9):
 - **Follow-ups:** ADR-0011 (CD-9, per-artifact licensing) and ADR-0012 (CD-10, scope/secrets/
   retention) are the two canonical decisions this identity choice resolves into. The "OPCⁿ"
   definition itself is **still an open item** (BA-D6) — not resolved by this ADR, tracked as
-  future work; see [`../../../../TODO.md`](../../../../TODO.md) for open work and
+  future work; see [`../../../../TODO.md`](https://github.com/IvanBBaev/agenthropic/blob/main/TODO.md) for open work and
   [`../../guide/roadmap.md`](../../guide/roadmap.md) for phase sequencing.
 
 ## Alternatives considered

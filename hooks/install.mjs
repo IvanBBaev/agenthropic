@@ -42,8 +42,15 @@
  *   this installer's own shape, and `Wrote <path>` printed over a change that
  *   was not made. A run whose output equals the current file now returns the
  *   `unchanged` action and writes nothing at all.
+ *
+ *   AMENDED 2026-09-24 (GG7): the write itself goes through a transient temp
+ *   sibling (`<file>.tmp-<pid>`) renamed over the target, so the file is never
+ *   left half-written; the temp file never outlives the run.
  * - The POST target is hard-pinned to loopback (127.0.0.1); the port is the
  *   only variable part.
+ * - The user's curl environment cannot redirect or log the POST: the command
+ *   starts `curl --disable` (no ~/.curlrc) and passes `--noproxy '*'` (no
+ *   proxy env var applies). See buildHookCommand (GG1/GG2).
  * - Hook failures never block Claude Code: the command is fail-silent
  *   (`--silent --fail`, a hard `--max-time`, and a trailing `|| true`).
  *
@@ -71,8 +78,9 @@
  * MERGE / ROLLBACK:
  * - Updates are non-destructive: unrelated settings keys and unrelated hook
  *   entries are preserved verbatim; previously installed agenthropic entries
- *   (recognized by the loopback `/api/hooks/event` target in the command)
- *   are replaced, never duplicated.
+ *   (a command byte-identical to a shape this installer generated) are replaced,
+ *   never duplicated; one that targets `/api/hooks/event` but matches no known
+ *   shape is refused, never rewritten (see classifyHookCommand).
  * - Before modifying an existing file, a backup copy is written next to it
  *   (`<file>.backup-<timestamp>`). Rollback = copy the backup over the file.
  * - `--remove` strips the agenthropic entries again, preserving everything
@@ -81,8 +89,22 @@
  * Usage: node hooks/install.mjs [--out <path>] [--port <n>]
  *                               [--token-env <NAME>] [--dry-run] [--remove]
  */
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 /** The four real Claude Code lifecycle hooks this project consumes. */
@@ -146,7 +168,8 @@ export const DELIVERY_ID_HEADER = 'X-Agenthropic-Delivery-Id';
 
 /**
  * Shell expression that mints the delivery id AT FIRE TIME - one value per
- * hook invocation, and one value for that invocation's own curl retries.
+ * hook invocation (the generated command never retries, so there are no
+ * retries to share it).
  * `$$` (the hook shell's pid) plus the epoch second plus `$RANDOM`; on a shell
  * without `$RANDOM` (dash) the expression degrades to pid+second, which is
  * still per-invocation because each firing runs in its own shell. The
@@ -249,12 +272,25 @@ function assertValidTokenEnv(tokenEnv) {
  * failure counter surfaced on /api/health) is an owner policy decision - it
  * buys retention, disk and privacy questions that a hook installer must not
  * settle on its own.
+ *
+ * GG1/GG2 (2026-09-24): the request carries the bearer token and the whole
+ * prompt body, so the user's curl environment must not get a say in where it
+ * goes or what gets logged about it.
+ * - `--noproxy '*'`: curl honours `http_proxy` / `ALL_PROXY` for ANY host,
+ *   127.0.0.1 included, unless `no_proxy` happens to cover it. With a proxy in
+ *   the environment the "loopback" POST left the machine, token and prompt
+ *   included. Single-quoted so the shell never globs it.
+ * - `--disable`: skips `~/.curlrc`, which can set a proxy, `--verbose` or
+ *   `--trace-ascii` (the last two dump request headers - the expanded token -
+ *   to stderr or a file). curl only honours it as the FIRST argument, so it
+ *   must stay there.
  */
 export function buildHookCommand({ port = DEFAULT_PORT, tokenEnv = DEFAULT_TOKEN_ENV } = {}) {
   assertValidPort(port);
   assertValidTokenEnv(tokenEnv);
   return (
-    `curl --silent --show-error --fail --max-time 3 --output /dev/null ` +
+    `curl --disable --silent --show-error --fail --max-time 3 --noproxy '*' ` +
+    `--output /dev/null ` +
     `--request POST --header 'Content-Type: application/json' ` +
     `--variable '%${tokenEnv}' ` +
     `--expand-header 'Authorization: Bearer {{${tokenEnv}}}' ` +
@@ -299,6 +335,20 @@ function buildHookCommandGen2({ port, tokenEnv }) {
   );
 }
 
+function buildHookCommandGen4({ port, tokenEnv }) {
+  // Gen 3 plus `--show-error`. Shipped until 2026-09-24: no `--disable`, so
+  // ~/.curlrc applied, and no `--noproxy`, so proxy env vars could route the
+  // "loopback" POST - token and prompt - off the machine (GG1/GG2).
+  return (
+    `curl --silent --show-error --fail --max-time 3 --output /dev/null ` +
+    `--request POST --header 'Content-Type: application/json' ` +
+    `--variable '%${tokenEnv}' ` +
+    `--expand-header 'Authorization: Bearer {{${tokenEnv}}}' ` +
+    `--header "X-Agenthropic-Delivery-Id: $$-$(date +%s)-$RANDOM" --data-binary @- ` +
+    `'http://127.0.0.1:${String(port)}/api/hooks/event' || true`
+  );
+}
+
 function buildHookCommandGen3({ port, tokenEnv }) {
   // M-11 shape: argv-free token, delivery id, but still `--silent` alone, so
   // failures printed nothing (see buildHookCommand's --show-error note).
@@ -314,6 +364,7 @@ function buildHookCommandGen3({ port, tokenEnv }) {
 
 const COMMAND_GENERATIONS = Object.freeze([
   buildHookCommand,
+  buildHookCommandGen4,
   buildHookCommandGen3,
   buildHookCommandGen2,
   buildHookCommandGen1,
@@ -505,7 +556,14 @@ function normalizeSettings(settings) {
  */
 export function mergeHooksIntoSettings(settings, hooksConfig) {
   const merged = normalizeSettings(settings);
-  const hooks = isRecord(merged.hooks) ? merged.hooks : {};
+  // GG6 (2026-09-24). A non-object `hooks` (an array, a string, null) used to
+  // be replaced by `{}` without a word, discarding whatever the operator had
+  // put there. Same rule as a malformed event list: refuse, do not guess.
+  // Thrown while computing the new settings, i.e. before any backup or write.
+  if (merged.hooks !== undefined && !isRecord(merged.hooks)) {
+    throw new Error('Refusing to merge: existing "hooks" is not an object. Fix the file manually.');
+  }
+  const hooks = merged.hooks === undefined ? {} : merged.hooks;
   merged.hooks = hooks;
   for (const [event, entries] of Object.entries(hooksConfig)) {
     const existing = hooks[event] === undefined ? [] : hooks[event];
@@ -620,6 +678,123 @@ function readExistingSettings(path) {
   }
 }
 
+/** Same bound the kernel uses for a symlink chain (Linux `MAXSYMLINKS`). */
+const MAX_SYMLINK_HOPS = 40;
+
+/**
+ * Resolve the path the settings bytes must land on so that a symlinked `--out`
+ * survives the rename.
+ *
+ * JJ2 (2026-09-24). Only an EXISTING target used to be resolved; a dangling link
+ * (a dotfiles checkout whose file is not there yet) fell through to `out`
+ * itself, and the rename replaced the link with a regular file. A dangling chain
+ * is now followed hop by hop - relative link text against the link's own
+ * directory - until it reaches a path that is not a link. That path's directory
+ * must already exist: creating directories wherever a link happens to point is
+ * not something an installer should do silently, so it refuses instead.
+ */
+function resolveWriteTarget(out, fileExisted) {
+  if (fileExisted) {
+    return realpathSync(out);
+  }
+  let target = out;
+  for (let hops = 0; lstatSync(target, { throwIfNoEntry: false })?.isSymbolicLink(); hops += 1) {
+    if (hops === MAX_SYMLINK_HOPS) {
+      throw new Error(`Refusing to write ${out}: too many levels of symbolic links.`);
+    }
+    target = resolve(dirname(target), readlinkSync(target));
+  }
+  if (target !== out && !existsSync(dirname(target))) {
+    throw new Error(
+      `Refusing to write ${out}: it is a symlink to ${target}, whose directory ` +
+        `${dirname(target)} does not exist. Nothing was written.`,
+    );
+  }
+  return target;
+}
+
+/**
+ * Create `tempPath` exclusively. JJ3 (2026-09-24): the temp name is predictable
+ * (`<target>.tmp-<pid>`) and was opened without `O_EXCL`, so anything already
+ * planted there - a symlink above all - was written THROUGH. `wx` refuses an
+ * existing entry; a stale one (a crashed earlier run with a recycled pid) is
+ * unlinked - the entry itself, never what it points at - and the create is
+ * retried exactly once.
+ */
+function writeTempExclusively(tempPath, settingsText, mode) {
+  const options = { encoding: 'utf8', mode, flag: 'wx' };
+  try {
+    writeFileSync(tempPath, settingsText, options);
+  } catch (error) {
+    if (
+      !(error instanceof Error) ||
+      /** @type {NodeJS.ErrnoException} */ (error).code !== 'EEXIST'
+    ) {
+      throw error;
+    }
+    unlinkSync(tempPath);
+    writeFileSync(tempPath, settingsText, options);
+  }
+}
+
+/**
+ * GG7 (2026-09-24). The settings file used to be rewritten in place, so a
+ * write that died part-way (disk full, quota, I/O error) left the operator's
+ * Claude Code settings truncated. The new text now goes to a temp sibling that
+ * is renamed over the target - rename is atomic on one filesystem, so the file
+ * holds either the old bytes or the new ones, never a prefix.
+ *
+ * - A symlinked `--out` is resolved first - dangling or not, see JJ2 in
+ *   `resolveWriteTarget` - so the rename replaces the file the link points at
+ *   and the link itself survives (a dotfiles-managed `settings.json` is
+ *   commonly a symlink).
+ * - The temp file is created exclusively (JJ3, `writeTempExclusively`).
+ * - The existing file's permission bits are carried over; a plain rename would
+ *   otherwise reset a `chmod 600` settings file to the umask default.
+ * - On failure the temp file is removed and the error names the backup, which
+ *   is where the operator will want to look first - or, on a first install, the
+ *   directory this run created (JJ4), since "nothing was written" alone would
+ *   hide it.
+ * - F3 (2026-09-26): that cleanup never masks the failure it follows. A
+ *   directory planted at the temp name defeats the write (JJ3's unlink refuses
+ *   it) and then `rmSync` without `recursive` refuses it as well, `force` or
+ *   not - so the cleanup threw its own ERR_FS_EISDIR over the real error and
+ *   the operator saw a bare Node error with no pointer to the backup. The
+ *   cleanup failure is noted in the message instead; `recursive` is not an
+ *   option, because the installer never recursively deletes a directory it
+ *   did not create.
+ */
+function writeSettingsAtomically(out, fileExisted, settingsText, backupPath, createdDirectory) {
+  const target = resolveWriteTarget(out, fileExisted);
+  const mode = fileExisted ? statSync(target).mode & 0o777 : undefined;
+  const tempPath = `${target}.tmp-${String(process.pid)}`;
+  try {
+    writeTempExclusively(tempPath, settingsText, mode);
+    if (mode !== undefined) {
+      chmodSync(tempPath, mode); // `mode` above is filtered by the umask
+    }
+    renameSync(tempPath, target);
+  } catch (error) {
+    let cleanup = '';
+    try {
+      rmSync(tempPath, { force: true });
+    } catch {
+      // F3: a cleanup that throws would replace the error being reported.
+      cleanup = ` The temp entry ${tempPath} could not be removed and was left behind.`;
+    }
+    const reason = error instanceof Error ? error.message : String(error);
+    let state;
+    if (backupPath !== undefined) {
+      state = `${out} was left unchanged; a backup was taken at ${backupPath}.`;
+    } else if (createdDirectory !== undefined) {
+      state = `Nothing was written, but the directory ${createdDirectory} was created.`;
+    } else {
+      state = 'Nothing was written.';
+    }
+    throw new Error(`Failed to write ${out}: ${reason}. ${state}${cleanup}`, { cause: error });
+  }
+}
+
 function backupTimestamp(now) {
   return now.toISOString().replace(/[:.]/g, '-');
 }
@@ -649,9 +824,40 @@ export function runInstall({
 
   const existing = readExistingSettings(out);
   const fileExisted = existsSync(out);
+  // L-3 (2026-09-23). Serialised BEFORE `transform` runs, so the comparison
+  // below is against what the file actually said rather than against whatever
+  // the transform may have left behind.
+  const existingText = formatSettings(existing);
   const settingsText = formatSettings(transform(existing));
   const currentText = fileExisted ? readFileSync(out, 'utf8') : undefined;
   const unchanged = currentText === settingsText;
+
+  // C-7 (2026-09-23). `--remove` against a file that does not exist used to fall
+  // through to the write path: it created the whole parent tree, wrote `{}`, and
+  // reported `Created directory ...` + `Wrote ...`. Removing hooks from a file
+  // that was never there brought a settings file into existence - the opposite
+  // of what the operator asked for, announced as a success. There is nothing to
+  // remove, so nothing is created and nothing is written.
+  if (remove && !fileExisted) {
+    return { action: 'absent', outPath: out, settingsText };
+  }
+
+  // L-3 (2026-09-23). `--remove` against an existing file that holds none of our
+  // hooks used to fall through to the write path whenever the file's formatting
+  // differed from this installer's - which, for any hand-maintained settings
+  // file, it does. Measured against a four-space `settings.json` holding one
+  // foreign `SessionStart` hook and nothing of ours: the run took a backup,
+  // rewrote the operator's file into two-space shape and printed `Backed up
+  // existing file to ...` + `Wrote ...`, reporting a removal that removed
+  // nothing and accruing one backup per re-run. H-2 already named the same three
+  // false statements; its byte-equality test simply cannot see a no-op through a
+  // reformat. Removal is the one operation that has a truthful empty case, so it
+  // gets compared on meaning, not on bytes. Placed ahead of the dry-run branch
+  // for the reason C-7 established: the preview must not claim a write the real
+  // run would not perform.
+  if (remove && settingsText === existingText) {
+    return { action: 'nothing-to-remove', outPath: out, settingsText };
+  }
 
   if (dryRun) {
     return { action: 'dry-run', outPath: out, settingsText, unchanged };
@@ -679,11 +885,11 @@ export function runInstall({
   // the operator believing the hooks were live in `.claude/`. The directory is
   // still created - refusing would break the documented first-run path - but it
   // is now reported, so a created tree is something the operator reads rather
-  // than something they have to go looking for.
-  const parentDirectory = dirname(out);
-  const createdDirectory = existsSync(parentDirectory) ? undefined : parentDirectory;
-  mkdirSync(parentDirectory, { recursive: true });
-  writeFileSync(out, settingsText, 'utf8');
+  // than something they have to go looking for. `mkdirSync` returns the FIRST
+  // directory it created (the top of the new tree), which is what the operator
+  // has to remove after a typo, and what a failed write must still own up to (JJ4).
+  const createdDirectory = mkdirSync(dirname(out), { recursive: true });
+  writeSettingsAtomically(out, fileExisted, settingsText, backupPath, createdDirectory);
   return { action: 'written', outPath: out, backupPath, createdDirectory, settingsText };
 }
 
@@ -710,9 +916,32 @@ if (isMain) {
           `${result.outPath} already matches this installer's output - ` +
             'nothing written, no backup taken.',
         );
+      } else if (result.action === 'absent') {
+        console.log(
+          `${result.outPath} does not exist, so there are no agenthropic hooks to ` +
+            'remove. Nothing written, no directory created.',
+        );
+      } else if (result.action === 'nothing-to-remove') {
+        // L-3 (2026-09-23) - see the note in `runInstall`.
+        console.log(
+          `${result.outPath} holds no agenthropic hooks, so there was nothing to ` +
+            'remove. Nothing written, no backup taken, formatting left alone.',
+        );
       } else {
+        // C-6 (2026-09-23). `runInstall` already reports `unchanged` on a dry
+        // run, and the real run says plainly that it wrote nothing - but the
+        // dry run threw that away and announced `Would write ...` over a file
+        // it would not have touched. A preview that overstates the next run is
+        // worse than no preview.
         if (result.action === 'dry-run' && result.outPath !== undefined) {
-          console.log(`[dry-run] Would write ${result.outPath}:`);
+          if (result.unchanged === true) {
+            console.log(
+              `[dry-run] ${result.outPath} already matches this installer's output - ` +
+                'a real run would write nothing and take no backup. Its contents:',
+            );
+          } else {
+            console.log(`[dry-run] Would write ${result.outPath}:`);
+          }
         }
         console.log(result.settingsText);
       }

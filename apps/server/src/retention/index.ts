@@ -1,18 +1,17 @@
 /**
  * WP-D10 - retention: public surface.
  *
- * POLICY STATUS. The MECHANISM is implemented and tested; the POLICY - how
- * many days of what is kept - is deliberately UNSET and awaits Ivan's
- * ratification of OPEN-1 (retention TTL vs `events_raw` immutability), with
- * OPEN-2/OPEN-3 as the surrounding data-lifecycle reads:
- * `docs/analysis/open-decisions.md`. WP-D10 is therefore NOT done - do not
- * record it as such anywhere.
- *
- * The default is a no-op: an unconfigured deployment behaves exactly as it did
- * before this module existed.
+ * POLICY STATUS. The MECHANISM is implemented and tested, and the v1.0 POLICY
+ * is signed (D3, 2026-09-08): `events` after 90 days, backup files after 30
+ * days behind a floor of the 7 newest, `token_usage` never. `config.ts` reads
+ * the numbers, {@link signedRetentionPolicy} builds the policy, and `index.ts`
+ * runs it after each successful daily backup (L9). The library loader
+ * ({@link loadRetentionPolicy}) keeps its no-op default and is not called by
+ * the server.
  */
 export {
   BACKUP_FILE_PATTERN,
+  BackupPruneError,
   pruneBackupFiles,
   type BackupFileCandidate,
   type BackupPruneOptions,
@@ -31,14 +30,17 @@ export {
   DEFAULT_MAX_ROWS_PER_RUN,
   isNoOpPolicy,
   loadRetentionPolicy,
+  MAX_RETENTION_DAYS,
   NO_RETENTION,
   RETENTION_PROTECTED_TABLES,
   RetentionPolicyError,
+  signedRetentionPolicy,
   type AgeRule,
   type BackupFileRule,
   type CostBearingAgeRule,
   type RawEventStrategy,
   type RetentionPolicy,
+  type SignedRetentionValues,
 } from './policy';
 export type { RetentionPort, RetentionRunOptions, RetentionRunReport } from './port';
 export {
@@ -48,4 +50,5 @@ export {
   type PruneReport,
   type PruneTableOutcome,
 } from './prune';
-export { createRetentionRunner } from './runner';
+export { createRetentionRunner, RetentionRunError } from './runner';
+export { describeRetentionPolicy, retentionRunLine } from './summary';

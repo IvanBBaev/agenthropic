@@ -4,11 +4,11 @@
  * Ports carry no database import, so the shape below is pure. The SQLite-backed
  * adapter is `runner.ts`.
  *
- * POLICY STATUS: this is a mechanism contract only. The retention POLICY is
- * unset and awaits Ivan's OPEN-1/2/3 ratification
- * (docs/analysis/open-decisions.md). The default policy makes every call to
- * {@link RetentionPort.run} a reported no-op, so wiring the port up anywhere
- * does not, by itself, delete anything.
+ * POLICY STATUS: a mechanism contract. The v1.0 policy is signed (D3,
+ * 2026-09-08) and `index.ts` runs this port after each successful daily
+ * backup (L9). Under the no-op policy every call to {@link RetentionPort.run}
+ * is a reported no-op, so wiring the port up somewhere else does not, by
+ * itself, delete anything.
  */
 import type { BackupPruneReport } from './backup-files';
 import type { PruneReport } from './prune';
@@ -27,8 +27,9 @@ export interface RetentionRunReport {
   readonly ranAt: string;
   readonly dryRun: boolean;
   /**
-   * False when no retention rule is configured - the default. Nothing was
-   * inspected, nothing was deleted, and both sub-reports are null. This flag is
+   * False when no retention rule is configured ({@link NO_RETENTION}, or the
+   * signed policy with both windows at 0). Nothing was inspected, nothing was
+   * deleted, and both sub-reports are null. This flag is
    * how a caller distinguishes "retention ran and found nothing to do" from
    * "retention is not configured".
    */

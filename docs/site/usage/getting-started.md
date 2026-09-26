@@ -12,7 +12,7 @@
 > 2026-07-11), so the flow below is runnable, not aspirational. The real values, all
 > verified against the repository:
 >
-> - **Install:** pnpm monorepo (`pnpm@11`, Node ≥ 22 per `package.json` `engines`),
+> - **Install:** pnpm monorepo (`pnpm@11`, Node 22 only — `.nvmrc`, `engines.node` `>=22 <23`),
 >   workspaces `apps/server`, `apps/web`, `packages/shared`, `packages/core`,
 >   `packages/test-fixtures`, plus `hooks/`. `pnpm install` with the committed
 >   `pnpm-lock.yaml` is the real step 2.
@@ -22,13 +22,16 @@
 >   `DASHBOARD_PORT` (default **4317**). Startup fails without `DASHBOARD_TOKEN`,
 >   exactly as promised.
 > - **Run the SPA:** `pnpm --filter @agenthropic/web dev` (Vite dev server; React +
->   D3, four real views). This is a **second process on a second port** — the server
->   serves no static bundle, so the API port is not where the UI lives. Open the URL
->   Vite prints and paste the same `DASHBOARD_TOKEN` into the SPA's gate.
+>   D3, four real views). This is the development route — a **second process on a
+>   second port**. For a single-port run, `pnpm start` at the repo root builds the SPA
+>   and the server serves it from the same `127.0.0.1:4317` origin as the API (§5).
+>   Open the URL Vite prints and paste the same `DASHBOARD_TOKEN` into the SPA's gate.
 > - **Install the hooks:** `node hooks/install.mjs` (`WP-X8`, shipped) — generates
 >   four fail-silent hooks (`UserPromptSubmit`, `Stop`, `SubagentStop`, `PreCompact`)
->   that POST to the loopback receiver with `Authorization: Bearer ${DASHBOARD_TOKEN}`
->   expanded by the shell at fire time, never written to disk. See
+>   that POST to the loopback receiver. The `Authorization: Bearer` header is filled
+>   in by curl itself from the `DASHBOARD_TOKEN` environment variable at fire time
+>   (`--variable` / `--expand-header`, curl 8.3.0 or newer), so the token never sits
+>   in a shell argument and is never written to disk. See
 >   [hooks installer](hooks-installer.md).
 > - **Data flows without hooks too:** the ingest watcher polls
 >   `~/.claude/projects/*.jsonl` directly (JSONL is the primary source, CD-1), so
@@ -55,7 +58,7 @@ resolved: pnpm monorepo, Fastify, port 4317. See the update box above.)*
 | Requirement | Status | Source |
 |---|---|---|
 | A macOS or Linux host | Fixed shape; no OS-specific dependency named in the design | `ai/DESIGN.md` §1 describes the reference deployment as "real sessions on a Mac Mini M4" |
-| Node runtime + **pnpm** | _(leaning — unconfirmed)_ *(Resolved as built: Node ≥ 22 and `pnpm@11`, per the root `package.json` `engines` and `packageManager` fields)* | `CLAUDE.md` current-state: "Leaning Fastify + better-sqlite3 + React/Vite/D3, pnpm monorepo (server + web), but unconfirmed" |
+| Node runtime + **pnpm** | _(leaning — unconfirmed)_ *(Resolved as built: Node 22 only (`.nvmrc`; `engines.node` `>=22 <23`) and `pnpm@11`, per the root `package.json` and `packageManager`)* | `CLAUDE.md` current-state: "Leaning Fastify + better-sqlite3 + React/Vite/D3, pnpm monorepo (server + web), but unconfirmed" |
 | A local Claude Code install already producing `~/.claude/projects/*.jsonl` | Fixed — this file is the system's **ground-truth** input, not optional tooling | `ai/DESIGN.md` §3, §8; [architecture overview](../architecture/overview.md) Invariant 1 |
 
 The reference host throughout the design basis is Ivan's own **Mac Mini M4**, run as a
@@ -158,12 +161,16 @@ DASHBOARD_TOKEN=<token> pnpm --filter @agenthropic/server dev
 ```
 
 > **As built:** the command above is the real one, and the port question is settled —
-> default **4317**, overridable with `DASHBOARD_PORT`. Note the script name: there is
-> **only `dev`**. `apps/server/package.json` defines `dev`, `bench` and `test` and
-> nothing else, so there is no `start` script and **no production run mode** — the
-> server runs under `tsx watch` from source. An earlier draft of this page printed
-> `pnpm --filter server start`, which is wrong twice over: the workspace is named
-> `@agenthropic/server`, and that script does not exist.
+> default **4317**, overridable with `DASHBOARD_PORT`. Note the script names:
+> `apps/server/package.json` defines `dev` (`tsx watch`, restarts on edit), `start`
+> (`tsx src/index.ts`, no watch), `bench` and `test`. Both run modes execute the
+> TypeScript source under tsx on purpose — there is no build step for the server,
+> because the migration-checksum guard depends on the executor (the reason is spelled
+> out in that `package.json`). The one-command route is `pnpm start` at the repo root:
+> it checks the Node version, builds the SPA, then starts the server, which serves the
+> built UI on the same port as the API. An earlier draft of this page printed
+> `pnpm --filter server start`, which is wrong on the workspace name — it is
+> `@agenthropic/server`.
 >
 > The bind host is **not** an environment variable at all: `127.0.0.1` is a constant in
 > `apps/server/src/config.ts` with a comment saying it is intentionally not
@@ -182,17 +189,21 @@ curl -s -H "Authorization: Bearer <token>" http://127.0.0.1:4317/api/health
 It is auth-gated like everything else, so a **401** means the token you sent is not the
 token the server started with — not that the server is broken. A **200** carries
 `status: "ok"`, a `schemaVersion`, and, while a first pass over the corpus is still
-running, `ingest: "replaying"` (it reads `"idle"` afterwards). Read a *missing* field as
+running, `ingest: "replaying"` (it reads `"idle"` afterwards, which means the pass
+finished, not that it succeeded). Read a *missing* field as
 missing, never as zero: the handler omits optional fields when it has nothing to report
-rather than emitting a fabricated `0`, so an absent `ingestSkips` means "no completed
-pass yet", not "no files were skipped". [The API reference](api.md#liveness-and-ingest-visibility--get-apihealth)
+rather than emitting a fabricated `0`, so an absent `ingestSkips` means "ingest is not
+running" (`DASHBOARD_INGEST=0`), not "no files were skipped". [The API reference](api.md#liveness-and-ingest-visibility--get-apihealth)
 lists the whole payload and what each omission means.
 
 ### 5. Open the dashboard and give it the token
 
-The server hosts no UI. It serves the API and the SSE stream, and nothing else — there
-is no static-file plugin anywhere in `apps/server`, so pointing a browser at port 4317
-gets you JSON, not a dashboard. The SPA is a second process:
+The server serves the built SPA from the same origin as the API: a hand-rolled static
+handler (`apps/server/src/http/static-site.ts`, no `@fastify/static`) answers every
+path outside `/api/` from `apps/web/dist` (or `DASHBOARD_WEB_ROOT`), and answers `503`
+with a "not built yet, run `pnpm start`" message while the bundle is absent. So after
+`pnpm start` a browser at `http://127.0.0.1:4317/` gets the dashboard. During
+development the SPA is a second process instead:
 
 ```bash
 pnpm --filter @agenthropic/web dev
@@ -311,8 +322,9 @@ rather than gloss over it:
 > `pnpm --filter @agenthropic/server dev`, default port 4317); ingestion resolved to
 > **JSONL-primary** (no outbox — hooks are liveness only); and the hook-POST leg
 > authenticates with the same mandatory Bearer token as every other endpoint, sent
-> as `Authorization: Bearer ${DASHBOARD_TOKEN}` by the installed hook command with
-> the variable expanded at fire time, never stored in the hook file.
+> as an `Authorization: Bearer` header that curl itself expands from the
+> `DASHBOARD_TOKEN` environment variable at fire time (`--variable` /
+> `--expand-header`), never stored in the hook file.
 
 ## Next steps
 
@@ -320,7 +332,7 @@ rather than gloss over it:
   reads, including `DASHBOARD_TOKEN`, the `~/.claude/projects` path, the poll interval
   and the watchdog window, plus what the backup and retention machinery does and does
   not do yet.
-- [API reference](api.md) — the ten routes, the health payload, and the response fields
+- [API reference](api.md) — the twelve routes, the health payload, and the response fields
   the four views are built on.
 - [Hooks installer](hooks-installer.md) — installing the hook scripts, leak-free token
   acquisition, and verifying an end-to-end hook → loopback ingest → `events_raw` run

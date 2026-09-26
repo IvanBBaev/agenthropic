@@ -38,10 +38,11 @@ import {
   nodeCorpusFs,
   resolveCorpusRoot,
   type CorpusFs,
-  type LstatInfo,
   type ReadLimits,
   type SessionRef,
+  type SkippedFile,
 } from '../corpus/index';
+import { isRealDir, probeLstat } from '../corpus/corpus-paths';
 
 /** One session's parsed reconstruction plus its compaction boundaries. */
 export interface ResolvedSessionSubstrate {
@@ -50,8 +51,25 @@ export interface ResolvedSessionSubstrate {
 }
 
 /**
- * The result of one lookup. Four of the five arms carry no substrate — and
- * they are four DIFFERENT facts that the route answers with DIFFERENT HTTP
+ * A corpus entry that names (or would hold) the session and could not be
+ * PROBED — `lstat` failed with something other than absence: `EACCES`,
+ * `EPERM`, `EIO`... The `unreadable-root` fact one level down: the entry is
+ * (or may be) there, this process just could not look at it, so the session's
+ * existence is unknown and must never be spelled "not found". `path` is the
+ * corpus-root-relative POSIX path of the entry the probe failed on — the slug
+ * directory (`<slug>`) or the main transcript (`<slug>/<uuid>.jsonl`) — never
+ * an absolute path.
+ */
+export interface SessionUnreadable {
+  readonly kind: 'session-unreadable';
+  readonly path: string;
+  /** The fs error code when one was surfaced (`EACCES`, `EIO`, …). */
+  readonly code: string | undefined;
+}
+
+/**
+ * The result of one lookup. Six of the seven arms carry no substrate — and
+ * they are six DIFFERENT facts that the route answers with DIFFERENT HTTP
  * statuses. This used to be `ResolvedSessionSubstrate | null`, and every
  * `null` became `404 Session not found.`, which was a false statement in most
  * of the cases: with no corpus root the server has no standing to say whether
@@ -59,6 +77,13 @@ export interface ResolvedSessionSubstrate {
  * an empty remnant IS found — it just holds nothing to analyse. Same collapse
  * the dashboard forbids for agent status ('unknown' is never `null`), except
  * this one reached the reader as a sentence.
+ *
+ * The two `session-un*` arms are the same collapse one level below the root:
+ * a slug directory or transcript the probe could not look at (hint path, or
+ * enumeration naming this very id) is `session-unreadable`; an id that is not
+ * among the LISTED sessions while some slug directory went unlisted is
+ * `session-unlisted`. Only when every slug directory was listed and none held
+ * the id is `session-not-found` a true sentence.
  */
 export type SubstrateLookup =
   /** Built and parsed; the analysis can run. */
@@ -67,7 +92,14 @@ export type SubstrateLookup =
   | { readonly kind: 'no-corpus-root' }
   /** The root exists but could not be read right now — retryable, not a 404. */
   | { readonly kind: 'unreadable-root' }
-  /** The corpus was enumerated and holds no session with that id. */
+  /** The entry naming the session exists (or may) but could not be probed — retryable, not a 404. */
+  | SessionUnreadable
+  /**
+   * Every LISTED session was checked and none has the id, but `unreadableDirs`
+   * slug directories could not be listed and may hold it — retryable, not a 404.
+   */
+  | { readonly kind: 'session-unlisted'; readonly unreadableDirs: number }
+  /** The corpus was fully enumerated and holds no session with that id. */
   | { readonly kind: 'session-not-found' }
   /** The session file exists but yields nothing parseable (an empty remnant). */
   | { readonly kind: 'no-substrate' };
@@ -105,14 +137,14 @@ export interface SubstrateProviderDeps {
   readonly slugOf?: (sessionId: string) => string | null;
 }
 
-/** lstat, returning `null` instead of throwing when the entry is gone/unreadable. */
-function tryLstat(fs: CorpusFs, absPath: string): LstatInfo | null {
-  try {
-    return fs.lstat(absPath);
-  } catch {
-    return null;
-  }
-}
+/** What the DB slug hint resolved to — see {@link resolveHintedRef}. */
+type HintOutcome =
+  /** Both probes passed; the ref is exactly what enumeration would have built. */
+  | { readonly kind: 'hit'; readonly ref: SessionRef }
+  /** No usable hint — absent, unvetted, or stale — so enumeration must answer. */
+  | { readonly kind: 'declined' }
+  /** A probe on the hinted path failed for a reason other than absence: this IS the answer. */
+  | SessionUnreadable;
 
 /**
  * Fast-path ref resolution from a DB slug hint, instead of enumerating the
@@ -127,10 +159,10 @@ function tryLstat(fs: CorpusFs, absPath: string): LstatInfo | null {
  * non-symlink directory on the slug (a symlinked slug dir is never followed —
  * a confined read's O_NOFOLLOW guards only the FINAL path component, so an
  * intermediate symlink must be rejected here, mirroring enumeration's
- * isRealDir); `assertWithinRoot` + a regular non-symlink file on the main
- * transcript. `assertWithinRoot` is belt-and-braces on both paths: after
- * `isSafeEntryName` (and the UUID gate) it cannot fire, exactly as on the
- * enumeration path.
+ * `probeLstat` + `isRealDir(st)` pair); `assertWithinRoot` + a regular
+ * non-symlink file on the main transcript. `assertWithinRoot` is
+ * belt-and-braces on both paths: after `isSafeEntryName` (and the UUID gate)
+ * it cannot fire, exactly as on the enumeration path.
  *
  * Vetting-failure verdicts deliberately DIFFER from enumeration's: there, a
  * traversal-shaped name was read off disk and proves a crafted corpus
@@ -138,40 +170,87 @@ function tryLstat(fs: CorpusFs, absPath: string): LstatInfo | null {
  * merely a HINT — the path is never touched and the caller falls back to
  * enumeration, which answers from disk-vetted names only.
  *
- * Returns null on ANY miss — no dep, non-canonical id, no row, unsafe slug,
- * or a stale hint (entry gone or of the wrong kind) — never a partial ref.
+ * `declined` on any MISS — no dep, non-canonical id, no row, unsafe slug, or
+ * a stale hint (entry gone, or of the wrong kind) — never a partial ref. A
+ * probe that FAILED is not a miss: the entry is (or may be) there and this
+ * process could not look at it, so the outcome is `session-unreadable` at the
+ * corpus-relative path of the probe that failed. Enumeration cannot improve on
+ * that — the same probe fails there — and would only offer to rephrase it as
+ * "not found", so this outcome is final and never falls back.
  */
 function resolveHintedRef(
   fs: CorpusFs,
   corpusRoot: string,
   sessionId: string,
   slugOf: ((sessionId: string) => string | null) | undefined,
-): SessionRef | null {
+): HintOutcome {
   if (slugOf === undefined || !isSessionUuid(sessionId)) {
-    return null;
+    return { kind: 'declined' };
   }
   const slug = slugOf(sessionId);
   if (slug === null || !isSafeEntryName(slug)) {
-    return null;
+    return { kind: 'declined' };
   }
   const slugDirAbs = join(corpusRoot, slug);
   assertWithinRoot(corpusRoot, slugDirAbs);
-  const slugStat = tryLstat(fs, slugDirAbs);
-  if (slugStat === null || !slugStat.isDirectory || slugStat.isSymbolicLink) {
-    return null;
+  const slugDir = probeLstat(fs, slugDirAbs);
+  if (slugDir.kind === 'unreadable') {
+    return { kind: 'session-unreadable', path: slug, code: slugDir.code };
+  }
+  if (slugDir.kind === 'gone' || !isRealDir(slugDir.info)) {
+    return { kind: 'declined' };
   }
   const mainAbsPath = join(slugDirAbs, `${sessionId}.jsonl`);
   assertWithinRoot(corpusRoot, mainAbsPath);
-  const mainStat = tryLstat(fs, mainAbsPath);
-  if (mainStat === null || !mainStat.isFile || mainStat.isSymbolicLink) {
-    return null;
+  const main = probeLstat(fs, mainAbsPath);
+  if (main.kind === 'unreadable') {
+    return { kind: 'session-unreadable', path: `${slug}/${sessionId}.jsonl`, code: main.code };
+  }
+  if (main.kind === 'gone' || !main.info.isFile || main.info.isSymbolicLink) {
+    return { kind: 'declined' };
   }
   return {
-    sessionId,
-    projectSlug: slug,
-    mainAbsPath,
-    sessionDirAbs: join(slugDirAbs, sessionId),
+    kind: 'hit',
+    ref: {
+      sessionId,
+      projectSlug: slug,
+      mainAbsPath,
+      sessionDirAbs: join(slugDirAbs, sessionId),
+    },
   };
+}
+
+/**
+ * The verdict for an id that enumeration did not list. `session-not-found` is
+ * a sentence about the WHOLE corpus, so it is true only when every slug
+ * directory was listed. Enumeration records each one it could not probe or
+ * list as an `unreadable` skip whose path is the bare slug (no `/`), and any of
+ * those may hold the session: count them and answer `session-unlisted`.
+ *
+ * An `unreadable` skip on a main transcript (`<slug>/<uuid>.jsonl`) hides
+ * exactly the session it is named after. When that is this id, enumeration
+ * has SEEN the session's file and could not probe it — the very fact the hint
+ * path reports for the same disk state, so it gets the same
+ * `session-unreadable` answer (a hint may cost a lookup its speed, never its
+ * answer). Another id's transcript cannot hide this one and does not count.
+ */
+function verdictForUnlisted(skipped: readonly SkippedFile[], sessionId: string): SubstrateLookup {
+  const mainSuffix = `/${sessionId}.jsonl`;
+  let unreadableDirs = 0;
+  for (const skip of skipped) {
+    if (skip.reason !== 'unreadable') {
+      continue;
+    }
+    if (skip.relativePath.endsWith(mainSuffix)) {
+      return { kind: 'session-unreadable', path: skip.relativePath, code: skip.code };
+    }
+    if (!skip.relativePath.includes('/')) {
+      unreadableDirs += 1;
+    }
+  }
+  return unreadableDirs === 0
+    ? { kind: 'session-not-found' }
+    : { kind: 'session-unlisted', unreadableDirs };
 }
 
 /** Build the production substrate provider over the read-only corpus port. */
@@ -192,20 +271,32 @@ export function createSubstrateProvider(deps: SubstrateProviderDeps): SubstrateP
       }
 
       // The DB slug hint first: O(1) lstat probes instead of an O(corpus)
-      // sweep. Any miss falls through to enumeration below — the hint can
-      // only ever cost a lookup its speed, never its answer.
-      let ref = resolveHintedRef(fs, corpusRoot, sessionId, deps.slugOf);
-      if (ref === null) {
+      // sweep. Any MISS falls through to enumeration below — the hint can
+      // only ever cost a lookup its speed, never its answer. A probe that
+      // FAILED is not a miss and does not fall through: enumeration would hit
+      // the same wall and, when the root listing itself happens to work,
+      // would spell "could not look" as "not found".
+      const hinted = resolveHintedRef(fs, corpusRoot, sessionId, deps.slugOf);
+      if (hinted.kind === 'session-unreadable') {
+        return hinted;
+      }
+      let ref: SessionRef;
+      if (hinted.kind === 'hit') {
+        ref = hinted.ref;
+      } else {
         const enumeration = enumerateSessions(fs, corpusRoot);
         if (enumeration.kind === 'unreadable-root') {
           // A listing that failed proves nothing about the session — answering
           // "not found" here would deny a session nobody looked at.
           return { kind: 'unreadable-root' };
         }
-        ref = enumeration.refs.find((candidate) => candidate.sessionId === sessionId) ?? null;
-        if (ref === null) {
-          return { kind: 'session-not-found' };
+        const listed = enumeration.refs.find((candidate) => candidate.sessionId === sessionId);
+        if (listed === undefined) {
+          // Not among the LISTED sessions — which is "not found" only when
+          // every slug directory was listed (see verdictForUnlisted).
+          return verdictForUnlisted(enumeration.skipped, sessionId);
         }
+        ref = listed;
       }
 
       const built = buildSessionSubstrate(fs, ref, limits);

@@ -305,6 +305,10 @@ function ledgerOracle(db: SqliteDatabase, topN = TOP_N): CostSummaryDto {
         null,
       ...bucket,
     })),
+    // The population the slice came from (L1): every session with a ledger
+    // row, priced or not - never the slice length.
+    sessionCount: bySession.size,
+    hasMore: bySession.size > top.length,
   };
 }
 
@@ -895,6 +899,8 @@ describe('cost summary equals an uncached scan (M-19)', () => {
       perModel: [],
       perDay: [],
       topSessions: [],
+      sessionCount: 0,
+      hasMore: false,
     });
     expect(summary).toEqual(ledgerOracle(temp.db));
     // A migrated database is NOT empty of prices - so "no rows" here is the

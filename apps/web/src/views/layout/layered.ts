@@ -45,8 +45,18 @@ export interface LayeredLayout<N, E> {
   readonly edges: readonly PlacedEdge<E>[];
   /** Edges referencing a node id absent from the payload - reported, not drawn. */
   readonly droppedEdges: number;
-  /** Nodes that sit in a cycle; placed on one fallback layer below the rest. */
+  /**
+   * Nodes that truly sit in a cycle (a strongly connected component of two or
+   * more nodes, or a node with an edge to itself). Placed on one fallback
+   * layer below the rest.
+   */
   readonly cyclicNodes: number;
+  /**
+   * Nodes that are NOT in any cycle but are reachable only through one, so the
+   * longest-path pass cannot rank them either. They share the fallback layer
+   * with the cycle members and are counted apart so no notice calls them cyclic.
+   */
+  readonly belowCycleNodes: number;
   readonly width: number;
   readonly height: number;
 }
@@ -74,6 +84,67 @@ export function isPlaceableEdge(
 }
 
 /**
+ * True cycle membership among the nodes Kahn's pass could not rank (KK1).
+ * Tarjan's strongly connected components: a component of two or more nodes is
+ * a cycle, and so is a single node with an edge to itself. Every other unranked
+ * node is merely downstream of a cycle. Only unranked ids are passed in, and a
+ * child of an unranked node is itself unranked, so the walk never leaves the set.
+ */
+function cycleMembers(
+  ids: readonly string[],
+  children: ReadonlyMap<string, readonly string[]>,
+): Set<string> {
+  const index = new Map<string, number>();
+  const low = new Map<string, number>();
+  const stack: string[] = [];
+  const onStack = new Set<string>();
+  const members = new Set<string>();
+  let next = 0;
+
+  const connect = (id: string): void => {
+    index.set(id, next);
+    low.set(id, next);
+    next += 1;
+    stack.push(id);
+    onStack.add(id);
+    const out = children.get(id) ?? [];
+    for (const childId of out) {
+      if (!index.has(childId)) {
+        connect(childId);
+        low.set(id, Math.min(low.get(id)!, low.get(childId)!));
+      } else if (onStack.has(childId)) {
+        low.set(id, Math.min(low.get(id)!, index.get(childId)!));
+      }
+    }
+    if (low.get(id) !== index.get(id)) return;
+    const component: string[] = [];
+    let popped: string;
+    do {
+      popped = stack.pop()!;
+      onStack.delete(popped);
+      component.push(popped);
+    } while (popped !== id);
+    if (component.length > 1 || out.includes(id)) {
+      for (const member of component) members.add(member);
+    }
+  };
+
+  for (const id of ids) if (!index.has(id)) connect(id);
+  return members;
+}
+
+/**
+ * The fallback-layer notice both graph views render (KK1). The cycle count is
+ * true cycle membership; nodes that only hang below a cycle share its layer
+ * and are named as such rather than folded into the cycle count.
+ */
+export function fallbackLayerNotice(cyclicNodes: number, belowCycleNodes: number): string {
+  const head = `${String(cyclicNodes)} agent${cyclicNodes === 1 ? '' : 's'} sit in a cycle and are placed on a fallback layer`;
+  if (belowCycleNodes === 0) return `${head}.`;
+  return `${head}; ${String(belowCycleNodes)} more agent${belowCycleNodes === 1 ? '' : 's'} below the cycle ${belowCycleNodes === 1 ? 'is' : 'are'} not in it but share${belowCycleNodes === 1 ? 's' : ''} that layer.`;
+}
+
+/**
  * Layer nodes by longest path from a root (Kahn order), then order each layer
  * by the mean x of already-placed parents (stable on ties by input order) so
  * children cluster under their parent. Coordinates are a fixed grid - the
@@ -91,6 +162,7 @@ export function computeLayeredLayout<N extends { readonly id: string }, E>(
       edges: [],
       droppedEdges: edges.length,
       cyclicNodes: 0,
+      belowCycleNodes: 0,
       width: 0,
       height: 0,
     };
@@ -125,12 +197,19 @@ export function computeLayeredLayout<N extends { readonly id: string }, E>(
     }
   }
 
-  // Cycle members never reach indegree 0; park them on one fallback layer.
+  // Nodes Kahn never reaches are cycle members AND everything reachable only
+  // through a cycle; park all of them on one fallback layer, but count the
+  // true cycle members apart (KK1) so the notice never calls a descendant of a
+  // cycle "in a cycle".
   const processed = new Set(queue);
-  const cyclic = nodes.filter((node) => !processed.has(node.id));
+  const unranked = nodes.filter((node) => !processed.has(node.id));
+  const cyclicIds = cycleMembers(
+    unranked.map((node) => node.id),
+    children,
+  );
   const maxProcessedDepth = Math.max(0, ...[...processed].map((id) => depth.get(id)!));
-  const fallbackDepth = processed.size > 0 && cyclic.length > 0 ? maxProcessedDepth + 1 : 0;
-  for (const node of cyclic) depth.set(node.id, fallbackDepth);
+  const fallbackDepth = processed.size > 0 && unranked.length > 0 ? maxProcessedDepth + 1 : 0;
+  for (const node of unranked) depth.set(node.id, fallbackDepth);
 
   // Group into layers (input order within a layer as the initial order).
   const layers = new Map<number, N[]>();
@@ -186,7 +265,8 @@ export function computeLayeredLayout<N extends { readonly id: string }, E>(
     nodes: placedNodes,
     edges: placedEdges,
     droppedEdges,
-    cyclicNodes: cyclic.length,
+    cyclicNodes: cyclicIds.size,
+    belowCycleNodes: unranked.length - cyclicIds.size,
     width: marginX * 2 + (maxLayerSize - 1) * gapX,
     height: marginY * 2 + maxDepth * gapY,
   };

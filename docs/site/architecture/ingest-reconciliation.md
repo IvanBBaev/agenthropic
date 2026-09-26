@@ -16,8 +16,8 @@ per-field reconciliation precedence with deterministic backfill. This page walks
 contract end to end, the Phase-0 probe that decides CD-1, and the three P0 reconciliation
 tests that gate every merge from Phase 3 onward.
 
-> **Update — CD-1 empirically pre-answered.** A read-only [Phase-0 corpus
-> probe](../../analysis/phase0-probe.md) run against the real `~/.claude/projects/` corpus on
+> **Update — CD-1 empirically pre-answered.** A read-only
+> [Phase-0 corpus probe](../../analysis/phase0-probe.md) run against the real `~/.claude/projects/` corpus on
 > 2026-07-04 (17 projects · 117 sessions · ~849 nested + 148 flat agent files) pre-answers CD-1
 > as **`CONDITIONAL-GO` → build** (confidence 85/100): JSONL *is* a trustworthy,
 > outage-surviving single source of truth — **for a parser that keys on the `Agent`/`Workflow`
@@ -73,8 +73,8 @@ tradeoffs:
   itself maintains — it survives an ingest-process crash by construction — but whether it
   actually carries the subagent parent→child linkage (`Agent`/`Workflow` spawn → child
   `sessionId` → parent reference) strongly enough to rebuild the tree **from the log alone**
-  was, when concept-analysis-v2 was written, **unverified** — the [Phase-0 corpus
-  probe](../../analysis/phase0-probe.md) has since verified it empirically (0.000% depth-1
+  was, when concept-analysis-v2 was written, **unverified** — the
+  [Phase-0 corpus probe](../../analysis/phase0-probe.md) has since verified it empirically (0.000% depth-1
   orphan rate) (concept-analysis-v2 §2, LB1).
 
 concept-analysis-v2 is explicit that this is the single biggest risk carrier in the whole
@@ -419,10 +419,32 @@ The two error classes that come out of this layer are deliberately different in 
   watcher stops itself permanently and surfaces it through `onFatal`, which the composition
   root turns into a loud non-zero exit.
 
+**AMENDED 2026-09-23 (J-6).** The skip-reason list in the first bullet is missing its ninth
+member, `too-deep`: a real directory under `<uuid>/subagents/**` deeper than
+`ReadLimits.maxDepth` (default 4, PROVISIONAL). The walk does not enter it, so nothing beneath
+it is read, and it is now recorded as a skip like any other. When the bullet was written the
+walk returned at the depth limit without recording anything, so those artifacts were dropped
+with no counter - the one hole in "announced, never silently dropped". The union of record is
+`SkipReason` in `apps/server/src/corpus/fs-port.ts`. Scope: only the substrate walk
+(`walkArtifacts`, `apps/server/src/corpus/disk-substrate.ts`) emits it; the fingerprint walk
+still stops silently at the same depth by design.
+
 One more whole-run abort exists, for a related reason: an **unreadable corpus root**. Returning
 an empty summary there would report a root the runner could not even list as a quiet, fully
 ingested corpus — a confident lie about the entire corpus. It throws instead, and the watcher's
 tick catch turns it into an honest `read-error` outcome that retries next poll.
+
+A *partial* enumeration gets the same treatment one level down. A slug directory whose listing
+or probe fails (EACCES, EIO, EMFILE under load), or a main transcript whose probe fails, is
+reported as an `unreadable` skip and its sessions are simply absent from that pass. The watcher
+used to read that absence as "left the disk": it pruned their fingerprints and retry budgets,
+and the checkpoint commit dropped their persisted rows — so one transient fault on a busy slug
+cost a full re-read of every session under it the moment it recovered, or a from-scratch replay
+after a restart. It now holds every known session the enumeration could not look at, matched by
+the slug it was last enumerated under or by its own transcript path; a session it has never
+enumerated (hydrated from a checkpoint) is held whenever anything at all was unreadable. A
+session that really vanished under a readable slug is still pruned on the same pass, and a pass
+with no unreadable entries prunes exactly as before.
 
 The read caps are bounds, not truths, and are labelled as such: `DEFAULT_MAX_FILE_BYTES` is
 64 MiB and `DEFAULT_MAX_DEPTH` is 4 (real artifacts reach depth 3 under a session directory),
@@ -545,10 +567,16 @@ Per-session failures inside a pass have their own posture. A fingerprint is comm
 for a session that did not fail, so a failed session stays "changed" and is retried next
 tick — committing unconditionally once made failure *terminal*, leaving the dashboard silently
 empty while `/api/health` still reported "ok". Retries are bounded: after
-`MAX_INGEST_ATTEMPTS` (3) consecutive failures against the **same** fingerprint the session is
-quarantined, which works by committing its fingerprint and thereby stopping the retry loop. It
-is re-admitted with a fresh budget as soon as its file changes **or the pricing table
-changes** — the canonical cure for a halt-gate failure is seeding the missing pricing row, and
+`MAX_INGEST_ATTEMPTS` (3) consecutive failed passes, **whatever the bytes did in between**, the
+session is quarantined, which works by committing its fingerprint and thereby stopping the
+every-poll retry. From then on a byte change re-reads it only on a schedule that doubles with
+every failed re-read, 1, 2, 4... passes apart up to `REREAD_BACKOFF_CAP_PASSES` (32), until a
+read succeeds. The budget deliberately does not restart on new bytes: a live transcript that
+Claude Code appends to every few seconds changed its fingerprint on every poll, so a
+fingerprint-keyed budget reset to 1/3 each pass and the watcher re-parsed the whole file, and
+failed, every 3 s for as long as the session ran (observed 2026-09-26: 17 s ticks against one
+refused transcript). A **pricing table change** is the one thing that hands back a fresh budget
+at once — the canonical cure for a halt-gate failure is seeding the missing pricing row, and
 that row has to unblock the watcher without a restart.
 
 Every failure is reported through a single seam, so a silent dashboard always has a matching
@@ -623,6 +651,23 @@ was read, while the agent was still running. Ingest therefore asserts exactly on
 | `error` | — | Reserved. v1 never guesses it. |
 | `unknown` | the watchdog | No activity for `DASHBOARD_WATCHDOG_MINUTES`. |
 
+**AMENDED 2026-09-23 (J-7).** Two rows of the table above are stale. `error` is no longer
+reserved. Migration 17 added `agents.outcome_cause`, and ingest now promotes an agent to
+`error` when the transcript's terminal record *states* the one cause that cannot be read as
+anything but a failure: `terminated_early` ("Agent terminated early due to an API error").
+The other five causes are recorded in the column and deliberately never promoted -
+`user_interrupt` is a human pressing stop, `concurrency_limit` / `permission_failed` /
+`dispatch_unavailable` describe a spawn that was refused so no agent ever ran, and
+`unclassified` is unrecognised error text that is likelier benign than fatal. This does not
+weaken the sentence above the table: ingest still never derives a terminal from silence or
+from `endedAt`. What the original text missed is that a transcript can *state* an ending as
+well as evidence activity, and a stated failure is an observation rather than an inference.
+`completed` still has no ingest-side producer, so the consequence stated below is unchanged.
+The `working` row's attribution is also stale: `LIVENESS_STATUS` and the promotion rule live
+in `apps/server/src/ingest/normalize-session.ts`; `ingest-session.ts` writes the projection
+the normalizer produced. See [`glossary.md`](glossary.md) for the outcome cause and
+[`data-model.md`](data-model.md) for the column and its `CHECK`.
+
 **Consequence, stated rather than hidden: with no hooks installed, nothing ever reports
 `completed`.** Agents go `working` → `unknown`. That is the honest reading of the evidence
 available, and `unknown` is displayed as `unknown` — never softened into something friendlier.
@@ -644,6 +689,14 @@ so a hook can move the `status` column of a row the parser already created and n
 it can never create, delete or re-parent an agent, and a hook naming an unknown agent is stored
 as raw liveness and changes no row.
 
+Since 2026-09 the hook resolver (`resolveHookStatusTarget` in
+`apps/server/src/hooks/liveness-status.ts`) refuses one further delivery: a `SubagentStop` whose resolved
+agent id is the **session** id. The main agent's id is the session uuid, so such a firing
+names the main agent, which a subagent-stop cannot speak for; it is stored as liveness and
+changes no row rather than stamping a sticky `completed` on the main agent and mirroring it
+onto the session. The stored-payload replay resolves through the same function and therefore
+inherits the refusal.
+
 ## 9. The contingent outbox — hooks-primary fallback only
 
 If the Phase-0 spike (§3) reads CONDITIONAL-GO rather than GO — i.e. JSONL does **not** carry
@@ -662,8 +715,8 @@ Two things make this fallback safe rather than a second, parallel ingest design:
   the Projection needs to know which branch is live — CD-2's substrate is identical either way
   (§4). The outbox is additive plumbing on the write path, not a fork of the read path.
 
-> **Update — the outbox is off the v1 critical path.** The [Phase-0
-> probe](../../analysis/phase0-probe.md) found JSONL self-reconciles by backfill with ≈0
+> **Update — the outbox is off the v1 critical path.** The
+> [Phase-0 probe](../../analysis/phase0-probe.md) found JSONL self-reconciles by backfill with ≈0
 > historical crashes in the real corpus, so the durable outbox buys **latency, not correctness**
 > and is `YAGNI`-leaning — pulled off the v1 critical path and added only on a real trigger (a
 > sub-second live-freshness need, *or* hooks becoming a data source not also present in JSONL).
@@ -751,7 +804,8 @@ dependency edge in the build graph, not a note in a README (development-plan §1
 > was meant to buy without inheriting its trust assumptions. The
 > unknown-`event_type`-stored-not-crashed gate holds as written. Three of the Phase-3 row's
 > four items are built: the three P0 tests exist (§10), the missing-`Stop` watchdog is live
-> (§8), and `PreCompact` repricing runs compaction-aware with the delta≈0 invariant (see
+> (§8), and compaction repricing (boundaries read from the transcript's `compactMetadata`,
+> never from the `PreCompact` hook) runs compaction-aware with the delta≈0 invariant (see
 > [cost model](../architecture/cost-model.md)). **The fourth is not met, and the row is
 > therefore not satisfied** — "hierarchy ≥95% vs. the labeled corpus" has never been scored,
 > because the labeled corpus does not exist yet (the `LABEL-ME` trees are still blank
@@ -804,7 +858,11 @@ dependency edge in the build graph, not a note in a README (development-plan §1
 >   a `NO_RETENTION` default that is a byte-identical no-op), while the **policy — which TTL,
 >   for which table — is still unset and owner-owned**, so `WP-D10` is not done. The
 >   huge-payload threshold remains open. See [the data model](../architecture/data-model.md)
->   for the table-by-table detail.
+>   for the table-by-table detail. **Update 2026-09-10:** the policy was signed on
+>   2026-09-08 (D3) and is wired — `events` older than 90 days pruned, `token_usage` never,
+>   backup files older than 30 days expired behind a floor of the 7 newest — so `WP-D10`
+>   is done; see [backup & restore](../operations/backup-restore.md) §4. The huge-payload
+>   threshold is still open.
 > - **Hook-POST authentication** — answered: the hook receiver sits behind the same
 >   mandatory-token gate as every other endpoint, and the installed hook command never puts
 >   the token on any command line. The value is imported into curl from the environment with

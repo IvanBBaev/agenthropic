@@ -4,13 +4,16 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  agentTypeLabel,
   AHEAD_OF_CLOCK,
   formatRelativeMs,
   formatRelativeTime,
   formatTokens,
   formatUsd,
   FUTURE_SKEW_TOLERANCE_MS,
+  projectLabel,
   shortId,
+  UNREADABLE_TIMESTAMP,
   UNREADABLE_TOKENS,
   UNREADABLE_USD,
 } from '../src/format';
@@ -41,6 +44,21 @@ describe('formatTokens', () => {
   it('compacts thousands and millions', () => {
     expect(formatTokens(56_800)).toBe('56.8k');
     expect(formatTokens(1_200_000)).toBe('1.2M');
+  });
+
+  it('rounds before picking the unit, so a boundary value promotes instead of reading 1000.0', () => {
+    expect(formatTokens(999_949)).toBe('999.9k');
+    expect(formatTokens(999_950)).toBe('1.0M');
+    expect(formatTokens(999_949_999)).toBe('999.9M');
+    expect(formatTokens(999_950_000)).toBe('1.0B');
+    expect(formatTokens(2_500_000_000)).toBe('2.5B');
+    // The top tier has nowhere to promote to, so it keeps counting in B.
+    expect(formatTokens(1_234_500_000_000)).toBe('1234.5B');
+  });
+
+  it('renders negative zero as a plain zero', () => {
+    expect(formatTokens(-0)).toBe('0');
+    expect(formatTokens(-5)).toBe('-5');
   });
 });
 
@@ -104,9 +122,21 @@ describe('formatUsd', () => {
 describe('formatRelativeTime', () => {
   const now = Date.parse('2026-07-29T12:00:00.000Z');
 
-  it('returns null for a null or unparseable timestamp - never invents one', () => {
+  /**
+   * AMENDED 2026-09-23 (B2). This pinned BOTH gaps at `null`, which is the
+   * defect rather than the guarantee: the sole caller renders `null` as the
+   * words `no timestamp`, so a row carrying a timestamp this build cannot read
+   * was reported as a row that has never been active. The durable guarantee -
+   * never invent an age out of a value that has none - is unchanged and still
+   * asserted; the two gaps are now said apart.
+   */
+  it('never invents an age, and says an absent timestamp apart from an unreadable one', () => {
     expect(formatRelativeTime(null, now)).toBeNull();
-    expect(formatRelativeTime('not-a-date', now)).toBeNull();
+    expect(formatRelativeTime('not-a-date', now)).toBe(UNREADABLE_TIMESTAMP);
+    // Neither an age nor a reassurance: it must not be mistakable for either
+    // vocabulary this module owns.
+    expect(UNREADABLE_TIMESTAMP).not.toContain('ago');
+    expect(UNREADABLE_TIMESTAMP).not.toContain('now');
   });
 
   it('reads fresh timestamps (and small negative skew) as just now', () => {
@@ -178,5 +208,42 @@ describe('formatRelativeMs', () => {
   it('refuses to date a reading the clock has not reached yet', () => {
     expect(formatRelativeMs(now + FUTURE_SKEW_TOLERANCE_MS, now)).toBe('just now');
     expect(formatRelativeMs(now + FUTURE_SKEW_TOLERANCE_MS + 1, now)).toBe(AHEAD_OF_CLOCK);
+  });
+});
+
+/**
+ * The vanished subject (2026-09-23, lane-P). Each of these three helpers
+ * exists to put a NAME on screen - in a `<code>` element, in a project column,
+ * in an agent-identity cell. All three have arms that pass a served string
+ * straight through, and `''` is a served string: the element renders, the name
+ * slot is empty, and the row claims to be about something it never names.
+ */
+describe('a name slot the server left blank (lane-P)', () => {
+  it('names a blank id instead of rendering an empty code element', () => {
+    expect(shortId('')).toBe('blank id ("")');
+  });
+
+  it('makes a whitespace-only id visible', () => {
+    expect(shortId('   ')).toBe('blank id ("   ")');
+  });
+
+  it('keeps naming the gap when the project slug is the empty string', () => {
+    // `null` is already handled - the slug that is present but says nothing
+    // is the one that slipped through, because `??` only catches null.
+    expect(projectLabel('')).toBe('blank project slug ("")');
+    expect(projectLabel('  ')).toBe('blank project slug ("  ")');
+    expect(projectLabel(null)).toBe('project unknown');
+  });
+
+  it('keeps naming the gap when an agent type is the empty string', () => {
+    expect(agentTypeLabel('', null)).toBe('blank type ("")');
+    expect(agentTypeLabel(null, '')).toBe('blank type ("")');
+    expect(agentTypeLabel(null, null)).toBe('type unrecorded');
+  });
+
+  it('falls through a blank subagent type to a real agent type', () => {
+    // A blank in the preferred field must not hide a usable value in the
+    // fallback field - that would turn a recorded fact into a gap.
+    expect(agentTypeLabel('', 'general-purpose')).toBe('general-purpose');
   });
 });

@@ -187,13 +187,16 @@ describe('shell with a stored token', () => {
     // into the visible text rather than being summarised away.
     const detail = screen.getByTestId('connection-detail').textContent ?? '';
     expect(detail).toContain('HTTP 503');
-    expect(detail).toContain('the server answered, so it is running');
+    expect(detail).toContain(
+      'something on this origin answered - the dashboard server, or a proxy in front of it',
+    );
+    expect(detail).not.toContain('so it is running');
     // And the token verdict is not silently implied either way.
     expect(detail).toContain('neither accepted nor rejected');
   });
 
   it('does not call an accepted token a lost connection when the body is unreadable', async () => {
-    // 200 with no schemaVersion. Every route on this server is auth-gated, so
+    // 200 with no schemaVersion. Every /api/* route on this server is auth-gated, so
     // this 200 is proof the token was ACCEPTED - the app used to answer that
     // by telling the user the server could not be reached.
     routeFetch(sessionList(), healthResponse(200, { status: 'ok' }));
@@ -242,6 +245,77 @@ describe('shell with a stored token', () => {
     const chip = screen.getByTestId('connection-chip').textContent ?? '';
     expect(chip).not.toContain('reconnecting');
     expect(chip).toBe('○ connecting…');
+    expect(screen.getByTestId('connection-detail').textContent).toContain('has not connected yet');
+  });
+
+  // D6 (L3). The residue of SS-1: the chip printed the same three words after
+  // one failed retry and after forty, so the header could not distinguish a
+  // blip from a stream that was never coming back - and it was the only thing
+  // on the page in a position to say. The count starts at the SECOND failure:
+  // `attempt 1` adds nothing to the word already standing beside it.
+  it('distinguishes one failed attempt from forty on the connection chip', async () => {
+    routeFetch();
+    render(<App />);
+    await screen.findByText('schema v3');
+    const source = MockEventSource.latest();
+    act(() => source.open());
+
+    act(() => source.fail());
+    expect(screen.getByTestId('connection-chip').textContent).toBe('○ reconnecting');
+
+    act(() => source.fail());
+    expect(screen.getByTestId('connection-chip').textContent).toBe('○ reconnecting (attempt 2)');
+
+    for (let attempt = 3; attempt <= 40; attempt += 1) act(() => source.fail());
+    expect(screen.getByTestId('connection-chip').textContent).toBe('○ reconnecting (attempt 40)');
+
+    // The number rides in the chip's LABEL, not in the decorative glyph, so it
+    // is part of the accessible name that the polite live region announces: a
+    // reader who cannot see the header is told this is the fortieth try too.
+    const chip = screen.getByTestId('connection-chip');
+    expect(chip.querySelector('[aria-hidden="true"]')?.textContent).toBe('○');
+    expect(screen.getByRole('status').contains(chip)).toBe(true);
+  });
+
+  it('drops the attempt count back to silence when the stream comes back', async () => {
+    routeFetch();
+    render(<App />);
+    await screen.findByText('schema v3');
+    const source = MockEventSource.latest();
+
+    act(() => source.open());
+    act(() => source.fail());
+    act(() => source.fail());
+    expect(screen.getByTestId('connection-chip').textContent).toBe('○ reconnecting (attempt 2)');
+
+    act(() => source.open());
+    expect(screen.getByTestId('connection-chip').textContent).toBe('● live');
+
+    // A stream that opened, dropped and is retrying once is at attempt 1 - and
+    // attempt 1 says nothing, exactly as it did the first time round. Carrying
+    // the old total over would announce `attempt 3` for a single fresh failure.
+    act(() => source.fail());
+    expect(screen.getByTestId('connection-chip').textContent).toBe('○ reconnecting');
+  });
+
+  // The count is appended to whichever wording the SH-2 fork chose, never used
+  // to bring `reconnecting` back over a connection that never existed. Forty
+  // failed first attempts are still not a past connection - and this reader has
+  // the least other evidence on the page, so the number matters most here.
+  it('counts attempts on a never-opened stream without claiming a reconnect', async () => {
+    routeFetch();
+    render(<App />);
+    await screen.findByText('schema v3');
+    const source = MockEventSource.latest();
+
+    act(() => source.fail());
+    expect(screen.getByTestId('connection-chip').textContent).toBe('○ connecting…');
+
+    for (let attempt = 2; attempt <= 40; attempt += 1) act(() => source.fail());
+
+    const chip = screen.getByTestId('connection-chip').textContent ?? '';
+    expect(chip).toBe('○ connecting… (attempt 40)');
+    expect(chip).not.toContain('reconnecting');
     expect(screen.getByTestId('connection-detail').textContent).toContain('has not connected yet');
   });
 
@@ -346,6 +420,97 @@ describe('shell with a stored token', () => {
       expect(screen.getByTestId('connection-chip').textContent).toBe('● live');
     });
 
+    /**
+     * B3. The mirror image of the test below it: an OPEN stream outranks a
+     * stale probe because it is the newer evidence, and by the same argument a
+     * CLOSED one outranks a probe that has not answered at all. `closed` is
+     * terminal for EventSource, so the page has already lost live updates for
+     * good; answering that with the word `checking…`, under a scope label that
+     * names the event stream, told the reader the app was still finding out -
+     * and took the reload instruction off the screen while it did.
+     */
+    it('does not let an unanswered probe hide a stream that has already died', async () => {
+      const health = deferred<Response>();
+      routeFetchWithHealth(() => health.promise);
+      render(<App />);
+      await waitFor(() =>
+        expect(screen.getByTestId('connection-chip').textContent).toBe('checking…'),
+      );
+
+      // EventSource treats a non-200 on the stream route as fatal: the socket
+      // is gone for good while the health request is still outstanding.
+      act(() => MockEventSource.latest().fail({ fatal: true }));
+      expect(screen.getByTestId('connection-chip').textContent).toBe('stream closed');
+      expect(screen.getByTestId('connection-detail').textContent).toContain('reload the page');
+
+      // And the probe's own answer, when it comes, does not resurrect it: a
+      // healthy server with a dead stream is still a page with no live updates.
+      await act(async () => {
+        health.resolve(healthOk());
+        await health.promise;
+      });
+      expect(screen.getByTestId('connection-chip').textContent).toBe('stream closed');
+      expect(screen.getByTestId('connection-detail').textContent).toContain('reload the page');
+    });
+
+    /**
+     * R-1. B3 stopped an UNANSWERED probe from hiding a dead stream, and left
+     * the `unreachable` arm's precedence standing on one sentence of
+     * reasoning: "the server is not answering both outranks and explains a
+     * dead stream". That is true of `no-response` and of nothing else. The
+     * other two verdicts exist precisely BECAUSE something answered - their
+     * own detail text says so - so they explain nothing about a stream that is
+     * terminally closed, and they take `STREAM_CLOSED_DETAIL`, the only
+     * sentence on the page that says live updates have stopped for good and a
+     * reload is the way back, off the screen.
+     */
+    it('keeps the reload instruction on screen when a dead stream meets a server that answered', async () => {
+      routeFetchWithHealth(() => Promise.resolve(healthResponse(503, { error: 'starting' })));
+      render(<App />);
+
+      await waitFor(() =>
+        expect(screen.getByTestId('connection-chip').textContent).toBe('server error'),
+      );
+
+      // A non-200 on the stream route is fatal for EventSource: no retry, no
+      // frames ever again, and the reader cannot tell from the outside.
+      act(() => MockEventSource.latest().fail({ fatal: true }));
+
+      const detail = screen.getByTestId('connection-detail').textContent ?? '';
+      // The probe's verdict is still worth saying - the 503 is real.
+      expect(detail).toContain(
+        'something on this origin answered - the dashboard server, or a proxy in front of it',
+      );
+      expect(detail).not.toContain('so it is running');
+      // But it is not the whole truth, and the half it omits is the only half
+      // the reader can act on.
+      expect(detail).toContain('will not reconnect on its own');
+      expect(detail).toContain('reload the page');
+    });
+
+    /**
+     * R-1, the sharper half. `malformed` does not merely fail to mention the
+     * dead stream - it asserts the opposite in so many words: "the
+     * disagreement is about the shape of the body, not the connection". The
+     * connection is exactly what has died, and this is the wording a reader
+     * gets by pressing the app's own `Re-check server` button while looking at
+     * a correct `stream closed` chip.
+     */
+    it('does not tell a reader the connection is fine while the stream is closed', async () => {
+      routeFetchWithHealth(() => Promise.resolve(healthResponse(200, { status: 'ok' })));
+      render(<App />);
+
+      await waitFor(() =>
+        expect(screen.getByTestId('connection-chip').textContent).toBe('unreadable response'),
+      );
+
+      act(() => MockEventSource.latest().fail({ fatal: true }));
+
+      const detail = screen.getByTestId('connection-detail').textContent ?? '';
+      expect(detail).toContain('this token was accepted');
+      expect(detail).toContain('reload the page to resume live updates');
+    });
+
     it('lets an open stream outrank a probe that failed once and was never re-run', async () => {
       routeFetchWithHealth(() => Promise.reject(new TypeError('Failed to fetch')));
       render(<App />);
@@ -425,9 +590,12 @@ describe('shell with a stored token', () => {
     // its appearance IS the message.
     expect(screen.queryByTestId('dropped-frames')).toBeNull();
 
-    // A truncated `ingest-failed` is the worst case in the whole app: a
-    // quarantined session never reaches the read API, so that frame was the
-    // only place its failure was ever going to be visible.
+    // A truncated `ingest-failed` is the worst case in the whole app: that
+    // frame was the only place its failure was ever going to be visible.
+    // AMENDED 2026-09-23 (coverage-claim): the reason used to be "a quarantined
+    // session never reaches the read API". It can - showing its last good pass
+    // as though current - so the lost frame is worse than an absence, not
+    // milder. The assertion is unchanged.
     act(() => source.emit('ingest-failed', 'truncated {"sessionId":'));
     expect(screen.getByTestId('dropped-frames').textContent).toBe('1 unread frame');
     expect(screen.getByTestId('dropped-frames-detail').textContent).toContain('not on this screen');
@@ -473,10 +641,16 @@ describe('shell with a stored token', () => {
 
     // The detail has to say what a reload will NOT fix, because for the worst
     // frame in this app - an ingest failure - a refetch cannot bring it back:
-    // a quarantined session is not served by the read API at all.
-    expect(screen.getByTestId('missed-frames-detail').textContent).toContain(
-      'cannot be recovered by any refetch',
+    // a quarantined session is either missing from the read API (it never
+    // ingested) or still listed at its last good extent (it did, before the
+    // failure), and neither body says which. It must not claim the older,
+    // false "not served at all".
+    const missedDetail = screen.getByTestId('missed-frames-detail').textContent;
+    expect(missedDetail).toContain('cannot be recovered by any refetch');
+    expect(missedDetail).toContain(
+      'a quarantined session is either missing from the read API or still showing its last good pass, and neither body says which',
     );
+    expect(missedDetail).not.toContain('not served by the read API');
     expect(screen.getByRole('status').contains(screen.getByTestId('missed-frames'))).toBe(true);
   });
 
@@ -491,6 +665,11 @@ describe('shell with a stored token', () => {
     act(() => source.emit('ingest-failed', 'truncated {"sessionId":', { id: '1' }));
     expect(screen.getByTestId('dropped-frames').textContent).toBe('1 unread frame');
     expect(screen.queryByTestId('missed-frames')).toBeNull();
+    // A drop is either an unreadable frame or a frame a handler failed on, and
+    // the header cannot say which - so it claims neither.
+    const droppedDetail = screen.getByTestId('dropped-frames-detail').textContent ?? '';
+    expect(droppedDetail).toContain('this build failed to parse or to apply');
+    expect(droppedDetail).not.toContain('could not parse');
 
     // And a gap is not a drop: nothing arrived to be unread.
     act(() => source.emit('agent-status-changed', { sessionId: 's-1' }, { id: '3' }));
@@ -532,6 +711,12 @@ describe('shell with a stored token', () => {
     // row cannot come to disagree about the wording.
     expect(legend).toContain(ABSENT_STATUS_REASON);
     expect(ABSENT_STATUS_META.label).toContain(ABSENT_STATUS_REASON);
+    // AMENDED 2026-09-23 (lane-P). The raw word is now printed in quotes, so
+    // that a word which renders as nothing is still visible as something the
+    // server sent. The legend has to explain the punctuation it now paints -
+    // `unrecognised ("")` is only legible to a reader who has been told that
+    // the quotes are the page's and the emptiness is the server's.
+    expect(legend).toContain('the raw word in quotes');
   });
 
   it('routes by hash across the four views and defaults unknown hashes to live', async () => {

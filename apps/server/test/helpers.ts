@@ -53,3 +53,48 @@ export function insertAgent(
      VALUES (?, ?, 'subagent', 'explorer', ?, ?, '2026-07-11T00:00:00Z', '2026-07-11T00:00:00Z')`,
   ).run(id, sessionId, status, parentAgentId);
 }
+
+/**
+ * One projection event (`events_raw` + `events`) for retention tests. The
+ * session/agent must already exist (see {@link insertSession},
+ * {@link insertAgent}); `occurredAt` is what the age window is measured on.
+ */
+export function insertProjectionEvent(
+  db: SqliteDatabase,
+  key: string,
+  occurredAt: string,
+  sessionId = 's1',
+  agentId = 'a1',
+): void {
+  const raw = db
+    .prepare(
+      `INSERT INTO events_raw (idempotency_key, source, event_type, payload, received_at)
+       VALUES (?, 'hook', 'PreToolUse', '{}', ?)`,
+    )
+    .run(key, occurredAt);
+  db.prepare(
+    `INSERT INTO events (raw_event_id, session_id, agent_id, event_type, occurred_at)
+     VALUES (?, ?, ?, 'PreToolUse', ?)`,
+  ).run(raw.lastInsertRowid, sessionId, agentId, occurredAt);
+}
+
+/** One priced `token_usage` row for retention tests (the never-pruned table). */
+export function insertTokenUsage(
+  db: SqliteDatabase,
+  messageId: string,
+  occurredAt: string,
+  sessionId = 's1',
+  agentId = 'a1',
+): void {
+  db.prepare(
+    `INSERT INTO token_usage (session_id, agent_id, message_id, model, bucket, tokens, occurred_at)
+     VALUES (?, ?, ?, 'claude-opus-4-8', 'input', 1000, ?)`,
+  ).run(sessionId, agentId, messageId, occurredAt);
+}
+
+export function countRows(
+  db: SqliteDatabase,
+  table: 'events' | 'token_usage' | 'events_raw',
+): number {
+  return (db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
+}

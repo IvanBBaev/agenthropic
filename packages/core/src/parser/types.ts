@@ -17,7 +17,10 @@ export interface ParsedAgent {
   /** `sessionId` for the main agent; the `agent-<hex>` filename hex for a subagent. */
   id: string;
   type: ParsedAgentType;
-  /** Populated only when a resolving `tool_use` block carried `input.subagent_type` (join path 1). */
+  /**
+   * The resolving `tool_use` block's `input.subagent_type` when present, otherwise the sidecar's
+   * `agentType` (`Explore` on the legacy_explore path); null when neither exists.
+   */
   subagentType: string | null;
   /** Resolved spawn parent, or `null` for the main agent and for orphan subagents (no join path). */
   parentAgentId: string | null;

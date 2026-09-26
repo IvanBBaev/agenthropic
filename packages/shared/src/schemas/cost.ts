@@ -32,7 +32,11 @@ export type ModelCostDto = Static<typeof ModelCostSchema>;
 
 export const DailyCostSchema = Type.Object(
   {
-    /** `YYYY-MM-DD`, or the literal `'unknown'` for usage rows without a timestamp. */
+    /**
+     * The UTC calendar day (`YYYY-MM-DD`) of the usage rows' canonical
+     * `occurred_at` — not the viewer's local day — or the literal `'unknown'`
+     * for usage rows without a timestamp.
+     */
     day: Type.String(),
     tokens: Type.Integer({ minimum: 0 }),
     costUsd: Type.Number({ minimum: 0 }),
@@ -60,11 +64,16 @@ export type SessionCostDto = Static<typeof SessionCostSchema>;
  * How much of the corpus the figures alongside it are actually computed from.
  *
  * `unpricedTokens` already discloses the tokens present in the database that
- * carry no dollar figure. This discloses the opposite and larger gap: sessions
- * that are not in the database AT ALL, because ingest could not read or price
- * them. Their tokens are in neither `tokens` nor `unpricedTokens` - nothing in
- * a total computed from stored rows can hint that they exist, and the omission
- * is one-directional, since a total missing sessions is always too SMALL.
+ * carry no dollar figure. This discloses a different gap: sessions whose latest
+ * ingest attempt failed to read or price them. Each such session is EITHER
+ * absent from the stored rows (it never ingested) OR present at an older extent
+ * than the corpus now holds (it ingested cleanly, then was quarantined at the
+ * pricing gate with its last good pass still committed - see
+ * `test/ingest-quarantine-coverage.test.ts`); the counts cannot say which.
+ * Either way the missing part is in neither `tokens` nor `unpricedTokens`, and
+ * the omission is one-directional: `totals` is a lower bound whenever these
+ * counts are non-zero. (Amended 2026-09-25 (OO): this used to say "not in the
+ * database AT ALL".)
  *
  * Omitted (not zeroed) when the server has no ingest seam wired: "we did not
  * ask" and "we asked and the answer is none" are different facts, and a zero
@@ -91,7 +100,18 @@ export const CostSummaryResponseSchema = Type.Object(
     totals: CostTotalsSchema,
     perModel: Type.Array(ModelCostSchema),
     perDay: Type.Array(DailyCostSchema),
+    /** The `topN` costliest sessions - a slice of the corpus, ordered by cost. */
     topSessions: Type.Array(SessionCostSchema),
+    /**
+     * How many sessions the corpus holds with any priced or unpriced usage - the
+     * population `topSessions` was cut from, not the length of the slice. With
+     * this the client can state "5 of 51" instead of hedging that five might
+     * be all there is; before it, the payload could not tell a corpus of exactly
+     * `topN` sessions from one with hundreds.
+     */
+    sessionCount: Type.Integer({ minimum: 0 }),
+    /** `true` when `sessionCount` exceeds the slice - the table is truncated. */
+    hasMore: Type.Boolean(),
     coverage: Type.Optional(CostCoverageSchema),
   },
   { additionalProperties: false },
@@ -173,6 +193,7 @@ export const AgentDelegationSavingsSchema = Type.Object(
     parentAgentId: nullable(Type.String()),
     actualUsd: Type.Number({ minimum: 0 }),
     hypotheticalUsd: Type.Number({ minimum: 0 }),
+    /** `max(0, hypotheticalUsd - actualUsd)` - never negative. */
     savingsUsd: Type.Number({ minimum: 0 }),
     hypotheticalModel: Type.String(),
     isEstimate: Type.Literal(true),
@@ -187,6 +208,12 @@ export const DelegationSavingsSchema = Type.Object(
   {
     actualUsd: Type.Number({ minimum: 0 }),
     hypotheticalUsd: Type.Number({ minimum: 0 }),
+    /**
+     * Sum of `perAgent[].savingsUsd`, i.e. Σ max(0, hypothetical - actual) per
+     * subagent - NOT `hypotheticalUsd - actualUsd`. A subagent that would have
+     * been cheaper on the top-tier model adds 0 here but still enters both
+     * totals (A: 10 actual / 2 hyp, B: 1 / 5 -> actual 11, hyp 7, savings 4).
+     */
     savingsUsd: Type.Number({ minimum: 0 }),
     perAgent: Type.Array(AgentDelegationSavingsSchema),
     /** Subagents with no resolvable top-tier model — excluded, never guessed. */
@@ -257,6 +284,11 @@ export const AggregateDelegationSavingsSchema = Type.Object(
     actualUsd: Type.Number({ minimum: 0 }),
     /** What that same work would have cost on the top-tier model instead. */
     hypotheticalUsd: Type.Number({ minimum: 0 }),
+    /**
+     * Σ over priced subagents of max(0, hypothetical - actual) - NOT
+     * `hypotheticalUsd - actualUsd`, which can be smaller (or negative) when
+     * some subagent would have been cheaper on the top-tier model.
+     */
     savingsUsd: Type.Number({ minimum: 0 }),
     isEstimate: Type.Literal(true),
     basis: Type.Literal('stored-usage-rows'),

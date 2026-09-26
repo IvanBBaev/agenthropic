@@ -7,6 +7,7 @@
  * the color class.
  */
 import type { AgentStatus } from '../dto';
+import { quoteRawValue } from '../format';
 
 /** Every persisted status, in board display order. */
 export const AGENT_STATUSES: readonly AgentStatus[] = [
@@ -56,11 +57,26 @@ export const UNRECOGNISED_STATUS_SYMBOL = '?';
  * A status string this build does not know (server ahead of the UI, or data
  * written by an older schema). It is shown, with its raw value, rather than
  * being coerced into a friendlier known state or dropped from the picture.
+ *
+ * AMENDED 2026-09-23 (lane-P). "Shown, with its raw value" was true of every
+ * raw value except the ones that show as nothing. `dto-guards.ts` checks
+ * containers and load-bearing numbers and deliberately NOT strings, so `''`
+ * and `'   '` reach this function as legitimately as `'zombie'` does - and
+ * they rendered as `unrecognised ()`, a parenthesis that promises a value and
+ * then exhibits none. A reader cannot tell that from a rendering fault in this
+ * page, which is exactly the wrong thing to leave ambiguous in the label whose
+ * whole job is to report what the server actually sent.
+ *
+ * The raw value is now always quoted - not quoted only when blank. One string
+ * rather than two arms, the same choice lane O made in `unreadableDayLabel`
+ * the same day: a reader who meets `unrecognised ("zombie")` once learns that
+ * the quotes delimit the server's own bytes, and then `unrecognised ("")` and
+ * `unrecognised ("  ")` are legible without having to be explained.
  */
 export function unrecognisedStatusMeta(raw: string): StatusMeta {
   return {
     symbol: UNRECOGNISED_STATUS_SYMBOL,
-    label: `${UNRECOGNISED_STATUS_LABEL} (${raw})`,
+    label: `${UNRECOGNISED_STATUS_LABEL} (${quoteRawValue(raw)})`,
     className: 'status-unrecognised',
   };
 }

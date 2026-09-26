@@ -72,8 +72,9 @@ export type SessionDetailDto = Static<typeof SessionDetailSchema>;
 
 /**
  * `GET /api/sessions/:id/tree` response. `unattributed` carries token usage
- * whose `agent_id` is null (the main agent's own turns) or points at no
- * materialized agent row - shown, never dropped.
+ * whose `agent_id` is null or points at no materialized agent row - shown,
+ * never dropped. Main-agent turns are NOT here: ingest writes them onto the
+ * main node (agent id === session id).
  */
 export const SessionTreeResponseSchema = Type.Object(
   {

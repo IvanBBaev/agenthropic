@@ -99,6 +99,11 @@ substrate unavailable rather than a number, and every parser threshold remains
 **PROVISIONAL (LABEL-ME)**. Green CI against fixtures the same author wrote is not the
 measurement this ADR named, and no amount of it becomes that measurement.
 
+*(As built — 2026-08-15, recorded 2026-09-22: a fifth edge mechanism, `legacy_explore`, was
+added by migration 13 on 2026-08-15 for pre-2.1.71 `Explore` sidecars that carry no
+`toolUseId`; `orchestration_edges.source` now admits five values, not four. The hook count
+and the JSONL-only reconstruction are unchanged.)*
+
 ## Context
 
 agenthropic ingests from two sources: Claude Code lifecycle **hooks** (sub-second, live) and

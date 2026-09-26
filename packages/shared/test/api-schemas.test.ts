@@ -9,7 +9,7 @@ import {
   DEFAULT_COST_TOP_N,
   DEFAULT_DAG_NODE_LIMIT,
   DEFAULT_PAGE_LIMIT,
-  GenericRealtimeEventSchema,
+  IngestFailedEventSchema,
   GlobalDagResponseSchema,
   MAX_COST_TOP_N,
   MAX_DAG_NODE_LIMIT,
@@ -281,9 +281,39 @@ describe('cost and DAG schemas', () => {
           unpricedTokens: 100,
         },
       ],
+      sessionCount: 1,
+      hasMore: false,
     };
     expect(Value.Check(CostSummaryResponseSchema, summary)).toBe(true);
     expect(Value.Check(CostSummaryResponseSchema, { ...summary, totals: undefined })).toBe(false);
+  });
+
+  it('requires the population counter next to the topSessions slice (L1)', () => {
+    const base = {
+      totals: { tokens: 0, costUsd: 0, unpricedTokens: 0 },
+      perModel: [],
+      perDay: [],
+      topSessions: [],
+    };
+    // Both fields are mandatory: a payload without them is the pre-L1 shape,
+    // which a client must refuse rather than render as "0 of 0".
+    expect(Value.Check(CostSummaryResponseSchema, base)).toBe(false);
+    expect(Value.Check(CostSummaryResponseSchema, { ...base, sessionCount: 0 })).toBe(false);
+    expect(Value.Check(CostSummaryResponseSchema, { ...base, hasMore: false })).toBe(false);
+    expect(
+      Value.Check(CostSummaryResponseSchema, { ...base, sessionCount: 0, hasMore: false }),
+    ).toBe(true);
+    // A slice of an empty corpus that claims more, or a negative / fractional
+    // population, is not a summary.
+    expect(
+      Value.Check(CostSummaryResponseSchema, { ...base, sessionCount: -1, hasMore: false }),
+    ).toBe(false);
+    expect(
+      Value.Check(CostSummaryResponseSchema, { ...base, sessionCount: 1.5, hasMore: true }),
+    ).toBe(false);
+    expect(
+      Value.Check(CostSummaryResponseSchema, { ...base, sessionCount: 51, hasMore: 'yes' }),
+    ).toBe(false);
   });
 
   it('rejects a negative dollar figure anywhere in the cost summary', () => {
@@ -341,15 +371,64 @@ describe('realtime event schemas', () => {
     occurredAt: '2026-07-11T00:00:00Z',
   };
 
-  it('accepts the two specific events and the generic envelope', () => {
+  const ingestFailed = {
+    type: 'ingest-failed',
+    payload: {
+      sessionId: 'session-2',
+      reason: 'refusing to price at $0: unknown model id "unpriced-model-z"',
+      attempt: 2,
+      willRetry: true,
+      occurredAt: '2026-07-11T00:00:00Z',
+    },
+  };
+
+  it('accepts the three typed events, each on its own arm', () => {
     expect(Value.Check(SessionIngestedEventSchema, ingested)).toBe(true);
     expect(Value.Check(AgentStatusChangedEventSchema, statusChanged)).toBe(true);
-    expect(Value.Check(GenericRealtimeEventSchema, { type: 'custom', payload: { a: 1 } })).toBe(
-      true,
-    );
-    for (const event of [ingested, statusChanged, { type: 'custom', payload: {} }]) {
+    expect(Value.Check(IngestFailedEventSchema, ingestFailed)).toBe(true);
+    for (const event of [ingested, statusChanged, ingestFailed]) {
       expect(Value.Check(RealtimeEventSchema, event)).toBe(true);
     }
+  });
+
+  it('is a closed union: an unknown type with an opaque payload is not an event (D5)', () => {
+    // Until 2026-09-09 a generic `{ type: string, payload: object }` arm made
+    // this pass; the arm is gone, so a frame nobody publishes validates nowhere.
+    expect(Value.Check(RealtimeEventSchema, { type: 'custom', payload: { a: 1 } })).toBe(false);
+    expect(Value.Check(RealtimeEventSchema, { type: 'custom', payload: {} })).toBe(false);
+    // And a known name with the wrong envelope is not rescued by another arm.
+    expect(Value.Check(RealtimeEventSchema, { type: 'ingest-failed', sessionId: 's' })).toBe(false);
+    // The `type` is a literal, not a string: a well-formed ingest-failed
+    // payload under any other name is refused by the arm and by the union.
+    const renamed = { ...ingestFailed, type: 'custom' };
+    expect(Value.Check(IngestFailedEventSchema, renamed)).toBe(false);
+    expect(Value.Check(RealtimeEventSchema, renamed)).toBe(false);
+  });
+
+  it('pins every ingest-failed payload field and refuses extras on both levels', () => {
+    const { payload } = ingestFailed;
+    const withPayload = (overrides: Record<string, unknown>) => ({
+      type: 'ingest-failed',
+      payload: { ...payload, ...overrides },
+    });
+    // `occurredAt` belongs inside the envelope (the dashboard narrows it there);
+    // beside `type` it is an extra property and the frame is refused.
+    expect(Value.Check(IngestFailedEventSchema, { ...ingestFailed, occurredAt: 'x' })).toBe(false);
+    expect(Value.Check(IngestFailedEventSchema, withPayload({ path: '/Users/x' }))).toBe(false);
+    for (const field of ['sessionId', 'reason', 'attempt', 'willRetry', 'occurredAt']) {
+      const missing: Record<string, unknown> = { ...payload };
+      delete missing[field];
+      expect(
+        Value.Check(IngestFailedEventSchema, { type: 'ingest-failed', payload: missing }),
+      ).toBe(false);
+    }
+    expect(Value.Check(IngestFailedEventSchema, withPayload({ attempt: 0 }))).toBe(false);
+    expect(Value.Check(IngestFailedEventSchema, withPayload({ attempt: 1.5 }))).toBe(false);
+    expect(Value.Check(IngestFailedEventSchema, withPayload({ willRetry: 'yes' }))).toBe(false);
+    expect(Value.Check(IngestFailedEventSchema, withPayload({ reason: null }))).toBe(false);
+    expect(
+      Value.Check(IngestFailedEventSchema, withPayload({ attempt: 3, willRetry: false })),
+    ).toBe(true);
   });
 
   it('allows null costUsd (not-yet-priced) but never a missing field', () => {

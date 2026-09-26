@@ -64,26 +64,57 @@ export function assertLoopbackHost(host: string): void {
   }
 }
 
+const TOKEN_PARAM = 'token';
+
+/**
+ * Decode a raw query key the way `URLSearchParams` would for the purpose of
+ * comparing it to an ASCII name: `+` becomes a space and each well-formed
+ * `%XX` escape becomes its byte. It never throws - a malformed escape is left
+ * as literal text (as `URLSearchParams` does), so it can never decode to the
+ * name. Non-ASCII bytes map to non-ASCII characters, which likewise cannot
+ * match an ASCII name, so byte-wise decoding is exact for this comparison.
+ */
+function decodeQueryKeyForMatch(rawKey: string): string {
+  return rawKey
+    .replace(/\+/g, ' ')
+    .replace(/%([0-9A-Fa-f]{2})/g, (_match, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+}
+
 /**
  * Redact the `token` query parameter in a request URL so the SSE stream's
- * `?token=<secret>` never lands in a request log. Any other query parameters
- * and the path are preserved verbatim. A URL with no `token` param is returned
- * unchanged. This is the one place a token can appear in a URL (EventSource
- * cannot set an Authorization header), so it is the one place logging must
- * scrub.
+ * `?token=<secret>` never lands in a request log. Redaction is done in place:
+ * the query is split on `&` and only a segment whose decoded key is exactly
+ * `token` (including a percent-encoded key name such as `%74oken`) has its
+ * value replaced with `REDACTED`, keeping its raw key. Every occurrence is
+ * redacted. Every other byte - the path, the other segments and any fragment -
+ * is preserved verbatim. A URL with no `token` param is returned unchanged.
+ * This is the one place a token can appear in a URL (EventSource cannot set an
+ * Authorization header), so it is the one place logging must scrub.
  */
 export function redactTokenInUrl(url: string): string {
   const queryStart = url.indexOf('?');
   if (queryStart === -1) {
     return url;
   }
-  const path = url.slice(0, queryStart);
-  const params = new URLSearchParams(url.slice(queryStart + 1));
-  if (!params.has('token')) {
+  const fragmentStart = url.indexOf('#', queryStart);
+  const queryEnd = fragmentStart === -1 ? url.length : fragmentStart;
+  let redacted = false;
+  const segments = url
+    .slice(queryStart + 1, queryEnd)
+    .split('&')
+    .map((segment) => {
+      const equalsAt = segment.indexOf('=');
+      const rawKey = equalsAt === -1 ? segment : segment.slice(0, equalsAt);
+      if (decodeQueryKeyForMatch(rawKey) !== TOKEN_PARAM) {
+        return segment;
+      }
+      redacted = true;
+      return `${rawKey}=REDACTED`;
+    });
+  if (!redacted) {
     return url;
   }
-  params.set('token', 'REDACTED');
-  return `${path}?${params.toString()}`;
+  return `${url.slice(0, queryStart + 1)}${segments.join('&')}${url.slice(queryEnd)}`;
 }
 
 /**

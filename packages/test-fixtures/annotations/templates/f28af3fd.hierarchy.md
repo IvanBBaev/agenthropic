@@ -20,7 +20,8 @@ agreement.
 
 **Where to look:** open the main transcript
 `spike/corpus/sessions/f28af3fd/data/f28af3fd-d80b-4bb0-a48e-89625d2aa3e3.jsonl`
-and search for `Task` tool_use blocks — each carries the subagent's
+and search for `Agent` tool_use blocks (a workflow subagent has none: it is joined by its
+`subagents/workflows/wf_*/` directory) — each carries the subagent's
 `description`, which is echoed as a comment on each line below. A block found in
 the *main* transcript means `ROOT`. A block found inside another agent's
 transcript (`f28af3fd-d80b-4bb0-a48e-89625d2aa3e3/subagents/agent-<hex>.jsonl`) means that agent is the parent

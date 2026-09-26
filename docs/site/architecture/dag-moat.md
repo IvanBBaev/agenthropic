@@ -22,7 +22,8 @@ right, which is exactly why it is the moat and not a nice-to-have.
 >
 > - **The edges are JSONL-only, not dual-path.** No hook ever asserts an edge —
 >   `SubagentStart` does not exist, and even `SubagentStop` contributes only a liveness
->   timestamp. The parser derives every edge from the transcripts via **five join
+>   verdict (a `'completed'` status on an agent the parser already created), never an
+>   edge. The parser derives every edge from the transcripts via **five join
 >   paths**, recorded per row in a `source` column: `'tool_use'`, `'directory'`,
 >   `'task_notification'`, `'queue_operation'`, and `'legacy_explore'`.
 >   "Rebuild from JSONL alone" is therefore not a fallback proof but the only branch
@@ -108,6 +109,20 @@ is exactly the property `WP-U3` (session/agent/subagent-tree endpoints) and `WP-
 > so whole-session re-ingest (the replay mechanism) collapses duplicate derivations to
 > one row. `instance` and `host_id` are `NOT NULL` from migration 5.
 
+**AMENDED 2026-09-23 (J-3).** One thing the "query over persisted edges" framing does not
+settle, and which the global query got wrong until this date: **how a node's tokens are
+attributed.** The graph spans sessions; a *node* does not. `GET /api/dag/global` now groups
+`token_usage` by `(agent_id, session_id)` and joins on both columns - the scoping the
+per-session tree has always used - so a node's `totalTokens` / `costUsd` / `unpricedTokens` are
+that agent's usage **in its own session**, and the two endpoints report the same figure for the
+same agent. Previously the global query grouped by `agent_id` alone, so an agent id appearing
+in more than one session had every session's tokens summed onto the one node: a cross-session
+figure rendered as one agent's spend, larger than the session tree's figure for the same node
+and carrying nothing to say so. Nothing in the schema prevents the collision - no foreign key
+ties `token_usage.agent_id` to a session, and a usage row naming that id in another session is
+that session's *unattributed* usage. Spanning sessions is the moat claim; silently summing
+across them never was.
+
 ## Per-instance, not type-aggregated
 
 The second word matters because at least one audited rival built something that *looks*
@@ -157,9 +172,10 @@ against a future migration, not a shipped feature. Until Phase 5+ lands, treat a
 > the child's `meta.toolUseId`), `directory` (nested `workflows/wf_*/` containment),
 > `task_notification`, `queue_operation`, and the defensive `legacy_explore` fallback
 > for pre-2.1.71 transcripts — each recorded in the row's `source` column, so an edge's
-> provenance stays queryable. The paths are tried in that order and the first match
-> wins; an agent none of the five can join gets **no edge** (visible as an orphan),
-> never a guessed one. The section below is the design record of why the hedge existed.
+> provenance stays queryable. The parser decides `directory` first, by file layout alone;
+> for a flat file it tries `tool_use`, then `queue_operation`, then `task_notification`,
+> and `legacy_explore` last — the first match wins. An agent none of the five can join
+> gets **no edge** (visible as an orphan), never a guessed one. The section below is the design record of why the hedge existed.
 
 This is the core mechanism, and the single largest execution-risk item on the moat. The
 development plan's work package is explicit that the persisted edge must be derivable
@@ -343,7 +359,7 @@ Two things worth being precise about, since it is easy to blur them:
   (a type-aggregated diagram over a post-hoc reconstruction) so that distinction is not
   lost in a demo screenshot.
 
-## Confirmed shape of `orchestration_edges` (as built: migration 5 is the authority)
+## Confirmed shape of `orchestration_edges` (as built: migration 13 is the authority)
 
 Beyond `WP-D7`'s Done-when and `DESIGN.md` §4, the canonical decision **CD-4**
 (`concept-analysis-v2.md`) pins the column set explicitly:
@@ -380,8 +396,8 @@ CREATE TABLE orchestration_edges (
   UNIQUE (session_id, parent_agent_id, child_agent_id)
 );
 CREATE INDEX idx_orchestration_edges_session_id ON orchestration_edges(session_id);
-CREATE INDEX idx_orchestration_edges_parent ON orchestration_edges(parent_agent_id);
-CREATE INDEX idx_orchestration_edges_child ON orchestration_edges(child_agent_id);
+CREATE INDEX idx_orchestration_edges_parent_agent_id ON orchestration_edges(parent_agent_id);
+CREATE INDEX idx_orchestration_edges_child_agent_id ON orchestration_edges(child_agent_id);
 ```
 
 Two later migrations are worth reading as decisions rather than as maintenance.
@@ -492,7 +508,8 @@ which library wins until that decision is made.
   [the data model](../architecture/data-model.md) page's own status table, the exact
   FK/child-column naming remains a reference synthesis pending the actual migration
   (`WP-D4`…`WP-D10`), none of which are written yet.
-  *Resolved:* migration 5 is written and quoted above — `derived_from_event_id` became
+  *Resolved:* migrations 5, 12 and 13 are written and the current shape is quoted
+  above — `derived_from_event_id` became
   the `source` join-path column; the logical key is session-scoped.
 - **Fleet aggregation itself.** The host/instance key is populated from the first
   migration, but the cross-machine rollup UI/queries are Phase 5+ and not decomposed
@@ -511,9 +528,9 @@ which library wins until that decision is made.
 - [Architecture overview](../architecture/overview.md) — the full ingest loop and the
   two invariants (ground-truth tokens, persisted agent hierarchy) this page assumes.
 - [Data model](../architecture/data-model.md) — the annotated schema reference carrying
-  the real migration DDL for all nine built tables: `events_raw`, `events`, `sessions`,
-  `agents`, `orchestration_edges`, `token_usage`, `model_pricing`, `ingest_checkpoints`
-  and the migration runner's own `schema_version` ledger.
+  the real migration DDL for all ten built tables: `events_raw`, `events`, `sessions`,
+  `agents`, `orchestration_edges`, `token_usage`, `token_usage_rollup`, `model_pricing`,
+  `ingest_checkpoints` and the migration runner's own `schema_version` ledger.
 - [Ingest & reconciliation](../architecture/ingest-reconciliation.md) — the as-built
   ingest pipeline, and the CD-1 ingest-primacy decision the edge derivation rests on.
 - [Phase-0 corpus probe](../../analysis/phase0-probe.md) — the empirical CD-1 verdict

@@ -7,11 +7,7 @@
  * published types equal to it in realtime-event-contract.test.ts.
  */
 import { describe, expect, it } from 'vitest';
-import {
-  AgentStatusChangedEventSchema,
-  SERVER_EVENT_TYPES,
-  SessionIngestedEventSchema,
-} from '../src/index';
+import { RealtimeEventSchema, SERVER_EVENT_TYPES } from '../src/index';
 
 describe('SERVER_EVENT_TYPES', () => {
   it('lists exactly the three published event types, ingest-failed included', () => {
@@ -29,12 +25,15 @@ describe('SERVER_EVENT_TYPES', () => {
   it('covers every literal-typed arm of the RealtimeEvent union', () => {
     // The generic arm carries a free-form `type`; the two literal arms must
     // each appear in the list or their frames are dropped unheard.
-    const literalTypes = [
-      SessionIngestedEventSchema.properties.type.const,
-      AgentStatusChangedEventSchema.properties.type.const,
-    ];
+    // AMENDED 2026-09-23: the generic arm was removed on 2026-09-09 (the union
+    // is closed at one literal arm per registry name), and the hand-written
+    // list here still named only two of the three arms, skipping
+    // `ingest-failed`. The literals are now read from the union itself, so an
+    // arm added later cannot be missed, and the match is exact both ways.
+    const literalTypes = RealtimeEventSchema.anyOf.map((arm) => arm.properties.type.const);
     for (const literal of literalTypes) {
-      expect(SERVER_EVENT_TYPES).toContain(literal);
+      expect(typeof literal).toBe('string');
     }
+    expect([...literalTypes].sort()).toEqual([...SERVER_EVENT_TYPES].sort());
   });
 });

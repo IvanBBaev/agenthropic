@@ -23,7 +23,7 @@ templates).
 > commit the owner makes. Until then, "created" means drafted, not published, and the
 > table says so rather than rounding it up.
 
-| Artifact | Physical location | Status (verified 2026-08-15) |
+| Artifact | Physical location | Status (verified 2026-08-15; re-verified 2026-09-19 — see the note below the table) |
 |---|---|---|
 | Security disclosure policy | `SECURITY.md` at repo root | **Drafted, unpublished** — 266 lines on disk; absent from GitHub `main` |
 | Code of Conduct | `CODE_OF_CONDUCT.md` at repo root | **Not created** — Contributor Covenant adoption still exists only as the decision recorded on this page |
@@ -32,18 +32,23 @@ templates).
 | Issue template chooser config | `.github/ISSUE_TEMPLATE/config.yml` | **Drafted, unpublished** — `blank_issues_enabled: false` as specified in §3 |
 | Pull request template | `.github/PULL_REQUEST_TEMPLATE.md` | **Drafted, unpublished** — checklist diverges from §4; see the note there |
 
+*(Re-verified 2026-09-19: every "Drafted, unpublished" row above has since been
+**published** — `SECURITY.md`, both issue forms, the chooser config and the PR template
+are on GitHub `main` since commit `ef40885` of 2026-08-15, later the same day the table
+was first verified. Only `CODE_OF_CONDUCT.md` remains **not created**.)*
+
 Two further files that were never on this list appeared alongside them: a repo-root
 `CONTRIBUTING.md`, deliberately written as a short front door that defers to
-[the contributing overview](index.md) for depth, and a repo-root `CHANGELOG.md`. Both are
-working-tree-only on the same terms.
+[the contributing overview](index.md) for depth, and a repo-root `CHANGELOG.md`. Both reached GitHub `main` in
+the same commit (`ef40885`, 2026-08-15).
 
 The historical note this section used to carry still stands as history: when this page was
 first written there was no `.github/` directory, no `SECURITY.md`, no
 `CODE_OF_CONDUCT.md` and no `LICENSE` at all. The `LICENSE` gap is the one that closed
 properly — the file is tracked and the GitHub API reports this repository's license as
 `MIT` rather than `null`, which retires the release blocker
-[licensing & provenance](licensing.md) used to carry. The rest closed on disk and has not
-closed in public. Publishing them is an owner action; see
+[licensing & provenance](licensing.md) used to carry. The rest closed in public in commit
+`ef40885` (2026-08-15); only `CODE_OF_CONDUCT.md` remains uncreated — see
 [open decisions](#open-decisions--follow-ups).
 
 **One governance control that is worth stating plainly, because everything else on this
@@ -104,7 +109,8 @@ before most users are ever exposed.
 > the public thread until a private channel is opened for them. That is the right
 > behaviour for a policy that cannot enable its own channel, but it is a degraded path,
 > and it stays degraded until the owner turns private reporting on in the repository
-> settings. It is the second owner-only gap on this page, alongside branch protection.
+> settings. It was the second owner-only gap on this page alongside branch protection;
+> since branch protection closed on 2026-08-25 it is the only one left.
 
 `SECURITY.md` states, at minimum:
 
@@ -213,7 +219,7 @@ Two templates plus a chooser config, in the standard GitHub layout:
 |---|---|
 | Summary | One or two sentences: what happened vs. what was expected. |
 | Environment | OS, Node version, agenthropic version/commit, and which phase of the [roadmap](../guide/roadmap.md) is in play (this matters more than usual here — pre-Phase-0 there is no running app to file a bug against at all). |
-| Reproduction steps | Minimal steps; for ingest bugs, which of the twelve [lifecycle hook events](../architecture/hooks.md) was involved. |
+| Reproduction steps | Minimal steps; for ingest bugs, which of the four [lifecycle hook events](../architecture/hooks.md) the installer registers (`UserPromptSubmit`, `Stop`, `SubagentStop`, `PreCompact`) was involved. |
 | Logs / relevant excerpt | **Redacted.** No real `DASHBOARD_TOKEN`, no raw tool-call payload that might contain secrets — same placeholder convention as [the style guide](../STYLE-GUIDE.md). |
 | Is this a security issue? | A visible reminder in the template itself: if yes, stop and use the [private channel](#1-security-disclosure-policy-securitymd) instead of filing this issue. |
 
@@ -229,8 +235,8 @@ Two templates plus a chooser config, in the standard GitHub layout:
 ### `config.yml`
 
 Sets `blank_issues_enabled: false` and adds a `contact_links` entry pointing at
-`SECURITY.md` / the private reporting channel, labeled explicitly as "Report a
-security vulnerability (do not open a public issue)". This is the standard
+`SECURITY.md` / the private reporting channel, named "Security vulnerability", with an
+about-text that opens "Do not open a public issue for a security problem". This is the standard
 GitHub mechanism for steering security reports away from the public tracker
 *before* someone starts typing, rather than relying on every reporter to have
 read `SECURITY.md` first.
@@ -311,11 +317,12 @@ attest to having done it, not to prove it via the diff.
   repository can do it. *(The prior form of this item — which channel to use — was
   decided by implementation on 2026-08-15 in favour of the native channel, with no
   email or PGP fallback published. See [§1](#what-the-policy-states).)*
-- **Publishing the drafted artifacts.** `SECURITY.md`, both issue forms, the chooser
-  config and the PR template exist on disk and on no remote. Until they are
-  committed and pushed, a contributor arriving from github.com sees none of them:
-  no security policy, no issue forms, no PR checklist. A drafted policy that nobody
-  can reach governs nothing.
+- ~~**Publishing the drafted artifacts.**~~ **Done 2026-08-15** (re-verified
+  2026-09-19). `SECURITY.md`, both issue forms, the chooser config and the PR template
+  reached GitHub `main` in commit `ef40885`, so a contributor arriving from github.com
+  now sees the security policy, the issue forms and the PR checklist. *(The item as
+  first written: the five files existed on disk and on no remote, and a drafted policy
+  that nobody can reach governs nothing.)*
 - **`CODE_OF_CONDUCT.md` is still the one artifact that does not exist at all.** The
   adoption decision (Contributor Covenant, §2) has been made; the file has not been
   written. It is also not named as a work package in
@@ -345,7 +352,7 @@ attest to having done it, not to prove it via the diff.
   report severity.
 - [Contributing overview](index.md) — dev setup, PR flow, and the one-WP-one-agent
   model referenced by the feature-request template.
-- [`CONTRIBUTING.md`](../../../CONTRIBUTING.md) (repo root) — the short front door
+- [`CONTRIBUTING.md`](https://github.com/IvanBBaev/agenthropic/blob/main/CONTRIBUTING.md) (repo root) — the short front door
   drafted on 2026-08-15: prerequisites, setup, and the seven gates in CI's order. It
   defers to the contributing overview for depth rather than restating it.
 - [Testing & quality](testing.md) — the golden fixture corpus and coverage gate

@@ -21,7 +21,9 @@ the build **red** on violation, not a review-time reminder — see
 > controls above now **exist and are test-proven**: the server binds `127.0.0.1` only
 > and refuses to start without `DASHBOARD_TOKEN`
 > (`apps/server/src/config.ts` / `src/index.ts`); a single global `onRequest` hook in
-> `apps/server/src/server.ts` gates **every** route with a timing-safe token compare;
+> `apps/server/src/server.ts` gates **every** `/api/*` route with a timing-safe token
+> compare (the built SPA shell and its static assets, which hold no secret, are the
+> only routes outside the gate);
 > `/api/stream` rejects foreign `Origin` headers with 403 *before* auth; SQLite opens
 > in WAL mode with `foreign_keys=ON` asserted on every connection
 > (`apps/server/src/db/connection.ts`); the no-spawner static gate
@@ -140,6 +142,12 @@ packages and Definition-of-Done that turn each rule into CI-blocking code).
   > any other host, and `security-contract.test.ts` boots the real server and asserts
   > that **every** bound address is `127.0.0.1`. The static gate (rule 3's scanner)
   > additionally rejects the `0.0.0.0`/`::` bind patterns anywhere in the tree.
+  >
+  > *(Amended 2026-09-23: the runtime check now also fails closed on an **empty** address
+  > list. "No address is non-loopback" is vacuously true of no addresses at all, so a server
+  > that reported nothing bound used to pass the guard; it now logs `FATAL: the server
+  > reported no bound address...` and exits non-zero, because an invariant that could not be
+  > verified is treated as violated.)*
 
 ### 2. Auth token is mandatory — `timingSafeEqual`, not a no-op-when-unset
 
@@ -166,7 +174,9 @@ packages and Definition-of-Done that turn each rule into CI-blocking code).
   > **As built:** the rule holds; the implementation shape is *stronger* than the
   > sketches below in three ways. (1) There is no per-route guard to remember — a
   > single global `onRequest` hook in `apps/server/src/server.ts` gates every
-  > registered route, and it matches the exemptions (none today except the
+  > registered `/api/*` route (the built SPA shell and its assets are served outside
+  > the gate by design, and the static handler refuses any path whose first segment
+  > is `api`), and it matches the exemptions (none today except the
   > same-origin-then-token SSE ordering) on Fastify's **decoded** `routeOptions.url`,
   > not the raw request URL, so a percent-encoded path like `/%61pi/stream` cannot
   > slip past the gate (the contract suite tests exactly this). (2) The timing-safe
@@ -280,11 +290,25 @@ packages and Definition-of-Done that turn each rule into CI-blocking code).
   > `hooks/`, and the repo-root config files — source *and* tests — for the whole
   > subprocess API family, wide binds (`0.0.0.0`/`::`), WebSocket-server patterns,
   > and dynamic code evaluation (indirect eval, `data:`/concatenated dynamic import).
-  > Its two escape hatches are explicit and auditable (a logged whole-file allowlist
-  > containing only the policy file itself, and a per-line `spawner-gate-allow`
-  > marker), and its header is honest about scope: a regex gate stops the idiomatic
+  > Since 2026-09-07 it also reads the direct dependencies of the root and every
+  > workspace `package.json` by name, so a subprocess or WebSocket package is refused
+  > at `pnpm add`; transitive dependencies stay with lockfile review. Its two escape
+  > hatches are explicit and auditable (a logged whole-file allowlist containing only
+  > the policy file itself, and a per-line `spawner-gate-allow` marker — on three
+  > sites as of 2026-09-09: the license gate's fixed-argv `pnpm licenses list`, a
+  > migration-checksum test that runs `tsx` once at test time, and a test asserting
+  > the loopback guard rejects `0.0.0.0`), and its header is honest about scope: a regex gate stops the idiomatic
   > reintroduction paths, not a deliberately obfuscating insider — the runtime
   > loopback backstop and code review remain the real controls.
+  >
+  > **AMENDED 2026-09-23 (J-11).** "Three sites" is the count of sanctioned *exceptions*, and
+  > the enumeration above is still exact - but it is not a line count, and the gate prints a
+  > line count. The three exceptions are carried on **five** marked lines, because two of them
+  > need the marker on the `import` as well as on the call:
+  > `apps/server/test/migrations-checksum-stability.test.ts:83` and `:195`,
+  > `packages/shared/test/security.test.ts:81`, `scripts/check-licenses.mjs:36` and `:167`.
+  > A reader auditing the gate's `5 line(s) inline-exempt` clause against the sentence above
+  > would otherwise find a discrepancy that is not there.
 
 ### 4. Same-origin check on the realtime channel
 
@@ -320,7 +344,8 @@ packages and Definition-of-Done that turn each rule into CI-blocking code).
   > rule closes. They are still gated: the token check runs immediately afterwards and
   > rejects them without a credential. The half that matters is the other one: a
   > *present* `Origin` must match the server's own loopback origin exactly. Browsers
-  > always send it, so a page in another tab can never reach the stream, token or not.
+  > always send it on a cross-origin request, so a page in another tab can never reach
+  > the stream, token or not.
   > Treating a missing header as hostile would buy no security and break every
   > command-line client.
 
@@ -344,9 +369,14 @@ packages and Definition-of-Done that turn each rule into CI-blocking code).
 
   > **As built:** enforced *structurally*, which is stronger than "every route carries
   > the guard": there are no per-route guards to forget, because one global
-  > `onRequest` hook in `apps/server/src/server.ts` gates everything registered on the
-  > server — read routes, the hook receiver, `/api/stream`, even `/api/health`. A new
-  > route added tomorrow is token-gated by construction. The contract suite asserts
+  > `onRequest` hook in `apps/server/src/server.ts` gates every route whose routed
+  > pattern starts with `/api/` — read routes, the hook receiver, `/api/stream`, even
+  > `/api/health`. A new `/api/*` route added tomorrow is token-gated by construction.
+  > The only surface outside the gate is the built SPA shell and its static assets
+  > (`apps/server/src/http/static-site.ts`), which hold no secret and cannot present a
+  > Bearer header for the page still loading; that handler refuses any path whose
+  > first segment is `api`, so an unregistered `/api/...` is never answered off the
+  > filesystem. The contract suite asserts
   > 401 without a token and 401 for wrong tokens of *different lengths* (the compare
   > hashes to fixed length first, so short probes behave identically).
 
@@ -464,17 +494,22 @@ packages and Definition-of-Done that turn each rule into CI-blocking code).
   > prove. The backup itself is no longer merely a capability: an in-process daily
   > timer runs it (see
   > [Scheduling, as built](../operations/backup-restore.md#scheduling-as-built)),
-  > because a backup routine nothing ever calls is not a backup either. Its cadence,
-  > expiry window and keep-minimum are PROVISIONAL constants, not ratified policy.
+  > because a backup routine nothing ever calls is not a backup either. Its cadence is
+  > a constant (daily); the expiry window (30 days) and keep-minimum (7 files) are the
+  > signed v1.0 retention numbers (D3, 2026-09-08), overridable via
+  > `DASHBOARD_RETENTION_BACKUP_DAYS` and `DASHBOARD_RETENTION_BACKUP_KEEP_MIN`.
   >
   > Of the adjacent hardening: hook-payload **redaction** is built (`WP-IN14`, applied
   > before the idempotency key is computed, so raw secrets never reach the stored
-  > envelope or its hash). **Retention** has split into two halves with different
-  > truth values: backup-file expiry runs as part of each backup pass, while the
-  > database-row sweeper exists as built, tested code whose policy is deliberately
-  > blank and whose runner is called from nothing but its own tests. Nothing is being
-  > deleted from the database today, and nothing will be until the window is ratified
-  > (OPEN-1) and a caller is wired.
+  > envelope or its hash). **Retention** is signed and running (D3, 2026-09-08): after
+  > each successful daily backup the composition root runs the retention pass —
+  > `events` rows older than `DASHBOARD_RETENTION_EVENTS_DAYS` (default 90) are pruned
+  > in bounded runs, backup files older than `DASHBOARD_RETENTION_BACKUP_DAYS`
+  > (default 30) expire behind a keep-minimum of `DASHBOARD_RETENTION_BACKUP_KEEP_MIN`
+  > (default 7), `token_usage` is never pruned (setting
+  > `DASHBOARD_RETENTION_TOKEN_USAGE_DAYS` refuses startup), and `events_raw` stays
+  > append-only (OPEN-1's `archive-segments` branch is declared but unbuilt and
+  > refused loudly). A cycle whose backup failed deletes nothing.
 
 ## CI gates enforcing this
 
@@ -507,8 +542,9 @@ CI-observable condition:
 > change that only breaks `vite build` would otherwise merge green and first fail at
 > release time.
 >
-> **The coverage floor is 100, not 90.** All four Vitest configs
-> (`apps/server`, `apps/web`, `packages/core`, `packages/shared`) set
+> **The coverage floor is 100, not 90.** All five Vitest configs
+> (`apps/server`, `apps/web`, `packages/core`, `packages/shared`,
+> `packages/test-fixtures`) set
 > `thresholds: { lines, branches, functions, statements: 100 }`, so the test step
 > itself fails below that. The configs carry their own justification, and it is the
 > reason the number moved rather than a boast: *"a 90% bar on a package sitting at
@@ -579,19 +615,20 @@ As built today:
 
 - **Running and test-proven:** loopback-or-fail bind, mandatory-token-or-fail-startup
   (including the 16-character minimum), the global timing-safe token gate on every
-  route, same-origin-before-auth on `/api/stream` (SSE per CD-5), WAL +
+  `/api/*` route, same-origin-before-auth on `/api/stream` (SSE per CD-5), WAL +
   `foreign_keys` asserted on every connection, online backup with an
   integrity-checked restore path *and* a daily in-process schedule that fires it,
+  the signed retention pass (D3, 2026-09-08) chained after each successful backup,
   hook-payload redaction before the idempotency key, and the
   no-spawner/no-wide-bind/no-eval and license static gates running in CI.
 - **Satisfied by absence:** no subprocess surface, no outbound dial of any kind (the
   webhook dispatcher does not exist yet), no `ANTHROPIC_API_KEY` anywhere in the tree.
-- **Built but deliberately inert:** the `WP-D10` retention sweeper. The mechanism,
-  its protected-table list, its journal receipt and its bounded runs are all code with
-  tests; the policy is blank and the runner is wired into nothing, so no row is being
-  deleted. This is a *chosen* state, not an unfinished one — the retention window has
-  not been ratified (OPEN-1), and shipping a default guess would delete real data on
-  an unowned number.
+- **Running (signed D3, 2026-09-08):** the `WP-D10` retention sweeper, chained after
+  each successful daily backup — `events` rows older than 90 days are pruned in
+  bounded runs with a journal receipt, backup files older than 30 days expire behind
+  a floor of the 7 newest, and `token_usage` and `events_raw` are never pruned. The
+  numbers are overridable via `DASHBOARD_RETENTION_*` (`0` switches a window off);
+  OPEN-1's `archive-segments` branch stays declared-but-unbuilt and refused loudly.
 - **Still design, not code:** the webhook sink and Telegram relay (post-1.0, KC-5) and
   the operator-level restore drill (`WP-X9`, release checklist). Whether CI is
   *merge-blocking* was, until **2026-08-25**, a GitHub branch-protection setting this

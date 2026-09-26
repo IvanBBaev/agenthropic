@@ -111,13 +111,13 @@ export type {
 export {
   SessionIngestedEventSchema,
   AgentStatusChangedEventSchema,
-  GenericRealtimeEventSchema,
+  IngestFailedEventSchema,
   RealtimeEventSchema,
 } from './schemas/realtime';
 export type {
   SessionIngestedEvent,
   AgentStatusChangedEvent,
-  GenericRealtimeEvent,
+  IngestFailedEvent,
   RealtimeEvent,
 } from './schemas/realtime';
 export { SERVER_EVENT_TYPES } from './realtime/event-types';

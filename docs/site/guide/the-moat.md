@@ -29,7 +29,7 @@ doesn't change the "build" verdict.
 > - **The moat proper is built and proven.** The persisted per-instance DAG (`agents` +
 >   `orchestration_edges`, the latter carrying `instance` and `host_id` as `NOT NULL`) and
 >   the cost engine (compaction repricing + delegation savings) run today. Three **P0 proofs
->   run green in CI** on every push and pull request: Σ `token_usage` equals the JSONL,
+>   run green in CI** on every push to `main` and on every pull request: Σ `token_usage` equals the JSONL,
 >   verified by an independently written reader inside the test so a parser bug cannot make
 >   its own proof pass; a double replay produces a **byte-identical** database; and the DAG
 >   **rebuilds from JSONL alone** after a simulated outage, with hooks separately proven
@@ -69,8 +69,9 @@ doesn't change the "build" verdict.
 >   formal spike" promise in §2.1's blockquote **did not hold**: implementation began
 >   2026-07-11 by explicit owner override of that gate.
 >
-> - **"Built" is not "released."** There is no tag and no published package — the workspace
->   is `private: true` at version `0.1.0`, so a checkout is the only way to run any of it.
+> - **"Built" is not "released."** There is no tag and no published package — the root
+>   package is at version `0.3.0`, publishable (`publishConfig.access: public`) but never
+>   published, so a checkout is the only way to run any of it.
 >   Nothing on this page describes a download.
 >
 > The argument below is kept as the design record, with `*(As built: … )*` notes where a
@@ -173,7 +174,10 @@ The persisted `orchestration_edges` table (self-referential `parent_agent_id`,
 `derived_from_event_id`, `instance`/`host_id`) is the moat's core artefact — queried
 from the table, never reconstructed at render time — per concept-analysis-v2's CD-4/CD-2
 (see [architecture: the DAG moat](../architecture/dag-moat.md); that page has since been
-written).
+written). *(As built: no `derived_from_event_id` column shipped — edge provenance is the
+`source` column, one of `tool_use` / `directory` / `task_notification` /
+`queue_operation` / `legacy_explore`; `parent_agent_id`, `instance` and `host_id` are as described, the
+latter two `NOT NULL`.)*
 *(As built: shipped in migration 5, with a `source` column constrained to the four
 structural join paths — `tool_use`, `directory`, `task_notification`, `queue_operation` —
 and `UNIQUE (session_id, parent_agent_id, child_agent_id)` so a replay cannot duplicate an
@@ -234,7 +238,10 @@ This is combined with `hoangsonww`'s genuinely superior costing grafts: `token_u
 bucketed by `speed` / `inference_geo` / `service_tier` (each changes the per-token
 rate), preserving **compaction baselines** so historical totals still price correctly
 after a context rewrite, plus a `model_pricing` table to drive the tile
-(`DESIGN.md` §4). Land on
+(`DESIGN.md` §4). *(As built: the `bucket` column reads `input` / `output` /
+`cache_read` / `cache_write_5m` / `cache_write_1h` — no speed, geo or tier axis exists
+in the schema; compaction is repriced from the transcript's own boundaries at analysis
+time, and `model_pricing` is a seeded, migration-checksummed table.)* Land on
 [architecture: cost model](../architecture/cost-model.md); the
 tile itself is Phase 4 in the roadmap (§6 below).
 
@@ -319,13 +326,16 @@ one roof, with retention/redaction policy from day one (concept-analysis-v2 CD-1
 > migration runner is live, and **redaction is implemented**
 > (`apps/server/src/hooks/redact.ts`, applied at the hook ingest boundary, before the
 > idempotency key is computed, so a redelivered event redacts identically and still
-> dedupes). **Retention is built but switched off.** The mechanism — pruning, an audit
-> journal, backup-file expiry, a runner — exists and is tested; the policy it would enforce
-> does not, because WP-D10 stays blocked on the unresolved open decisions OPEN-1/2/3. That
-> split is deliberate rather than unfinished: a scheduled deleter must not exist before the
-> rule telling it what to delete has been signed, so the shipped default deletes nothing,
-> short-circuits without opening a transaction, and is never started at boot. "Retention/
-> redaction from day one" is therefore half true; say redaction, not retention.
+> dedupes). **Retention is built and running under a signed policy** (D3, 2026-09-08).
+> The mechanism — pruning, an audit journal, backup-file expiry, a runner — is tested,
+> and the daily backup timer chains it after each successful backup: `events` rows older
+> than 90 days are pruned, backup files older than 30 days expire but never below the
+> newest 7, and `token_usage` is never touched (`0` in a `DASHBOARD_RETENTION_*` window
+> switches that rule off). Until the policy was signed the shipped default deleted
+> nothing — a scheduled deleter must not exist before the rule telling it what to delete
+> is signed — which is why "retention/redaction from day one" was only half true for the
+> first weeks; both halves hold now. OPEN-1's `archive-segments` branch is still
+> declared-but-unbuilt and refused loudly.
 
 ## 3. The corrected ranking: `simple10` #1, not `hoangsonww`
 

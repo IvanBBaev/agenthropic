@@ -69,6 +69,13 @@ export interface CorpusIngestDeps {
   /** Optional sink for per-file skip diagnostics (never affects the summary). */
   readonly onWarning?: (skipped: SkippedFile) => void;
   /**
+   * Fired once per admitted session whose substrate build skipped at least one
+   * file, with that session's skips. The watcher needs the per-session view: a
+   * session ingested without a file it could not read must not be checkpointed
+   * as if its projection were complete.
+   */
+  readonly onSessionFilesSkipped?: (ref: SessionRef, skipped: readonly SkippedFile[]) => void;
+  /**
    * Admission predicate applied right after enumeration — the tail-follow
    * watcher passes only changed sessions through. `sessionsDiscovered` counts
    * the ADMITTED refs (the pass's actual working set), not the raw enumeration.
@@ -187,6 +194,9 @@ export function runCorpusIngest(deps: CorpusIngestDeps): CorpusIngestSummary {
     for (const skipped of built.skipped) {
       filesSkipped += 1;
       deps.onWarning?.(skipped);
+    }
+    if (built.skipped.length > 0) {
+      deps.onSessionFilesSkipped?.(ref, built.skipped);
     }
 
     if (built.kind === 'no-substrate') {

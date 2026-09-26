@@ -105,7 +105,7 @@ Binding once Step 0 is signed; dates from roadmap §4. Every failure branch is t
 |---|---|---|---|
 | **KC-0** | **2026-07-13** | All Step-0 boxes above checked | Archive — **DATE PASSED UNMET (2 of 5 boxes open); default overridden by owner instruction, see above** |
 | **KC-1** | **2026-07-27** | WP-S7 verdict written **+** the THROWAWAY DAG-with-dollars render exists **+** the friction log has not crowned a rival (≥4/5 questions) | Archive — **DATE PASSED UNMET: clauses 1 and 2 green, clause 3 unsatisfiable (log never opened); default overridden by owner instruction, see above** |
-| **KC-2** | **2026-09-14** | Phase 1–2 exit gates green; at most **one** velocity rebase applied | Descope ladder (roadmap §5) or archive |
+| **KC-2** | **2026-09-14** | Phase 1–2 exit gates green; at most **one** velocity rebase applied — **MET; ticked 2026-09-18, four days after the date** (the session that owns the tick was inactive 2026-09-10 → 09-18, so the bookkeeping is late, not the condition: nothing in the tree changed after 2026-09-10). Phase 1 and Phase 2 exit gates ✅ (their rows below), all eight gates green on 2026-09-18 over that unchanged tree (2,428 tests, 100% coverage ×5), CI `success` on the pushed SHA `39e565a`, **zero** velocity rebases applied. The descope ladder was not pulled. | Descope ladder (roadmap §5) or archive |
 | **KC-3** | **2026-10-12** | The three P0 moat proofs green & merge-blocking — _the merge-blocking half became satisfiable on **2026-08-25**, when `main` started requiring the `ci` check; it blocks a contributor, not the owner (`enforce_admins: false`). Not yet due; do not tick early._ | Archive |
 | **KC-4** | **2026-12-01** | **v1.0 tagged. The date does not move.** | Archive + public write-up |
 | **KC-5** | earned, not dated | 14 consecutive days of real daily v1.0 use + ≥3 friction-log entries wanting alerts | v2.0 cancelled; maintenance mode |
@@ -249,7 +249,7 @@ files / 1540 tests, 100/100/100/100 in all five packages**. New PROVISIONAL cons
   `jsonl`-source envelopes are stored raw but deliberately not projected; rows whose
   `session_id` could not be extracted belong to no session timeline and are reachable only
   via `events_raw`; the shared `InMemoryEventStore` fake does not mirror the projection.)_
-- [~] **WP-D10 retention+redaction** — redaction is live (**`apps/server/src/hooks/redact.ts`**
+- [x] **WP-D10 retention+redaction** _(closed 2026-09-10 — L9 wired the signed D3 values)_ — redaction is live (**`apps/server/src/hooks/redact.ts`**
   — the old `hooks/redact.ts` path recorded here was stale; the repo-root `hooks/` holds only
   the installer, and `hooks/README.md:146` already cited the correct path). It runs at the hook
   ingest boundary **before** the envelope, so the idempotency key is computed over the redacted
@@ -262,7 +262,7 @@ files / 1540 tests, 100/100/100/100 in all five packages**. New PROVISIONAL cons
   `sessions`, `agents`, `orchestration_edges`, `model_pricing` or `schema_version`. Default
   (`NO_RETENTION`) is a byte-identical no-op that opens no transaction; pruning `token_usage`
   is refused outright without an explicit `acknowledgeCostLoss`. 80 tests, 100% coverage.
-  **Still `[~]`, NOT done:** the policy VALUES stay blocked on OPEN-1/2/3 — Ivan's decision,
+  **Held `[~]` until 2026-09-10 because:** the policy VALUES stayed blocked on OPEN-1/2/3 — Ivan's decision,
   not an agent's — and nothing invokes the runner on a timer or over HTTP, deliberately, until
   the policy is signed. The two additive prune indexes are now **built** (migration 10
   `retention-scan-indexes`: `idx_events_occurred_at_id`, `idx_token_usage_occurred_at_id` —
@@ -275,7 +275,15 @@ files / 1540 tests, 100/100/100/100 in all five packages**. New PROVISIONAL cons
   - **Decided 2026-09-09 (D3, Closing board):** `DASHBOARD_RETENTION_EVENTS_DAYS=90`;
     `token_usage` never pruned in v1.0 (`NO_RETENTION` kept, `acknowledgeCostLoss` refusal
     stays); backups `DASHBOARD_RETENTION_BACKUP_DAYS=30`, `_KEEP_MIN=7`. Wiring is Wave-2 lane L9.
-- [ ] **NODE-PIN** _(toolchain, blocked on Ivan)_ — **the repo does not pin a Node version
+  - **Wired 2026-09-10 (L9, closes the row):** `loadRetentionValues` in `apps/server/src/config.ts`
+    (defaults 90 / 30 / 7; `0` disables a rule; a malformed value throws;
+    `DASHBOARD_RETENTION_TOKEN_USAGE_DAYS` set → refuses to start), `signedRetentionPolicy`
+    in `retention/policy.ts` (`tokenUsage` always `null`), and `index.ts` chains
+    `retention.run` after each *successful* daily backup inside its own try/catch; boot logs
+    a dry run and prunes nothing. Journal: `<DASHBOARD_DB_PATH>.retention-journal.jsonl`.
+    Docs: configuration.md, backup-restore.md, running.md, ADR CD-10 as-built 2026-09-10.
+    Residual by decision: `token_usage` is unbounded in v1.0.
+- [x] **NODE-PIN** _(toolchain, done 2026-09-09 — L6)_ — **the repo does not pin a Node version
   locally, and the default one on this machine silently fakes a whole-suite failure.**
   `package.json` declares `engines.node >= 22` and CI pins `node-version: 22`, but there is no
   `.nvmrc`, and the shell default resolves to `/opt/homebrew/bin/node` **v26.7.0**. The installed
@@ -292,6 +300,36 @@ files / 1540 tests, 100/100/100/100 in all five packages**. New PROVISIONAL cons
   meanwhile: `export PATH="$HOME/.nvm/versions/node/v22.23.2/bin:$PATH"`.
   - **Decided 2026-09-09 (D2, Closing board):** (a) — `.nvmrc` = `22`, `engines.node` tightened
     to `>=22 <23`, README says so. Wave-1 lane L6.
+  - **Done 2026-09-09 (L6):** `.nvmrc` = `22`; `engines.node` `>=22 <23`; `.npmrc`
+    `engine-strict=true`; CI `node-version-file: .nvmrc`; README, `SECURITY.md`,
+    `CONTRIBUTING.md`, three site pages. **Found while proving:** pnpm checks `engines` against
+    the Node that runs pnpm — here corepack's shim hard-codes nvm's v22.23.2 (userAgent
+    `node/v22.23.2`) — while `pnpm run` hands scripts the first `node` on PATH (`pnpm exec
+    node -v` → v26.7.0). So a scratch copy with `engines` `>=22 <23` installs cleanly under the
+    v26 shell and would still run vitest under v26: the plan's "fails at install" proof is
+    vacuous on this machine, and the headline cascade lives at run time. Hence
+    `scripts/check-node-version.mjs` (reads `.nvmrc`, compares majors, missing-is-loud, no
+    child process), run first by `test` and `start` and standalone as `gate:node`. Proved:
+    under the v26 shell `pnpm run test` stops at the guard with a pointed message (rc=1);
+    under v22 it prints OK and the suite runs. Beyond D2's letter, within its intent — Ivan
+    may veto the script. Not taken: pnpm's `useNodeVersion` (downloads its own Node; heavier
+    than asked). Seven gates re-run after: all rc=0, spawner scans 266 files. **Coverage
+    caveat:** `scripts/**` sits outside every package's coverage include, like the two
+    existing gate scripts, so the 100 % table says nothing about this guard; its evidence is
+    a ten-case `.nvmrc` probe (missing, empty, `lts/*`, trailing comment → rc=1; `22`, `22\n`,
+    `v22`, `22.23.2` → OK; other major → rc=1), run 2026-09-09.
+    **AMENDED 2026-09-23 (finding C-8).** "Run first by `test` and `start`" was true of the
+    ROOT scripts only; every per-package entry point bypassed the guard. Measured that day:
+    `pnpm --filter @agenthropic/server exec node -p process.version` → v26.7.0, unguarded.
+    Now wired into `apps/server`'s `dev`/`start`/`bench`/`test`, `apps/web`'s `dev`/`test`
+    and the `test` script of `packages/shared`, `packages/core`, `packages/test-fixtures`, as
+    `node ../../scripts/check-node-version.mjs && …` (the script resolves `.nvmrc` from
+    `import.meta.url`, so the relative path works from `apps/*` and `packages/*` alike).
+    Proved: rc=0 from `apps/server` and `packages/shared` under v22, rc=1 from `apps/web`
+    under v26 with the pointed message, and `pnpm run test` now prints the guard's OK line
+    **six** times (root + five packages). Deliberately NOT wired: `build`, `typecheck`,
+    `lint`, `format:check`, `render-claims` - the native ABI does not participate in them.
+    Still bypassable by invoking `vitest`/`tsx` directly, which goes through no package script.
 - [ ] **BENCH-SHAPE** _(benchmark, blocked on Ivan)_ — **the measured `34.87-39.92 s` cold replay
   does not describe the real corpus, and the gap is per-session size, not total bytes.**
   Established 2026-09-01 at the source: `corpus-scale.ts` deliberately never reads
@@ -306,6 +344,13 @@ files / 1540 tests, 100/100/100/100 in all five packages**. New PROVISIONAL cons
   precisely on the axis that is 3.7x off. **Settle it by rerunning with `--records` /
   `--record-bytes` at the real shape — NOT done here, because a benchmark rerun changes a number
   Ivan has to stand behind.** Feeds OPEN-1/2/3. See the 2026-09-01 WORKLOG entry.
+  - **Measured 2026-09-09, unratified** — five runs at the real shape, command lines and raw
+    logs in `docs/measurement/cold-replay-2026-09.md` + `runs/2026-09-09/`: **81.68–92.29 s**
+    at today's real per-session shape (61 sessions × 26.80 MiB, 2,747 B/record), **61.65 s** at
+    this row's 2026-09-01 shape (53 × 26.19 MiB); the band scales with records, not bytes
+    (byte-linear transfer underestimates it 1.10–1.61×), and the real shape costs 4.1–6.1× the
+    band per session; synthetic lower bound (subagent bytes folded into one file). Ivan ticks
+    this row; the doc's §7 lists every line that changes then.
 - [x] **WP-U0** _(backend)_ — Fastify bootstrap: loopback-or-fail (plus post-listen address
   re-verification that hard-exits), timing-safe token compare, same-origin SSE check,
   TypeBox, config. _(D9 merged into C1; WP-X11 vector-DB stub **deleted** per best-path §6.3.)_
@@ -559,7 +604,9 @@ files / 1540 tests, 100/100/100/100 in all five packages**. New PROVISIONAL cons
   whether a ~2-agent `error` bucket justifies any dashboard surface at all is his call, not an
   agent's. The API half (expose `outcomeCause` on the agent DTO) can move independently.
   - **Decided 2026-09-09 (D4, Closing board):** yes, minimal — the cause as text on `error`
-    rows in the Live view and the session tree; no new view, no colour. Wave-1 lane L5.
+    rows in the Live view and the session tree; no new view, no colour. Wave-1 lane L5. As
+    applied: any non-NULL `outcomeCause` renders, whatever the status (see the Closing board);
+    the Live-view half is open as D9.
 
   **API HALF CLOSED 2026-09-03; the UI half is still Ivan's.** `outcomeCause` is now a required,
   nullable field on `AgentNodeDto` (`packages/shared/src/schemas/graph.ts`) and is selected and
@@ -592,7 +639,7 @@ files / 1540 tests, 100/100/100/100 in all five packages**. New PROVISIONAL cons
   not hide behind the other's coverage. **Still open, and unchanged:** whether a ~2-agent `error`
   bucket justifies any dashboard surface at all is Ivan's call, not an agent's — nothing in the
   web app reads `outcomeCause` yet, and this closure deliberately did not invent a place for it.
-- [~] **WP-U14 — the realtime schema assertion cannot fail.** `RealtimeEventSchema`
+- [x] **WP-U14 — the realtime schema assertion cannot fail.** `RealtimeEventSchema`
   (`packages/shared/src/schemas/realtime.ts:48-64`) appears in **no** `src/` path; its single use is
   `apps/server/test/realtime-bridge.test.ts:104`,
   `expect(Value.Check(RealtimeEventSchema, event)).toBe(true)`. Because the union's third arm is
@@ -625,9 +672,35 @@ files / 1540 tests, 100/100/100/100 in all five packages**. New PROVISIONAL cons
   | `previousStatus` `nullable(AgentStatusSchema) → AgentStatusSchema` | n/a | **SURVIVED at first**, then killed after the null-previous-status test got its own arm assertion — `toMatchObject({previousStatus: null})` passes just as well against a schema that forbids the null |
 
   The third row is the one worth keeping: the first repair was itself incomplete, and only the
-  mutation said so. **Still open:** whether `GenericRealtimeEventSchema` should exist at all, and
-  whether `ingest-failed` deserves a typed arm — a CD-5 transport-contract question (what an
-  unknown event type over SSE is allowed to mean), not an agent's call.
+  mutation said so. **Was still open** until 2026-09-09: whether `GenericRealtimeEventSchema`
+  should exist at all, and whether `ingest-failed` deserves a typed arm — a CD-5
+  transport-contract question (what an unknown event type over SSE is allowed to mean), not an
+  agent's call. Decided by D5 (Ivan, "всички", 2026-09-08), landed as L4 below.
+
+  **CONTRACT HALF CLOSED 2026-09-09 (L4 / D5).** `GenericRealtimeEventSchema` and its type are
+  deleted; `IngestFailedEventSchema` is the union's third arm — `type: Literal('ingest-failed')`,
+  `payload: { sessionId, reason, attempt: Integer ≥ 1, willRetry, occurredAt }`,
+  `additionalProperties: false` on both levels — and `RealtimeEventSchema` is a closed three-arm
+  union. The `payload` envelope stays on purpose, byte-identical on the wire: the SPA carries no
+  TypeBox and narrows this frame by hand (`toIngestFailureNotice`), so a flattened arm would have
+  turned every quarantine notice into an anonymous counter with no gate going red — the same drift
+  class WP-IN5's unheard event came from. The bridge now returns `IngestFailedEvent`; `hub.ts` keeps
+  the CR/LF collapse as defence in depth (a closed union can no longer hand it a hostile `type`, and
+  the hub test says so with a visible `offUnion` cast). `acceptingArms` reports exactly one arm for
+  each of the three events the server emits, with negative controls per field (hoisted `occurredAt`,
+  extra payload key, `attempt` 0 / 2.5, non-boolean `willRetry`, non-string `reason`, wrong `type`
+  literal); the shared schema test refuses `{ type: 'custom', payload }` on the union. **Verified by
+  mutation, restored byte-identical (`cmp`) after every run:** payload `additionalProperties →
+  true`, outer `additionalProperties → true`, `attempt Integer → Number`, `attempt minimum 1 → 0`,
+  `willRetry → Unknown`, `reason → Unknown`, `type Literal → String` — all seven **KILLED** by both
+  suites; the last one SURVIVED the first pass and is what the wrong-literal negatives were added
+  for. `docs/site/usage/api.md` documents the closed union and what an unknown `event:` name means
+  (EventSource never delivers it, so never rendered; it still burns a hub `id`, so it surfaces as a
+  stream gap and is counted there). Web half (peer lane): `IngestFailedEvent` re-exported type-only
+  through `dto.ts`, a new `realtime-wire-shape.test.ts` pins the narrowing to the shared type
+  (compiles only while the envelope exists; the flat shape → `null` is documented as a test),
+  LiveView docblock amended. Peer's follow-up worth a line, not a wave: `session-ingested` and
+  `agent-status-changed` are still narrowed by hand in `live-model.ts` with no type pin.
 - **Exit gate (= the v1.0 definition, best-path §6.1):** all 5 daily questions answerable — **5
   of 5 ✅** as of 2026-09-02. This read **3 of 5 ✅, 2 RED** on 2026-09-01, the day the claim was
   first tested end-to-end instead of asserted
@@ -682,7 +755,7 @@ files / 1540 tests, 100/100/100/100 in all five packages**. New PROVISIONAL cons
 ~7% owner acts and measurements. Lanes below carry the plan's lane ids; a lane's full paths,
 exit and proof live in the plan. Dated one-word answers under D1…D8 are the sign-off.
 
-- [ ] **Wave 0 · 2026-09-08 → 2026-09-14 (KC-2)** — W0-A CHANGELOG `[Unreleased]` for the
+- [x] **Wave 0 · 2026-09-08 → 2026-09-14 (KC-2)** — W0-A CHANGELOG `[Unreleased]` for the
   133-file uncommitted tree (agent) · W0-B decision batch **D1 commit · D2 Node pin · D3
   retention values · D4 `outcomeCause` surface · D5 SSE contract · D6 SS-1 wording · D7 the
   two KC-0 acts (do/waive) · D8 LABEL-ME commit caveat** (Ivan; defaults in plan §2) · W0-C
@@ -702,18 +775,155 @@ exit and proof live in the plan. Dated one-word answers under D1…D8 are the si
     `annotations/human/` files plus a README note; CI keeps reporting "substrate unavailable",
     the locally ratified number goes to `DONE.md` with date and n.
   - W0-A done 2026-09-09: `CHANGELOG.md` `[Unreleased]` written from the 2026-08-25 → 09-08
-    WORKLOG entries. W0-C pending: `apps/web` test half of CF-2/LV-9 held by the peer session.
-- [ ] **Wave 1 · 2026-09-15 → 2026-09-28** — eight disjoint agent lanes: **L1** cost-summary
+    WORKLOG entries. W0-C done 2026-09-09: the whole tree (156 files) committed as `39e565a`
+    and pushed; CI run `34375436756` and Pages run `34375436730` green on that SHA. Both
+    ran after the web lane finished CF-2/LV-9 and all seven gates were re-run locally (test
+    1214/1214, coverage 100/100/100/100). The KC-2 tick was recorded on 2026-09-18 — four
+    days late, condition met on the date (see the KC table) — which closes the row.
+- [~] **Wave 1 · 2026-09-15 → 2026-09-28** — eight disjoint agent lanes: **L1** cost-summary
   `sessionCount`/`hasMore` · **L2** two-sided `hubIsWhole` + `describeCostFlow` owns the hub
   disclosure + CV-5 statement · **L3** `SseClient` attempt channel (D6) · **L4** typed
   `ingest-failed`, generic arm removed (D5; closes WP-U14) · **L5** `outcomeCause` on error
   rows (D4; closes WP-U13) · **L6** NODE-PIN (D2) · **L7** `SECURITY.md` + two site pages
   describing the widened `scripts/` gates · **L8** BENCH-SHAPE rerun at the real shape
   (agent measures, Ivan ratifies by ticking).
-- [ ] **Wave 2 · 2026-09-29 → 2026-10-12 (KC-3)** — **L9** retention wiring on the signed
+  - **L3 + L5 done 2026-09-09** (web lane, dispatched early — the row's gate is "W0-C green",
+    the date range is the window). L3: `SseClient` keeps a ledger of consecutive failed
+    attempts (`failedAttempts`, reset on open) and `SseStateHandler` is widened additively to
+    `(state, failedAttempts)`; the chip reads `○ reconnecting (attempt N)` / `○ connecting…
+    (attempt N)` from N ≥ 2, inside the label so it reaches the live region. Underneath, a real
+    bug: `setState` compared the state word alone, so the 2nd+ failure of a reconnecting stream
+    produced no notification — fixed and test-pinned. L5: `outcomeCauseText()` plus an
+    `observed agent outcomes` list in TreePanel, read from `tree.agents` (not the layout) and
+    outside the `role="img"` SVG; NULL renders nothing (test-pinned), an unrecognised value
+    renders `unrecognised (<raw>)`. Web tests 665 → 681. Re-verified here 2026-09-09: all
+    seven gates rc=0 under Node 22 (681/81/101/253/1214 tests, 100% coverage). CHANGELOG
+    `[Unreleased]` carries both. Uncommitted, rides with the next explicit commit ask.
+  - **L6 done 2026-09-09** (this lane) — see the NODE-PIN row for the mechanism and the
+    run-time finding; CHANGELOG `[Unreleased]` carries it.
+  - **L7 done 2026-09-09** (this lane) — `SECURITY.md` §2, `docs/site/security/model.md` §3
+    as-built note, `docs/site/contributing/licensing.md` update block. Numbers re-taken from
+    the gates' own output on this tree (spawner: 266 files / 4 roots / 1 allowlisted /
+    6 manifests; licences: 412 packages / 429 installed versions / 411 allowlisted /
+    1 documented exception, printed on its own line — the old "412 installed packages, all
+    licenses allowlisted" wording predates finding L-1). The G-3 direct-dependency manifest
+    scan is now described in all three, and the `spawner-gate-allow` census is corrected from
+    "only the licence scanner" to three sites (licence scanner, the migrations-checksum
+    test's `tsx` run, the shared loopback test). Docs only, no gate to re-run; prettier
+    explicit on the three files green. Wave 1 open after L7: L1, L4, L8.
+  - **L1 done 2026-09-09** (this lane: server + shared half) — `CostSummaryResponseSchema`
+    gained two required fields, `sessionCount` (integer ≥ 0: every session with a rollup row,
+    priced or unpriced — the population the slice was cut from, never the slice length) and
+    `hasMore` (`sessionCount > topSessions.length`); `getCostSummary` fills them from
+    `bySession.size`. Tests: the shared schema test demands both (the pre-L1 shape is refused;
+    negative / fractional counts and a non-boolean flag fail), the route test proves two seeded
+    sessions at default topN → `2 / false`, `topN=1` → `2 / true`, and a `DEFAULT_COST_TOP_N +
+    1` corpus → `hasMore: true` with the exact count while an unpriced-only session still
+    counts; the ledger oracle in the equivalence suite carries the fields, so its `topN ∈ {0, 1,
+    2, n−1}` sweep checks them too (`topN=0` is HTTP-unreachable — querystring minimum 1 — and
+    lives only there). `docs/site/usage/api.md` names the shape. Gates (Node 22): shared 82/82,
+    server 1216/1216, typecheck, lint, format rc=0. The web half is the peer lane's L2, landing
+    in parallel: fixture defaults derived from `topSessions` (not `0/false`, which would render
+    "3 of 0"), `isCostSummary` requiring a number and a boolean (shape, not sanity — no integer
+    check by that module's rule 1), CV-5 hedge → "N of M" statement, plus a discrepancy branch
+    when `hasMore` is false yet dollars sit outside the slice. Monorepo gates re-run over the
+    union once the peer reports. CHANGELOG `[Unreleased]` carries it. Wave 1 open after L1: L4,
+    L8 (this lane) and the L2 web half (peer lane).
+  - **L4 done 2026-09-09** (both halves) — closed realtime union: typed `IngestFailedEventSchema`
+    (payload envelope kept, wire bytes unchanged), `GenericRealtimeEventSchema` deleted,
+    `RealtimeEventSchema` three arms; bridge/hub typed accordingly; `acceptingArms` names exactly
+    one arm per emitted event with per-field negative controls; seven mutations over the new arm all
+    killed by both suites. Full detail on the WP-U14 row. Gates (Node 22): shared 84/84, server
+    1216/1216, typecheck, lint rc=0; `format:check` red only on `apps/web/test/cost-view.test.tsx`,
+    a peer-lane file mid-flight (CV-5), not touched here. Web half by the peer lane: `dto.ts` type-
+    only re-export, `realtime-wire-shape.test.ts` pin, LiveView docblock amended. Wave 1 open after
+    L4: L8 (this lane) and the L2 web half (peer lane, running).
+  - **L8 measured 2026-09-09**, awaiting Ivan's tick — see the BENCH-SHAPE row's sub-bullet and
+    `docs/measurement/cold-replay-2026-09.md`. Wave 1 open after L8: the L2 web half + CV-5
+    (peer lane). Wave 2 launched 2026-09-09 on Ivan's launch-agents order: L9 (retention wiring,
+    D3), L10 (LABEL-ME kit, D8), L11 (time-to-understand kit) — three background agents in this
+    session's lanes; the board moves only after their gates are re-run here under Node 22.
+  - **Doc drift fixed 2026-09-09** (found by the web lane): `graph.ts:12`, `common.ts:61` and
+    `queries.ts:281` called the outcome cause "five-valued" / "the five causes"; the schema has
+    six literals (`unclassified` is the sixth). Amended in place. `agent-outcome.ts:23`'s "five
+    legible causes" is the corpus count (19/7/3/2/2 = 33) and stays.
+  - **DagView, decided not omitted (2026-09-09):** `DagView.tsx` renders the same `AgentNodeDto`
+    and could surface the cause identically; left untouched under D4's "minimal". Takes a lane
+    only if the Wave-3 friction log asks for it.
+  - **D4 as applied (2026-09-09):** `ERROR_CAUSES` in `normalize-session.ts` is a one-element
+    set — only `terminated_early` yields `status: error` — so a literal "on `error` rows"
+    filter would render 1 of the 6 causes and hide the 19-of-33 `concurrency_limit` refusals,
+    while the plan's proof line wants each cause verbatim. Surface: any agent row whose
+    `outcomeCause` is non-NULL renders it as text, whatever the status; NULL renders nothing
+    (never "ok"). Text only, no new view, no colour — the rest of D4 stands. Ivan may veto.
+  - **Open decision D9 (Ivan):** the Live view has no per-agent row — it renders session cards
+    whose buckets are counts — so D4's "in the Live view" half is void as written. Attaching a
+    cause there needs a session-level field on the sessions DTO (server + shared, this lane).
+    Recommended default: **no for v1.0** — the session tree is where agents are; DagView is out
+    of D4's "minimal" scope by the same reading. Found-not-taken by the web lane, not invented.
+  - **L2 closed 2026-09-09** before Wave 1 opened: the web lane's CF-2 made `hubIsWhole`
+    two-sided (`flow.hub` carries both drawn sides; labels `all cost` / `drawn cost` /
+    `larger drawn side`), `describeCostFlow` states the hub note itself, and the CV-5 dollar
+    statement over the top-sessions table was already in CostView — all in `39e565a`. Wave 1
+    is seven lanes: L1, L3–L8.
+  - Note 2026-09-09 for **L7**: `SECURITY.md:117-123` and `docs/site/security/model.md:277-283`
+    enumerate the spawner gate more narrowly than `scripts/check-no-spawner.mjs` now checks
+    (understated, not false) — found by the web lane, left for L7.
+  - Open, found-not-taken 2026-09-09 (web lane, LV-9): a status frame applied while a
+    RELOAD fetch is in flight is still discarded by the landing response. Deliberately not
+    generalised — a "refetch if superseded" rule loops under a steady frame rate, the request
+    storm LV-7 warned against. Takes a lane only if the Wave-3 friction log raises it.
+  - **Row state 2026-09-18:** L1–L7 closed on 2026-09-09 (L2 before the wave opened, L3/L5
+    by the web lane); the only open item is L8's ratification tick, which is Ivan's. `[~]`
+    for that tick alone — no agent work is left on this row.
+- [~] **Wave 2 · 2026-09-29 → 2026-10-12 (KC-3)** — **L9** retention wiring on the signed
   values (closes WP-D10) · **L10** LABEL-ME kit: one evidence page per claim, read-only over
   `spike/` · **L11** time-to-understand kit: five sessions picked, log rows ready ·
   KC-3 tick on 2026-10-12 (P0-1/2/3 green + `ci` required).
+  - **Launched early on 2026-09-09** (Ivan's launch-agents order); all three lanes closed on
+    2026-09-10 and their gates were re-run here under Node 22. The row stays `[~]` only for
+    the KC-3 tick itself — Ivan's, on 2026-10-12. Its preconditions were re-verified on
+    2026-09-18 without ticking (not due): `main` still requires the `ci` check
+    (`gh api …/branches/main/protection` → `contexts: ["ci"]`, `strict: false`,
+    `enforce_admins: false`) and P0-1/2/3 are green in the 2026-09-18 gate run.
+  - **L9 done 2026-09-10** — see the WP-D10 row (now `[x]`) for the wiring; server suite
+    1255/1255 with the new config/index/policy tests, 100% coverage held.
+  - **L10 done 2026-09-10** — LABEL-ME kit in `packages/test-fixtures`:
+    `src/annotations/render-claims.ts` (logic, under the coverage gate; 139 tests) +
+    `annotations/tools/render-claims.ts` (tsx CLI, `pnpm --filter @agenthropic/test-fixtures
+    render-claims -- <template id>`) + git-ignored `annotations/.render/`; README §3
+    rewritten. Real renders over the local `spike/` corpus: b24be30c 42 claims (20 with both
+    records, 22 with the parent record absent; joins tool_use 20 / directory 22), f28af3fd
+    18 claims (all with both records; tool_use 15 / queue_operation 3). `human/` stays empty
+    by design — filling the 60 claims is Wave 3, Ivan's; the hierarchy gate is still NOT
+    CERTIFIED. Side effect: `pnpm-lock.yaml` +3 lines (tsx devDep for test-fixtures, needed
+    for `--frozen-lockfile` in CI).
+  - **L11 done 2026-09-09/10** — `docs/measurement/time-to-understand-log.md` §0: a launch
+    line proven to boot over the real corpus with a scratch DB, a sizes-only pre-selection,
+    the observed boot figures. The gate stays UNSIGNED until Ivan's stopwatch run. Its
+    finding is the defect below.
+  - **Defect found by L11, fixed 2026-09-10 — the real corpus was 52/60 unpriced.** With the
+    shipped seed, `claude-opus-5` (×48) and `claude-fable-5-1` (×4) had no `model_pricing`
+    row, so the halt gate parked 52 of 60 sessions and the dashboard showed 8. Migration 18
+    `model-pricing-opus-5-fable-5-1` seeds both ids with all five buckets explicit, from the
+    platform pricing page fetched 2026-09-10 (Fable 5.1 `cache_read` 0.25 = 0.025× input —
+    the seed's 0.1× derivation would have been 4× too high), at the same floor, upsert on the
+    PK so an operator's hand-written row converges instead of aborting; numbers live in the
+    SQL text so the checksum is executor-stable (ec11bd68…, pinned in both checksum suites;
+    agreeing set now 13 of 18). 35 rows / seven models; five new migration tests (fresh
+    seed, the 0.025× exception, 17→18 upgrade, operator-row convergence, rollup re-pricing
+    `''` → floor); schema/db-pricing suites bumped to 35. PROVISIONAL like the rest of the
+    seed until WP-C1 ratifies. The corpus watcher re-reads pricing every pass, so parked
+    sessions are re-admitted without a restart. **Re-run over the real corpus on 2026-09-18**
+    (log §0.5): schema 18, 54 of 54 sessions admitted, `sessionsExcluded` 0, zero
+    `unknown model id` halts — the fix is confirmed on the corpus that exposed the defect.
+  - **Open decision D10 (Ivan) — the Sonnet 5 rate.** The seed carries `claude-sonnet-5` at
+    3 / 15; the pricing page fetched 2026-09-10 lists Sonnet 5 at 2 / 10 standard. A rate
+    change is not a coverage gap, so it was deliberately NOT folded into migration 18. If
+    2 / 10 is the right rate for the observed window, every sonnet-5 dollar shown today is
+    1.5× too high; whether the seed's figure was ever right is itself unratified (WP-C1).
+    Recommended default: migration 19 with the official five-bucket rows at the same floor,
+    shipped together with the WP-C1 ratification tick.
 - [ ] **Wave 3 · 2026-10-13 → 2026-11-08 — Ivan's, no new features** — fill the 60 claims,
   run the hierarchy gate, drop PROVISIONAL (closes WP-X2 + LABEL-ME) · stopwatch run on five
   sessions (closes the `<30s` clause) · **friction log, 14 consecutive days** (Step-0 box;
@@ -723,6 +933,43 @@ exit and proof live in the plan. Dated one-word answers under D1…D8 are the si
   `RELEASE.md` §1–3/5/6 pass (agent) · R2 docs truth pass + `CHANGELOG` `[1.0.0]` + `DONE.md`
   milestone + `0.3.0 → 1.0.0` (agent) · R3 the `[HUMAN]` boxes, COPY-with-attribution review,
   live backup→restore drill, usability signature (Ivan).
+  - **R1 rehearsed 2026-09-18** on the uncommitted tree (HEAD `39e565a` + 83 modified
+    files): the appendix block — install, typecheck, lint, format:check, test (131 files /
+    2,428 tests, 100% ×4 in five packages), gate:spawner (allowlist = the policy file only),
+    gate:licenses (412 packages, one documented exception) — every exit code 0; §2 no-SSRF
+    and corpus-read-only greps clean; §3 P0 4 files / 19 tests green; §5 automated
+    `backup.test.ts` green; §6 dollar-trace suites green, `has_pages` true, Pages
+    `HTTP/2 200`, license MIT, branch protection unchanged. The R2 dated figures were
+    refreshed the same day (test totals 106/1554 → 131/2,428 in eleven places, `0.1.0` →
+    `0.3.0` in four as-built notes, P0 3/13 → 4/19). A rehearsal ticks no `RELEASE.md`
+    box; the `[HUMAN]` boxes, the §5 live drill, §7 and the whole pass re-run on the
+    release commit. The same day, the R2 items that are true today: `PROJECT-STATE` gained
+    a 2026-09-18 update block, ADR-0004/ADR-0006 and the decisions index a 2026-09-18
+    addendum (eighteen migrations; `events_raw` still without an UPDATE/DELETE path), the
+    analysis README bar paragraph a re-measured line. **2026-09-19:** the public
+    `data-model.md` was still at thirteen migrations — inventory row and section for
+    `token_usage_rollup` (16), `agents.outcome_cause` (17) in the `agents` section, ledger
+    rows 14–18, the retention row closed (WP-D10 done 2026-09-10), ten tables not nine;
+    `ingest-reconciliation.md`'s "WP-D10 is not done" got the same dated close. Later the
+    same day the 2026-09-10 retention close reached the remaining summary blurbs —
+    `README.md`, the site README, `data-model.md`'s library note, `glossary.md`,
+    `testing.md`, the decisions index (ADR-0012 row), ADR CD-6 / CD-10, `comparison.md`,
+    `faq.md` (three places), `roadmap.md` (two), `running.md` (the three
+    `DASHBOARD_RETENTION_*` rows plus the loader paragraph) and `troubleshooting.md` §7;
+    `api.md` now counts twelve routes and carries the `/api/cost/delegation-savings` and
+    `/api/changes` payloads, `outcomeCause` on the tree node and the optional `coverage`
+    block on the cost summary; `governance.md`'s "drafted, unpublished" rows closed
+    (published in `ef40885`, 2026-08-15; `CODE_OF_CONDUCT.md` still absent); stale counts
+    re-dated (`licensing.md`, `testing.md`, ADR CD-8, ADR LB-2, `roadmap.md` web tests);
+    `SECURITY.md` `0.1.0 → 0.3.0`; `CHANGELOG.md`'s `substrate unavailable` token
+    corrected. 36 substitutions across 20 files; `format:check` green; leak grep 0. The
+    two "broken anchor" findings (`hooks-installer.md` → `#leak-free-token-acquisition-
+    security-critical`, `telegram.md` → `#the-designed-setup-flow-planned`) were false
+    positives: rendered with the pinned kramdown 2.4.0 + parser-gfm 1.1.0 stack and
+    compared with GitHub's slugging, all 152 intra-site fragment links resolve (0 failing,
+    0 missing targets, 0 kramdown-vs-GitHub differences) — only a naive slug rule that
+    keeps the `_` emphasis markers would break them, and neither renderer uses it.
+    Nothing changed. The same check surfaced a real Pages-only defect: `jekyll-relative-links` 0.6.1 does not rewrite a `.md` link whose text wraps onto a second source line (`LINK_TEXT_REGEX` stops at a newline), so the live `telegram.html` and `testing.html` carried raw `.md#…` hrefs that land on the unrendered Markdown file. 15 such links across 8 site pages (`cost-model.md`, `ingest-reconciliation.md`, `contributing/index.md`, `licensing.md`, `testing.md`, `faq.md`, `troubleshooting.md`, `telegram.md`) joined onto one source line each, blockquote and list prefixes preserved; rescan 0, `format:check` green, leak grep 0. A full read-only link audit followed the same day (1289 links across 89 `docs/**/*.md` sources; 0 missing local targets, 0 missing live pages of 81 expected, 0 dead external links, 1 external probe blocked by a 403 that a browser passes). The 35 links in 14 files from `docs/` to repo-root files (`README.md`, `CONTRIBUTING.md`, `TODO.md`, `DONE.md`, `RELEASE.md`, `SECURITY.md`, `CHANGELOG.md`, `LICENSE`) 404ed on Pages because the repo root is outside the Pages source; they now point at the GitHub `blob/main` URL (rescan 0), and two directory links (`external-docs-review.md` → `due-diligence/projects/`, `cold-replay-2026-09.md` → `runs/2026-09-09/`) point at the GitHub `tree/main` URL, since a directory without a README has no Pages index. The audit also found that the Primer footer's "Improve this page" link on all 82 pages was `edit/main/<page>` without the `docs/` segment (the Pages API reports `source.path` as `/` under a workflow build); `.github/workflows/pages.yml` now pins `github.source: { branch: main, path: /docs }` in the generated `_config.yml`. Verified against the pinned `jekyll-github-metadata` 2.16.1 source (`SiteGitHubMunger#github_namespace` deep-merges a `github:` config hash over its drop; `EditLinkTag#parts` joins `repository_url / edit / branch / path / page.path`) and then against a local build of the pinned github-pages 232 stack (Jekyll 3.10.0 + jekyll-github-metadata 2.16.1 + Primer 0.6.0 loaded from a scratch gem home on the system Ruby 2.6, `PAGES_REPO_NWO` set, no token): all 84 rendered pages carry `edit/main/docs/<page>`, 0 without; the live build on the next push is the final confirmation (Ivan's act). The same local build reproduced a Pages-only rendering defect the live site has today: Liquid runs before kramdown and treats `{{DASHBOARD_TOKEN}}` as a variable, so the copyable curl hook command on `hooks-installer.html` (×2), `running.html` and `hooks.html` read `Authorization: Bearer ` with nothing after it and the `{{…}}` mention vanished; the five spots are now wrapped in `{% raw %}` / `{% endraw %}` inside HTML comments (hidden on GitHub, honoured by Liquid), and the rebuilt pages show the template verbatim with no Liquid warning. `format:check` green after each batch, leak grep 0. Row stays open. Docs-truth sweep #3 (2026-09-19; four narrow agents after a first single agent died of context thrashing): every finding verified against the code before applying. 8 findings on the two security pages (the auth gate covers `/api/*` with the SPA carve-out; retention is signed and running under D3) and 39 substitutions on ten more files: `configuration.md` documents `DASHBOARD_WEB_ROOT` and counts eleven variables; `getting-started.md` no longer says the server hosts no UI or lacks a `start` script (`pnpm start` builds the SPA and the server serves it on the API's own origin, the dev SPA is the second-process route, curl expands the hook token at fire time); `hooks-installer.md` / `hooks.md` show `"async": true` and `--show-error`, name the per-firing `deliveryId` in the idempotency key and withdraw the byte-identical-Stop-body claim (amended 2026-09-02); `the-moat.md` no longer says retention is switched off and gains as-built notes for `orchestration_edges` / `token_usage`; `private: true` replaced by "publishable (`publishConfig.access: public`) but never published"; `README.md` counts nine read endpoints, six optional health fields, 30-day / floor-7 backups and CI on push to `main` plus PRs; `dashboard.md` twelve routes; `cost-model.md` attribution order (parser hard join, writer resolves `null` to the session id, migration 8 back-fills only pre-resolution rows) and migration-11 checksum wording; `docs/site/README.md` eighteen migrations, re-verified 2026-09-19. Left unverified on purpose: the Tailscale/Origin behaviour note, the WP-X9 wording, the `CostEngine` design name, the cost-model boot measurement, the "12-scenario" catalogue count, the simple10 licence row, branch protection, the 2026-09-10 wiring date. Raw-guard check, `format:check` and leak grep green. Row stays open. Docs-truth sweep #4 (2026-09-22; five agents over the pages the first three sweeps had not covered: architecture, `api.md` / `running.md` / `troubleshooting.md` / `telegram.md`, the guide pages and `testing.md`, the root community files plus `licensing.md` / `governance.md` / `STYLE-GUIDE.md`, and the ADRs): every finding verified against the code before applying; 67 substitutions across 27 files. Headline corrections: `dag-moat.md` states the as-built parent-resolution order (`directory` first, then `tool_use`, `queue_operation`, `task_notification`, `legacy_explore`), names migration 13 as the authority and the real migration-12 index names, and says `SubagentStop` carries a status verdict, never an edge; `ingest-reconciliation.md` reads compaction boundaries from `compactMetadata`, not the `PreCompact` hook; `data-model.md` and the ADR index count migration 18 as ten pricing rows; `api.md` and `troubleshooting.md` list all six optional health fields; `running.md` shows the real three-step `start` (Node-major guard first) and `--show-error`; `troubleshooting.md` no longer says hooks are liveness-only — a late `Stop` / `SubagentStop` reverts a watchdog `unknown` — and the retention window and cadence are the signed D3 policy; `telegram.md` marks the SSRF static gate as planned (no such pattern in `check-no-spawner.mjs`), counts the four test-side `fetch` sites and the `waiting`/unset watchdog inputs; `faq.md`, `SECURITY.md` and `STYLE-GUIDE.md` say the root package is unpublished (not `private: true`, which the workspace packages are) and retention is signed; `comparison.md`, `roadmap.md` (KC-2 row now MET) and `STYLE-GUIDE.md` count three P0 moat proofs plus the fourth over real HTTP, and the static-gate list drops the non-existent SSRF guard; `testing.md` counts eight fixtures and annotations, closes OPEN-2 (migration 4) and the retention TTL; `CONTRIBUTING.md` says `main` requires the `ci` check with `enforce_admins` off; `RELEASE.md` lists all seven CI commands (web build added, no box ticked) and the real auth enforcement points; `licensing.md` says an unused exception is reported, not fatal; `governance.md` records the community files in `ef40885`, only `CODE_OF_CONDUCT.md` missing, branch protection closed and four registered hooks; the ADRs gain dated as-built addenda (Normalizer/Projection stages exist since 2026-08-09 over parser output, fourth P0 proof, fifth edge mechanism, time-to-understand aid present but unmeasured, closing plan accepted 2026-09-08, five ADRs carry the desktop-probe update). The brief given to the agents wrongly said `source` has four values (migration 13 makes it five); no lane repeated the slip, and the three pages still saying four were fixed on top. Left unverified on purpose: GitHub-side state, measured figures, the 2026-09-10 wiring dates, the bot handle, the launchd deployment, design-era names and counts. Raw-guard, `format:check`, leak grep and `RELEASE.md` box-tick checks green. Row stays open. Docs-truth sweep #5 (2026-09-23; six agents, lanes J–O over architecture overview/glossary, security threat-model/remote-access, operations backup-restore, guide what-is-agenthropic, PR template, six ADRs + ADR template, `hooks/README.md`, the analysis entry point/README/closing plan, `parser-spec.md`, `DOCS-PLAN.md`): 29 findings verified against the code, all applied (plus 3 cross-lane: `testing.md` names the fourth P0 file; `open-decisions.md` gets dated D3 notes, Decided cells left to the owner); records only for the corpus figure, the CLAUDE.md/DESIGN.md quotations in `threat-model.md`, branch-protection state, the 412-package licence count and the Claude Code 2.1.251 payload claims. Raw-guard, `format:check`, leak grep and `RELEASE.md` box-tick checks green. Row stays open. Truth sweep #6 (2026-09-23; five agents, lanes P–T over server hooks/api/corpus, db/ingest/retention, core + shared, web/scripts/installer, fixtures/annotations/measurement docs): 48 code-comment and fixture-annotation findings verified against the code, all applied as 51 substitutions across 40 files (one duplicate dropped; the log reference block in the owner's time-to-understand measurement log left to Ivan). Owner items recorded, not edited: two stale comments inside checksummed migration 10, the `Shell.tsx` user-facing "every route is auth-gated" string, path numbering in `parse-session.ts` and a few dated-history comments. Suspected script defects reported, not fixed: `time-to-understand.mjs` answers the fleet Q4 per session, lists sessions without paging past 200, and its `[::1]` allow entry never matches (fails closed). All seven CI gates green (131 files / 2,428 tests, 100% coverage), leak grep 0, `RELEASE.md` untouched. Row stays open. Sweep #6 follow-up (2026-09-23; two agents): nine owner items settled in comments and one string (`parse-session.ts` renumbered to the real `resolveParent` order, `runner.ts`, `corpus-watcher.ts` pricing re-admission, `envelope.ts` + `install.mjs` no-retry sender, `top-burners.ts`, `dto-guards.ts` four exemptions, `CostView.tsx` four additions, `Shell.tsx:237` `/api/*`, `index.ts` M-13→M-18) plus four web test comments; the three `time-to-understand.mjs` defects fixed (IPv6 loopback, pagination, fleet Q4 savings). Still open for Ivan: migration 10's two stale comments (checksummed), `impl-review-2026-08-09.md:90` merging M-13 with M-18, T12. Seven gates green, 2,428 tests, 100% coverage. Row stays open.
 - [ ] **Wave 5 · by 2026-12-01 (KC-4)** — release commit, `v1.0.0` tag, push (Ivan) ·
   post-tag CI/Pages/badges green, `DONE.md` closed, this board reduced to the KC-5 items
   (orchestrator). One week of buffer; the critical path is D1 → Wave 3's 14 days → R3.

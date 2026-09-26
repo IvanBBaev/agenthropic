@@ -13,6 +13,31 @@
 // The token is read from DASHBOARD_TOKEN, sent to loopback only, and never printed.
 // Nothing here writes anywhere except the measurement log; ~/.claude/projects is read
 // by the server, read-only, and never touched by this script at all.
+//
+// AMENDED 2026-09-23 (findings C-4, C-5).
+//   C-4 Every id this script SHOWS is an 8-character prefix - the answer formats
+//       below say "id prefixes", and the log's own table cells are prefixes. The
+//       AMENDED 2026-09-23 (finding L-4): not every id. `select` prints FULL
+//       session UUIDs to the terminal (see the two `console.log` calls in it),
+//       because the operator has to pass one back as `run <sessionId>` and the
+//       lookup is by exact id. The invariant this script actually holds, and the
+//       only one that matters for a public repo, is narrower than the sentence
+//       above: every id it WRITES TO A TRACKED FILE is a prefix. Left as a
+//       terminal-only disclosure on purpose; `select` now warns the operator not
+//       to paste that output anywhere the repo can see it, which is the part the
+//       original wording silently promised on their behalf.
+//       one exception was the trial heading it WROTE, which carried the full
+//       session UUID into docs/measurement/time-to-understand-log.md. That file
+//       is tracked in a public repository, so a single recorded trial would have
+//       published a real session identifier from ~/.claude/projects. The heading
+//       now uses the same prefix as everything else; a prefix is what the
+//       protocol needs to correlate a trial with the selection it came from.
+//   C-5 `select` printed each slot's rule text verbatim next to the id it
+//       picked, but the picker skips sessions an earlier slot already claimed
+//       (protocol §3 rule 7). When the top candidate was burnt, the printed line
+//       still read e.g. "the oldest session still in the database" beside a
+//       session that was not the oldest. The rule text now states the rule that
+//       was actually applied.
 import { appendFileSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
@@ -23,11 +48,16 @@ const LOG_PATH = fileURLToPath(
 const DEFAULT_BASE = 'http://127.0.0.1:4317';
 const TARGET_SECONDS = 30;
 
-/** The token must never leave the machine: loopback origins only, no exceptions. */
+/**
+ * The token must never leave the machine: loopback origins only, no exceptions.
+ * `hostname`, not `host`: WHATWG URL keeps the brackets on an IPv6 hostname
+ * (`[::1]`) and drops the port, whereas splitting `host` on ':' cuts `[::1]:4317`
+ * down to `[`, which silently refused the IPv6 loopback.
+ */
 function resolveBase() {
   const raw = process.env['DASHBOARD_URL'] ?? DEFAULT_BASE;
   const url = new URL(raw);
-  if (!['127.0.0.1', 'localhost', '[::1]'].includes(url.host.split(':')[0])) {
+  if (!['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)) {
     throw new Error(`Refusing to send DASHBOARD_TOKEN to non-loopback host "${url.hostname}".`);
   }
   return url.origin;
@@ -67,6 +97,27 @@ async function apiOrThrow(path) {
   return result.body;
 }
 
+/** The server's page cap (MAX_PAGE_LIMIT in packages/shared/src/schemas/common.ts). */
+const PAGE_LIMIT = 200;
+
+/**
+ * Every session in the database, recent-first. `/api/sessions` caps a page at
+ * PAGE_LIMIT, so a single request would make the oldest sessions unreachable -
+ * and S4 ("the oldest session still in the database") would then silently pick
+ * the wrong one. Pages until `total` is reached or a page comes back empty.
+ * Ingest may add a session between pages, which shifts offsets by one, so rows
+ * are de-duplicated by id rather than trusted to be disjoint.
+ */
+async function fetchAllSessions() {
+  const byId = new Map();
+  for (let offset = 0; ; offset += PAGE_LIMIT) {
+    const page = await apiOrThrow(`/api/sessions?limit=${PAGE_LIMIT}&offset=${offset}`);
+    for (const session of page.sessions) if (!byId.has(session.id)) byId.set(session.id, session);
+    if (page.sessions.length === 0 || offset + page.sessions.length >= page.total) break;
+  }
+  return [...byId.values()];
+}
+
 /** @param {string} id */
 const short = (id) => String(id).slice(0, 8);
 
@@ -80,7 +131,7 @@ const usd = (amount) => `$${Number(amount).toFixed(4)}`;
 
 async function select() {
   connect();
-  const { sessions } = await apiOrThrow('/api/sessions?limit=200');
+  const sessions = await fetchAllSessions();
   if (sessions.length === 0) {
     console.log('No sessions in the database. Let ingest run first.');
     return;
@@ -119,15 +170,28 @@ async function select() {
   const practice = sessions.find((s) => !chosen.has(s.id));
 
   console.log('\nSession selection (protocol §2) — ids only, deliberately.\n');
+  // C-5 (2026-09-23): the suffix below is printed for every slot, unconditionally.
+  // It is constant text, so it discloses nothing about the data - but it makes
+  // each printed claim true even when the slot's top candidate was burnt by an
+  // earlier slot and the pick fell through to the next one.
   console.log(`  P   ${practice?.id ?? '(none left — run the practice on any session)'}`);
   console.log('      practice, recorded, excluded from the gate\n');
   for (const [slot, rule, session] of picks) {
     console.log(
       `  ${slot}  ${session?.id ?? '(no such session — record "no such session"; the absence is data)'}`,
     );
-    console.log(`      ${rule}\n`);
+    console.log(`      ${rule}, first such session no earlier slot has taken\n`);
   }
   console.log('Do not open any of these before the clock starts.');
+  // L-4 (2026-09-23). The ids above are FULL session UUIDs, unlike every id this
+  // script writes to a file. The operator needs them whole to start a trial, so
+  // they stay whole - but nothing else in this tool tells them that this one
+  // output is the unredacted one, and it is the output most likely to be pasted
+  // into an issue or a commit message.
+  console.log(
+    'These are full session ids, for your terminal only - do not paste this output ' +
+      'into any file in this repository.',
+  );
   console.log(`Then: node scripts/time-to-understand.mjs run <sessionId> --label S1\n`);
 }
 
@@ -192,7 +256,9 @@ async function timeItem(rl, item) {
 async function groundTruth(sessionId, sessionsBefore, sessionsAfter) {
   const tree = await apiOrThrow(`/api/sessions/${encodeURIComponent(sessionId)}/tree`);
   const cost = await apiOrThrow('/api/cost/summary');
-  const analysis = await api(`/api/sessions/${encodeURIComponent(sessionId)}/cost-analysis`);
+  // Q4 is fleet-scoped (protocol §1), so its savings truth is the corpus-wide
+  // estimate, not one session's cost-analysis.
+  const fleetSavings = await api('/api/cost/delegation-savings');
 
   const working = tree.agents.filter((a) => a.status === 'working').map((a) => short(a.id));
   const stuck = tree.agents
@@ -211,9 +277,19 @@ async function groundTruth(sessionId, sessionsBefore, sessionsAfter) {
     .sort((a, b) => (a.day < b.day ? 1 : -1))
     .slice(0, 7)
     .reduce((sum, d) => sum + d.costUsd, 0);
-  const savings = analysis.ok
-    ? `${usd(analysis.body.delegationSavings.savingsUsd)} (estimate; API only — no view calls this endpoint)`
-    : `not available (HTTP ${analysis.status})`;
+  // C-9 (2026-09-23). The session-level counts alone read as the whole coverage
+  // story, and they are not: a session counted as "priced" can still contain
+  // subagents the estimate skipped, and agent rows with a NULL type sit outside
+  // the estimate entirely. The endpoint reports both, so the ground truth prints
+  // both rather than implying completeness it never established.
+  const savings = fleetSavings.ok
+    ? `${usd(fleetSavings.body.savingsUsd)} (estimate; whole corpus, ` +
+      `${fleetSavings.body.sessionsPriced} of ${fleetSavings.body.sessionsWithSubagents} ` +
+      `delegating sessions priced, ${fleetSavings.body.skippedSessionCount} skipped; ` +
+      `${fleetSavings.body.subagentsPriced} subagents priced, ` +
+      `${fleetSavings.body.subagentsSkipped} skipped, ` +
+      `${fleetSavings.body.untypedAgents} untyped agents outside the estimate)`
+    : `not available (HTTP ${fleetSavings.status})`;
 
   const fleetStuck = sessionsAfter
     .filter((s) => s.statusCounts.error + s.statusCounts.unknown > 0)
@@ -251,12 +327,12 @@ async function run(sessionId, label) {
 
     for (const item of FLEET_ITEMS) results.push(await timeItem(rl, item));
 
-    const sessionsBefore = (await apiOrThrow('/api/sessions?limit=200')).sessions;
+    const sessionsBefore = await fetchAllSessions();
     console.log('\nQ5 needs a restart. Stop the server (Ctrl-C), start it again, and');
     console.log('reload the browser. Restart time is NOT on the clock.');
     await rl.question('[Enter] once the reloaded page is in front of you: ');
     results.push(await timeItem(rl, Q5));
-    const sessionsAfter = (await apiOrThrow('/api/sessions?limit=200')).sessions;
+    const sessionsAfter = await fetchAllSessions();
 
     const truth = await groundTruth(sessionId, sessionsBefore, sessionsAfter);
     console.log('\n--- Grading. You decide; this script only shows you the data. ---');
@@ -308,7 +384,8 @@ function renderBlock({ label, sessionId, results, truth, tSession, verdict, note
     .join('\n');
   return [
     '',
-    `### Trial ${label} — ${new Date().toISOString()} — session ${sessionId}`,
+    // C-4: prefix, never the full id - this log file is tracked in a public repo.
+    `### Trial ${label} — ${new Date().toISOString()} — session ${short(sessionId)}`,
     '',
     '| Item | Seconds | Answer given | Ground truth | Correct |',
     '| --- | --- | --- | --- | --- |',

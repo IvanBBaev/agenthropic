@@ -262,6 +262,50 @@ describe('upsertAgent (WP-D6)', () => {
     expect(readAgent(ROOT_ID)?.status).toBe('working');
   });
 
+  describe('parent_agent_id on re-parse', () => {
+    const OTHER_PARENT = 'agent-other-parent';
+
+    function upsertChild(parentAgentId: string | null): void {
+      upsertAgent(temp.db, {
+        id: CHILD_ID,
+        sessionId: SESSION_ID,
+        type: 'subagent',
+        subagentType: 'explorer',
+        status: 'working',
+        parentAgentId,
+        firstSeenAt: TS,
+        lastSeenAt: TS,
+        outcomeCause: null,
+      });
+    }
+
+    beforeEach(() => {
+      insertAgent(temp.db, ROOT_ID, SESSION_ID);
+      insertAgent(temp.db, OTHER_PARENT, SESSION_ID);
+    });
+
+    it('keeps a known parent when a later pass resolves none (null is absence of evidence)', () => {
+      upsertChild(ROOT_ID);
+      upsertChild(null);
+
+      expect(readAgent(CHILD_ID)?.parent_agent_id).toBe(ROOT_ID);
+    });
+
+    it('still applies a legitimate correction to a different non-null parent', () => {
+      upsertChild(ROOT_ID);
+      upsertChild(OTHER_PARENT);
+
+      expect(readAgent(CHILD_ID)?.parent_agent_id).toBe(OTHER_PARENT);
+    });
+
+    it('adopts a parent once one is resolved for a row first stored as a root', () => {
+      upsertChild(null);
+      upsertChild(ROOT_ID);
+
+      expect(readAgent(CHILD_ID)?.parent_agent_id).toBe(ROOT_ID);
+    });
+  });
+
   it("throws when parent_agent_id references a non-existent agent (FK - ordering is the caller's job)", () => {
     expect(() =>
       upsertAgent(temp.db, {
@@ -301,7 +345,7 @@ describe('reconcileAgentStatus (M-13 replay primitive)', () => {
   it("moves a non-terminal row and reports the transition ('working' -> 'completed')", () => {
     insertAgent(temp.db, CHILD_ID, SESSION_ID, null, 'working');
 
-    expect(reconcileAgentStatus(temp.db, CHILD_ID, 'completed')).toEqual({
+    expect(reconcileAgentStatus(temp.db, CHILD_ID, 'completed', SESSION_ID)).toEqual({
       type: 'agent-status-changed',
       agentId: CHILD_ID,
       sessionId: SESSION_ID,
@@ -314,7 +358,7 @@ describe('reconcileAgentStatus (M-13 replay primitive)', () => {
   it("moves an 'unknown' row too — replayed evidence beats a watchdog guess", () => {
     insertAgent(temp.db, CHILD_ID, SESSION_ID, null, 'unknown');
 
-    expect(reconcileAgentStatus(temp.db, CHILD_ID, 'completed')).toMatchObject({
+    expect(reconcileAgentStatus(temp.db, CHILD_ID, 'completed', SESSION_ID)).toMatchObject({
       oldStatus: 'unknown',
       newStatus: 'completed',
     });
@@ -322,7 +366,7 @@ describe('reconcileAgentStatus (M-13 replay primitive)', () => {
   });
 
   it('returns null for an agent id with no row (never creates one — CD-1)', () => {
-    expect(reconcileAgentStatus(temp.db, 'no-such-agent', 'completed')).toBeNull();
+    expect(reconcileAgentStatus(temp.db, 'no-such-agent', 'completed', SESSION_ID)).toBeNull();
     const count = temp.db.prepare('SELECT COUNT(*) AS n FROM agents').get() as { n: number };
     expect(count.n).toBe(0);
   });
@@ -330,21 +374,21 @@ describe('reconcileAgentStatus (M-13 replay primitive)', () => {
   it("never moves a row already 'completed' (idempotence under replay)", () => {
     insertAgent(temp.db, CHILD_ID, SESSION_ID, null, 'completed');
 
-    expect(reconcileAgentStatus(temp.db, CHILD_ID, 'completed')).toBeNull();
+    expect(reconcileAgentStatus(temp.db, CHILD_ID, 'completed', SESSION_ID)).toBeNull();
     expect(statusOf(CHILD_ID)).toBe('completed');
   });
 
   it("never moves a row already 'error' — replayed evidence cannot outrank a later terminal", () => {
     insertAgent(temp.db, CHILD_ID, SESSION_ID, null, 'error');
 
-    expect(reconcileAgentStatus(temp.db, CHILD_ID, 'completed')).toBeNull();
+    expect(reconcileAgentStatus(temp.db, CHILD_ID, 'completed', SESSION_ID)).toBeNull();
     expect(statusOf(CHILD_ID)).toBe('error');
   });
 
   it('returns null when the row already holds the target non-terminal status (no X -> X transition)', () => {
     insertAgent(temp.db, CHILD_ID, SESSION_ID, null, 'waiting');
 
-    expect(reconcileAgentStatus(temp.db, CHILD_ID, 'waiting')).toBeNull();
+    expect(reconcileAgentStatus(temp.db, CHILD_ID, 'waiting', SESSION_ID)).toBeNull();
     expect(statusOf(CHILD_ID)).toBe('waiting');
   });
 });

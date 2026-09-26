@@ -1,6 +1,6 @@
 # ADR-0012: CD-10 — Scope, secrets & retention: MVP discipline for a solo owner
 
-- **Status:** accepted, **partially built as of 2026-07-30** — scope discipline held; payload redaction shipped at the ingest boundary; ~~**retention TTL is not implemented**~~ *(amended 2026-08-15 — the retention **mechanism** now exists and is tested; the retention **policy** is still unset)*, blocked on the open OPEN-1/2/3 decisions (see the as-built updates below)
+- **Status:** accepted, **partially built as of 2026-07-30** — scope discipline held; payload redaction shipped at the ingest boundary; ~~**retention TTL is not implemented**~~ *(amended 2026-08-15 — the retention **mechanism** now exists and is tested; the retention **policy** is still unset)* *(amended 2026-09-10 — the policy is **signed** (D3, 2026-09-08: `events` 90 days, `token_usage` never, backup files 30 days behind a floor of 7) and **wired** after each successful daily backup; `WP-D10` closes — see the 2026-09-10 as-built update below)*
 - **Date:** 2026-07-03
 - **Deciders:** Ivan Baev (project owner), via the six-lens concept-analysis-v2 workflow
 - **Source:** [`concept-analysis-v2.md` §3, row CD-10](../../../analysis/concept-analysis-v2.md#3-canonical-decision-register-v2)
@@ -48,7 +48,8 @@ make. Building a sweeper before those land would mean choosing a data-destructio
 policy by default — the precise failure mode this project was built to avoid. So the
 gap is deliberate, but it is still a gap: the "unbounded local storage growth" risk
 this ADR names in its Context is, as of today, **not mitigated**. A long-running
-instance grows without bound.
+instance grows without bound. *(Superseded 2026-09-10: mitigated for `events`; see
+below.)*
 
 **Telegram `token_ref` — not built, because there is nothing to secure yet.** No
 `token_ref` resolver exists (`WP-A3`), because alerting is post-1.0 and no Telegram
@@ -65,13 +66,15 @@ configuration anywhere" is superseded. `apps/server/src/retention/` now holds
 `policy.ts`, `prune.ts`, `journal.ts`, `backup-files.ts`, `runner.ts` and `port.ts`,
 with `db/retention-queries.ts` behind them. What has **not** changed is the reason
 `WP-D10` is still not done: the policy numbers are blank, and they are not an agent's
-to fill in.
+to fill in. *(They were filled in by the owner on 2026-09-08 and wired on 2026-09-10 —
+see the next update.)*
 
 **The separation being maintained here is mechanism versus policy, and it is the
 whole point.** The mechanism can express either branch of OPEN-1; the policy that
 selects a branch awaits Ivan's ratification. Concretely:
 
-- **The default deletes nothing, ever.** `NO_RETENTION` is what
+- **The default deletes nothing, ever.** *(The library default, that is; since
+  2026-09-10 the server runs `signedRetentionPolicy` instead.)* `NO_RETENTION` is what
   `loadRetentionPolicy` returns for an environment with no `DASHBOARD_RETENTION_*`
   variable set, and a deployment that never configures retention behaves
   byte-identically to a build without the module. Shipping a mechanism therefore did
@@ -110,13 +113,41 @@ long-running instance still grows without bound in `events` and `token_usage`. T
 blocker remains OPEN-1 / OPEN-2 / OPEN-3 in
 [`open-decisions.md`](../../../analysis/open-decisions.md), and it remains Ivan's.
 Building the mechanism was the part that could be done without choosing on his
-behalf; choosing is not.
+behalf; choosing is not. *(He chose on 2026-09-08 — the next update records it.)*
 
 **Redaction, secrets and scope are unchanged.** The redaction default is still
 pending sign-off and still may only grow, never relax; `token_ref` still does not
 exist because alerting does not; `ANTHROPIC_API_KEY` still appears nowhere in the
 server source; and **"< 30s time-to-understand a session" is still UNMEASURED** — no
 one has timed it, so it is neither met nor missed.
+
+## As-built update — 2026-09-10
+
+**Verdict: the retention half is built and wired; `WP-D10` closes.** The 2026-08-15
+sentence "the policy numbers are blank, and they are not an agent's to fill in" is
+superseded by a decision, not by an agent: on 2026-09-08 the owner accepted the closing
+plan's default D3 — `events` 90 days; `token_usage` never pruned in v1.0; backup files 30
+days with the newest 7 always kept — and lane L9 wired it on 2026-09-10.
+
+- **Policy source.** `loadRetentionValues` in `apps/server/src/config.ts` reads
+  `DASHBOARD_RETENTION_EVENTS_DAYS` (default 90), `DASHBOARD_RETENTION_BACKUP_DAYS`
+  (default 30) and `DASHBOARD_RETENTION_BACKUP_KEEP_MIN` (default 7); `0` disables a
+  rule; a malformed value throws; `DASHBOARD_RETENTION_TOKEN_USAGE_DAYS` is refused
+  outright when set, so the cost-loss acknowledgement path has no caller in v1.0.
+- **Runner.** `signedRetentionPolicy` in `apps/server/src/retention/policy.ts` builds
+  the policy with `tokenUsage` always `null`; `apps/server/src/index.ts` chains
+  `retention.run` after each *successful* daily backup, inside its own try/catch so a
+  failed prune is logged and never stops the backups, and logs a dry run at boot without
+  pruning. Every earlier guarantee stands: `events_raw` and the five other protected
+  tables are never DML targets, an unparseable variable throws, and a journal receipt is
+  written only when rows were actually deleted.
+- **Residual, by decision.** `token_usage` still grows without bound in v1.0. That is
+  the signed policy, not an omission, and OPEN-1's `archive-segments` branch remains
+  declared-and-refused.
+
+Redaction, secrets and scope are unchanged from 2026-08-15, and the
+"< 30s time-to-understand a session" gate is still UNMEASURED: its preparation section
+was written on 2026-09-09, and the stopwatch run is the owner's.
 
 ## Context
 

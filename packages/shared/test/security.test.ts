@@ -124,6 +124,51 @@ describe('redactTokenInUrl', () => {
   it('redacts an empty token value too', () => {
     expect(redactTokenInUrl('/api/stream?token=')).toBe('/api/stream?token=REDACTED');
   });
+
+  it('keeps percent-encoded bytes of other params verbatim (no + re-encoding)', () => {
+    expect(redactTokenInUrl(`/api/stream?q=a%20b&token=${SECRET}`)).toBe(
+      '/api/stream?q=a%20b&token=REDACTED',
+    );
+  });
+
+  it('keeps a value-less flag param verbatim (no appended =)', () => {
+    expect(redactTokenInUrl(`/api/stream?flag&token=${SECRET}`)).toBe(
+      '/api/stream?flag&token=REDACTED',
+    );
+  });
+
+  it('keeps literal + signs, empty segments and a fragment verbatim', () => {
+    expect(redactTokenInUrl(`/api/stream?q=a+b&&token=${SECRET}#frag?token=x`)).toBe(
+      '/api/stream?q=a+b&&token=REDACTED#frag?token=x',
+    );
+  });
+
+  it('redacts every token occurrence', () => {
+    const out = redactTokenInUrl(`/api/stream?token=${SECRET}&a=1&token=${SECRET}2`);
+    expect(out).toBe('/api/stream?token=REDACTED&a=1&token=REDACTED');
+    expect(out).not.toContain(SECRET);
+  });
+
+  it('redacts a token whose key name is percent-encoded, keeping the raw key', () => {
+    const out = redactTokenInUrl(`/api/stream?%74oken=${SECRET}&%74%6F%6b%65%6E=${SECRET}`);
+    expect(out).toBe('/api/stream?%74oken=REDACTED&%74%6F%6b%65%6E=REDACTED');
+    expect(out).not.toContain(SECRET);
+  });
+
+  it('redacts a bare token key with no = sign', () => {
+    expect(redactTokenInUrl('/api/stream?a=1&token')).toBe('/api/stream?a=1&token=REDACTED');
+  });
+
+  it('does not throw on malformed percent-escapes and still redacts the token', () => {
+    const out = redactTokenInUrl(`/api/stream?bad%ZZ=%E0%A4%A&%=1&token=${SECRET}`);
+    expect(out).toBe('/api/stream?bad%ZZ=%E0%A4%A&%=1&token=REDACTED');
+    expect(out).not.toContain(SECRET);
+  });
+
+  it('does not treat look-alike keys as the token', () => {
+    const url = '/api/stream?to+ken=a&Token=b&tokens=c&%74oken%=d&x=token';
+    expect(redactTokenInUrl(url)).toBe(url);
+  });
 });
 
 describe('isAllowedOrigin', () => {

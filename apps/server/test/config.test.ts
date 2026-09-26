@@ -5,6 +5,9 @@ import {
   DEFAULT_DB_PATH,
   DEFAULT_POLL_INTERVAL_MS,
   DEFAULT_PORT,
+  DEFAULT_RETENTION_BACKUP_DAYS,
+  DEFAULT_RETENTION_BACKUP_KEEP_MIN,
+  DEFAULT_RETENTION_EVENTS_DAYS,
   DEFAULT_WATCHDOG_MINUTES,
   DEFAULT_WEB_ROOT,
   HOST,
@@ -40,6 +43,11 @@ describe('config (WP-U0)', () => {
       pollIntervalMs: DEFAULT_POLL_INTERVAL_MS,
       watchdogMinutes: DEFAULT_WATCHDOG_MINUTES,
       webRoot: DEFAULT_WEB_ROOT,
+      retention: {
+        eventsDays: DEFAULT_RETENTION_EVENTS_DAYS,
+        backupDays: DEFAULT_RETENTION_BACKUP_DAYS,
+        backupKeepMinimum: DEFAULT_RETENTION_BACKUP_KEEP_MIN,
+      },
     });
   });
 
@@ -158,5 +166,78 @@ describe('config (WP-U0)', () => {
         loadConfig({ DASHBOARD_TOKEN: TEST_TOKEN, DASHBOARD_WATCHDOG_MINUTES: raw }),
       ).toThrow(/Invalid DASHBOARD_WATCHDOG_MINUTES/);
     });
+  });
+});
+
+describe('retention keys (WP-D10, D3 signed 2026-09-08)', () => {
+  it('ships the signed numbers as defaults: 90 / 30 / 7', () => {
+    expect(DEFAULT_RETENTION_EVENTS_DAYS).toBe(90);
+    expect(DEFAULT_RETENTION_BACKUP_DAYS).toBe(30);
+    expect(DEFAULT_RETENTION_BACKUP_KEEP_MIN).toBe(7);
+    expect(loadConfig({ DASHBOARD_TOKEN: TEST_TOKEN }).retention).toEqual({
+      eventsDays: 90,
+      backupDays: 30,
+      backupKeepMinimum: 7,
+    });
+  });
+
+  it('parses explicit windows and floor', () => {
+    expect(
+      loadConfig({
+        DASHBOARD_TOKEN: TEST_TOKEN,
+        DASHBOARD_RETENTION_EVENTS_DAYS: '180',
+        DASHBOARD_RETENTION_BACKUP_DAYS: '60',
+        DASHBOARD_RETENTION_BACKUP_KEEP_MIN: '3',
+      }).retention,
+    ).toEqual({ eventsDays: 180, backupDays: 60, backupKeepMinimum: 3 });
+  });
+
+  it('treats an empty string as unset', () => {
+    expect(
+      loadConfig({
+        DASHBOARD_TOKEN: TEST_TOKEN,
+        DASHBOARD_RETENTION_EVENTS_DAYS: '',
+        DASHBOARD_RETENTION_BACKUP_DAYS: '',
+        DASHBOARD_RETENTION_BACKUP_KEEP_MIN: '',
+        DASHBOARD_RETENTION_TOKEN_USAGE_DAYS: '',
+      }).retention,
+    ).toEqual({ eventsDays: 90, backupDays: 30, backupKeepMinimum: 7 });
+  });
+
+  it('0 is the documented off switch for both windows', () => {
+    expect(
+      loadConfig({
+        DASHBOARD_TOKEN: TEST_TOKEN,
+        DASHBOARD_RETENTION_EVENTS_DAYS: '0',
+        DASHBOARD_RETENTION_BACKUP_DAYS: '0',
+      }).retention,
+    ).toEqual({ eventsDays: 0, backupDays: 0, backupKeepMinimum: 7 });
+  });
+
+  it.each(['-1', 'abc', '2.5'])('rejects DASHBOARD_RETENTION_EVENTS_DAYS %s', (raw) => {
+    expect(() =>
+      loadConfig({ DASHBOARD_TOKEN: TEST_TOKEN, DASHBOARD_RETENTION_EVENTS_DAYS: raw }),
+    ).toThrow(/Invalid DASHBOARD_RETENTION_EVENTS_DAYS .*non-negative integer \(0 disables\)/);
+  });
+
+  it.each(['-1', 'abc', '2.5'])('rejects DASHBOARD_RETENTION_BACKUP_DAYS %s', (raw) => {
+    expect(() =>
+      loadConfig({ DASHBOARD_TOKEN: TEST_TOKEN, DASHBOARD_RETENTION_BACKUP_DAYS: raw }),
+    ).toThrow(/Invalid DASHBOARD_RETENTION_BACKUP_DAYS .*non-negative integer/);
+  });
+
+  it.each(['0', '-1', 'x', '1.5'])(
+    'rejects DASHBOARD_RETENTION_BACKUP_KEEP_MIN %s: the floor is at least one file',
+    (raw) => {
+      expect(() =>
+        loadConfig({ DASHBOARD_TOKEN: TEST_TOKEN, DASHBOARD_RETENTION_BACKUP_KEEP_MIN: raw }),
+      ).toThrow(/Invalid DASHBOARD_RETENTION_BACKUP_KEEP_MIN .*positive integer/);
+    },
+  );
+
+  it('refuses DASHBOARD_RETENTION_TOKEN_USAGE_DAYS loudly: token_usage is never pruned', () => {
+    expect(() =>
+      loadConfig({ DASHBOARD_TOKEN: TEST_TOKEN, DASHBOARD_RETENTION_TOKEN_USAGE_DAYS: '30' }),
+    ).toThrow(/DASHBOARD_RETENTION_TOKEN_USAGE_DAYS is set, but token_usage is never pruned/);
   });
 });

@@ -8,6 +8,7 @@ import {
   NO_RETENTION,
   RETENTION_PROTECTED_TABLES,
   RetentionPolicyError,
+  signedRetentionPolicy,
   type RetentionPolicy,
 } from '../src/retention/policy';
 
@@ -142,8 +143,29 @@ describe('retention policy (WP-D10 mechanism; policy value awaits OPEN-1)', () =
       ['DASHBOARD_RETENTION_EVENTS_DAYS', 'thirty'],
       ['DASHBOARD_RETENTION_MAX_ROWS_PER_RUN', '0'],
       ['DASHBOARD_RETENTION_BACKUP_KEEP_MIN', 'x'],
+      // Number()-lenient forms: each used to parse to a positive integer.
+      ['DASHBOARD_RETENTION_EVENTS_DAYS', ' 30'],
+      ['DASHBOARD_RETENTION_EVENTS_DAYS', '30 '],
+      ['DASHBOARD_RETENTION_EVENTS_DAYS', '0x1e'],
+      ['DASHBOARD_RETENTION_EVENTS_DAYS', '1e3'],
+      ['DASHBOARD_RETENTION_EVENTS_DAYS', '+5'],
+      ['DASHBOARD_RETENTION_EVENTS_DAYS', '30.0'],
+      ['DASHBOARD_RETENTION_BACKUP_KEEP_MIN', '0b11'],
+      ['DASHBOARD_RETENTION_MAX_ROWS_PER_RUN', '9007199254740993'],
     ])('rejects %s=%s', (name, value) => {
       expect(() => loadRetentionPolicy({ [name]: value })).toThrow(RetentionPolicyError);
+    });
+
+    it('names the variable and the raw value in the error', () => {
+      expect(() => loadRetentionPolicy({ DASHBOARD_RETENTION_EVENTS_DAYS: '1e3' })).toThrow(
+        'Invalid DASHBOARD_RETENTION_EVENTS_DAYS "1e3": expected a positive integer.',
+      );
+    });
+
+    it('accepts plain digits, leading zeros included', () => {
+      expect(loadRetentionPolicy({ DASHBOARD_RETENTION_EVENTS_DAYS: '090' }).events).toEqual({
+        maxAgeDays: 90,
+      });
     });
 
     it('an empty string means unset, not zero', () => {
@@ -230,6 +252,74 @@ describe('retention policy (WP-D10 mechanism; policy value awaits OPEN-1)', () =
           backupFiles: { directory: '/tmp/x', maxAgeDays: 0, keepMinimum: 1 },
         }),
       ).toThrow(/maxAgeDays/);
+    });
+  });
+
+  describe('the signed v1.0 policy (D3, 2026-09-08)', () => {
+    const DIR = '/var/lib/agenthropic/backups';
+
+    it('builds the two signed rules and nothing else', () => {
+      expect(
+        signedRetentionPolicy({ eventsDays: 90, backupDays: 30, backupKeepMinimum: 7 }, DIR),
+      ).toEqual({
+        events: { maxAgeDays: 90 },
+        tokenUsage: null,
+        rawEvents: 'keep-forever',
+        backupFiles: { directory: DIR, maxAgeDays: 30, keepMinimum: 7 },
+        maxRowsPerRun: DEFAULT_MAX_ROWS_PER_RUN,
+      });
+    });
+
+    it('0 switches a window off without touching the other', () => {
+      const eventsOff = signedRetentionPolicy(
+        { eventsDays: 0, backupDays: 30, backupKeepMinimum: 7 },
+        DIR,
+      );
+      expect(eventsOff.events).toBeNull();
+      expect(eventsOff.backupFiles).toEqual({ directory: DIR, maxAgeDays: 30, keepMinimum: 7 });
+
+      const backupsOff = signedRetentionPolicy(
+        { eventsDays: 90, backupDays: 0, backupKeepMinimum: 7 },
+        DIR,
+      );
+      expect(backupsOff.events).toEqual({ maxAgeDays: 90 });
+      expect(backupsOff.backupFiles).toBeNull();
+    });
+
+    it('both windows off is exactly the no-op policy', () => {
+      const off = signedRetentionPolicy(
+        { eventsDays: 0, backupDays: 0, backupKeepMinimum: 7 },
+        DIR,
+      );
+      expect(off).toEqual(NO_RETENTION);
+      expect(isNoOpPolicy(off)).toBe(true);
+    });
+
+    it('cannot express a token_usage window: there is no input for it', () => {
+      for (const eventsDays of [0, 1, 90, 3650]) {
+        expect(
+          signedRetentionPolicy({ eventsDays, backupDays: 30, backupKeepMinimum: 7 }, DIR)
+            .tokenUsage,
+        ).toBeNull();
+      }
+    });
+
+    it('runs the same validation as any other policy', () => {
+      expect(() =>
+        signedRetentionPolicy({ eventsDays: 90, backupDays: 30, backupKeepMinimum: 0 }, DIR),
+      ).toThrow(RetentionPolicyError);
+      expect(() =>
+        signedRetentionPolicy({ eventsDays: 90, backupDays: 30, backupKeepMinimum: 0 }, DIR),
+      ).toThrow(/backupFiles\.keepMinimum/);
+      expect(() =>
+        signedRetentionPolicy({ eventsDays: -1, backupDays: 30, backupKeepMinimum: 7 }, DIR),
+      ).toThrow(/events\.maxAgeDays/);
+      expect(() =>
+        signedRetentionPolicy({ eventsDays: 90, backupDays: 1.5, backupKeepMinimum: 7 }, DIR),
+      ).toThrow(/backupFiles\.maxAgeDays/);
+      expect(() =>
+        signedRetentionPolicy({ eventsDays: 90, backupDays: 30, backupKeepMinimum: 7 }, ''),
+      ).toThrow(/directory must not be empty/);
     });
   });
 

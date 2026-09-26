@@ -15,13 +15,15 @@ Every answer below links to the deeper reference page for the full detail.
 >
 > - **agenthropic is no longer pre-code — and it is also not released.** Implementation
 >   began **2026-07-11**. Running today: the loopback-bound, token-gated server; SQLite/WAL
->   with thirteen migrations and a daily backup timer; JSONL ingest with replay-on-startup
+>   with eighteen migrations and a daily backup timer; JSONL ingest with replay-on-startup
 >   and tail-follow polling that re-reads only new bytes; the persisted subagent DAG; the
 >   cost engine; the hook receiver and its installer; the status watchdog that ages an
 >   unobserved agent to `unknown`; the SSE hub; the read API; and all four dashboard views
 >   plus a per-session cost-analysis panel. There is still no tag and no published package —
->   the workspace is `private: true` at `0.1.0`, so a checkout is the only way to run it.
->   Test figures, re-measured **2026-08-15**: **106 test files / 1554 tests**, with **100%
+>   the root is at `0.3.0` with no npm release and every workspace package is
+>   `private: true`, so a checkout is the only way to run it.
+>   Test figures, re-measured **2026-09-18**: **131 test files / 2428 tests** *(re-measured
+>   again 2026-09-23: **140 test files / 2621 tests**)*, with **100%
 >   statements, branches, functions and lines** enforced in **all five** packages. Two
 >   things that figure does not mean. It is not *unconditionally* merge-blocking — it blocks
 >   a merge only for someone who is not the repository owner: `main` has been
@@ -37,14 +39,14 @@ Every answer below links to the deeper reference page for the full detail.
 >   operator-alerts API and UI were **cut outright**. The running server **makes no
 >   outbound network request of any kind**. Read every "Phase 5, not yet built" below as
 >   "not built, not scheduled, possibly never."
-> - **Retention is half-built: mechanism yes, policy no.** Redaction *is* implemented
+> - **Retention is built, signed and wired (as of 2026-09-10).** Redaction *is* implemented
 >   (`apps/server/src/hooks/redact.ts`, applied at the hook ingest boundary, before the
 >   idempotency key is computed). The retention *mechanism* — pruning, an audit journal,
->   backup-file expiry, a runner — is implemented and tested as well, but the *policy*,
->   meaning how many days of what is kept, is deliberately unset pending the OPEN-1/2/3
->   decisions. The shipped default is a no-op that opens no transaction and reads no row,
->   and nothing starts the runner at boot. So nothing prunes the database today; plan disk
->   accordingly.
+>   backup-file expiry, a runner — is implemented and tested, and the *policy* is signed
+>   (D3, 2026-09-08): `events` rows older than 90 days and backup files older than 30 days
+>   (never below the newest 7) are pruned by a runner chained after each successful daily
+>   backup; boot logs a dry run and deletes nothing; `0` switches a rule off. `token_usage`
+>   is **never** pruned in v1.0, by decision, so plan disk for that table's growth.
 > - **Still no footprint numbers.** No CPU/RAM/disk footprint has been measured even now,
 >   and the v1.0 usability target ("<30s to understand a session") is **unmeasured** too.
 >   One narrow exception, so that "no benchmarks" is not read wider than it is true:
@@ -69,7 +71,7 @@ Every answer below links to the deeper reference page for the full detail.
 | Cloud / SaaS? | No — self-hosted, local-first. Runs on your own machine. |
 | Phones home? | No telemetry egress. **As built: no outbound traffic at all** — the alert sink was never built, so the server makes no outbound network request of any kind. |
 | Cost to run? | No cloud bill — it's a local process + SQLite on hardware you already own. **Still no published CPU/RAM/disk figures.** One benchmark does exist (`apps/server/bench/corpus-scale.ts`), but it measures query and ingest *latency* against a **synthetic** corpus, not resource footprint on a real one — so it answers a different question than this row asks. |
-| Data safety / location? | Local SQLite (WAL) on your machine; tokens read from your own `~/.claude/projects/*.jsonl`; auth-gated writes; nothing leaves the box by default. *(As built: all four hold. Redaction is live; retention is **mechanism-built, policy-unset** — the default is a no-op, so nothing prunes the database yet.)* |
+| Data safety / location? | Local SQLite (WAL) on your machine; tokens read from your own `~/.claude/projects/*.jsonl`; auth-gated writes; nothing leaves the box by default. *(As built: all four hold. Redaction is live; retention is **built, signed and wired** (D3, 2026-09-08) — `events` rows older than 90 days and backup files older than 30 days (never below the newest 7) are pruned after each successful daily backup; `token_usage` is never pruned in v1.0.)* |
 | Do I have to install the hooks? | Optional, but they are the only signal that an agent *stopped*. Without them nothing ever reads `completed` — agents age `working` → `unknown`. `node hooks/install.mjs --out <settings.json>` writes them; `--dry-run` shows the result first. |
 | Why not fork simple10 / hoangsonww? | Neither ships the actual moat; greenfield lets us take the good parts of each without inheriting either's baggage (one's non-persisted edges, the other's RCE). *(Judged by reading their source in 2026-07 — neither was installed and run.)* |
 | Works across machines? | Not yet — single-host by design for now; the schema is hedged (`instance`/`host_id`) so fleet aggregation doesn't require a rewrite later. *(As built: the hedge is on `orchestration_edges` only, not every table.)* |
@@ -132,8 +134,8 @@ is kept out of the dashboard's environment entirely unless a specific feature tr
 needs it — the dashboard's job is to *read* your existing Claude Code logs, not to
 call any LLM API on your behalf.
 
-Details: [security model](../security/model.md) (loopback + no-SSRF), [remote
-access](../security/remote-access.md) (how *you* reach the dashboard, never the
+Details: [security model](../security/model.md) (loopback + no-SSRF),
+[remote access](../security/remote-access.md) (how *you* reach the dashboard, never the
 reverse), [telegram alerts](../usage/telegram.md).
 
 ## Roughly what does it cost to run?
@@ -176,14 +178,15 @@ for retention.
 >
 > The storage sentence needs a sharper correction. **Payload redaction is implemented**
 > (`apps/server/src/hooks/redact.ts`, applied at the hook ingest boundary). **The retention
-> TTL is built but switched off.** The mechanism — pruning, an audit journal, backup-file
-> expiry, a runner — exists and is tested; the policy it would enforce does not, because
-> deciding how a TTL coexists with an append-only substrate is an owner decision (OPEN-1)
-> and a scheduled deleter has no business existing before the rule that tells it what to
-> delete is signed. The shipped default therefore deletes nothing and nothing starts the
-> runner at boot. So storage growth is currently **unbounded**: nothing prunes the
-> database. On a single developer machine this is small, but it is not capped by anything,
-> and no one has measured how fast it grows.
+> TTL is built and, as of 2026-09-10, switched on.** The mechanism — pruning, an audit
+> journal, backup-file expiry, a runner — exists and is tested, and the rule that tells it
+> what to delete was signed by the owner on 2026-09-08 (D3) rather than chosen by code:
+> `events` rows older than 90 days and backup files older than 30 days (never below the
+> newest 7) are pruned after each successful daily backup, and the append-only
+> `events_raw` is never a delete target. `token_usage` is **never** pruned in v1.0, by
+> decision, so that table's growth is still **unbounded**. On a single developer machine
+> this is small, but it is not capped by anything, and no one has measured how fast it
+> grows.
 
 ## Is my data safe? Where does it live?
 
@@ -207,12 +210,13 @@ leaves that machine by default.** Concretely:
   calls an LLM API, or any API.)*
 - **Retention:** a retention TTL and payload-redaction rule for stored tool payloads
   is planned from Phase 1 (not yet implemented — this project has no code yet).
-  *(As built: half done, and the "no code yet" reason is stale. **Payload redaction is
+  *(As built: done, and the "no code yet" reason is stale. **Payload redaction is
   implemented** at the hook ingest boundary (`apps/server/src/hooks/redact.ts`). **The
-  retention TTL is built but unconfigured** — the pruning mechanism, its audit journal and
-  its runner all exist and are tested, but the policy is unset pending the OPEN-1/2/3
-  decisions, the default is a no-op and no runner starts at boot, so nothing currently
-  expires or prunes stored data.)*
+  retention TTL is built, signed and wired** as of 2026-09-10 — the pruning mechanism, its
+  audit journal and its runner all exist and are tested, and the signed v1.0 policy (D3,
+  2026-09-08) prunes `events` rows older than 90 days and backup files older than 30 days
+  behind a floor of 7 after each successful daily backup. `token_usage` is never pruned in
+  v1.0, by decision.)*
 - **Remote access, if you ever want it, is tunnel-only** — SSH port-forward or a
   Tailscale tunnel (e.g. `--host <tailscale-host>`), never a reverse proxy exposing
   the port publicly.

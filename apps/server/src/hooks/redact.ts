@@ -17,10 +17,9 @@
  *
  * POLICY STATUS: this implements the RECOMMENDED resolution of OPEN-3
  * (redaction from Phase 1, at the ingest boundary - see
- * docs/analysis/open-decisions.md) as the default. That recommendation is
- * PENDING Ivan's sign-off; the fuller retention/redaction policy (WP-D10)
- * additionally awaits the OPEN-1/OPEN-2/OPEN-3 decisions and may tighten or
- * extend these rules. Nothing here relaxes on sign-off - it can only grow.
+ * docs/analysis/open-decisions.md) as the default. WP-D10 is closed (retention
+ * values signed as D3, 2026-09-08), but the OPEN-3 field list below is still
+ * PENDING Ivan's ratification and may be tightened or extended. Nothing here relaxes on sign-off - it can only grow.
  */
 
 /** Replacement marker for masked keys and matched value fragments. */
@@ -106,6 +105,26 @@ export function maskCredentialShapes(text: string): string {
  * Pure, recursive scrub of an arbitrary JSON-ish value. Never mutates the
  * input; returns a new structure with secret-named fields replaced by
  * `[REDACTED]` and credential-shaped string fragments masked.
+ *
+ * AMENDED 2026-09-23 (lane-Q). The claim above is now TOTAL over the own
+ * enumerable keys of the input, which it was not before: fields were copied
+ * with `scrubbed[key] = ...`, and `__proto__` names an ACCESSOR on
+ * Object.prototype, so a `{"__proto__": {...}}` field was never copied at all.
+ * It vanished from the returned structure and its object value became that
+ * structure's PROTOTYPE instead. Nothing downstream disclosed the loss, and
+ * every id reader on this path (`readStringField` in hooks/envelope.ts,
+ * `extractLivenessIds` in db/event-store.ts) uses `record[key]`, which walks
+ * the prototype chain - so the envelope's `hookName` and the `events`
+ * projection's `session_id` / `agent_id` could be lifted from evidence that
+ * appears nowhere in the payload persisted to `events_raw`, leaving a liveness
+ * row and a status transition that no stored bytes can account for.
+ *
+ * Fastify's secure-json-parse proto-poisoning guard (`onProtoPoisoning:
+ * 'error'`, the framework default that `buildServer` inherits rather than
+ * sets) rejects such a body with 400, so the HTTP route could not reach this.
+ * The function is an exported part of the hooks surface with a documented
+ * totality claim, and a framework default is not a place to keep an
+ * invariant - `Object.defineProperty` makes the copy mean what it says.
  */
 export function redactSecrets(value: unknown): unknown {
   if (typeof value === 'string') {
@@ -118,7 +137,14 @@ export function redactSecrets(value: unknown): unknown {
     const record = value as Record<string, unknown>;
     const scrubbed: Record<string, unknown> = {};
     for (const [key, entry] of Object.entries(record)) {
-      scrubbed[key] = isSecretKeyName(key) ? REDACTED : redactSecrets(entry);
+      // defineProperty, not assignment: assignment would route `__proto__`
+      // through Object.prototype's setter and silently lose the field.
+      Object.defineProperty(scrubbed, key, {
+        value: isSecretKeyName(key) ? REDACTED : redactSecrets(entry),
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      });
     }
     return scrubbed;
   }

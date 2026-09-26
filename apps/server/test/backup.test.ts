@@ -10,7 +10,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { backupDatabase, restoreDatabase } from '../src/db/backup';
+import { backupDatabase, restoreDatabase, RESTORE_STAGING_SUFFIX } from '../src/db/backup';
 import { openDatabase, type SqliteDatabase } from '../src/db/connection';
 import { runMigrations } from '../src/db/migrations';
 import { SqliteEventStore } from '../src/db/event-store';
@@ -119,18 +119,20 @@ describe('backup + tested restore (WP-F8)', () => {
       /Restored database failed integrity_check/,
     );
 
-    // The copy DID land - the guard rejects after the file is in place, so the
-    // damaged image is still there to inspect...
-    expect(existsSync(restorePath)).toBe(true);
+    // The copy DID land, but only as the staged file: the destination was
+    // never created, and the damaged image is still there to inspect...
+    const staged = `${restorePath}${RESTORE_STAGING_SUFFIX}`;
+    expect(existsSync(restorePath)).toBe(false);
+    expect(existsSync(staged)).toBe(true);
     // ...and the rejected handle was closed: SQLite keeps the `-shm` sidecar
     // only for as long as a WAL connection is open.
-    expect(existsSync(`${restorePath}-shm`)).toBe(false);
+    expect(existsSync(`${staged}-shm`)).toBe(false);
 
     // Independently confirm both halves of that: opening it ourselves creates
     // the sidecar again, and integrity_check really does not say 'ok'.
-    const forensic = openDatabase(restorePath);
+    const forensic = openDatabase(staged);
     openHandles.push(forensic);
-    expect(existsSync(`${restorePath}-shm`)).toBe(true);
+    expect(existsSync(`${staged}-shm`)).toBe(true);
     expect(forensic.pragma('integrity_check', { simple: true })).not.toBe('ok');
   });
 

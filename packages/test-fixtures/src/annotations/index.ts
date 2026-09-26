@@ -37,6 +37,35 @@ export type {
   ScoringEntry,
   SessionScore,
 } from './score.js';
+export {
+  RENDER_DIR,
+  SUBSTRATE_UNAVAILABLE,
+  buildSpawnIndex,
+  describeRecord,
+  describeToolUseBlock,
+  isParserArtifact,
+  previewContent,
+  readClaimTemplate,
+  renderClaimPage,
+  renderClaims,
+  renderIndexPage,
+  resolveClaim,
+  runRenderClaims,
+  writeRender,
+} from './render-claims.js';
+export type {
+  ClaimRender,
+  ClaimResolution,
+  ClaimTemplate,
+  EvidenceLine,
+  JoinKind,
+  RecordRef,
+  RenderIo,
+  RenderStats,
+  RenderedTemplate,
+  SpawnIndex,
+  TemplateClaim,
+} from './render-claims.js';
 export { AnnotationError, ORPHAN_TOKEN, PROVENANCES, ROOT_TOKEN, UNKNOWN_TOKEN } from './types.js';
 export type {
   AnnotatedEdge,

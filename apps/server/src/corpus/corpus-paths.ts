@@ -73,24 +73,59 @@ export function assertWithinRoot(realRoot: string, candidateAbs: string): void {
 /** The ONLY immediate child of `<uuid>/` that is ever walked or fingerprinted. */
 export const SUBAGENTS_DIR = 'subagents';
 
-/** lstat, returning `null` instead of throwing when the entry is gone/unreadable. */
-export function tryLstat(fs: CorpusFs, absPath: string): LstatInfo | null {
+/**
+ * The three things an `lstat` probe can say about an entry the walk was handed
+ * by `readdir`. `gone` and `unreadable` are DIFFERENT facts and must stay
+ * distinguishable: the first means there is nothing to ingest, the second means
+ * there is something the dashboard cannot see — and a caller that folded both
+ * into "skip silently" ingested a session main-only, recorded nothing, and let
+ * the watcher checkpoint it as complete (finding F1).
+ */
+export type LstatOutcome =
+  | { readonly kind: 'ok'; readonly info: LstatInfo }
+  /**
+   * `ENOENT` — the entry vanished between `readdir` and `lstat` — or `ENOTDIR`,
+   * which is the same TOCTOU vanish one level up: an intermediate directory
+   * was replaced by a non-directory after it was listed, so the path no
+   * longer names anything. Neither leaves content behind to miss.
+   */
+  | { readonly kind: 'gone' }
+  /** Any other errno (`EACCES`, `EPERM`, `EIO`...): the entry exists, the probe could not look. */
+  | { readonly kind: 'unreadable'; readonly code: string | undefined };
+
+/** lstat as an explicit {@link LstatOutcome}; never throws. */
+export function probeLstat(fs: CorpusFs, absPath: string): LstatOutcome {
   try {
-    return fs.lstat(absPath);
-  } catch {
-    return null;
+    return { kind: 'ok', info: fs.lstat(absPath) };
+  } catch (err) {
+    const code = errnoCodeOf(err);
+    return code === 'ENOENT' || code === 'ENOTDIR'
+      ? { kind: 'gone' }
+      : { kind: 'unreadable', code };
   }
 }
 
-/** True when `absPath` is a real directory (a symlinked dir returns false — never followed). */
-export function isRealDir(fs: CorpusFs, absPath: string): boolean {
-  const st = tryLstat(fs, absPath);
-  return st !== null && st.isDirectory && !st.isSymbolicLink;
+/** True when the probed entry is a real directory (a symlinked dir is false — never followed). */
+export function isRealDir(st: LstatInfo): boolean {
+  return st.isDirectory && !st.isSymbolicLink;
 }
 
 /**
- * Resolve `<uuid>/subagents` for one session, or `null` when it must not be
- * descended into.
+ * What {@link resolveSubagentsDir} decided about one session's
+ * `<uuid>/subagents`: walk it, there is nothing to walk, or a probe on the way
+ * failed for a reason other than absence — in which case `relativePath` names
+ * the subtree (session-relative, POSIX) the caller consequently did not walk,
+ * ready to be recorded as an `unreadable` {@link SkippedFile}.
+ */
+export type SubagentsDirResolution =
+  | { readonly kind: 'dir'; readonly abs: string }
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'unreadable'; readonly relativePath: string; readonly code?: string };
+
+/**
+ * Resolve `<uuid>/subagents` for one session: `dir` when it may be descended
+ * into, `absent` when there is nothing to descend into, `unreadable` when the
+ * probe itself failed (see {@link SubagentsDirResolution}).
  *
  * BOTH components are checked, and the session dir is the whole reason this
  * function exists. `lstat` reports on the FINAL component only — the kernel
@@ -111,17 +146,34 @@ export function isRealDir(fs: CorpusFs, absPath: string): boolean {
  * {@link assertWithinRoot} is lexical — `resolve` plus a prefix compare, no
  * `realpath` — so the symlinked prefix satisfies it.
  *
- * Returning `null` rather than throwing keeps the posture every other symlink
+ * Answering `absent` rather than throwing keeps the posture every other symlink
  * encounter in this reader has: not walked, not an error. A symlinked session
  * dir is a fact about someone's disk, not proof of a crafted corpus the way a
  * traversal-shaped entry NAME is.
+ *
+ * A probe that fails for any reason other than absence is `unreadable`, and it
+ * is reported under `subagents` whichever of the two components failed: that
+ * is the subtree the caller declines to walk as a result, exactly as a failed
+ * `readdir` of `subagents/` is reported by the walk itself. Naming `<uuid>/`
+ * would name a path the session's substrate never contains.
  */
-export function resolveSubagentsDir(fs: CorpusFs, sessionDirAbs: string): string | null {
-  if (!isRealDir(fs, sessionDirAbs)) {
-    return null;
+export function resolveSubagentsDir(fs: CorpusFs, sessionDirAbs: string): SubagentsDirResolution {
+  const sessionDir = probeLstat(fs, sessionDirAbs);
+  if (sessionDir.kind === 'unreadable') {
+    return { kind: 'unreadable', relativePath: SUBAGENTS_DIR, code: sessionDir.code };
+  }
+  if (sessionDir.kind === 'gone' || !isRealDir(sessionDir.info)) {
+    return { kind: 'absent' };
   }
   const subagentsAbs = join(sessionDirAbs, SUBAGENTS_DIR);
-  return isRealDir(fs, subagentsAbs) ? subagentsAbs : null;
+  const subagents = probeLstat(fs, subagentsAbs);
+  if (subagents.kind === 'unreadable') {
+    return { kind: 'unreadable', relativePath: SUBAGENTS_DIR, code: subagents.code };
+  }
+  if (subagents.kind === 'gone' || !isRealDir(subagents.info)) {
+    return { kind: 'absent' };
+  }
+  return { kind: 'dir', abs: subagentsAbs };
 }
 
 /**

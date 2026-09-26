@@ -43,7 +43,10 @@ itself** builds at fire time: the command imports the env var with
 `--variable '%DASHBOARD_TOKEN'` and expands it inside a single-quoted
 `--expand-header 'Authorization: Bearer {{DASHBOARD_TOKEN}}'` template, so the
 token value never passes through any process's argv (see
-[Security model](#security-model) — this needs curl ≥ 8.3.0). The server
+[Security model](#security-model) — this needs curl ≥ 8.3.0). The command
+starts `curl --disable` (your `~/.curlrc` is not read) and passes
+`--noproxy '*'` (no proxy environment variable applies), so nothing in your
+curl setup can route the POST off the machine or log its headers. The server
 accepts any JSON event
 (unknown hook names and extra fields are stored, never rejected), redacts
 secret-shaped material at the ingest boundary, and appends idempotently to the
@@ -70,7 +73,9 @@ Applying a status is still **liveness, never structure** (CD-1). The applier is
 UPDATE-only by construction: it can move the `status` column of an agent the
 JSONL parser already created, and nothing else — it cannot create, delete or
 re-parent an agent. A hook naming an agent this server has never parsed is
-stored as raw liveness and changes no row.
+stored as raw liveness and changes no row at delivery time; a stored
+`SubagentStop` is replayed once the JSONL parser first inserts that agent
+(M-13), so a subagent whose hook beat its transcript still ends `completed`.
 
 ### Recurrence vs redelivery (`X-Agenthropic-Delivery-Id`)
 
@@ -166,14 +171,43 @@ name in the current directory — the operator's belief and what happened were
 opposites, and nothing said so. If you genuinely want a path that starts with a
 dash, write it as `./-name`.
 
+AMENDED 2026-09-23 (findings C-6, C-7). Two rows of the table above described a
+behaviour stronger than the one the installer had.
+
+- `--dry-run` "show what would be written": over a settings file that already
+  matched the installer's output, the dry run printed
+  `[dry-run] Would write <path>:` while a real run on the identical state
+  printed `... already matches this installer's output - nothing written, no
+  backup taken.` The preview contradicted the run it was previewing, and it
+  contradicted it in the direction that makes a no-op look like a change. The
+  dry run now says a real run would write nothing, and still shows the contents.
+- `--remove` "strip previously installed agenthropic entries": pointed at a path
+  that did not exist, it created the parent tree, wrote `{}`, and reported
+  `Created directory ...` and `Wrote ...`. Removing hooks from a file that was
+  never there brought a settings file into existence. `--remove` against a
+  missing file is now a reported no-op: no directory, no file, exit 0.
+
 ## Merge behavior and rollback
 
 - **Non-destructive merge:** unrelated settings keys and unrelated hook entries
-  are preserved verbatim. Agenthropic entries (recognized by the loopback
-  `/api/hooks/event` target in the command string) are replaced in place —
-  re-running the installer never duplicates them.
+  are preserved verbatim. Agenthropic entries (a command byte-identical to a
+  shape this installer has ever generated) are replaced in place — re-running
+  the installer never duplicates them. A command that targets
+  `/api/hooks/event` but matches no known shape is refused, never rewritten.
 - **Backup:** before modifying an existing file the installer copies it to
   `<file>.backup-<timestamp>` next to the original.
+- **The write is atomic.** The new settings go to a temp sibling
+  (`<file>.tmp-<pid>`) that is renamed over the file, so a write that fails
+  part-way (disk full, I/O error) leaves the original bytes intact, removes the
+  temp file, and names the backup in the error (or, on a first install, the
+  directory the run created). A symlinked `--out` is resolved first - also a
+  dangling one, whose target is created - so the file it points at is written
+  and the link stays a link; a dangling link whose target directory does not
+  exist is refused. The temp file is created exclusively, so nothing planted at
+  its name is written through. The file's permission bits are kept.
+- The installer refuses to merge into a file whose `hooks` value exists but is
+  not an object (an array, a string, `null`); it used to replace it with `{}`
+  silently. Nothing is backed up or written in that case.
 - **Rollback:** copy the backup over the settings file, or run with `--remove`
   to strip only the agenthropic entries.
 - The installer refuses to touch a file it cannot parse as JSON.
@@ -184,6 +218,22 @@ dash, write it as `./-name`.
 - **A created parent directory is reported.** Installing to a path whose parent
   does not exist still creates the whole tree, and now prints
   `Created directory <path>`.
+- **`--remove` never creates anything.** Pointed at a file that does not exist
+  there is nothing to strip, so the installer creates no directory, writes no
+  file, and says so.
+- **`--remove` never rewrites a file it had nothing to remove from.** Pointed at
+  a file that exists but holds none of our entries, the installer takes no
+  backup, leaves the bytes (indentation included) exactly as they were, and says
+  so (`... holds no agenthropic hooks, so there was nothing to remove.`).
+
+AMENDED 2026-09-23 (finding L-3). The bullet directly above is new. "A run that
+changes nothing writes nothing" was true only of BYTES: a `--remove` over a
+hand-maintained `settings.json` holding no agenthropic entries produced text
+that differed from the file purely in formatting, so it took a backup, rewrote
+the file into the installer's two-space shape, and printed `Backed up existing
+file to ...` plus `Wrote ...` about a removal that removed nothing. Removal is
+now decided on meaning rather than on bytes, which is the case the H-2 wording
+above was already reaching for.
 
 AMENDED 2026-09-07 (findings H-2, H-3). The two bullets above are new, and both
 correct something this section used to imply rather than say. On the first: the
@@ -239,7 +289,7 @@ omits rather than faking, and the skip/quarantine lines are all documented in
 >
 > ```sh
 > printf '{"hook_event_name":"Stop","session_id":"install-probe"}' | \
->   curl --silent --show-error --max-time 3 --output /dev/null \
+>   curl --disable --silent --show-error --max-time 3 --noproxy '*' --output /dev/null \
 >     --request POST --header 'Content-Type: application/json' \
 >     --variable '%DASHBOARD_TOKEN' \
 >     --expand-header 'Authorization: Bearer {{DASHBOARD_TOKEN}}' \
@@ -314,6 +364,14 @@ rather than decided here.
   a leaked token and never to a blocked session. If your dashboard receives no
   hook events, check `curl --version` first. A settings file installed before
   this fix is upgraded in place by re-running the installer.
+- **Your curl configuration cannot redirect or log the POST** (GG1/GG2,
+  2026-09-24). curl applies `http_proxy` / `ALL_PROXY` to 127.0.0.1 too unless
+  `no_proxy` covers it, and `~/.curlrc` can set a proxy, `--verbose` or
+  `--trace-ascii` — the last two write the request headers, expanded token
+  included, to stderr or a file. The generated command therefore begins
+  `curl --disable` (curl honours it only as the first argument) and passes
+  `--noproxy '*'`. Installs made before this change are recognized and
+  upgraded in place by re-running the installer.
 - **Residual exposure, stated honestly:** processes of the **same** OS account
   (and root) can always read the token — from the process environment, from
   the shell profile or `launchd` plist that exports it, or by asking the same
@@ -377,9 +435,10 @@ rather than decided here.
   sign-off.
 - **Redaction phase (OPEN-3):** payloads are redacted at the ingest boundary
   from Phase 1 (the audit-recommended resolution, implemented as the default in
-  `apps/server/src/hooks/redact.ts`). The fuller retention side (WP-D10) still
-  awaits the OPEN-1/2/3 sign-off in `docs/analysis/open-decisions.md`: the
-  sweeper mechanism is built and tested, but its policy is deliberately blank
-  and its runner is called from tests only, so **nothing currently deletes a
-  stored hook event**. Redaction, not expiry, is what keeps `events_raw` free of
-  secret-shaped material today.
+  `apps/server/src/hooks/redact.ts`). The retention side (WP-D10) is signed and
+  wired: the D3 values (`docs/analysis/closing-plan-2026-09-08.md`, signed
+  2026-09-08) run after each successful daily backup — `events` projection rows
+  older than 90 days (`DASHBOARD_RETENTION_EVENTS_DAYS`) are pruned, while the
+  raw envelope in `events_raw` is a protected table no retention rule can
+  reach. Redaction, not expiry, is still what keeps `events_raw` free of
+  secret-shaped material.

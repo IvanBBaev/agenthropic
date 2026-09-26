@@ -7,9 +7,15 @@
  *
  * The auth token is mandatory: `loadConfig` throws when `DASHBOARD_TOKEN` is
  * unset, so the server can never start without auth.
+ *
+ * Retention (WP-D10, signed as D3 on 2026-09-08) is configured here too: the
+ * three `DASHBOARD_RETENTION_*` numbers the daily timer runs with. There is
+ * deliberately no way to express a `token_usage` window - see
+ * {@link loadRetentionValues}.
  */
 import { fileURLToPath } from 'node:url';
 import { requireDashboardToken } from '@agenthropic/shared';
+import { MAX_RETENTION_DAYS, type SignedRetentionValues } from './retention/policy';
 
 /** The one and only bind host. Loopback, constant, no configuration path. */
 export const HOST = '127.0.0.1';
@@ -32,8 +38,21 @@ export const DEFAULT_DB_PATH = 'data/agenthropic.db';
 export const DEFAULT_WEB_ROOT = fileURLToPath(new URL('../../web/dist', import.meta.url));
 /** Tail-follow poll cadence (WP-IN5). PROVISIONAL (LABEL-ME) — not yet ratified. */
 export const DEFAULT_POLL_INTERVAL_MS = 3000;
+
+/** Node's timer ceiling: a larger `setInterval` delay is silently clamped to 1 ms. */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 /** Missing-Stop watchdog inactivity window (WP-IN12). PROVISIONAL (LABEL-ME). */
 export const DEFAULT_WATCHDOG_MINUTES = 10;
+/**
+ * Retention (WP-D10, values signed as D3 on 2026-09-08): `events` rows older
+ * than 90 days expire, backup files older than 30 days expire behind a floor
+ * of the 7 newest, and `token_usage` is never pruned in v1.0. `0` on either
+ * window switches that prune off. The daily backup timer runs the policy
+ * after each successful backup - see `index.ts`.
+ */
+export const DEFAULT_RETENTION_EVENTS_DAYS = 90;
+export const DEFAULT_RETENTION_BACKUP_DAYS = 30;
+export const DEFAULT_RETENTION_BACKUP_KEEP_MIN = 7;
 
 export interface ServerConfig {
   /** Mandatory dashboard auth token. Never logged, never persisted. */
@@ -61,6 +80,12 @@ export interface ServerConfig {
    * reason to have no value here.
    */
   readonly webRoot: string;
+  /**
+   * The signed retention numbers (`DASHBOARD_RETENTION_EVENTS_DAYS`,
+   * `DASHBOARD_RETENTION_BACKUP_DAYS`, `DASHBOARD_RETENTION_BACKUP_KEEP_MIN`).
+   * There is no `token_usage` window: v1.0 never prunes cost ground truth.
+   */
+  readonly retention: SignedRetentionValues;
 }
 
 /**
@@ -71,13 +96,14 @@ export interface ServerConfig {
 export function loadConfig(env: Record<string, string | undefined>): ServerConfig {
   const token = requireDashboardToken(env);
   const port = parsePort(env['DASHBOARD_PORT']);
-  const dbPath = env['DASHBOARD_DB_PATH'] ?? DEFAULT_DB_PATH;
+  const dbPath = parseDbPath(env['DASHBOARD_DB_PATH']);
   const ingestEnabled = parseIngestEnabled(env['DASHBOARD_INGEST']);
   const corpusRoot = parseCorpusRoot(env['CLAUDE_PROJECTS_DIR']);
   const pollIntervalMs = parsePositiveInt(
     'DASHBOARD_POLL_INTERVAL_MS',
     env['DASHBOARD_POLL_INTERVAL_MS'],
     DEFAULT_POLL_INTERVAL_MS,
+    MAX_TIMER_DELAY_MS,
   );
   const watchdogMinutes = parsePositiveInt(
     'DASHBOARD_WATCHDOG_MINUTES',
@@ -85,6 +111,7 @@ export function loadConfig(env: Record<string, string | undefined>): ServerConfi
     DEFAULT_WATCHDOG_MINUTES,
   );
   const webRoot = parseWebRoot(env['DASHBOARD_WEB_ROOT']);
+  const retention = loadRetentionValues(env);
   return {
     token,
     port,
@@ -94,6 +121,7 @@ export function loadConfig(env: Record<string, string | undefined>): ServerConfi
     pollIntervalMs,
     watchdogMinutes,
     webRoot,
+    retention,
   };
 }
 
@@ -101,8 +129,8 @@ function parsePort(raw: string | undefined): number {
   if (raw === undefined || raw === '') {
     return DEFAULT_PORT;
   }
-  const port = Number(raw);
-  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+  const port = parseDigits(raw);
+  if (!(port <= 65535)) {
     throw new Error(`Invalid DASHBOARD_PORT "${raw}": expected an integer between 0 and 65535.`);
   }
   return port;
@@ -117,6 +145,15 @@ function parseIngestEnabled(raw: string | undefined): boolean {
     return false;
   }
   throw new Error(`Invalid DASHBOARD_INGEST "${raw}": expected 1/true/0/false.`);
+}
+
+/**
+ * Empty counts as unset. `better-sqlite3` opens `''` as an anonymous temporary
+ * database, so an accidental `DASHBOARD_DB_PATH=` would silently discard every
+ * row at exit and put the backups under a cwd-relative directory.
+ */
+function parseDbPath(raw: string | undefined): string {
+  return raw === undefined || raw === '' ? DEFAULT_DB_PATH : raw;
 }
 
 /** Empty string counts as unset — an accidental `CLAUDE_PROJECTS_DIR=` must not mean cwd. */
@@ -134,13 +171,87 @@ function parseWebRoot(raw: string | undefined): string {
   return raw === undefined || raw === '' ? DEFAULT_WEB_ROOT : raw;
 }
 
-function parsePositiveInt(name: string, raw: string | undefined, fallback: number): number {
+/**
+ * The three signed retention numbers (D3). The windows are non-negative
+ * integers with `0` as the off switch; the floor is a positive integer,
+ * because a floor of zero is no floor (and the policy validator refuses it).
+ *
+ * `DASHBOARD_RETENTION_TOKEN_USAGE_DAYS` is refused outright when set: the
+ * server's policy cannot prune `token_usage` in v1.0, and an operator who set
+ * the variable expecting it to must hear that at boot, not discover it from a
+ * table that never shrinks. The other `DASHBOARD_RETENTION_*` variables belong
+ * to the library loader in `retention/policy.ts` and are not read here: the
+ * backup directory is derived from `DASHBOARD_DB_PATH`.
+ */
+function loadRetentionValues(env: Record<string, string | undefined>): SignedRetentionValues {
+  const tokenUsageDays = env['DASHBOARD_RETENTION_TOKEN_USAGE_DAYS'];
+  if (tokenUsageDays !== undefined && tokenUsageDays !== '') {
+    throw new Error(
+      'DASHBOARD_RETENTION_TOKEN_USAGE_DAYS is set, but token_usage is never pruned in v1.0 ' +
+        '(D3): those rows are the ground truth behind every reported dollar. Unset it.',
+    );
+  }
+  return {
+    eventsDays: parseNonNegativeInt(
+      'DASHBOARD_RETENTION_EVENTS_DAYS',
+      env['DASHBOARD_RETENTION_EVENTS_DAYS'],
+      DEFAULT_RETENTION_EVENTS_DAYS,
+      MAX_RETENTION_DAYS,
+    ),
+    backupDays: parseNonNegativeInt(
+      'DASHBOARD_RETENTION_BACKUP_DAYS',
+      env['DASHBOARD_RETENTION_BACKUP_DAYS'],
+      DEFAULT_RETENTION_BACKUP_DAYS,
+      MAX_RETENTION_DAYS,
+    ),
+    backupKeepMinimum: parsePositiveInt(
+      'DASHBOARD_RETENTION_BACKUP_KEEP_MIN',
+      env['DASHBOARD_RETENTION_BACKUP_KEEP_MIN'],
+      DEFAULT_RETENTION_BACKUP_KEEP_MIN,
+    ),
+  };
+}
+
+/**
+ * Plain decimal digits only, as a safe integer; `NaN` for anything else.
+ * `Number()` alone is far too lenient for config: it reads whitespace as `0`
+ * and accepts hex, exponent, sign and decimal-point forms.
+ */
+function parseDigits(raw: string): number {
+  return /^\d+$/.test(raw) && Number.isSafeInteger(Number(raw)) ? Number(raw) : Number.NaN;
+}
+
+function parsePositiveInt(
+  name: string,
+  raw: string | undefined,
+  fallback: number,
+  max: number = Number.MAX_SAFE_INTEGER,
+): number {
   if (raw === undefined || raw === '') {
     return fallback;
   }
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value <= 0) {
-    throw new Error(`Invalid ${name} "${raw}": expected a positive integer.`);
+  const value = parseDigits(raw);
+  if (!(value > 0 && value <= max)) {
+    throw new Error(`Invalid ${name} "${raw}": expected a positive integer up to ${max}.`);
+  }
+  return value;
+}
+
+/** Like {@link parsePositiveInt}, but `0` is a legal value - the off switch. */
+function parseNonNegativeInt(
+  name: string,
+  raw: string | undefined,
+  fallback: number,
+  max: number,
+): number {
+  if (raw === undefined || raw === '') {
+    return fallback;
+  }
+  const value = parseDigits(raw);
+  if (!(value <= max)) {
+    throw new Error(
+      `Invalid ${name} "${raw}": expected a non-negative integer (0 disables) up to ${String(max)}.`,
+    );
   }
   return value;
 }

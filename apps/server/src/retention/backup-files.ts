@@ -3,10 +3,12 @@
  * rows. This is the half of retention that can actually reclaim real disk
  * space, because a backup is a whole copy of the database.
  *
- * POLICY STATUS: mechanism only. How many days of backups to keep is unset and
- * awaits Ivan's OPEN-1 ratification (docs/analysis/open-decisions.md). With no
- * `backupFiles` rule configured this module is never called and no file is
- * ever removed.
+ * POLICY STATUS: signed (D3, 2026-09-08) - backups older than 30 days expire
+ * behind a floor of the 7 newest, both configurable
+ * (`DASHBOARD_RETENTION_BACKUP_DAYS`, `DASHBOARD_RETENTION_BACKUP_KEEP_MIN`),
+ * and the daily timer in `index.ts` runs this after each successful backup.
+ * With `DASHBOARD_RETENTION_BACKUP_DAYS=0` no `backupFiles` rule exists, this
+ * module is never called and no file is ever removed.
  *
  * SAFETY.
  *  - `keepMinimum` newest backups ALWAYS survive, whatever the age window
@@ -20,8 +22,10 @@
  *  - `dryRun` lists exactly what would go, and removes nothing.
  *  - Files are removed one by one; a failure part-way leaves the already
  *    removed ones removed (unlike the database prune, a filesystem has no
- *    transaction). The report therefore lists what was actually deleted, and
- *    the error propagates.
+ *    transaction). The error propagates as a {@link BackupPruneError} that
+ *    carries the partial report (what was actually deleted before the failure)
+ *    and names those files in its message, so a caller that only logs the
+ *    message still records the loss.
  */
 import { existsSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
@@ -69,6 +73,28 @@ export interface BackupPruneReport {
 }
 
 /**
+ * A pass that stopped part-way: `report` lists only what was really deleted
+ * before `failed` could not be removed; `cause` is the underlying fs error.
+ */
+export class BackupPruneError extends Error {
+  readonly report: BackupPruneReport;
+  readonly failed: BackupFileCandidate;
+
+  constructor(report: BackupPruneReport, failed: BackupFileCandidate, cause: unknown) {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    const names = report.deleted.map((candidate) => candidate.name).join(', ');
+    super(
+      `backup prune stopped at ${failed.name} (${reason}); ` +
+        `${String(report.deleted.length)} already deleted${names === '' ? '' : `: ${names}`}`,
+      { cause },
+    );
+    this.name = 'BackupPruneError';
+    this.report = report;
+    this.failed = failed;
+  }
+}
+
+/**
  * Apply one backup-file retention pass.
  *
  * Returns a report of what happened (or, with `dryRun`, would happen).
@@ -99,6 +125,17 @@ export function pruneBackupFiles(
   const keptByMinimum: BackupFileCandidate[] = [];
   let bytesReclaimed = 0;
 
+  const reportSoFar = (): BackupPruneReport => ({
+    directory: rule.directory,
+    directoryPresent: true,
+    dryRun,
+    cutoff,
+    found,
+    deleted,
+    keptByMinimum,
+    bytesReclaimed,
+  });
+
   found.forEach((candidate, index) => {
     if (candidate.modifiedAt >= cutoff) {
       return;
@@ -109,22 +146,17 @@ export function pruneBackupFiles(
       return;
     }
     if (!dryRun) {
-      unlinkSync(candidate.path);
+      try {
+        unlinkSync(candidate.path);
+      } catch (cause) {
+        throw new BackupPruneError(reportSoFar(), candidate, cause);
+      }
     }
     deleted.push(candidate);
     bytesReclaimed += candidate.sizeBytes;
   });
 
-  return {
-    directory: rule.directory,
-    directoryPresent: true,
-    dryRun,
-    cutoff,
-    found,
-    deleted,
-    keptByMinimum,
-    bytesReclaimed,
-  };
+  return reportSoFar();
 }
 
 /** Backup files in the directory, newest first (name break ties, for stability). */

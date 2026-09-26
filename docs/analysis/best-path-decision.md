@@ -244,4 +244,4 @@ _Produced by the `best-path-decision` adversarial workflow (6 theses × 3 critic
 25 agents, ~1.4M tokens, Opus / high effort); the two load-bearing empirical claims re-verified
 by hand against `~/.claude/projects/`. Refines [`concept-analysis-v2.md`](concept-analysis-v2.md)
 CD-1…CD-10 and re-sequences [`development-plan.md`](development-plan.md). Companion empirical
-analysis: [`phase0-probe.md`](phase0-probe.md). Open work: [`../../TODO.md`](../../TODO.md)._
+analysis: [`phase0-probe.md`](phase0-probe.md). Open work: [`../../TODO.md`](https://github.com/IvanBBaev/agenthropic/blob/main/TODO.md)._

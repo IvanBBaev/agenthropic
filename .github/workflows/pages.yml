@@ -61,10 +61,10 @@ on:
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 
+# Least privilege per job: only deploy mints the OIDC token. Build keeps
+# pages: write because configure-pages with enablement may create the site.
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 # One deployment at a time; never cancel a running production deploy.
 concurrency:
@@ -73,6 +73,9 @@ concurrency:
 
 jobs:
   build:
+    permissions:
+      contents: read
+      pages: write
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -88,15 +91,26 @@ jobs:
 
       - name: Add build-time site scaffolding (runner workspace only, never committed)
         run: |
-          # Minimal Jekyll config: only forces inclusion of the underscore-
-          # prefixed ADR template (linked from five pages; Jekyll drops _* files
-          # by default). Everything else stays at Pages defaults.
+          # Minimal Jekyll config: forces inclusion of the underscore-prefixed
+          # ADR template (linked from five pages; Jekyll drops _* files by
+          # default) and pins `github.source` so the Primer footer's
+          # "Improve this page" link (`{% github_edit_link %}`) carries the
+          # `docs/` segment. Under a workflow build the Pages API reports the
+          # source path as `/`, so without this every edit link pointed at
+          # `edit/main/<page>` instead of `edit/main/docs/<page>` and 404ed.
+          # jekyll-github-metadata deep-merges a `github:` hash from the config
+          # over its own drop, and the tag joins `repository_url / edit/ /
+          # branch / path / page.path`. Everything else stays at Pages defaults.
           cat > docs/_config.yml <<'EOF'
           title: agenthropic
           description: Self-hosted, local-first dashboard observing Claude Code agent/subagent activity
           include:
             - _adr-template.md
             - site/contributing/decisions/_adr-template.md
+          github:
+            source:
+              branch: main
+              path: /docs
           EOF
           # docs/ has no README.md of its own, so the site root would 404.
           # Generate a small landing page pointing into the published trees.
@@ -127,6 +141,9 @@ jobs:
 
   deploy:
     needs: build
+    permissions:
+      pages: write
+      id-token: write
     runs-on: ubuntu-latest
     environment:
       name: github-pages

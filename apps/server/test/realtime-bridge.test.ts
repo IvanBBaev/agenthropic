@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Value } from '@sinclair/typebox/value';
 import {
   AgentStatusChangedEventSchema,
-  GenericRealtimeEventSchema,
+  IngestFailedEventSchema,
   SessionIngestedEventSchema,
 } from '@agenthropic/shared';
 import type { AgentStatusChangedEvent, SessionIngestedEvent } from '../src/ingest/ingest-events';
@@ -16,26 +16,28 @@ const STAMP = '2026-07-20T10:00:00.000Z';
  * in a fixed order, and including the ones that must REJECT it.
  *
  * WHY THIS REPLACED `Value.Check(RealtimeEventSchema, event)` (WP-U14). That
- * assertion was very nearly a tautology on anything that lands on the generic
- * arm, because `GenericRealtimeEventSchema` accepts ANY `{type: string,
- * payload: object}`: it could not see one thing about the payload it was
- * nominally validating, and it sat inside the suite meant to catch exactly
- * this. Worse, it was applied ONLY to the event that lands on the catch-all -
- * the two events with real typed arms, where a union check has genuine bite
- * (`additionalProperties: false`, a literal `type`, integer minimums), were
- * asserted with `toEqual` alone and never met the shared schema at all. The
- * check had teeth everywhere it was not used.
+ * assertion was very nearly a tautology on anything that landed on the union's
+ * former generic arm, which accepted ANY `{type: string, payload: object}`: it
+ * could not see one thing about the payload it was nominally validating, and
+ * it sat inside the suite meant to catch exactly this. Worse, it was applied
+ * ONLY to the event that landed on the catch-all - the two events with real
+ * typed arms, where a union check has genuine bite (`additionalProperties:
+ * false`, a literal `type`, integer minimums), were asserted with `toEqual`
+ * alone and never met the shared schema at all. The check had teeth everywhere
+ * it was not used.
  *
  * Naming the arm turns "some arm accepted it" into "exactly this arm accepted
  * it and the other two refused", which is a claim that can fail: loosen any
- * arm, or let a typed event decay onto the catch-all, and this goes red.
+ * arm and this goes red. Since 2026-09-09 (closing-plan L4 / D5) the third arm
+ * is the typed `ingest-failed` schema and the catch-all is deleted, so the
+ * claim now has the same bite for all three events the server can emit.
  */
 function acceptingArms(event: unknown): string[] {
   return (
     [
       ['session-ingested', SessionIngestedEventSchema],
       ['agent-status-changed', AgentStatusChangedEventSchema],
-      ['generic', GenericRealtimeEventSchema],
+      ['ingest-failed', IngestFailedEventSchema],
     ] as const
   )
     .filter(([, schema]) => Value.Check(schema, event))
@@ -119,9 +121,11 @@ describe('toRealtimeEvent (ingest -> shared realtime seam)', () => {
 
 /**
  * WP-IN5 failure visibility. A session that fails to ingest used to be
- * discarded, so the dashboard silently showed nothing. The failure now travels
- * the same SSE transport as every other truth (CD-5), on the shared union's
- * generic arm - no shared-schema change, and the dashboard can render it.
+ * discarded, so the dashboard silently showed nothing. The failure travels the
+ * same SSE transport as every other truth (CD-5), on its own typed arm since
+ * 2026-09-09; the `payload` envelope is kept byte-identical because the
+ * dashboard narrows it by hand (LiveView `toIngestFailureNotice`) and no gate
+ * would notice a flattened frame - the bytes are the contract here.
  */
 describe('toIngestFailureEvent (ingest failure -> SSE)', () => {
   const report: IngestFailureReport = {
@@ -131,7 +135,7 @@ describe('toIngestFailureEvent (ingest failure -> SSE)', () => {
     willRetry: true,
   };
 
-  it('maps a failure report onto the generic arm, stamp inside the payload', () => {
+  it('maps a failure report onto the typed ingest-failed arm, stamp inside the payload', () => {
     const event = toIngestFailureEvent(report, STAMP);
     expect(event).toEqual({
       type: 'ingest-failed',
@@ -143,14 +147,24 @@ describe('toIngestFailureEvent (ingest failure -> SSE)', () => {
         occurredAt: STAMP,
       },
     });
-    // This event has no typed arm, so it must land on the catch-all and ONLY
-    // there. That much is nearly free, which is why it is not asserted alone:
-    expect(acceptingArms(event)).toEqual(['generic']);
-    // ...the negative control is what gives the line above any weight. The one
-    // thing the generic arm genuinely enforces is `additionalProperties: false`,
-    // so hoisting `occurredAt` out of the payload must be refused by all three
-    // arms. If any arm is ever loosened, this is the assertion that goes red.
+    // Exactly the typed arm, and the other two refuse it.
+    expect(acceptingArms(event)).toEqual(['ingest-failed']);
+    // Negative controls, one per thing the arm enforces. Hoisting `occurredAt`
+    // beside `type` (the flat shape of the sibling arms) must be refused by all
+    // three - that is the wire shape the dashboard cannot read.
     expect(acceptingArms({ ...event, occurredAt: STAMP })).toEqual([]);
+    // The payload is closed too: a substrate path smuggled in as an extra key
+    // is not "more information", it is a frame the schema forbids.
+    expect(acceptingArms({ ...event, payload: { ...event.payload, path: '/x' } })).toEqual([]);
+    // Each field is pinned by type, not just by presence.
+    expect(acceptingArms({ ...event, payload: { ...event.payload, attempt: 0 } })).toEqual([]);
+    expect(acceptingArms({ ...event, payload: { ...event.payload, attempt: 2.5 } })).toEqual([]);
+    expect(acceptingArms({ ...event, payload: { ...event.payload, willRetry: 'yes' } })).toEqual(
+      [],
+    );
+    expect(acceptingArms({ ...event, payload: { ...event.payload, reason: 7 } })).toEqual([]);
+    // The `type` is a literal: the same payload under another name is nobody's.
+    expect(acceptingArms({ ...event, type: 'custom' })).toEqual([]);
   });
 
   it('carries the quarantine verdict and nothing about the substrate', () => {

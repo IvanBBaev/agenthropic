@@ -1,7 +1,7 @@
 /**
  * The single props contract every routed view receives (WP-U5).
  *
- * NEXT WAVE (WP-U6..U9): replace each view's INTERNALS, keep this signature -
+ * WP-U6..U9 replaced each view's INTERNALS and kept this signature -
  * the shell, router and view registry then never change. If a view needs more
  * than this, extend ViewProps here (one place) rather than forking per-view
  * prop shapes.

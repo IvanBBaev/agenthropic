@@ -66,8 +66,20 @@ export interface RunInstallResult {
    * written. It is a distinct outcome from `written` on purpose: reporting a
    * no-op as a write is the thing that made re-running the installer look like
    * it had done something.
+   *
+   * `absent` (added 2026-09-23, finding C-7) means `--remove` was asked of a
+   * path that does not exist: there was nothing to remove, so no directory was
+   * created and no file was written. It is distinct from `unchanged` because
+   * `unchanged` asserts the file exists and already matches.
+   *
+   * `nothing-to-remove` (added 2026-09-23, finding L-3) means `--remove` was
+   * asked of a file that exists but holds none of our hooks. Nothing was
+   * written and no backup was taken. It is distinct from `unchanged`, which
+   * compares BYTES and so misses this case for any file whose formatting is
+   * not already this installer's, and from `absent`, which asserts the file is
+   * not there at all.
    */
-  action: 'printed' | 'written' | 'dry-run' | 'unchanged';
+  action: 'printed' | 'written' | 'dry-run' | 'unchanged' | 'absent' | 'nothing-to-remove';
   outPath?: string;
   backupPath?: string;
   /**

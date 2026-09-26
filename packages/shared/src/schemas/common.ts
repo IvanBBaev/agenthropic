@@ -58,7 +58,7 @@ export type AgentType = Static<typeof AgentTypeSchema>;
  *                            deliberately NOT promoted to 'error'.
  *
  * On the measured corpus 19 of 33 are `concurrency_limit` - a scheduling fact
- * with no failed agent in it. That is the whole reason this is a five-valued
+ * with no failed agent in it. That is the whole reason this is a six-valued
  * enum on the wire and not a boolean: collapsing it would invent 33 failures
  * where there are 2.
  */
@@ -91,7 +91,7 @@ export const OrchestrationEdgeSourceSchema = Type.Union([
 
 export type OrchestrationEdgeSource = Static<typeof OrchestrationEdgeSourceSchema>;
 
-/** Pagination caps for the sessions list. */
+/** Pagination caps shared by the paginated read endpoints (sessions, events, changes). */
 export const DEFAULT_PAGE_LIMIT = 50;
 export const MAX_PAGE_LIMIT = 200;
 export const MAX_PAGE_OFFSET = 1_000_000;

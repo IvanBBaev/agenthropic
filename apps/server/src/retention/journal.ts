@@ -27,12 +27,14 @@
  * SUM of receipts is not guaranteed to equal the dollars retention removed
  * overall: a pruned window whose transcript changes later is resurrected by
  * re-ingest and journalled again by the next prune, so the sum can OVER-COUNT
- * - see the RETENTION vs REPLAY CHECKPOINTS note in `prune.ts` (awaiting
- * OPEN-1). Over-counting is still the safe direction; it inflates, never
- * hides, removed spend.
+ * - see the RETENTION vs REPLAY CHECKPOINTS note in `prune.ts`.
+ * Over-counting is still the safe direction; it inflates, never hides,
+ * removed spend.
  *
- * POLICY STATUS: mechanism only; the retention policy itself is unset and
- * awaits Ivan's OPEN-1/2/3 ratification (docs/analysis/open-decisions.md).
+ * POLICY STATUS: the v1.0 policy is signed (D3, 2026-09-08) and never prunes
+ * `token_usage`, so under it every receipt carries a zero dollar impact and
+ * records `events` rows only. The receipt is written all the same: it is the
+ * record that a scheduled deletion happened, and of what.
  */
 import {
   closeSync,
@@ -72,13 +74,25 @@ export function defaultJournalPath(databasePath: string): string {
 /**
  * Append one entry and flush it to stable storage before returning. Throws on
  * any I/O failure - the caller treats that as "the prune did not happen".
+ *
+ * `writeSync` may write fewer bytes than asked, so the write loops until the
+ * whole line is out. A single unchecked call would `fsync` a truncated receipt
+ * and return normally. A write that makes no progress throws.
  */
 export function appendJournalEntry(path: string, entry: Record<string, unknown>): void {
   mkdirSync(dirname(path), { recursive: true });
-  const line = `${JSON.stringify({ schema: RETENTION_JOURNAL_SCHEMA, ...entry })}\n`;
+  const line = Buffer.from(`${JSON.stringify({ schema: RETENTION_JOURNAL_SCHEMA, ...entry })}\n`);
   const fd = openSync(path, 'a');
   try {
-    writeSync(fd, line);
+    for (let offset = 0; offset < line.length;) {
+      const written = writeSync(fd, line, offset, line.length - offset);
+      if (written <= 0) {
+        throw new Error(
+          `retention journal write made no progress at byte ${String(offset)} of ${String(line.length)}: ${path}`,
+        );
+      }
+      offset += written;
+    }
     fsyncSync(fd);
   } finally {
     closeSync(fd);

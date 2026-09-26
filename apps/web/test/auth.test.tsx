@@ -126,11 +126,17 @@ describe('the entry screen names which of the three failures happened (AU-2)', (
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).not.toContain('Server unreachable');
     expect(alert.textContent).toContain('503');
+    // Under the two-dev-server setup Vite's proxy answers 500 itself when the
+    // API server is down, so an HTTP error proves only that SOMETHING answered.
+    expect(alert.textContent).toContain(
+      'Something on this origin answered with HTTP 503 - the dashboard server, or a proxy in front of it',
+    );
+    expect(alert.textContent).not.toContain('The server is running');
     expect(sessionStorage.getItem(TOKEN_KEY)).toBeNull();
   });
 
   it('does not blame the token when the token was accepted', async () => {
-    // 200 with a body this build cannot read. Every route is auth-gated, so a
+    // 200 with a body this build cannot read. Every /api/* route is auth-gated, so a
     // 200 is proof the token IS valid. The old message accused the network and
     // left the user re-typing a token that was never the problem.
     fetchMock.mockResolvedValue(textResponse(200));
@@ -218,6 +224,49 @@ describe('the entry screen puts the cursor where the fix is (AU-5)', () => {
     fireEvent.change(tokenInput(), { target: { value: 'another-token' } });
     expect(screen.queryByRole('alert')).toBeNull();
     expect(tokenInput().getAttribute('aria-invalid')).toBe('false');
+  });
+
+  /**
+   * B1. The sibling test above covers the edit that happens while the verdict
+   * is ON SCREEN; this is the edit that happens while the verdict is still IN
+   * FLIGHT, which the same handler cannot clear because it has not been said
+   * yet. Nothing disables the field during a probe, so the window is exactly as
+   * wide as the request - and on a rejected token, correcting it immediately is
+   * the single most likely thing a user does inside that window.
+   */
+  it('names which string a late verdict judges when the field moved on under it (B1)', async () => {
+    const gate = deferred<Response>();
+    fetchMock.mockReturnValue(gate.promise);
+    render(<TokenScreen onSuccess={() => undefined} />);
+
+    fireEvent.change(tokenInput(), { target: { value: 'bad-token' } });
+    fireEvent.submit(screen.getByRole('form', { name: 'token entry' }));
+    fireEvent.change(tokenInput(), { target: { value: 'corrected-token' } });
+    await act(async () => {
+      gate.resolve(healthResponse(401, { error: 'Unauthorized.' }));
+      await gate.promise;
+    });
+
+    const alert = await screen.findByRole('alert');
+    // The verdict is kept - the probe really did fail, and swallowing it would
+    // leave the user waiting for an answer that has already come and gone.
+    expect(alert.textContent).toContain('Invalid token');
+    expect(alert.textContent).toContain('submitted');
+    // ...but nothing has judged the string now in the box, so nothing may mark
+    // it invalid - least of all to a reader who only hears the attribute.
+    expect(tokenInput().getAttribute('aria-invalid')).toBe('false');
+  });
+
+  it('keeps marking the field invalid when the verdict is about what it holds', async () => {
+    // The other side of the same branch: an untouched field IS the string the
+    // server rejected, and the qualifier would be a lie there.
+    fetchMock.mockResolvedValue(healthResponse(401, { error: 'Unauthorized.' }));
+    render(<App />);
+    submitToken('bad-token');
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).not.toContain('submitted');
+    expect(tokenInput().getAttribute('aria-invalid')).toBe('true');
   });
 
   it('ignores a second submit while the first is still in flight', async () => {

@@ -35,7 +35,7 @@
  */
 import { sankey, sankeyLinkHorizontal, type SankeyGraph, type SankeyLink } from 'd3-sankey';
 import type { CostSummaryDto } from '../../dto';
-import { shortId } from '../../format';
+import { hasVisibleText, nameOrBlank, shortId } from '../../format';
 
 /** Categorical slots are fixed, never cycled; extra models fold into Other. */
 export const MAX_MODEL_NODES = 7;
@@ -299,6 +299,42 @@ const BALANCE_EPSILON = 1e-4;
 type ModelCost = CostSummaryDto['perModel'][number];
 type SessionCost = CostSummaryDto['topSessions'][number];
 
+/**
+ * The model name as this layout is willing to print it (2026-09-23, lane-P).
+ *
+ * Every label here is painted verbatim - on the diagram, in its legend, in the
+ * zero-cost notice. `perModel[].model` is `Type.String()` on the wire and the
+ * client guards check strings only for being strings, so a blank name is
+ * contract-valid; passed through, it produced a coloured node with no name, a
+ * legend entry keying nothing, and a `$0 priced` list that listed one nothing.
+ */
+function modelNodeLabel(model: string): string {
+  return nameOrBlank(model, 'model name');
+}
+
+/**
+ * The same name inside the undrawable notice, which prefixes its entries with
+ * `model` / `session` to say which axis they came from. The prefix is dropped
+ * for a blank name rather than stacked in front of the marker: `model blank
+ * model name ("")` says "model" twice, and the marker already contains the
+ * word, so nothing is lost by letting it speak for itself.
+ */
+function undrawableModelLabel(model: string): string {
+  return hasVisibleText(model) ? `model ${model}` : modelNodeLabel(model);
+}
+
+/**
+ * The session name as this layout is willing to print it (2026-09-23, lane-P):
+ * a real project slug in full, otherwise the shortened session id.
+ *
+ * Deliberately not `projectSlug ?? shortId(...)`. That coalesces on null only,
+ * so a slug the server recorded as `''` beat a perfectly usable id - the
+ * fallback existed and the blank jumped the queue in front of it.
+ */
+function sessionNodeLabel(projectSlug: string | null, sessionId: string): string {
+  return projectSlug !== null && hasVisibleText(projectSlug) ? projectSlug : shortId(sessionId);
+}
+
 /** A served amount a ribbon can carry: a real number, strictly positive. */
 function isDrawableCost(costUsd: number): boolean {
   return Number.isFinite(costUsd) && costUsd > 0;
@@ -344,7 +380,7 @@ export function computeCostFlow(
       continue;
     }
     if (isUndrawableCost(model.costUsd)) {
-      undrawable.push({ label: `model ${model.model}`, costUsd: model.costUsd });
+      undrawable.push({ label: undrawableModelLabel(model.model), costUsd: model.costUsd });
       // A non-finite cost is deliberately kept OUT of `perModelUsd`: one NaN
       // would poison the sum and silence the reconciliation below, which is
       // the only other check that would have noticed it.
@@ -353,7 +389,9 @@ export function computeCostFlow(
     }
     // Exactly $0. Real usage behind it is worth naming; a row with no tokens
     // at all is genuinely nothing to report.
-    if (model.tokens > 0 || model.unpricedTokens > 0) zeroCostModels.push(model.model);
+    if (model.tokens > 0 || model.unpricedTokens > 0) {
+      zeroCostModels.push(modelNodeLabel(model.model));
+    }
   }
 
   const pricedSessions: SessionCost[] = [];
@@ -370,7 +408,7 @@ export function computeCostFlow(
     // and without this line it would leave the diagram with nothing said.
     if (isUndrawableCost(session.costUsd)) {
       undrawable.push({
-        label: `session ${session.projectSlug ?? shortId(session.sessionId)}`,
+        label: `session ${sessionNodeLabel(session.projectSlug, session.sessionId)}`,
         costUsd: session.costUsd,
       });
     }
@@ -431,7 +469,7 @@ export function computeCostFlow(
     const id = `model:${model.model}`;
     nodes.push({
       id,
-      label: model.model,
+      label: modelNodeLabel(model.model),
       kind: 'model',
       colorIndex: index,
       unpricedTokens: model.unpricedTokens,
@@ -440,7 +478,14 @@ export function computeCostFlow(
   });
   if (folded.length > 0) {
     const foldedCost = folded.reduce((sum, model) => sum + model.costUsd, 0);
-    const foldedUnpriced = folded.reduce((sum, model) => sum + model.unpricedTokens, 0);
+    // A negative or non-finite count on one folded model must not be summed
+    // into a clean-looking figure (+100 and -100 fold to 0): the folded node
+    // is then unreadable, which the hover and the prose both disclose.
+    const foldedUnpriced = folded.some(
+      (model) => !Number.isFinite(model.unpricedTokens) || model.unpricedTokens < 0,
+    )
+      ? Number.NaN
+      : folded.reduce((sum, model) => sum + model.unpricedTokens, 0);
     nodes.push({
       id: 'other-models',
       label: `other models (${folded.length})`,
@@ -503,7 +548,11 @@ export function computeCostFlow(
       // The label is what the chart paints verbatim: a real project slug in
       // full (never truncated into something that reads like an id), or the
       // shortened session id when no slug was recorded.
-      label: session.projectSlug ?? shortId(session.sessionId),
+      // AMENDED 2026-09-23 (lane-P): through `sessionNodeLabel`, because `??`
+      // catches only null and a slug of `''` was therefore winning over the id
+      // fallback sitting unused in the same row - leaving the one node that
+      // identifies a session with no name at all.
+      label: sessionNodeLabel(session.projectSlug, session.sessionId),
       kind: 'session',
       colorIndex: null,
       unpricedTokens: session.unpricedTokens,

@@ -1,7 +1,7 @@
 # queue-operation — hierarchy ground truth (true by construction)
 
-The queued-spawn case: the child reaches its parent through a `queue_operation`
-record that maps the queued task id back to the originating tool_use id.
+The queued-spawn case: the child reaches its parent through a `queue-operation`
+record (edge source `queue_operation`) that maps the queued task id back to the originating tool_use id.
 
 ## meta
 

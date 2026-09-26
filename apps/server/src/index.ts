@@ -30,13 +30,17 @@ import { registerHookRoutes } from './hooks/routes';
 import {
   createCorpusWatcher,
   MAX_INGEST_ATTEMPTS,
+  REREAD_BACKOFF_CAP_PASSES,
   type CorpusWatcher,
   type IngestFailureReport,
   type TickOutcome,
 } from './ingest/corpus-watcher';
 import { toIngestFailureEvent, toRealtimeEvent } from './realtime/bridge';
 import { RealtimeHub } from './realtime/hub';
-import { pruneBackupFiles } from './retention/backup-files';
+import { signedRetentionPolicy } from './retention/policy';
+import type { RetentionPort } from './retention/port';
+import { createRetentionRunner, RetentionRunError } from './retention/runner';
+import { describeRetentionPolicy, retentionRunLine } from './retention/summary';
 import { buildServer } from './server';
 
 export {
@@ -47,6 +51,9 @@ export {
   DEFAULT_POLL_INTERVAL_MS,
   DEFAULT_WATCHDOG_MINUTES,
   DEFAULT_WEB_ROOT,
+  DEFAULT_RETENTION_EVENTS_DAYS,
+  DEFAULT_RETENTION_BACKUP_DAYS,
+  DEFAULT_RETENTION_BACKUP_KEEP_MIN,
 } from './config';
 export type { ServerConfig } from './config';
 export {
@@ -158,12 +165,22 @@ export function isLoopbackAddress(address: string): boolean {
 
 /**
  * Post-listen defence in depth: if ANY bound address is not loopback, log
- * (without secrets) and terminate the process. Exported for direct testing.
+ * (without secrets) and terminate the process. An EMPTY address list fails
+ * closed the same way: nothing was verified, so "every address is loopback"
+ * would be a vacuous pass. Exported for direct testing.
  */
 export async function enforceLoopbackOrExit(
   addresses: ReadonlyArray<{ address: string }>,
   cleanup: () => Promise<void>,
 ): Promise<void> {
+  if (addresses.length === 0) {
+    console.error(
+      'FATAL: the server reported no bound address, so the loopback-only invariant ' +
+        'could not be verified; shutting down.',
+    );
+    await cleanup();
+    process.exit(1);
+  }
   const offenders = addresses.filter((entry) => !isLoopbackAddress(entry.address));
   if (offenders.length === 0) {
     return;
@@ -344,7 +361,9 @@ export function tickTroubleTransition(
  * health lie in the opposite direction - red for a condition the server is
  * correctly surviving. The retry verdict is the honest part: `will retry` says
  * the watcher intends another pass, `quarantined` says the budget is spent and
- * this session will NOT be retried until its bytes change.
+ * this session is re-read only when its bytes change, at a cadence that
+ * doubles up to REREAD_BACKOFF_CAP_PASSES passes, or at once when a pricing
+ * row lands.
  *
  * `report.reason` arrives already sanitized by the watcher - no absolute path,
  * no transcript content, no hook payload, length-capped.
@@ -354,7 +373,9 @@ export function reportIngestFailure(
   hub: RealtimeHub,
   occurredAt: string,
 ): void {
-  const verdict = report.willRetry ? 'will retry' : 'quarantined until the session changes';
+  const verdict = report.willRetry
+    ? 'will retry'
+    : `quarantined: re-read on a change, at most every ${String(REREAD_BACKOFF_CAP_PASSES)} passes`;
   console.error(
     `corpus ingest failure: session ${report.sessionId} ` +
       `(attempt ${String(report.attempt)}/${String(MAX_INGEST_ATTEMPTS)}, ${verdict}): ` +
@@ -398,7 +419,12 @@ export interface SkipReporter {
   onSkip(skipped: SkippedFile): void;
   /** Aggregate line for a pass that skipped files; rate-limited, 0 is silent. */
   onTickSkips(filesSkipped: number): void;
-  /** Cumulative counts by reason since boot. */
+  /**
+   * Cumulative skip EVENTS by reason since boot, served as `ingestSkips` on
+   * `/api/health`. A file declined again on a later pass counts again (a live
+   * transcript that stays over the size cap is re-skipped each time its
+   * session is re-read), so this is not a count of distinct files.
+   */
   counters(): Readonly<Partial<Record<SkipReason, number>>>;
 }
 
@@ -434,7 +460,8 @@ export function createSkipReporter(
         const code = skipped.code === undefined ? '' : `, ${skipped.code}`;
         logError(
           `corpus ingest: skipped ${skipped.relativePath} (${skipped.reason}${code}) - ` +
-            `this session's records are NOT in the dashboard totals.`,
+            `this file's records are NOT in the dashboard totals ` +
+            `(the session's other files, if any, still are).`,
         );
       }
     },
@@ -454,18 +481,20 @@ export function createSkipReporter(
 }
 
 /**
- * Backup cadence and expiry window (review M-20: `events_raw` is the one
- * non-re-derivable table, and a backup capability nothing runs is not a
- * backup). PROVISIONAL numbers pending the OPEN-1 retention ratification; the
- * `keepMinimum` floor is the safety mechanism either way - however wrong the
- * window, the newest {@link BACKUP_KEEP_MINIMUM} backups always survive.
+ * Backup cadence (review M-20: `events_raw` is the one non-re-derivable table,
+ * and a backup capability nothing runs is not a backup). The expiry window and
+ * the keep-minimum floor used to sit here as PROVISIONAL constants; since D3
+ * (2026-09-08) they are configuration - `DASHBOARD_RETENTION_BACKUP_DAYS` and
+ * `DASHBOARD_RETENTION_BACKUP_KEEP_MIN` in `config.ts` - and reach this timer
+ * inside the retention policy. The cadence itself stays a constant.
  */
 export const BACKUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
-export const BACKUP_MAX_AGE_DAYS = 14;
-export const BACKUP_KEEP_MINIMUM = 7;
 
 export interface BackupScheduler {
-  /** One backup + expiry pass - exactly what the daily timer fires. */
+  /**
+   * One backup and - only when that backup succeeded - one retention pass.
+   * Exactly what the daily timer fires.
+   */
   runOnce(): Promise<void>;
   /** Clear the daily timer. Idempotent; wired into server close. */
   stop(): void;
@@ -473,9 +502,18 @@ export interface BackupScheduler {
 
 /**
  * Schedule daily database backups into `directory`
- * (`agenthropic-<timestamp>.db`, the documented naming convention that
- * {@link pruneBackupFiles} recognizes), expiring old ones with the
- * keep-minimum-floored retention pass right after each write.
+ * (`agenthropic-<timestamp>.db`, the documented naming convention the
+ * backup-file prune recognizes), with the retention pass chained after each
+ * write (L9 wiring of WP-D10). Each cycle:
+ *  1. writes a dated backup into `directory`;
+ *  2. if, and only if, that succeeded, runs `retention` at the cycle's `now` -
+ *     so every prune, of rows or of backup files, is preceded by a fresh
+ *     safety copy, and a cycle whose backup failed deletes nothing at all;
+ *  3. logs one line for the backup and one for the retention pass. Deleted
+ *     rows are also written to the retention journal beside the database (the
+ *     prune does that inside its own delete transaction).
+ * A throwing runner is logged and never propagates: the timer keeps ticking,
+ * and the next cycle tries again after its own backup.
  *
  * The timer is `unref`-ed: a backup schedule must never be what keeps a
  * process that already closed its server alive. A failed run logs and waits
@@ -484,10 +522,9 @@ export interface BackupScheduler {
 export function scheduleDailyBackups(
   db: SqliteDatabase,
   directory: string,
+  retention: RetentionPort,
   options: {
     readonly intervalMs?: number;
-    readonly maxAgeDays?: number;
-    readonly keepMinimum?: number;
     readonly now?: () => Date;
     readonly backup?: (db: SqliteDatabase, destPath: string) => Promise<void>;
     readonly log?: (line: string) => void;
@@ -495,13 +532,26 @@ export function scheduleDailyBackups(
   } = {},
 ): BackupScheduler {
   const intervalMs = options.intervalMs ?? BACKUP_INTERVAL_MS;
-  const maxAgeDays = options.maxAgeDays ?? BACKUP_MAX_AGE_DAYS;
-  const keepMinimum = options.keepMinimum ?? BACKUP_KEEP_MINIMUM;
   const now = options.now ?? (() => new Date());
   const backup = options.backup ?? backupDatabase;
   const log = options.log ?? console.log;
   const logError = options.logError ?? console.error;
   let running = false;
+
+  function runRetention(at: Date): void {
+    try {
+      log(retentionRunLine(retention.run({ now: at })));
+    } catch (error) {
+      logError(`retention failed: ${error instanceof Error ? error.message : String(error)}`);
+      if (error instanceof RetentionRunError) {
+        // What the pass had already deleted before it stopped - rows and
+        // backup files are gone either way, so the record must not be.
+        logError(
+          `retention failed part-way; completed before the failure - ${retentionRunLine(error.report)}`,
+        );
+      }
+    }
+  }
 
   async function runOnce(): Promise<void> {
     if (running) {
@@ -514,11 +564,9 @@ export function scheduleDailyBackups(
       const at = now();
       const destPath = join(directory, `agenthropic-${at.toISOString().replace(/[:.]/g, '-')}.db`);
       await backup(db, destPath);
-      const report = pruneBackupFiles({ directory, maxAgeDays, keepMinimum }, { now: at });
-      log(
-        `database backup: wrote ${destPath}, ` +
-          `expired ${String(report.deleted.length)} old backup(s).`,
-      );
+      log(`database backup: wrote ${destPath}.`);
+      // Reached only after a successful backup - the contract above.
+      runRetention(at);
     } catch (error) {
       logError(`database backup failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -539,6 +587,34 @@ export function scheduleDailyBackups(
   };
 }
 
+/**
+ * Boot-time retention report (L9): one info line saying what the signed policy
+ * is and what it WOULD prune right now. A dry run by construction - nothing is
+ * deleted at boot; the first real pass is the first daily cycle, after its
+ * backup. Never throws: an assessment that fails is logged as an error and the
+ * server boots regardless.
+ */
+export function reportRetentionAtBoot(
+  retention: RetentionPort,
+  options: {
+    readonly now?: () => Date;
+    readonly log?: (line: string) => void;
+    readonly logError?: (line: string) => void;
+  } = {},
+): void {
+  const now = options.now ?? (() => new Date());
+  const log = options.log ?? console.log;
+  const logError = options.logError ?? console.error;
+  try {
+    const report = retention.run({ now: now(), dryRun: true });
+    log(
+      `retention policy: ${describeRetentionPolicy(retention.policy)}. ${retentionRunLine(report)}`,
+    );
+  } catch (error) {
+    logError(`retention dry run failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 /** Boot the server. Throws when configuration is invalid (e.g. no token). */
 export async function start(
   env: Record<string, string | undefined> = process.env,
@@ -546,6 +622,13 @@ export async function start(
   const config = loadConfig(env);
   const db = openDatabase(config.dbPath);
   runMigrations(db);
+
+  // The signed retention policy (D3) over the backup directory next to the
+  // database it protects. Validated here, at wiring time; reported at boot as
+  // a dry run; run for real only by the daily timer, after that cycle's backup.
+  const backupsDir = join(dirname(config.dbPath), 'backups');
+  const retention = createRetentionRunner(db, signedRetentionPolicy(config.retention, backupsDir));
+  reportRetentionAtBoot(retention);
 
   // ONE hub shared by the ingest loop and the SSE route: watcher events are
   // bridged onto the shared RealtimeEvent DTOs and fan out to every stream
@@ -561,13 +644,15 @@ export async function start(
   // it for in-process harnesses that stub process.exit (production exits).
   let appRef: FastifyInstance | null = null;
   // /api/health's boot phase (M-16): 'replaying' from bind until the startup
-  // replay tick finishes, then 'idle' for the life of the process.
+  // replay tick finishes (successfully or not), then 'idle' for the life of the
+  // process. Not wired at all when ingest is off.
   let ingestPhase: 'replaying' | 'idle' = config.ingestEnabled ? 'replaying' : 'idle';
   // Trouble state for the scheduled poll loop, seeded from the replay tick
   // below so a boot that already announced its trouble is not announced twice.
   let tickTrouble: TickTroubleKind | null = null;
-  // Created even when ingest is off: skipCounters() is part of the server's
-  // shape either way, and an ingest-less boot honestly reports zero skips.
+  // Created even when ingest is off: RunningServer.skipCounters() is part of
+  // the server's shape either way and answers {} there. /api/health, which
+  // speaks to operators, omits the field on such a boot (see buildServer).
   const skipReporter = createSkipReporter();
   // Duration of the last completed watcher pass (M-15); null until one ran
   // (or forever, on an ingest-less boot) — /api/health omits it rather than
@@ -575,7 +660,7 @@ export async function start(
   let lastTickDurationMs: number | null = null;
   // M-18: messages the M-12 ownership rule skipped since boot. Counted here
   // rather than in the writer so /api/health can report the running total; an
-  // ingest-less boot honestly reports zero, exactly as skipCounters does.
+  // ingest-less boot omits the field, since nothing was there to collide.
   let crossSessionUsageCollisions = 0;
   // M-15/M-18: ONE tail-caching read port, shared by the ingest watcher and the
   // cost-analysis substrate provider below. The byte-offset cache is per
@@ -685,17 +770,21 @@ export async function start(
     schemaVersion: currentSchemaVersion(db),
     db,
     hub,
+    // The four ingest seams below are wired only when the watcher exists, like
+    // ingestExclusions: with ingest off, an 'idle' phase or a zero count would
+    // describe a pass that never ran, so /api/health omits the fields instead.
+    //
     // The same counters RunningServer.skipCounters() exposes, surfaced on
     // /api/health so frozen-dollar skips are visible from the dashboard side.
-    skipCounters: () => skipReporter.counters(),
+    skipCounters: ingestWatcher === null ? undefined : () => skipReporter.counters(),
     // M-16: lets a probe distinguish "still replaying the corpus" from "idle
     // and current" - the replay below runs after the bind.
-    ingestPhase: () => ingestPhase,
+    ingestPhase: ingestWatcher === null ? undefined : () => ingestPhase,
     // M-15: how long the last corpus pass took, so a poll outgrowing its
     // interval is visible from the dashboard side before it hurts.
-    tickDurationMs: () => lastTickDurationMs,
+    tickDurationMs: ingestWatcher === null ? undefined : () => lastTickDurationMs,
     // M-18: spend that a resume/fork replay deliberately did not re-count.
-    usageCollisions: () => crossSessionUsageCollisions,
+    usageCollisions: ingestWatcher === null ? undefined : () => crossSessionUsageCollisions,
     // How much of the corpus the dollar figures are NOT computed from. A
     // session ingest cannot finish contributes no rows at all, so every total
     // silently omits its spend - and omits it in the flattering direction,
@@ -720,7 +809,7 @@ export async function start(
       // removes the O(file bytes) synchronous re-read that remained. See the
       // sharing-safety argument at `corpusFs`.
       fs: corpusFs,
-      // Persisted-slug hint (review M-13): lets the provider try the session's
+      // Persisted-slug hint (review M-18): lets the provider try the session's
       // recorded project directory first instead of scanning every slug.
       slugOf: (id) => getSessionProjectSlug(db, id),
     }),
@@ -739,8 +828,9 @@ export async function start(
     },
   });
   // Daily backups of the one non-re-derivable table's home (review M-20) -
-  // scheduled regardless of ingest, next to the database it protects.
-  const backups = scheduleDailyBackups(db, join(dirname(config.dbPath), 'backups'));
+  // scheduled regardless of ingest, next to the database it protects - with
+  // the retention pass chained after each successful backup (L9).
+  const backups = scheduleDailyBackups(db, backupsDir, retention);
   const close = async (): Promise<void> => {
     backups.stop();
     watcher?.stop();

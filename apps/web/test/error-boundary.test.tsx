@@ -8,7 +8,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import App from '../src/App';
-import { describeFailure, ErrorBoundary, UNDESCRIBED_FAILURE } from '../src/ErrorBoundary';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import {
+  describeFailure,
+  ErrorBoundary,
+  SERVER_DATA_CAUSE,
+  UNATTRIBUTED_CAUSE,
+  UNDESCRIBED_FAILURE,
+} from '../src/ErrorBoundary';
 import { MockEventSource } from './mock-event-source';
 import { UNREADABLE_BODY_MESSAGE } from '../src/api';
 import { costSummary, jsonResponse, sessionList, sessionTree, globalDag } from './fixtures';
@@ -42,7 +50,11 @@ function Boom({ thrown }: { readonly thrown: unknown }): never {
 
 function renderBoundary(thrown: unknown) {
   return render(
-    <ErrorBoundary subject="The cost view" stillWorks="The navigation above still works.">
+    <ErrorBoundary
+      subject="The cost view"
+      stillWorks="The navigation above still works."
+      cause={SERVER_DATA_CAUSE}
+    >
       <Boom thrown={thrown} />
     </ErrorBoundary>,
   );
@@ -75,7 +87,7 @@ describe('describeFailure', () => {
 describe('ErrorBoundary', () => {
   it('renders its children untouched while nothing throws', () => {
     render(
-      <ErrorBoundary subject="The cost view" stillWorks="ignored">
+      <ErrorBoundary subject="The cost view" stillWorks="ignored" cause={SERVER_DATA_CAUSE}>
         <p>the real view</p>
       </ErrorBoundary>,
     );
@@ -118,7 +130,7 @@ describe('ErrorBoundary', () => {
       return <p>recovered</p>;
     }
     render(
-      <ErrorBoundary subject="The cost view" stillWorks="ignored">
+      <ErrorBoundary subject="The cost view" stillWorks="ignored" cause={SERVER_DATA_CAUSE}>
         <Flaky />
       </ErrorBoundary>,
     );
@@ -459,5 +471,47 @@ describe('the crash panel says when the retry has already been answered (EB-3)',
     expect(screen.getByTestId('error-boundary-repeat').textContent ?? '').toContain(
       'The cost view',
     );
+  });
+});
+
+/**
+ * The same panel is mounted twice: per view inside the shell, where a crash is
+ * almost always this build failing to read what the server returned, and at
+ * the root in `main.tsx`, where a crash can be anything - the token screen
+ * never saw a byte of server data. The cause sentences are therefore supplied
+ * by the call site; the root claims none.
+ */
+describe('the crash panel attributes a cause only where one is known', () => {
+  function renderWith(cause: typeof SERVER_DATA_CAUSE) {
+    return render(
+      <ErrorBoundary subject="The dashboard" stillWorks="Nothing is left to click." cause={cause}>
+        <Boom thrown={new Error('boom')} />
+      </ErrorBoundary>,
+    );
+  }
+
+  it('keeps the server-data explanation for a view boundary', () => {
+    renderWith(SERVER_DATA_CAUSE);
+    const text = screen.getByTestId('error-boundary').textContent ?? '';
+    expect(text).toContain('This build could not render what the server returned.');
+    expect(text).toContain('the server is very likely newer than this page');
+  });
+
+  it('claims no cause at the root', () => {
+    renderWith(UNATTRIBUTED_CAUSE);
+    const text = screen.getByTestId('error-boundary').textContent ?? '';
+    expect(text).toContain('Nothing is left to click.');
+    expect(text).toContain(UNATTRIBUTED_CAUSE.summary);
+    expect(text).toContain(UNATTRIBUTED_CAUSE.retryAdvice);
+    expect(text).not.toMatch(/server/i);
+  });
+
+  it('wires the neutral cause to the root boundary and the server cause to the views', () => {
+    // main.tsx is the DOM entry point and is not mounted by jsdom tests, so
+    // its wiring is pinned from the source.
+    const main = readFileSync(resolve(process.cwd(), 'src/main.tsx'), 'utf8');
+    expect(main).toContain('cause={UNATTRIBUTED_CAUSE}');
+    const shell = readFileSync(resolve(process.cwd(), 'src/Shell.tsx'), 'utf8');
+    expect(shell).toContain('cause={SERVER_DATA_CAUSE}');
   });
 });

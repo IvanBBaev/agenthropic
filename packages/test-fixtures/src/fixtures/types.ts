@@ -1,9 +1,10 @@
 /**
  * Shared types for the synthetic fixture corpus.
  *
- * Every fixture models one of the four structural join paths of
- * docs/analysis/parser-spec.md section 4 (plus the N3 usage-dedup case from
- * section 5.2). All content is SYNTHETIC — invented ids, hex, timestamps and
+ * Every fixture models one join provenance of docs/analysis/parser-spec.md
+ * section 4.1 (five: tool_use, directory, task_notification, queue_operation,
+ * legacy_explore), the depth-2 parent (gate item 4), the N3 usage-dedup case
+ * (section 5.2) or the WP-U10 outcome terminals. All content is SYNTHETIC — invented ids, hex, timestamps and
  * prose; nothing is copied from real transcripts.
  */
 

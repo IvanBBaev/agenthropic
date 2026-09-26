@@ -50,7 +50,16 @@ function pricedCte(where = ''): string {
       tu.tokens AS tokens,
       tu.occurred_at AS occurred_at,
       (
-        SELECT mp.usd_per_mtok
+        -- The LATEST dated row decides; a rate that is not a finite,
+        -- non-negative number resolves to NULL (unpriced) rather than to a
+        -- negative, infinite or text-coerced dollar figure. It never falls
+        -- back to an older row - that would price at a rate no longer in force.
+        SELECT CASE
+          WHEN typeof(mp.usd_per_mtok) IN ('integer', 'real')
+            AND mp.usd_per_mtok >= 0
+            AND mp.usd_per_mtok < 9e999
+          THEN mp.usd_per_mtok
+        END
         FROM model_pricing mp
         WHERE mp.model = tu.model
           AND mp.bucket = tu.bucket
@@ -177,7 +186,12 @@ export function countSessions(db: SqliteDatabase): number {
   return row.c;
 }
 
-const SESSION_PAGE_ORDER = 'COALESCE(s.last_activity_at, s.started_at) DESC, s.id ASC';
+// SA-Z1: recent-first by INSTANT, not by stored text. These columns are not
+// canonicalized (see the note above `canonicalInstant`), and as raw text
+// '...T00:00:00Z' sorts above '...T00:00:00.500Z' and an offset spelling sorts
+// by its local wall clock - the list head would not be the latest session.
+// NULL (no timestamp, or one strftime cannot parse) sorts last under DESC.
+const SESSION_PAGE_ORDER = `${canonicalInstant('COALESCE(s.last_activity_at, s.started_at)')} DESC, s.id ASC`;
 
 /** Recent-first page of session summaries (WP-U3). */
 export function listSessions(
@@ -278,7 +292,7 @@ function toAgentNode(row: AgentNodeRow): AgentNodeDto {
     subagentType: row.subagent_type,
     status: row.status as AgentNodeDto['status'],
     // Served as persisted. NULL is "no outcome was observed", not "succeeded",
-    // and the five causes stay distinct - see AgentNodeSchema.
+    // and the six causes stay distinct - see AgentNodeSchema.
     outcomeCause: row.outcome_cause as AgentNodeDto['outcomeCause'],
     parentAgentId: row.parent_agent_id,
     firstSeenAt: row.first_seen_at,
@@ -352,7 +366,7 @@ export function getSessionTree(db: SqliteDatabase, sessionId: string): SessionTr
        FROM agents ag
        LEFT JOIN usage_by_agent u ON u.agent_id = ag.id
        WHERE ag.session_id = ?
-       ORDER BY COALESCE(ag.first_seen_at, '') ASC, ag.id ASC`,
+       ORDER BY COALESCE(${canonicalInstant('ag.first_seen_at')}, '') ASC, ag.id ASC`,
     )
     .all(sessionId, sessionId) as AgentNodeRow[];
   const edgeRows = db
@@ -485,7 +499,7 @@ function accumulate(into: Map<string, CostBucket>, key: string, add: CostBucket)
 interface CanonicalPriceRow {
   readonly model: string;
   readonly bucket: string;
-  readonly usd_per_mtok: number;
+  readonly usd_per_mtok: unknown;
   readonly canonical_effective_from: string;
 }
 
@@ -500,7 +514,7 @@ function rateKey(model: string, bucket: string, effectiveFrom: string): string {
 }
 
 /**
- * The whole of `model_pricing` (~25 rows) as a lookup keyed by the rollup's
+ * The whole of `model_pricing` (~40 rows) as a lookup keyed by the rollup's
  * stored join key.
  *
  * `strftime('%Y-%m-%dT%H:%M:%fZ', ...)` is applied here for the same reason
@@ -521,7 +535,18 @@ function rateKey(model: string, bucket: string, effectiveFrom: string): string {
  * arm is a corruption tripwire, and the equivalence suite reaches it only by
  * dropping those triggers first.
  */
-function readRateTable(db: SqliteDatabase): Map<string, number> {
+/**
+ * A stored rate usable for pricing, or NULL (unpriced). Mirrors the validity
+ * rule in `pricedCte` so the rollup-backed summary and the SQL-priced routes
+ * agree: only a finite, non-negative number prices tokens. `usd_per_mtok` has
+ * REAL affinity but no value guard, so text, negatives and infinity can be
+ * stored; none of them may reach a money field.
+ */
+function usableRate(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function readRateTable(db: SqliteDatabase): Map<string, number | null> {
   const rows = db
     .prepare(
       `SELECT model, bucket, usd_per_mtok,
@@ -530,7 +555,7 @@ function readRateTable(db: SqliteDatabase): Map<string, number> {
          FROM model_pricing`,
     )
     .all() as CanonicalPriceRow[];
-  const rates = new Map<string, number>();
+  const rates = new Map<string, number | null>();
   for (const row of rows) {
     const key = rateKey(row.model, row.bucket, row.canonical_effective_from);
     if (rates.has(key)) {
@@ -540,7 +565,7 @@ function readRateTable(db: SqliteDatabase): Map<string, number> {
           'Cost cannot be reported unambiguously; refusing to guess.',
       );
     }
-    rates.set(key, row.usd_per_mtok);
+    rates.set(key, usableRate(row.usd_per_mtok));
   }
   return rates;
 }
@@ -555,7 +580,7 @@ function readRateTable(db: SqliteDatabase): Map<string, number> {
  * to $0: silently counting those tokens as unpriced would present real, priced
  * spend as unknown and hide the broken table that caused it.
  */
-function rateFor(rates: Map<string, number>, row: CostRollupRow): number {
+function rateFor(rates: Map<string, number | null>, row: CostRollupRow): number | null {
   const rate = rates.get(rateKey(row.model, row.bucket, row.rate_effective_from));
   if (rate === undefined) {
     throw new Error(
@@ -660,7 +685,7 @@ export interface CostSummaryProbe {
  *   Such a write also rewrites the affected rollup slice through migration
  *   16's `model_pricing` triggers, on that other connection and so equally
  *   invisible here. So the table's full content rides in the key verbatim —
- *   ~25 rows (PROVISIONAL: the WP-C1 seed's size), a trivial read next to the
+ *   ~40 rows (PROVISIONAL: the WP-C1 seed plus migration 18), a trivial read next to the
  *   rollup scan being avoided, and the one thing that makes a cross-connection
  *   repricing visible to this cache at all.
  *
@@ -745,7 +770,7 @@ export function getCostSummary(
   // `effective_from`, so pricing is a lookup on a stored key, never a redo of
   // the dated-rate resolution — no `ORDER BY effective_from DESC LIMIT 1`
   // correlated subquery per row anywhere below. That lookup is done in JS
-  // against a Map built from the whole of `model_pricing` (~25 rows) rather
+  // against a Map built from the whole of `model_pricing` (~40 rows) rather
   // than as a SQL LEFT JOIN, for two reasons. A LEFT JOIN that matched two
   // pricing rows would silently DOUBLE a cost with nothing able to report it;
   // building a Map makes that collision a loud throw (see readRateTable). And
@@ -813,14 +838,11 @@ export function getCostSummary(
     // '' is the rollup's encoding of "no rate was in force" — the priced CTE's
     // NULL rate. Those tokens are surfaced as unpriced and contribute $0; they
     // are never guessed at, and never dropped.
+    const rate = row.rate_effective_from === '' ? null : rateFor(rates, row);
     const add: CostBucket =
-      row.rate_effective_from === ''
+      rate === null
         ? { tokens: row.tokens, costUsd: 0, unpricedTokens: row.tokens }
-        : {
-            tokens: row.tokens,
-            costUsd: (row.tokens * rateFor(rates, row)) / 1000000,
-            unpricedTokens: 0,
-          };
+        : { tokens: row.tokens, costUsd: (row.tokens * rate) / 1000000, unpricedTokens: 0 };
     totals.tokens += add.tokens;
     totals.costUsd += add.costUsd;
     totals.unpricedTokens += add.unpricedTokens;
@@ -866,6 +888,13 @@ export function getCostSummary(
       projectSlug: slugs.get(sessionId) ?? null,
       ...bucket,
     })),
+    // The population the slice was cut from, so the client can say "N of M"
+    // rather than hedge (closing-plan L1). `bySession` holds every session with
+    // a rollup row - priced or unpriced - which is exactly what a longer
+    // `topN` would have listed; sessions with no usage at all are not
+    // "sessions with cost" and are not counted here.
+    sessionCount: bySession.size,
+    hasMore: bySession.size > top.length,
   };
   // Stored under the key OBSERVED BEFORE the scan — safe because better-sqlite3
   // is synchronous: nothing on this connection can write between the two.
@@ -873,11 +902,21 @@ export function getCostSummary(
   return summary;
 }
 
+/** Recent-first agent order by instant, for an optional table alias prefix. */
+function agentRecencyOrder(alias: string): string {
+  return `COALESCE(${canonicalInstant(`COALESCE(${alias}last_seen_at, ${alias}first_seen_at)`)}, '') DESC, ${alias}id ASC`;
+}
+
 /**
  * The persisted cross-session DAG, capped at `nodeLimit` recent-first agent
- * nodes. Returned edges are those whose BOTH endpoints made the cap, so the
- * client never renders a dangling reference; `counts` carries the full totals
- * and a `truncated` flag so the cap is always visible, never silent.
+ * nodes. Returned edges are those whose BOTH endpoints made the cap, so no
+ * returned edge names an agent outside `nodes`. Each node's `parentAgentId`
+ * is NOT subject to the cap: it is the persisted data fact served as-is, so a
+ * capped read can carry a node whose parent fell outside the returned set
+ * (F4, 2026-09-26). That is deliberate - the subagent tree is a data fact,
+ * not a UI reconstruction - and the client draws its links from `edges`, which
+ * is the capped surface. `counts` carries the full totals and a `truncated`
+ * flag so the cap is always visible, never silent.
  */
 export function getGlobalDag(db: SqliteDatabase, nodeLimit: number): GlobalDagDto {
   const count = (table: string): number =>
@@ -898,8 +937,11 @@ export function getGlobalDag(db: SqliteDatabase, nodeLimit: number): GlobalDagDt
   const ids = (
     db
       .prepare(
+        // SA-Z1: the cap keeps the most recent agents by INSTANT; a raw-text
+        // order would keep an older agent and drop a newer one while
+        // `truncated` presents the cap as the recent-first cut it claims.
         `SELECT id FROM agents
-         ORDER BY COALESCE(last_seen_at, first_seen_at, '') DESC, id ASC
+         ORDER BY ${agentRecencyOrder('')}
          LIMIT ?`,
       )
       .all(nodeLimit) as Array<{ id: string }>
@@ -927,9 +969,9 @@ export function getGlobalDag(db: SqliteDatabase, nodeLimit: number): GlobalDagDt
     .prepare(
       `WITH ${pricedCte(`WHERE tu.agent_id IN ${idList}`)},
        usage_by_agent AS (
-         SELECT agent_id, SUM(tokens) AS total_tokens, ${COST_USD} AS cost_usd, ${UNPRICED} AS unpriced_tokens
+         SELECT agent_id, session_id, SUM(tokens) AS total_tokens, ${COST_USD} AS cost_usd, ${UNPRICED} AS unpriced_tokens
          FROM priced
-         GROUP BY agent_id
+         GROUP BY agent_id, session_id
        )
        SELECT
          ag.id AS id, ag.session_id AS session_id, ag.type AS type,
@@ -941,9 +983,12 @@ export function getGlobalDag(db: SqliteDatabase, nodeLimit: number): GlobalDagDt
          COALESCE(u.cost_usd, 0) AS cost_usd,
          COALESCE(u.unpriced_tokens, 0) AS unpriced_tokens
        FROM agents ag
-       LEFT JOIN usage_by_agent u ON u.agent_id = ag.id
+       -- Scoped to the agent's OWN session, as the session tree scopes it: a
+       -- usage row in another session that names this agent id is that
+       -- session's unattributed usage, never this node's (no FK forbids it).
+       LEFT JOIN usage_by_agent u ON u.agent_id = ag.id AND u.session_id = ag.session_id
        WHERE ag.id IN ${idList}
-       ORDER BY COALESCE(ag.last_seen_at, ag.first_seen_at, '') DESC, ag.id ASC`,
+       ORDER BY ${agentRecencyOrder('ag.')}`,
     )
     .all(...ids, ...ids) as AgentNodeRow[];
   // The edge scan reuses the SAME resolved id list instead of re-deriving the
@@ -996,8 +1041,9 @@ export function getGlobalDag(db: SqliteDatabase, nodeLimit: number): GlobalDagDt
  *      substrate analysis of the LOSING session counts it too. This one is not
  *      countable from the DB (the loser leaves no row) — the server's
  *      cross-session collision counter is the place that fact is surfaced.
- *   2. Retention prunes `token_usage` but never `agents`, so an old session can
- *      keep subagents with no usage. Those price to $0 honestly (no rows, no
+ *   2. Hand-run retention tooling CAN prune `token_usage` (acknowledgeCostLoss;
+ *      the server's signed policy never does) but never `agents`, so such a
+ *      session can keep subagents with no usage. Those price to $0 honestly (no rows, no
  *      cost, no hypothetical) rather than erroring.
  *   3. A residual-cycle `parent_agent_id` nulled at ingest makes a subagent's
  *      top-tier model underivable — it self-reports in `subagentsSkipped`.
@@ -1267,8 +1313,10 @@ export function getAggregateDelegationSavings(
 //   usable on the one table that grows without bound.
 //
 //   `sessions.started_at`, `sessions.last_activity_at` and
-//   `agents.first_seen_at` carry NO such guarantee - nothing canonicalizes
-//   them, and the corpus does contain second-precision and offset spellings.
+//   `agents.first_seen_at` carry NO such guarantee for the rows already
+//   stored. Ingest canonicalizes them before every write now, but no
+//   migration rewrote older rows, and those do contain second-precision and
+//   offset spellings.
 //   Comparing those as raw text is silently wrong: '...T00:00:00Z' sorts
 //   ABOVE '...T00:00:00.000Z' ('Z' > '.'), so a session would fall on the
 //   wrong side of a boundary that names the very same instant. Every read of
@@ -1313,6 +1361,13 @@ const ISO_INSTANT = new RegExp(ISO_INSTANT_PATTERN);
  * and nothing is repaired - a silently corrected boundary answers a different
  * question than the one that was asked, with no sign that it did.
  *
+ * One spelling IS normalized rather than rejected, because it is not a repair
+ * but an exact synonym: ISO 8601's end-of-day `T24:00:00` (`.000` optional)
+ * passes the pattern, `Date.parse` reads it as 00:00 of the NEXT day, and the
+ * canonical result is echoed back to the client in `since`. `T23:59:60`,
+ * `T23:60` and `T24:00:01` all fail `Date.parse` and answer 400. (Amended
+ * 2026-09-25 (OO).)
+ *
  * The calendar round-trip is not redundant with `Date.parse`: V8 rolls
  * '2026-02-30' forward to March 2 rather than rejecting it, so a request for a
  * day that does not exist would otherwise be answered for a different day.
@@ -1329,7 +1384,12 @@ export function normalizeSinceInstant(raw: string): string | null {
   ) {
     return null;
   }
-  return new Date(epochMs).toISOString();
+  const canonical = new Date(epochMs).toISOString();
+  // An offset can push the instant past year 9999 or before year 0; the
+  // canonical spelling is then '+010000-…' / '-000001-…', which sorts as TEXT
+  // before every stored 4-digit-year instant and would turn the window
+  // inside out. Such an instant has no comparable spelling - refuse it.
+  return /^\d{4}-/.test(canonical) ? canonical : null;
 }
 
 /**

@@ -259,6 +259,13 @@ describe('the exclusion counts over a corpus that cannot be priced', () => {
       // zero would claim a completeness nobody measured.
       expect(body).not.toHaveProperty('sessionsExcluded');
       expect(body).not.toHaveProperty('sessionsQuarantined');
+      // The same holds for every other ingest field. There is no replay to be
+      // 'idle' after, and no pass that could have skipped or collided, so a
+      // zero or an 'idle' here would describe an ingest that is not running.
+      expect(body).not.toHaveProperty('ingest');
+      expect(body).not.toHaveProperty('ingestSkips');
+      expect(body).not.toHaveProperty('crossSessionUsageCollisions');
+      expect(body).not.toHaveProperty('lastTickDurationMs');
     } finally {
       await server.close();
     }

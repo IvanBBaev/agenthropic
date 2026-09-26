@@ -13,17 +13,24 @@ export type SqliteDatabase = Database.Database;
 
 /**
  * Open (creating if needed) the SQLite database at `path`, creating the
- * parent directory first. Asserts WAL journal mode and enforced foreign keys.
+ * parent directory first. Asserts WAL journal mode and enforced foreign keys;
+ * if setup throws, the handle is closed before the error propagates.
  */
 export function openDatabase(path: string): SqliteDatabase {
   mkdirSync(dirname(path), { recursive: true });
   const db = new Database(path);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
-  assertConnectionPragmas(
-    db.pragma('journal_mode', { simple: true }),
-    db.pragma('foreign_keys', { simple: true }),
-  );
+  try {
+    db.pragma('journal_mode = WAL');
+    db.pragma('foreign_keys = ON');
+    assertConnectionPragmas(
+      db.pragma('journal_mode', { simple: true }),
+      db.pragma('foreign_keys', { simple: true }),
+    );
+  } catch (err) {
+    // The caller never receives this handle, so nothing else could close it.
+    db.close();
+    throw err;
+  }
   return db;
 }
 

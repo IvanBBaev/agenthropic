@@ -17,13 +17,15 @@ important limit of what that CI gate can and cannot prove
 [§3](../../analysis/concept-analysis-v2.md) CD-9; development-plan
 [`WP-F5`/`WP-F6`](../../analysis/development-plan.md)).
 
-> **Update — 2026-08 (as built; both gates re-run locally on 2026-08-15; branch
-> protection recorded 2026-08-25).** Both gates named in §6 exist, are wired into the
+> **Update — 2026-08, figures re-taken 2026-09-09 (as built; both gates re-run locally
+> on 2026-09-09; branch protection recorded 2026-08-25).** Both gates named in §6 exist, are wired into the
 > root `package.json`, and run as named steps in
 > [`.github/workflows/ci.yml`](https://github.com/IvanBBaev/agenthropic/blob/main/.github/workflows/ci.yml),
-> so the CD-9 mechanism below is live rather than planned. The two figures quoted
-> here are a dated measurement of the tree as it stood on 2026-08-15, not constants —
-> both move with every dependency change and every added file.
+> so the CD-9 mechanism below is live rather than planned. The figures quoted here
+> are a dated measurement of the tree as it stood on 2026-09-09, not constants — both
+> move with every dependency change and every added file (the 2026-08-15 reading was
+> 412 packages and 235 files; the file count grew with the sources, and the license
+> line changed shape when the gate started counting its one exception apart).
 >
 > - **`WP-F6` — `pnpm run gate:licenses`** → [`scripts/check-licenses.mjs`](https://github.com/IvanBBaev/agenthropic/blob/main/scripts/check-licenses.mjs).
 >   It enumerates every installed dependency in the workspace (prod + dev) via
@@ -37,25 +39,62 @@ important limit of what that CI gate can and cannot prove
 >   an attribution-only data file pulled in transitively by the Vite toolchain — if
 >   that package ever relicenses, the exception stops matching and the gate goes red
 >   rather than waving it through. Workspace-local `@agenthropic/*` packages are
->   skipped as private, so the count is of third-party code only:
->   `check-licenses: OK (412 installed packages, all licenses allowlisted)`. The
+>   skipped as private, so the count is of third-party code only, and an applied
+>   exception is printed on its own line before the verdict rather than folded into
+>   "all allowlisted":
+>   `check-licenses: documented exception applied (NOT allowlisted): caniuse-lite@1.0.30001803  [CC-BY-4.0]`
+>   then `check-licenses: OK (412 packages / 429 installed versions; 411 allowlisted,
+>   1 under a documented exception)`. *(Corrected 2026-09-24: that count listed a name once per license
+>   it appeared under; counted as unique names the same tree reads `OK (407 packages / 429
+>   installed versions; 406 allowlisted, 1 under a documented exception)`.)* An exception that matches nothing in the
+>   installed tree is named on every run rather than failing it — deliberately, so a
+>   dependency bump that retires the package does not go red — which is how a dropped
+>   package cannot leave a standing permission behind unnoticed. The
 >   first open question in [What's undecided](#whats-undecided) — "which SPDX
 >   identifiers are on the allowlist" — is answered by that file; it is no longer
 >   undecided.
 > - **`WP-F5` — `pnpm run gate:spawner`** → `scripts/check-no-spawner.mjs`:
->   `check-no-spawner: OK (235 files scanned across 4 roots + repo-root config;
->   1 allowlisted)`. Its scope is wider than the work-package title suggests — it
->   walks `apps/`, `packages/`, `scripts/` and `hooks/` in full (source, tests, and
->   package-root config such as `vite.config.ts`, which is exactly where a dev-server
->   bind would be widened) plus the repo-root config files, and it forbids four
->   families of pattern, not one: the whole subprocess API surface, dynamic code
->   evaluation, wide network binds, and WebSocket servers. Sanctioned exceptions must
->   carry an inline `spawner-gate-allow` marker, and the only one in the repository is
->   the license scanner's own fixed-argv
+>   `check-no-spawner: OK (266 files scanned across 4 roots + repo-root config;
+>   1 allowlisted; 6 package.json manifests checked for forbidden direct dependencies)`
+>   *(re-measured 2026-09-19: 272 files, same 1 allowlisted, same 6 manifests; re-measured
+>   again 2026-09-23: **282 files**, still 1 allowlisted and 6 manifests, still exit 0;
+>   since 2026-09-24 the line ends `...checked for forbidden direct dependencies and
+>   wide-bind scripts)`, at 308 files)*.
+>   Its scope is wider than the work-package title suggests — it walks `apps/`,
+>   `packages/`, `scripts/` and `hooks/` in full (source, tests, and package-root
+>   config such as `vite.config.ts`, which is exactly where a dev-server bind would be
+>   widened) plus the repo-root config files, and it forbids four families of pattern,
+>   not one: the whole subprocess API surface, dynamic code evaluation, wide network
+>   binds, and WebSocket servers. Since 2026-09-07 it also opens the root and every
+>   workspace `package.json` (six manifests) and fails on a **direct** dependency named
+>   for a subprocess or WebSocket package (`execa`, `cross-spawn`, `shelljs`,
+>   `node-pty`, `ws`, `socket.io`, anything containing `websocket`), so `pnpm add execa`
+>   goes red before a single import is written; a transitive dependency is outside the
+>   gate and stays with lockfile review. Sanctioned exceptions must carry an inline
+>   `spawner-gate-allow` marker, and the repository has three such sites, each visible
+>   in any diff: the license scanner's own fixed-argv
 >   `execFileSync('pnpm', ['licenses', 'list', '--json'])` — no shell, no
->   interpolation. One file is allowlisted wholesale, the gate script itself, because
+>   interpolation; a server test that runs `tsx` once, at test time only, on a file it
+>   has just written, to re-measure the migration checksums it pins
+>   (`apps/server/test/migrations-checksum-stability.test.ts`); and a shared test
+>   asserting the loopback guard rejects `0.0.0.0`. One file is allowlisted wholesale,
+>   the gate script itself, because
 >   it defines every forbidden pattern as a literal; that allowlisting is printed on
 >   every run rather than applied silently.
+>
+>   **AMENDED 2026-09-23 (J-11/J-12).** Two corrections to the paragraph above, neither of
+>   them to its substance. (1) "Three such sites" counts sanctioned *exceptions* - the
+>   enumeration is exact - but the gate reports a **line** count, and the three exceptions are
+>   carried on **five** marked lines: two of them need the marker on the `import` as well as
+>   on the call (`apps/server/test/migrations-checksum-stability.test.ts:83` and `:195`,
+>   `packages/shared/test/security.test.ts:81`, `scripts/check-licenses.mjs:36` and `:167`).
+>   (2) The quoted `OK` line predates the gate's current output shape. As of 2026-09-23 the
+>   real final line is `check-no-spawner: OK (282 files scanned across 4 roots + repo-root
+>   config; 1 allowlisted; 5 line(s) inline-exempt; 6 package.json manifests checked for
+>   forbidden direct dependencies)`, preceded by one `inline opt-out in force` line per exempt
+>   line and by two `inline opt-out suppressed nothing (dead marker, not fatal)` lines - the
+>   latter naming prose comments that carry the marker text without suppressing anything, which
+>   is reported and non-fatal. Exit code still 0.
 >
 > **Both gates are merge-blocking for anyone who is not the repository owner.** Both
 > run in CI on every push and pull request, and both fail the workflow correctly when
@@ -321,8 +360,8 @@ listed alongside `WP-F6` in the task scope because it is the concrete enforcemen
 that the one MIT-attributed, wholesale-copyable project — `hoangsonww` — cannot
 smuggle its RCE spawner in alongside its Telegram provider: a static pattern scan
 fails the build the moment any `child_process` import appears, regardless of which
-file introduced it or why (see [security model, rule
-3](../security/model.md#3-never-a-browser-driven-subprocess--claude-spawner)). It
+file introduced it or why (see
+[security model, rule 3](../security/model.md#3-never-a-browser-driven-subprocess--claude-spawner)). It
 is a security gate first and a provenance gate second — but because the one
 artifact this project *does* copy wholesale (`hoangsonww`'s webhook code) sits one
 file away from the exact route this gate exists to forbid, it functions as part of
@@ -332,7 +371,10 @@ The shipped gate is broader than that Done-when in both scope and coverage. It s
 `apps/`, `packages/`, `scripts/` and `hooks/` rather than `apps/server` alone, it
 includes tests and package-root config files rather than `src/` only, and it forbids
 dynamic evaluation, wide network binds and WebSocket servers alongside the
-subprocess family. It is also honest in its own source comments about what a regex
+subprocess family; since 2026-09-07 it also reads the direct dependencies declared
+in all six workspace manifests by name, so a subprocess or WebSocket package is
+refused at `pnpm add` rather than at first import. It is also honest in its own
+source comments about what a regex
 scanner can and cannot do: it stops the idiomatic ways a spawner could be
 reintroduced during ordinary development, and it explicitly does not claim to stop a
 developer who is deliberately obfuscating with runtime-assembled strings or

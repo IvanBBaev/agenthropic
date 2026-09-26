@@ -1,6 +1,6 @@
 # task-notification-recovery — hierarchy ground truth (true by construction)
 
-The compaction-eviction case: the spawning `Task` tool_use block is gone from
+The compaction-eviction case: the spawning `Agent` tool_use block is gone from
 the main transcript, and the only surviving structural trace is the
 `<task-notification>` record. The parser must re-anchor the child to the main
 agent rather than drop it.

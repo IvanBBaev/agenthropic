@@ -34,8 +34,8 @@
  *
  *   vitest (vite's esbuild transform, what this file pins) and `tsx` (what
  *   `pnpm start`, `pnpm dev` and `pnpm bench` run) now produce an IDENTICAL
- *   checksum for TWELVE of the seventeen migrations - ids 1-6, 8, 9, 10, 12,
- *   13 and 17. They differ on ids 7, 11, 14, 15 and 16. Running the pre-H-1
+ *   checksum for FOURTEEN of the nineteen migrations - ids 1-6, 8, 9, 10, 12,
+ *   13, 17, 18 and 19. They differ on ids 7, 11, 14, 15 and 16. Running the pre-H-1
  *   whitespace-only formula over the SAME two transform outputs puts the
  *   agreement at ZERO, so the agreeing set is what H-1 bought.
  *
@@ -43,8 +43,16 @@
  * agreeing set on the same re-measurement, which is a property of its body
  * rather than luck: it is one `db.exec` of a single template literal, with no
  * number literal, no `new` expression and no arrow function, so it carries
- * none of the five printer differences enumerated next. The residual five are
- * still exactly ids 7, 11, 14, 15 and 16.
+ * none of the five printer differences enumerated next. Migration 18
+ * (`model-pricing-opus-5-fable-5-1`, appended 2026-09-10) was built to that
+ * same shape on purpose - its ten rates are spelled inside the SQL text of the
+ * one template literal rather than as JS number literals, because a `0.5` in
+ * JS would have re-printed as `.5` under tsx and made it a sixth divergent id
+ * - and it joined the agreeing set on its own measurement. Migration 19
+ * (`model-pricing-opus-5-5`, appended 2026-09-26) is a five-row copy of that
+ * shape and joined the same way, measured identical under both executors on
+ * the day it was written. The residual five are still exactly ids 7, 11, 14,
+ * 15 and 16.
  *
  * The old cause - a separator tsx's esbuild elides before a closing bracket and
  * vite's does not - is now cancelled by the formula itself. The residual five
@@ -124,8 +132,9 @@
  * comment-preserving executor, and that was measured too: `node
  * --experimental-strip-types`, which leaves comments standing, went from
  * agreeing with tsx on ZERO of the sixteen to agreeing on the SAME eleven -
- * and, re-measured on 2026-09-01, on migration 17 as well, so all three
- * executors now agree on the same twelve.
+ * and, re-measured on 2026-09-01, on migration 17 as well, and on 2026-09-10 on
+ * migration 18 too, and on 2026-09-26 on migration 19, so all three executors
+ * now agree on the same fourteen.
  */
 import { describe, expect, it } from 'vitest';
 import { migrationChecksum, migrations, type Migration } from '../src/db/migrations';
@@ -161,8 +170,11 @@ interface PinnedChecksum {
  * for it. The sixteen rows above that one were re-measured on the same run,
  * under vitest AND under tsx, and came out byte-identical to what they already
  * said - which is what makes this an append rather than the incident the
- * paragraphs above describe. That is the only shape a diff in this table may
- * legitimately take: a new row at the end, every older row untouched.
+ * paragraphs above describe. Migration 18 followed the same procedure on
+ * 2026-09-10: one row appended, and the seventeen above it re-measured under
+ * vitest, tsx and `node --experimental-strip-types` and found byte-identical.
+ * That is the only shape a diff in this table may legitimately take: a new row
+ * at the end, every older row untouched.
  */
 const PINNED: readonly PinnedChecksum[] = [
   {
@@ -250,6 +262,16 @@ const PINNED: readonly PinnedChecksum[] = [
     name: 'agents-outcome-cause',
     checksum: '05ff7a6f95a7ff9432e38bd164c593b95c163fdcd1e461008a75e3fea01f1c41',
   },
+  {
+    id: 18,
+    name: 'model-pricing-opus-5-fable-5-1',
+    checksum: 'ec11bd686759b257661764839b23befa7813e89846328f79ce1c3bd48888ce8a',
+  },
+  {
+    id: 19,
+    name: 'model-pricing-opus-5-5',
+    checksum: '4efb01c611acb6d2723aed7beb74d1e82ec676b970adf64857ce1d40537a6920',
+  },
 ];
 
 /** The literal whitespace normalisation `migrationChecksum` applies. */
@@ -331,7 +353,7 @@ describe('migration checksum pin', () => {
     // One `toEqual` over the whole table rather than a loop of assertions: the
     // failure output then shows every literal that moved at once, which
     // separates "someone edited migration 11" from "the transform changed" at a
-    // glance - one row versus seventeen.
+    // glance - one row versus nineteen.
     expect(computed).toEqual(PINNED);
   });
 

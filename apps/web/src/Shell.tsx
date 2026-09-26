@@ -22,7 +22,7 @@ import {
   UNRECOGNISED_STATUS_LABEL,
   UNRECOGNISED_STATUS_SYMBOL,
 } from './views/status';
-import { ErrorBoundary } from './ErrorBoundary';
+import { ErrorBoundary, SERVER_DATA_CAUSE } from './ErrorBoundary';
 import { VIEWS } from './views/index';
 
 /**
@@ -47,11 +47,19 @@ import { VIEWS } from './views/index';
  * buy precision the reader has to memorise). What changes is that the legend
  * now names both parentheticals it can produce, and quotes the absence phrase
  * from the constant that renders it rather than restating it here.
+ *
+ * AMENDED 2026-09-23 (lane-P). `unrecognisedStatusMeta` now prints the raw
+ * word inside quotes, so that a word which renders as nothing - `''`, or
+ * whitespace - is still visible as something the server sent. The legend says
+ * "in quotes" because that punctuation is now carrying meaning: it is the
+ * boundary of the server's own bytes, and a reader who meets `unrecognised
+ * ("")` needs to have been told that the quotes are the page's and the
+ * emptiness is the server's, not the other way round.
  */
 const LEGEND_STATUSES = [
   ...AGENT_STATUSES.map((status) => `${STATUS_META[status].symbol} ${STATUS_META[status].label}`),
   `${NULL_STATUS_META.symbol} ${NULL_STATUS_META.label}`,
-  `${UNRECOGNISED_STATUS_SYMBOL} ${UNRECOGNISED_STATUS_LABEL} (the raw word, or "${ABSENT_STATUS_REASON}")`,
+  `${UNRECOGNISED_STATUS_SYMBOL} ${UNRECOGNISED_STATUS_LABEL} (the raw word in quotes, or "${ABSENT_STATUS_REASON}")`,
 ].join(' ');
 
 /**
@@ -154,9 +162,34 @@ const STREAM_CLOSED_DETAIL =
  * `unreachable` arm above answers first. What is left is the case with no other
  * signal on the page - the probe succeeded, so the server is up, and the stream
  * alone cannot get in.
+ *
+ * AMENDED 2026-09-09 (L3, D6): the wording is unchanged and stays true at any
+ * attempt number - the first attempt did fail, and the browser is still
+ * retrying. HOW MANY have failed since is carried by the chip's label beside
+ * it (see `attemptSuffix`) rather than restated here, so the two never drift
+ * into disagreeing about the same number.
  */
 const STREAM_NEVER_OPENED_DETAIL =
   'the event stream has not connected yet - the first attempt failed and the browser is retrying';
+
+/**
+ * `(attempt N)` for a retrying chip, or nothing at all (D6).
+ *
+ * From the SECOND failed attempt on. `attempt 1` tells a reader nothing the
+ * word beside it has not already said, and a counter that appears on every
+ * blip is a counter people stop reading. From two upwards it is the entire
+ * difference between a hiccup and a stream that is never coming back - the
+ * header knew it had tried forty times and printed the same three words it
+ * printed after one.
+ *
+ * Anything below 2 yields the empty string rather than a confident
+ * `attempt 0`. The test is written as `>= 2` precisely so that a count which
+ * is not a real number falls out on the SILENT side: an unknown figure is
+ * said as nothing, never as a figure.
+ */
+function attemptSuffix(failedAttempts: number): string {
+  return failedAttempts >= 2 ? ` (attempt ${String(failedAttempts)})` : '';
+}
 
 /**
  * The detail shown when the socket is open but the mount probe failed (F-2).
@@ -178,43 +211,88 @@ function staleProbeDetail(message: string): string {
  * went on collapsing them into `server unreachable`. In two of the three that
  * word is false, and falsest exactly where it matters:
  *
- * - `server-error`: something ANSWERED. The server is up, and the reader is
- *   being sent to restart a running process.
- * - `malformed`: the answer was 200. Every route on this server is auth-gated,
+ * - `server-error`: something ANSWERED - the dashboard server, or a proxy in
+ *   front of it (PP2: under the two-dev-server setup Vite's proxy answers 500
+ *   itself when the API server is down, so "the server is running" is NOT
+ *   known). What is known is that this was not a network failure.
+ * - `malformed`: the answer was 200. Every /api/* route on this server is auth-gated,
  *   so a 200 is proof the token was ACCEPTED - and the app's one chip for
  *   "can these numbers be trusted" was reporting a shape disagreement as a
  *   lost connection while hiding a successful authentication behind it.
  *
  * `no-response` keeps the original wording, because there it was always the
  * true one: nothing answered, and nothing judged the token.
+ *
+ * AMENDED 2026-09-23 (R-1): the three verdicts are built here and dressed as a
+ * chip below, so that a CLOSED stream can add its own sentence to any of them
+ * without the wording above being restated three times.
  */
-function unreachableChip(health: Extract<HealthState, { kind: 'unreachable' }>): Chip {
+function unreachableVerdict(health: Extract<HealthState, { kind: 'unreachable' }>): {
+  readonly label: string;
+  readonly detail: string;
+} {
   switch (health.reason) {
     case 'no-response':
-      return {
-        symbol: null,
-        label: 'server unreachable',
-        className: 'chip chip-error',
-        detail: health.message,
-      };
+      return { label: 'server unreachable', detail: health.message };
     case 'server-error':
       return {
-        symbol: null,
         label: 'server error',
-        className: 'chip chip-error',
-        detail: `${health.message} - the server answered, so it is running; this token was neither accepted nor rejected`,
+        detail: `${health.message}: something on this origin answered - the dashboard server, or a proxy in front of it - so this token was neither accepted nor rejected`,
       };
     case 'malformed':
       return {
-        symbol: null,
         label: 'unreadable response',
-        className: 'chip chip-error',
-        detail: `${health.message} - the server answered, and because every route here is auth-gated that answer means this token was accepted; the disagreement is about the shape of the body, not the connection`,
+        detail: `${health.message} - the server answered, and because every /api/* route here is auth-gated that answer means this token was accepted; the disagreement is about the shape of the body, not the connection`,
       };
   }
 }
 
-function chipFor(health: HealthState, stream: SseConnectionState, everOpened: boolean): Chip {
+/**
+ * The unreachable verdict, plus the stream's own state when that state is
+ * terminal (R-1).
+ *
+ * B3 stopped an UNANSWERED probe from outranking a dead stream and left this
+ * arm's precedence resting on one argument: "the server is not answering both
+ * outranks and explains a dead stream". That argument holds for `no-response`
+ * and collapses for the other two, which exist precisely because something
+ * ANSWERED - their own text says so, and `malformed` goes further and tells the
+ * reader in as many words that the disagreement is "not the connection" while
+ * the connection is the thing that has died. Either way the chip dropped
+ * `STREAM_CLOSED_DETAIL`, the page's only sentence saying that live updates
+ * have stopped for good and that a reload is the way back.
+ *
+ * The route in is not exotic and the app supplies it: a reader looking at a
+ * correct `stream closed` chip presses `Re-check server`, the probe answers
+ * 500 or answers 200 with a body this build cannot read, and the diagnosis of
+ * the breakage is replaced by a sentence about the server being up.
+ *
+ * Both facts are kept, in the order they matter to the reader: the probe's
+ * verdict is the news, and the dead stream is the part that is still true
+ * whatever the probe found. `no-response` gets the sentence too - "the server
+ * is down" explains why the stream died, but not that it will stay dead after
+ * the server comes back, which is the only part anyone can act on.
+ */
+function unreachableChip(
+  health: Extract<HealthState, { kind: 'unreachable' }>,
+  streamClosed: boolean,
+): Chip {
+  const verdict = unreachableVerdict(health);
+  return {
+    symbol: null,
+    label: verdict.label,
+    className: 'chip chip-error',
+    detail: streamClosed
+      ? `${verdict.detail}; separately, ${STREAM_CLOSED_DETAIL}`
+      : verdict.detail,
+  };
+}
+
+function chipFor(
+  health: HealthState,
+  stream: SseConnectionState,
+  everOpened: boolean,
+  failedAttempts: number,
+): Chip {
   /*
    * AMENDED 2026-09-02 (F-2): the `unreachable` arm used to short-circuit HERE,
    * above the stream switch entirely. The reasoning was sound as far as it went
@@ -241,32 +319,78 @@ function chipFor(health: HealthState, stream: SseConnectionState, everOpened: bo
       detail: health.kind === 'unreachable' ? staleProbeDetail(health.message) : null,
     };
   }
-  if (health.kind === 'checking') {
+  /*
+   * AMENDED 2026-09-23 (B3): the guard used to be a bare `health.kind ===
+   * 'checking'`, which let a probe with no answer yet outrank a stream that had
+   * already given its last one. `closed` is terminal - EventSource reached a
+   * fatal error or was closed outright, and nothing will bring it back without
+   * a reload - so with a probe in flight the chip said `checking…`, under a
+   * scope label that names the EVENT STREAM as its subject, over a stream this
+   * code knew was dead; and `STREAM_CLOSED_DETAIL`, the only sentence telling
+   * the reader a reload is required, was not on screen at all. Two ways in, and
+   * neither is exotic: at mount the stream route can fail fatally (any non-200,
+   * including the same-origin refusal) while the health request is still
+   * outstanding, and `Re-check server` puts health back into `checking` by hand
+   * - so the one control offered to a reader whose connection is broken
+   * WITHDREW the diagnosis of the breakage. A probe that has not answered is
+   * the absence of evidence; a closed stream is evidence. The closed arm of the
+   * switch below is reached instead, unchanged, and is still the only place
+   * that wording lives.
+   *
+   * The `unreachable` arm keeps its precedence: there the probe HAS answered,
+   * and "the server is not answering" both outranks and explains a dead stream.
+   *
+   * AMENDED 2026-09-23 (R-1): that last sentence is still why the arm keeps its
+   * precedence, and it was wrong about what the precedence COSTS. It is an
+   * argument about `no-response` only - the other two verdicts are reached
+   * because the server answered - and even there it explains why the stream
+   * died without saying that it will stay dead once the server returns. The arm
+   * is unchanged and still wins; it now carries the closed stream's own
+   * sentence with it (see `unreachableChip`), so nothing outranks that sentence
+   * off the page any more.
+   */
+  if (health.kind === 'checking' && stream !== 'closed') {
     return { symbol: null, label: 'checking…', className: 'chip chip-wait', detail: null };
   }
   if (health.kind === 'unreachable') {
-    return unreachableChip(health);
+    return unreachableChip(health, stream === 'closed');
   }
   switch (stream) {
     case 'connecting':
       return { symbol: null, label: 'connecting…', className: 'chip chip-wait', detail: null };
-    case 'reconnecting':
+    case 'reconnecting': {
       // SH-2. Same amber, same glyph - a retrying stream is a warning either
       // way - but the word only claims a previous connection when there was
       // one, and the case that has no other signal on the page says so itself.
+      //
+      // AMENDED 2026-09-09 (L3, D6): the attempt count is appended to BOTH
+      // forks, because it is a fact about the RETRYING and not about the word
+      // chosen to describe it. A stream that has never been open can be on its
+      // fortieth attempt exactly as a dropped one can, and that reader has the
+      // least other evidence on the page - suppressing the number there would
+      // hide it precisely where it is worth most.
+      //
+      // It is APPENDED, never allowed to change the word: forty failed first
+      // attempts are still not a past connection, so the never-opened fork
+      // keeps saying `connecting…` at attempt 40 as firmly as at attempt 1.
+      // The count goes in the label rather than beside it so that it lands in
+      // the chip's accessible name, inside the polite live region - a reader
+      // who cannot see the header is told the retry is the fortieth too.
+      const suffix = attemptSuffix(failedAttempts);
       return everOpened
         ? {
             symbol: '○',
-            label: 'reconnecting',
+            label: `reconnecting${suffix}`,
             className: 'chip chip-warn',
             detail: null,
           }
         : {
             symbol: '○',
-            label: 'connecting…',
+            label: `connecting…${suffix}`,
             className: 'chip chip-warn',
             detail: STREAM_NEVER_OPENED_DETAIL,
           };
+    }
     case 'closed':
       return {
         symbol: null,
@@ -283,6 +407,13 @@ export function Shell({ token, onLock, onAuthRejected }: ShellProps) {
   const [stream, setStream] = useState<SseConnectionState>('connecting');
   /** Whether the stream has ever been open - the evidence `reconnecting` needs. */
   const [streamEverOpened, setStreamEverOpened] = useState(false);
+  /**
+   * Consecutive failed connection attempts, straight from the stream client's
+   * own ledger (D6) - never counted here. The Shell would have to re-derive it
+   * from a state sequence it only partly sees, and a second tally of the same
+   * events is a second chance to disagree with the first.
+   */
+  const [streamAttempts, setStreamAttempts] = useState(0);
   const [sse, setSse] = useState<SseClient | null>(null);
   /**
    * Frames that arrived and could not be read. Held here rather than in a view
@@ -331,8 +462,9 @@ export function Shell({ token, onLock, onAuthRejected }: ShellProps) {
     // one connection's losses to another.
     setDroppedFrames(0);
     setMissedFrames(0);
-    const unsubscribe = client.onStateChange((state) => {
+    const unsubscribe = client.onStateChange((state, attempts) => {
       setStream(state);
+      setStreamAttempts(attempts);
       if (state === 'open') setStreamEverOpened(true);
     });
     const unsubscribeDrops = client.onFrameDropped((frame) => setDroppedFrames(frame.total));
@@ -356,7 +488,7 @@ export function Shell({ token, onLock, onAuthRejected }: ShellProps) {
     setProbeNonce((nonce) => nonce + 1);
   };
 
-  const chip = chipFor(health, stream, streamEverOpened);
+  const chip = chipFor(health, stream, streamEverOpened, streamAttempts);
   const active = VIEWS[view];
 
   return (
@@ -422,13 +554,18 @@ export function Shell({ token, onLock, onAuthRejected }: ShellProps) {
           <span className="muted chip-detail" data-testid="missed-frames-detail">
             the server numbered frames that never reached this page - a reload re-reads the current
             state, but an ingest-failure notice among them cannot be recovered by any refetch,
-            because a quarantined session is not served by the read API
+            because a quarantined session is either missing from the read API or still showing its
+            last good pass, and neither body says which
           </span>
         )}
+        {/* Neutral on purpose (PP1): a drop is either a frame that could not be
+            parsed or a parsed frame a handler failed on, and this header holds
+            only the count, not which - so it claims neither. */}
         {droppedFrames > 0 && (
           <span className="muted chip-detail" data-testid="dropped-frames-detail">
-            the stream delivered {droppedFrames === 1 ? 'a frame' : 'frames'} this build could not
-            parse - something changed that is not on this screen; reload to re-read from the server
+            the stream delivered {droppedFrames === 1 ? 'a frame' : 'frames'} this build failed to
+            parse or to apply - something changed that is not on this screen; reload to re-read from
+            the server
           </span>
         )}
         {health.kind === 'ok' && (
@@ -467,6 +604,7 @@ export function Shell({ token, onLock, onAuthRejected }: ShellProps) {
               key={view}
               subject={`The ${active.title} view`}
               stillWorks="The navigation above still works, and the connection chip still reports the stream. The other views read the same server, so if this is a version mismatch they may be wrong in ways that do not crash."
+              cause={SERVER_DATA_CAUSE}
             >
               <active.Component token={token} sse={sse} onAuthRejected={onAuthRejected} />
             </ErrorBoundary>

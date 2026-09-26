@@ -1,6 +1,6 @@
 # ADR-0004: CD-2 — Single immutable substrate + deterministic projection
 
-- **Status:** accepted, **amended in practice 2026-07-30** — append-only immutability shipped and is trigger-enforced; the two-stage Normalizer → Projection pipeline was not built; **amended 2026-08-15**, re-amended **2026-08-25** — the abort test is merge-blocking for anyone who is not the repository owner (`main` is branch-protected on the `ci` check; `enforce_admins: false`, deliberate for a single-maintainer repository), and the triggers that enforce immutability sit below CI either way (see the as-built updates below)
+- **Status:** accepted, **amended in practice 2026-07-30** — append-only immutability shipped and is trigger-enforced; the two-stage Normalizer → Projection pipeline was not built over `events_raw` (a pure normalizer / transactional projection pair over parser output exists since 2026-08-09 — see the 2026-09-22 note under the 2026-08-15 update); **amended 2026-08-15**, re-amended **2026-08-25** — the abort test is merge-blocking for anyone who is not the repository owner (`main` is branch-protected on the `ci` check; `enforce_admins: false`, deliberate for a single-maintainer repository), and the triggers that enforce immutability sit below CI either way (see the as-built updates below)
 - **Date:** 2026-07-03
 - **Deciders:** Ivan Baev (project owner), via the six-lens concept-analysis-v2 workflow
 - **Source:** [`concept-analysis-v2.md` §3, row CD-2](../../../analysis/concept-analysis-v2.md#3-canonical-decision-register-v2)
@@ -88,6 +88,20 @@ about process discipline, not about whether the substrate can be edited. It cann
 
 Thirteen migrations have now been applied ([ADR-0006](adr-cd-4-schema-events-and-orchestration.md)'s
 2026-08-15 update) and none of them added an UPDATE or DELETE path to `events_raw`.
+Re-checked on 2026-09-18 at **eighteen** migrations (14–18 are listed in ADR-0006's
+2026-09-18 update): still none. The only `UPDATE` or `DELETE` that names `events_raw`
+anywhere in `apps/server/src/db/migrations.ts` is the `BEFORE UPDATE` / `BEFORE DELETE`
+trigger pair that forbids them.
+
+*(As built — 2026-08-09, recorded 2026-09-22: the 2026-07-30 sentence "there is no pure
+`Normalizer` stage and no separate `Projection` stage" no longer holds.
+`apps/server/src/ingest/normalize-session.ts` (WP-IN6, a pure function from parser output
+to a `NormalizedSession` value — no DB, clock or IO) and
+`apps/server/src/ingest/project-session.ts` (WP-IN7, one transaction per session) are the
+two stages, called in that order from `ingest-session.ts`. What is still not built is the
+shape in the diagram: the normalizer reads parser output, not `events_raw`, so `events_raw`
+still holds hook events only and the JSONL path still does not round-trip through the
+substrate.)*
 
 ## Context
 

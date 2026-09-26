@@ -201,7 +201,7 @@ describe('Phase-1 schema', () => {
   });
 
   describe('model_pricing (WP-C1)', () => {
-    it('is seeded with the WP-C1 approximate list prices (2026-01-01 floor) for all five models', () => {
+    it('is seeded with the WP-C1 approximate list prices (2026-01-01 floor) for all seven models', () => {
       const rows = temp.db
         .prepare('SELECT model, bucket, usd_per_mtok, effective_from FROM model_pricing')
         .all() as Array<{
@@ -210,7 +210,9 @@ describe('Phase-1 schema', () => {
         usd_per_mtok: number;
         effective_from: string;
       }>;
-      expect(rows).toHaveLength(25); // 5 models x 5 buckets
+      // 5 seed models (migrations 7 + 11) + the 2 corpus models migration 18 adds
+      // + the 1 migration 19 adds, x 5 buckets.
+      expect(rows).toHaveLength(40);
       // Migration 14 canonicalises every effective_from to the full UTC instant, so the
       // column's lexicographic order is its chronological order — the ordering the rate
       // resolver's `effective_from <= occurred_at` + `ORDER BY ... DESC LIMIT 1` assumes.
@@ -230,6 +232,26 @@ describe('Phase-1 schema', () => {
       expect(rate('claude-fable-5', 'output')).toBe(50);
       expect(rate('claude-haiku-4-5-20251001', 'input')).toBe(1);
       expect(rate('claude-haiku-4-5-20251001', 'output')).toBe(5);
+      // Migration 18: explicit official rows for the two model ids the real corpus uses
+      // (platform.claude.com pricing page, fetched 2026-09-10). Fable 5.1's cache_read is
+      // 0.025x input - the one rate the seed's 0.1x derivation would have got wrong.
+      expect(rate('claude-opus-5', 'input')).toBe(5);
+      expect(rate('claude-opus-5', 'output')).toBe(25);
+      expect(rate('claude-opus-5', 'cache_read')).toBe(0.5);
+      expect(rate('claude-opus-5', 'cache_write_5m')).toBe(6.25);
+      expect(rate('claude-opus-5', 'cache_write_1h')).toBe(10);
+      expect(rate('claude-fable-5-1', 'input')).toBe(10);
+      expect(rate('claude-fable-5-1', 'output')).toBe(50);
+      expect(rate('claude-fable-5-1', 'cache_read')).toBe(0.25);
+      expect(rate('claude-fable-5-1', 'cache_write_5m')).toBe(12.5);
+      expect(rate('claude-fable-5-1', 'cache_write_1h')).toBe(20);
+      // Migration 19: the same for claude-opus-5-5 (pricing page fetched 2026-09-26).
+      // Its cache_read is 0.05x input - a third ratio, so it too is copied, not derived.
+      expect(rate('claude-opus-5-5', 'input')).toBe(4);
+      expect(rate('claude-opus-5-5', 'output')).toBe(20);
+      expect(rate('claude-opus-5-5', 'cache_read')).toBe(0.2);
+      expect(rate('claude-opus-5-5', 'cache_write_5m')).toBe(5);
+      expect(rate('claude-opus-5-5', 'cache_write_1h')).toBe(8);
       for (const bucket of ['input', 'output', 'cache_read', 'cache_write_5m', 'cache_write_1h']) {
         expect(rate('<synthetic>', bucket)).toBe(0);
       }

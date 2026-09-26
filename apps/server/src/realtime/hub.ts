@@ -13,7 +13,7 @@ export type {
   RealtimeEvent,
   SessionIngestedEvent,
   AgentStatusChangedEvent,
-  GenericRealtimeEvent,
+  IngestFailedEvent,
 } from '@agenthropic/shared';
 
 /** A subscriber: receives one fully serialized SSE frame per published event. */
@@ -26,8 +26,10 @@ export type SseFrameWriter = (frame: string) => void;
  *
  * `JSON.stringify` never emits raw newlines (they are escaped as \n inside
  * strings), so `data:` is always a single line. The `event:` field is the
- * event's `type`; any CR/LF in a (generic) type is collapsed to a space so a
- * hostile type string cannot inject extra SSE fields.
+ * event's `type`. The union is closed - three literal types, no generic arm
+ * since 2026-09-09 - so a well-typed publisher can never hand over a CR/LF
+ * here; the collapse to a space stays as defence in depth, so that even a
+ * hostile string could not inject extra SSE fields.
  */
 export function serializeSseFrame(event: RealtimeEvent, id: number): string {
   const eventName = event.type.replace(/[\r\n]+/g, ' ');
@@ -37,10 +39,20 @@ export function serializeSseFrame(event: RealtimeEvent, id: number): string {
 export class RealtimeHub {
   private readonly subscribers = new Set<SseFrameWriter>();
   private nextId = 1;
+  private dropped = 0;
 
   /** Number of currently subscribed writers (observability + tests). */
   get subscriberCount(): number {
     return this.subscribers.size;
+  }
+
+  /**
+   * Cumulative number of writers dropped because they threw during a publish
+   * (an ordinary unsubscribe is not a drop). Keeps the drop observable instead
+   * of silent; it is not part of any served payload.
+   */
+  get droppedSubscribers(): number {
+    return this.dropped;
   }
 
   /**
@@ -57,7 +69,8 @@ export class RealtimeHub {
   /**
    * Publish one event to every subscriber and return the frame id it was sent
    * with. A writer that throws is dropped - one dead connection must never
-   * break fan-out to the healthy ones.
+   * break fan-out to the healthy ones - and counted in
+   * {@link RealtimeHub.droppedSubscribers}.
    */
   publish(event: RealtimeEvent): number {
     const id = this.nextId;
@@ -68,6 +81,7 @@ export class RealtimeHub {
         writer(frame);
       } catch {
         this.subscribers.delete(writer);
+        this.dropped += 1;
       }
     }
     return id;

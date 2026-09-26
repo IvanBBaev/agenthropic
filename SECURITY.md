@@ -14,13 +14,23 @@ counts as a vulnerability here, and how to report one.
 | `main` | Yes |
 | Anything else | No |
 
-There is no released version. The workspace is `private: true` at version `0.1.0`
-(`package.json`); there is no tag, no published package and no binary, and the only way
+There is no released version. The root package is at version `0.3.0` (`package.json`) and
+every workspace package is `private: true`; there is no tag, no published package and no
+binary, and the only way
 to run agenthropic is a checkout of `main` plus the Quickstart in `README.md`. v1.0 is
 targeted for **2026-12-01** (`RELEASE.md`, kill checkpoint KC-4). Until then, fixes land
 on `main` only, and "upgrade" means pulling `main`.
 
-Node 22 or newer is required (`package.json`, `engines`).
+Node 22 is required (`.nvmrc`; `engines.node` is `>=22 <23`, enforced at install and, by
+`scripts/check-node-version.mjs`, at `pnpm test` / `pnpm start`).
+
+**AMENDED 2026-09-23 (J-1).** The guard reaches further than `pnpm test` / `pnpm start`, which
+was its whole wiring when this was written: it also prefixes the root `gate:node`,
+`apps/server`'s `dev`, `start`, `bench` and `test`, `apps/web`'s `dev` and `test`, and the
+`test` script of `packages/shared`, `packages/core` and `packages/test-fixtures`. It is not on
+`typecheck`, `lint`, `format`, `format:check`, `hooks:install`, `apps/web build` or
+`render-claims`. Treat it as a footgun guard, not a security control: it is a package-script
+prefix, so a direct `npx vitest` / `tsx` invocation runs on whatever Node is on PATH.
 
 ## Reporting a vulnerability
 
@@ -56,7 +66,8 @@ the fix if the reporter wants to be named.
 
 ## Threat model
 
-The server binds `127.0.0.1` only and every route is Bearer-token gated. That shapes
+The server binds `127.0.0.1` only and every `/api/*` route is Bearer-token gated (the static
+SPA shell, which holds no secret, is the one thing served without a token). That shapes
 both halves of the scope below.
 
 ### Out of scope
@@ -107,7 +118,16 @@ there is no configuration path that changes it. The port is configurable
 `apps/server/src/index.ts` re-reads every bound address and calls `process.exit(1)` if
 any of them is not loopback, so a wide bind terminates the process instead of serving.
 The static gate additionally fails the build on `0.0.0.0`, `host: true`, `host: ''` and
-`host: '::'` / `host: '::0'` anywhere in the scanned trees.
+`host: '::'` / `host: '::0'` anywhere in the scanned trees, and on any `package.json`
+`scripts` entry that passes the wide address or a `--host` flag without an explicit
+loopback value (a CLI flag would override the config file's loopback host).
+
+Since 2026-09 that check also fails **closed** on an empty address list. If the server
+reports no bound address at all, the loopback invariant could not be verified, and an
+unverifiable invariant is treated as a failure: the process logs `FATAL: the server reported
+no bound address, so the loopback-only invariant could not be verified; shutting down.`,
+runs its cleanup and exits non-zero. The earlier form passed vacuously in that case, because
+"none of the addresses is non-loopback" is trivially true of an empty list.
 
 ### 2. No browser-driven subprocess or `claude` spawner, ever
 
@@ -116,12 +136,17 @@ agenthropic deliberately does not have. There is no `/api/run`, no endpoint that
 a process, and no path from request input to a shell. The refusal is guarded statically
 rather than left to review: `scripts/check-no-spawner.mjs` fails the build on
 `child_process`, `execa`, `.spawn(`, `spawnSync`, `execSync`, `execFile*`, `fork(`,
-bracket-form access to any of those, `eval(`, indirect eval, `Function(`, `data:`
-dynamic imports and concatenated dynamic-import specifiers. It scans `apps/`,
+bracket-form access to any of those, `eval(`, indirect eval, `Function(`, the `vm`
+module, `data:` dynamic imports, concatenated dynamic-import specifiers, and imports of
+subprocess-wrapper packages (`cross-spawn`, `cross-spawn-async`, `shelljs`, `node-pty`,
+`tinyexec`, `zx`, `nano-spawn`, `spawndamnit`). It scans `apps/`,
 `packages/`, `scripts/`, `hooks/` and the repo-root config files, sources and tests
-alike, and it runs as the **first** CI step, before typecheck
-(`.github/workflows/ci.yml`) - it is the cheapest check in the workflow and guards the
-one invariant the project cannot walk back.
+alike, and it also opens the root and every workspace `package.json` and fails on a
+direct dependency named for a subprocess or WebSocket package (`execa`, the wrapper
+packages above, `ws`, `socket.io`, anything containing `websocket`) - direct
+dependencies only; a transitive one is the lockfile review's job. It runs as the
+**first** CI step, before typecheck (`.github/workflows/ci.yml`) - it is the cheapest
+check in the workflow and guards the one invariant the project cannot walk back.
 
 The gate's own header is honest about its limit: a regex scanner stops the idiomatic
 reintroduction paths, not a developer who is deliberately obfuscating. If you find a way
@@ -129,7 +154,21 @@ to get a process spawned, obfuscated or not, that is a valid and high-severity r
 
 The gate has exactly two escape hatches, both auditable: a whole-file allowlist that
 contains only the policy file itself (and logs on every run), and a per-line
-`spawner-gate-allow` marker that is visible in any diff.
+`spawner-gate-allow` marker that is visible in any diff. As of 2026-09-09 the marker
+covers three sanctioned exceptions, none reachable from a request: the license gate's
+fixed-argv `pnpm licenses list` call (`scripts/check-licenses.mjs`), a server test that
+runs `tsx` once at test time to re-measure the migration checksums it pins
+(`apps/server/test/migrations-checksum-stability.test.ts`), and a shared test asserting
+the loopback guard rejects `0.0.0.0` (`packages/shared/test/security.test.ts`).
+
+AMENDED 2026-09-23: this paragraph used to say the marker "sits on three sites", which
+reads as a line count and is not one. Those three exceptions are carried on **five**
+marked lines, because two of them need the marker on the `import` as well as on the
+call. Since the gate started reporting its own hatches it prints each of those lines and
+totals them as `5 line(s) inline-exempt`, so audit the gate's output against the line
+count, not against the number of exceptions. Two further mentions of the marker sit in
+prose - comments explaining why a file carries it - and suppress nothing; the gate names
+them as dead markers and does not fail on them.
 
 ### 3. Mandatory token, timing-safe, on every route
 
@@ -164,8 +203,11 @@ which is not the attack this rule closes, and it still has to present the creden
 Because the browser `EventSource` API cannot set headers, `/api/stream` also accepts the
 token as `?token=`. That is the one place a token can legitimately appear in a URL, so it
 is the one place logging scrubs it: the Fastify request serializer
-(`redactedRequestSerializer` in `apps/server/src/server.ts`) runs `redactTokenInUrl`
-before any line reaches a log sink.
+(`redactedRequestSerializer` in `apps/server/src/server.ts`) runs `redactTokenInUrl` on
+every request line, and the root not-found handler logs nothing, so an unrouted request
+such as `POST /api/stream?token=...` cannot write its URL into a log message either
+(Fastify's default 404 handler logs the raw URL as a plain message, bypassing the
+serializer).
 
 ### 5. Remote access via tunnel only
 
@@ -245,6 +287,10 @@ None of the above helps if the deployment undoes it.
   newer; on an older curl the hook delivers nothing rather than falling back to a form
   that would leak. If you hand-edit those hooks, do not put the literal token on the
   command line.
+- The same command starts with `curl --disable` and passes `--noproxy '*'`: a `~/.curlrc`
+  cannot add tracing or a proxy, and an `http_proxy` / `ALL_PROXY` in the environment
+  cannot route the loopback POST (token and prompt) through a proxy. Hooks written by an
+  earlier installer version are recognised and upgraded in place on the next install.
 
 ## Verifying the invariants yourself
 

@@ -28,7 +28,9 @@ and the quantified acceptance criteria in
 >
 > - **The three P0 release-blocker tests are green.** They live in `apps/server/test/p0/` —
 >   `p0-token-reconciliation.test.ts`, `p0-double-replay.test.ts`, `p0-dag-rebuild.test.ts`,
->   sharing a `harness.ts`. One detail matters more than the pass/fail: the
+>   sharing a `harness.ts` (a fourth file beside them, `p0-five-daily-questions.test.ts`, is
+>   the CD-10 five-daily-questions proof over real HTTP, not a reconciliation test). One
+>   detail matters more than the pass/fail: the
 >   token-reconciliation proof does **not** compare the parser against itself. It reads the
 >   JSONL with an independent minimal reader written inside the test against the normative
 >   rules of [`parser-spec.md`](../../analysis/parser-spec.md) §5.1–5.3, so a parser bug
@@ -52,10 +54,13 @@ and the quantified acceptance criteria in
 >   — there is no hook normalizer, because hooks are a secondary signal — and the test file
 >   says so in place of quietly dropping the clause; the anomaly surfaces instead through
 >   the `WP-IN12` watchdog as a visible `unknown` status.
-> - **Totals as of 2026-08-15: 106 test files / 1554 tests, green, across five packages**
->   — `apps/server` 66/881, `apps/web` 17/283, `packages/core` 12/210,
->   `packages/test-fixtures` 4/100, `packages/shared` 7/80. These counts move with every
->   commit; treat them as a dated measurement, not a constant.
+> - **Totals as of 2026-09-18: 131 test files / 2428 tests, green, across five packages**
+>   — `apps/server` 83/1255, `apps/web` 22/697, `packages/core` 14/253,
+>   `packages/test-fixtures` 5/139, `packages/shared` 7/84. These counts move with every
+>   commit; treat them as a dated measurement, not a constant. *(Re-measured 2026-09-23:
+>   **140 test files / 2621 tests**, still green — `apps/server` 90/1358, `apps/web`
+>   22/726, `packages/core` 16/314, `packages/test-fixtures` 5/139, `packages/shared`
+>   7/84. Coverage still 100% on all four axes in every package.)*
 > - **The coverage gate is no longer ">90%" anywhere in the repo. It is 100.** All five
 >   packages run `vitest run --coverage` and all five pin `lines`/`branches`/`functions`/
 >   `statements` at `100`, and all five are currently at 100 on every one of those four
@@ -68,9 +73,9 @@ and the quantified acceptance criteria in
 >   silently never executed. That was found and fixed.
 > - **§2's golden real-session corpus is not what shipped.** The three-tier
 >   raw/redacted/manifested promotion of ≥3 captured real sessions was not built. What
->   exists is `packages/test-fixtures` with **seven** typed fixtures — `flat-tool-use`,
+>   exists is `packages/test-fixtures` with **eight** typed fixtures — `flat-tool-use`,
 >   `nested-workflow`, `queue-operation`, `task-notification-recovery`, `depth-2-sync`,
->   `usage-dedup`, `legacy-bare-explore` — plus per-suite corpora written into temp
+>   `usage-dedup`, `legacy-bare-explore`, `agent-outcome-errors` — plus per-suite corpora written into temp
 >   directories. Tests **never** touch the real `~/.claude/projects`: every corpus is built
 >   under `mkdtempSync` with explicitly injected env. The package location that
 >   §"What's undecided" called "a named leaning" is settled — it is `packages/test-fixtures`.
@@ -100,8 +105,8 @@ and the quantified acceptance criteria in
 >   *"merge-blocking for anyone who is not the repository owner; CI-failing and loud, but
 >   bypassable, for the owner."* Verify with
 >   `gh api repos/IvanBBaev/agenthropic/branches/main/protection --jq '{contexts: .required_status_checks.contexts, enforce_admins: .enforce_admins.enabled}'`
->   → `{"contexts":["ci"],"enforce_admins":false}`; the full write-up is [the standing
->   correction](decisions/README.md#a-standing-correction-merge-blocking).
+>   → `{"contexts":["ci"],"enforce_admins":false}`; the full write-up is
+>   [the standing correction](decisions/README.md#a-standing-correction-merge-blocking).
 
 ## 1. Four units, not "the dashboard"
 
@@ -170,9 +175,10 @@ place (development-plan §1, §4).
   transcript and the hook log side by side, unmodified.
 - **redacted** — the same session with payload content scrubbed before it can live in a
   version-controlled repository, applying the payload-redaction policy that CD-10
-  requires from Phase 1 (concept-analysis-v2 §3, CD-10). The exact redaction rule and
-  retention TTL are open Phase-0 inputs, not yet fixed numbers (concept-analysis-v2 §7,
-  open question 6) — see [backup & restore](../operations/backup-restore.md).
+  requires from Phase 1 (concept-analysis-v2 §3, CD-10). The exact redaction rule is
+  still an open input; the retention TTL is not — the v1.0 numbers were signed on
+  2026-09-08 (D3: `events` 90 days, backup files 30 days behind a floor of 7,
+  `token_usage` never), closing concept-analysis-v2 §7, open question 6 — see [backup & restore](../operations/backup-restore.md).
 - **manifested** — accompanied by a manifest that records, per session, which
   pathology(ies) it demonstrates, so a CI check can assert corpus completeness by
   reading the manifest rather than by trusting a code comment — the "manifest
@@ -250,7 +256,7 @@ certify below it no matter how good the raw percentage looks. The two prepared t
 of them leaves the sample below the floor, and the gate says so.
 
 **Provenance is enforced structurally, not by convention.** `annotations/synthetic/`
-holds seven annotations, one per fixture, that state the hierarchy each fixture was
+holds eight annotations, one per fixture, that state the hierarchy each fixture was
 *built* to have. They are genuinely useful — they prove the loader, the scorer, the
 report and every join path work end to end, and they regression-guard the depth-2 case —
 but they were written by the same side as the parser, so agreement with them proves
@@ -394,7 +400,7 @@ scenarios were **hardened** as they crossed into the plan of record — flagged 
 | # | Scenario (EXPANDED §7.1) | Expected behavior (source) | Maps to (CD / NFR / WP) |
 |---|---|---|---|
 | 1 | **Duplicate hook event** | No duplicate normalized event or double token total. | CD-2 idempotency-keyed `events_raw`; **NFR-DATA-02**; P0 double-replay test (§4). |
-| 2 | **`SubagentStop` arrives before `SubagentStart`** | Raw event stored; normalized anomaly flagged; UI shows uncertain edge. | CD-2/CD-3; anomaly + watchdog state (`WP-IN12`); relates to **OPEN-2** (`'unknown'` missing from the `agents.status` CHECK). |
+| 2 | **`SubagentStop` arrives before `SubagentStart`** | Raw event stored; normalized anomaly flagged; UI shows uncertain edge. | CD-2/CD-3; anomaly + watchdog state (`WP-IN12`); relates to **OPEN-2** (`'unknown'` is in the `agents.status` CHECK since migration 4, which closed it). |
 | 3 | **Missing parent id** | Agent marked orphan / pending reparent; no fake root unless explicitly synthesized. | CD-4 self-ref `parent_agent_id`, orphan-safe self-FK (`WP-D6`); **NFR-DATA-01**. |
 | 4 | **Malformed JSON** | 400 error; no DB mutation except optional audit log. | CD-2 ingest schema validation (**FR-01**). *Distinct from* the §5 anchor "an unknown `event_type` is stored, not crashed" — this one **rejects**, that one **accepts-and-stores**. |
 | 5 | **Unauthenticated POST** | 401/403; no raw event stored. | CD-7 mandatory `DASHBOARD_TOKEN`; **NFR-SEC-02**. |
@@ -534,8 +540,37 @@ against a throwaway temp directory but is measured by nothing; and the two CI ga
 whatsoever and are exercised only by being executed in CI. Both gates do run on every CI
 invocation and both currently pass — the spawner gate reports `OK (235 files scanned
 across 4 roots + repo-root config; 1 allowlisted)` and the license gate `OK (412 installed
-packages, all licenses allowlisted)`, measured 2026-08-15 — but "the gate script works" is
-established by its output, not by a test of the script.
+packages, all licenses allowlisted)`, measured 2026-08-15; re-measured 2026-09-19 as
+`OK (272 files scanned across 4 roots + repo-root config; 1 allowlisted; 6 package.json
+manifests checked for forbidden direct dependencies)` and `OK (412 packages / 429
+installed versions; 411 allowlisted, 1 under a documented exception)` — but "the gate
+script works" is established by its output, not by a test of the script.
+*(Re-measured again 2026-09-23: the spawner gate now scans **282** files across the same
+4 roots + repo-root config, still 1 allowlisted and 6 manifests checked, and the license
+gate is unchanged at 412 packages / 429 installed versions, 411 allowlisted, 1 under the
+documented exception. The file count tracks the sources; it is a dated measurement, not a
+constant, and neither gate's verdict has moved.)*
+
+*(Amended 2026-09-23 (J-12): the `OK` lines quoted above also predate the spawner gate's
+current output shape. Its real final line now reads `check-no-spawner: OK (282 files scanned
+across 4 roots + repo-root config; 1 allowlisted; 5 line(s) inline-exempt; 6 package.json
+manifests checked for forbidden direct dependencies)`, and the run prints one `inline opt-out
+in force` line per exempt line plus two `inline opt-out suppressed nothing (dead marker, not
+fatal)` lines above it. The five exempt lines carry the three sanctioned exceptions - two
+exceptions need the marker on the `import` as well as on the call. Both extra clauses are
+reporting, not failure: exit code 0.)*
+
+*(Amended 2026-09-24: the gate now also checks every `package.json` `scripts` string for a
+bind wider than loopback, flags imports of more subprocess-wrapper packages, and flags the
+`vm` module. Its final line now ends `6 package.json manifests checked for forbidden direct
+dependencies and wide-bind scripts)`; measured at 308 files scanned, still exit 0.)*
+
+*(Amended again 2026-09-24 (II4): the license gate counted a package once per license it
+appeared under, so a name installed at two versions under two licenses counted twice. It now
+counts unique names, and the line reads `OK (407 packages / 429 installed versions; 406
+allowlisted, 1 under a documented exception)`. The dependency tree did not change; the earlier
+412 / 411 figures were the double count. All three gate scripts also now recognise themselves
+when invoked through a symlinked path, where they previously exited 0 without checking.)*
 
 And the standing caveat that no coverage number escapes: 100% line and branch coverage
 records that every line and branch **executed**, not that every behaviour was
@@ -565,8 +600,8 @@ nothing physically withheld a merge. The mechanism now exists: `main` requires t
 check, so a red run withholds the merge button from a contributor — but not from the
 repository owner, because `enforce_admins` is deliberately off in a repository with one
 maintainer whose normal working mode is a direct push to `main`, and enabling it would lock
-that sole maintainer out (see [the standing
-correction](decisions/README.md#a-standing-correction-merge-blocking)).
+that sole maintainer out (see
+[the standing correction](decisions/README.md#a-standing-correction-merge-blocking)).
 
 ## What's undecided
 
@@ -583,13 +618,14 @@ correction](decisions/README.md#a-standing-correction-merge-blocking)).
   anomaly flagged": there is no hook normalizer to flag it in, so the anomaly is observed
   through the watchdog instead and the gap is recorded in the test file.
 - **Where the corpus physically lives in the repo** is settled: `packages/test-fixtures`,
-  which is now a real workspace package carrying seven typed fixtures, the annotation
+  which is now a real workspace package carrying eight typed fixtures, the annotation
   corpus, and its own coverage gate.
-- **The redaction rule and the retention TTL** are still open, and remain the owner's to
-  set. The retention *mechanism* has since been built in `apps/server/src/retention/`,
-  but its default policy is a byte-identical no-op and every concrete number — what to
-  prune, after how long, with what backup floor — is deliberately unset pending
-  ratification (concept-analysis-v2 §7, open question 6; OPEN-1/2/3). See
+- **The redaction rule** is still open and remains the owner's to set. **The retention
+  TTL is no longer open:** the mechanism was built in `apps/server/src/retention/`, and
+  the owner signed the v1.0 numbers on 2026-09-08 (D3) — `events` 90 days, `token_usage`
+  never, backup files 30 days behind a floor of 7 — wired into the composition root on
+  2026-09-10 and run after each successful daily backup. The library default is still a
+  byte-identical no-op; the *server* no longer uses it. See
   [backup & restore](../operations/backup-restore.md).
 - **The join key behind `token_usage.agent_id`** (`WP-S3`, G0.1b) turned out not to need
   the confidence-scored heuristic the open question contemplated. Attribution is a hard

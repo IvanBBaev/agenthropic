@@ -1,6 +1,6 @@
 # depth-2-sync — hierarchy ground truth (true by construction)
 
-Parser-spec gate item 4: the grandchild's spawning `Task` block lives inside the
+Parser-spec gate item 4: the grandchild's spawning `Agent` block lives inside the
 depth-1 agent's own transcript, not in the main transcript. Its parent is
 therefore the depth-1 subagent — the self-referential parent index. A parser
 that only ever indexes the main transcript flattens this to ROOT and scores

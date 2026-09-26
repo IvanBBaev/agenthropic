@@ -3,23 +3,24 @@
  * firing into a LIVENESS transition on an agent that already exists.
  *
  * Why this module exists at all. Ingest can only prove that activity happened
- * (see LIVENESS_STATUS in ingest/ingest-session.ts), and the watchdog can only
+ * (see LIVENESS_STATUS in ingest/normalize-session.ts), and the watchdog can only
  * prove that activity went stale. Neither can observe an ENDING. Hooks can:
  * `SubagentStop` fires when an identified subagent terminates, and `Stop` fires
  * when the main agent goes idle. That is the entire terminal signal the system
  * has, which is why "no hooks installed" honestly means "nothing ever reports
  * 'completed'".
  *
- * CD-1 - HOOKS ARE LIVENESS ONLY, NEVER STRUCTURE. Everything here goes through
- * `applyAgentStatus`, an UPDATE-only primitive: a hook can move the `status`
- * column of a row the JSONL parser already created and NOTHING else. It cannot
- * create an agent, delete one, re-parent one, add an edge or touch token usage.
- * A hook naming an agent this server has never parsed is stored as raw liveness
- * and changes no row — the transcript remains the sole structural authority.
+ * CD-1 - HOOKS ARE LIVENESS ONLY, NEVER STRUCTURE. Every status write here goes
+ * through an UPDATE-only primitive (`applyAgentStatus` live, `reconcileAgentStatus`
+ * on the M-13 replay): a hook can move the `status` column of a row the JSONL
+ * parser already created and NOTHING else. It cannot create an agent, delete one,
+ * re-parent one, add an edge or touch token usage. A hook naming an agent this
+ * server has never parsed is stored as raw liveness and changes no row at
+ * delivery; a stored `SubagentStop` is replayed when ingest first inserts that
+ * agent (M-13) — the transcript remains the sole structural authority.
  *
  * `Stop` MAPS TO 'waiting', NOT 'completed'. Claude Code fires `Stop` at the end
- * of every TURN with a byte-identical body (hooks/README.md, and the reason the
- * WP-IN1 envelope needs a sender-minted deliveryId at all), so treating it as a
+ * of every TURN, not once per session (hooks/README.md), so treating it as a
  * session ending would re-introduce exactly the confident lie this lifecycle
  * removes. 'waiting' is the honest reading: the main agent is idle right now.
  * If it never comes back, the watchdog ages it to 'unknown' — and 'unknown' is
@@ -94,7 +95,9 @@ export function agentIdFromTranscriptPath(path: string): string | null {
  * Returns null — meaning "stored as liveness, no status change" — whenever the
  * evidence is incomplete. NEVER GUESS A TARGET: attributing a `SubagentStop` to
  * the wrong agent would mark a running agent finished, the same class of bug
- * this lifecycle exists to remove.
+ * this lifecycle exists to remove. The same holds for a `SubagentStop` whose
+ * agent id is the session id: that names the main agent, which a subagent-stop
+ * can never speak for.
  */
 export function resolveHookStatusTarget(
   hookName: string,
@@ -110,9 +113,41 @@ export function resolveHookStatusTarget(
     const transcriptPath = readTranscriptPath(payload);
     const agentId =
       ids.agentId ?? (transcriptPath === null ? null : agentIdFromTranscriptPath(transcriptPath));
-    return agentId === null ? null : { agentId, status: 'completed' };
+    // A SubagentStop naming the session id names the MAIN agent (its id IS the
+    // session uuid). SubagentStop by definition speaks for a subagent, so this
+    // is not evidence that the main agent ended: accepting it would stamp a
+    // sticky 'completed' on the main agent and mirror it onto the session.
+    if (agentId === null || agentId === ids.sessionId) {
+      return null;
+    }
+    return { agentId, status: 'completed' };
   }
   return null;
+}
+
+/**
+ * Does the agent row `agentId` belong to session `sessionId`?
+ *
+ * The session scope of a stop. A hook payload is untrusted input: the receiver
+ * is auth-gated, but a buggy or replayed hook can still deliver a
+ * `SubagentStop` whose session id is session A while its agent id names an
+ * agent row that belongs to session B. A stop can only speak for an agent of
+ * the session that fired it, so accepting that one would stamp a sticky
+ * 'completed' on another session's agent - an ending nobody observed, the same
+ * class of bug as the session-id refusal in {@link resolveHookStatusTarget}.
+ * A payload with no session id cannot prove ownership and is refused by the
+ * caller before this runs (NEVER GUESS A TARGET). An agent with no row is not
+ * owned by anything; the status primitives already treat that as "no row to
+ * move".
+ *
+ * This is the first of two layers. The status primitives themselves
+ * (`applyAgentStatus`, `reconcileAgentStatus`) are session-scoped in SQL too,
+ * so a future caller that forgets this check still cannot move a foreign row.
+ */
+function agentBelongsToSession(db: SqliteDatabase, agentId: string, sessionId: string): boolean {
+  const row = db.prepare('SELECT session_id AS sessionId FROM agents WHERE id = ?').get(agentId) as
+    { sessionId: string } | undefined;
+  return row !== undefined && row.sessionId === sessionId;
 }
 
 /**
@@ -137,14 +172,38 @@ export function applyHookLiveness(
   // One transaction around the pair: the agent row and its session mirror must
   // never diverge across a crash between the two UPDATEs.
   return db.transaction((): AgentStatusChangedEvent[] => {
-    const transition = applyAgentStatus(db, target.agentId, target.status);
-    if (transition === null) {
+    // A stop names an agent of ANOTHER session (or carries no session at all):
+    // stored as raw liveness by the receiver, but it moves no row here - see
+    // agentBelongsToSession. Checked inside the transaction so the ownership
+    // read and the UPDATE see the same row.
+    const sessionId = extractLivenessIds(payload).sessionId;
+    if (sessionId === null || !agentBelongsToSession(db, target.agentId, sessionId)) {
       return [];
     }
-    // No-op unless the target is a main agent — a subagent stopping says
+    const transition = applyAgentStatus(db, target.agentId, target.status, sessionId);
+    // No-op unless the target is a main agent - a subagent stopping says
     // nothing about whether its parent session is still working.
+    //
+    // AMENDED 2026-09-23 (lane-Q). This used to sit behind an early
+    // `if (transition === null) return []`, so the mirror ran only when the
+    // AGENT row moved. db/sessions.ts calls this mirror "one rule, one place,
+    // used by both the hook applier and the watchdog so the two can never
+    // drift" - and the two could drift, in the ordinary orchestration case:
+    // `sessions.last_activity_at` is the max across ALL agents
+    // (normalize-session.ts) while a main agent's `last_seen_at` is its own,
+    // so an ingest tick in which only a SUBAGENT advanced reverts the session
+    // row to 'working' while the main agent correctly stays 'waiting'. Claude
+    // Code fires `Stop` once per TURN, so the next idle turn's `Stop` found the
+    // agent already 'waiting', produced no transition, and skipped the mirror
+    // with it - leaving the session asserting 'working' after a hook had just
+    // observed its main agent idle, and never re-converging, because every
+    // later `Stop` was a no-op too. Applying the mirror on every RESOLVED
+    // target keeps the session honest without widening what a hook may touch:
+    // the statement is a guarded UPDATE whose subselect matches nothing for a
+    // subagent or an agent this server has never parsed, so CD-1 still holds -
+    // a hook moves `status` and can create nothing.
     mirrorMainAgentStatus(db, target.agentId, target.status);
-    return [transition];
+    return transition === null ? [] : [transition];
   })();
 }
 
@@ -214,14 +273,23 @@ export function reconcilePendingSubagentStops(
       if (target === null || !newAgentIds.has(target.agentId)) {
         continue;
       }
-      const transition = reconcileAgentStatus(db, target.agentId, target.status);
+      // The query already scopes the STORED stops to `sessionId`; this scopes
+      // the TARGET ROW to it as well. A stop from this session that names an
+      // agent owned by another session is refused, exactly as on the live path
+      // - `newAgentIds` is caller input, and replayed evidence must not be able
+      // to reach across sessions just because a caller handed it a foreign id.
+      if (!agentBelongsToSession(db, target.agentId, sessionId)) {
+        continue;
+      }
+      const transition = reconcileAgentStatus(db, target.agentId, target.status, sessionId);
       if (transition === null) {
         // Duplicate stored stops for the same agent: the first one already
         // moved the row to its terminal, the rest are no-ops by design.
         continue;
       }
-      // Parity with the live path: a main-agent target mirrors onto its
-      // session row; for a subagent this is a guarded no-op.
+      // Parity with the live path. The resolver refuses a SubagentStop that
+      // names the session's own main agent, so for a subagent target this is a
+      // guarded no-op; it stays so the two paths cannot drift.
       mirrorMainAgentStatus(db, target.agentId, target.status);
       transitions.push(transition);
     }

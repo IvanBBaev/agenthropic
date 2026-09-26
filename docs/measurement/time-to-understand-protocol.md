@@ -243,6 +243,13 @@ per-day table; if Q4 fails on time, that is why.
 > measurement exists to answer and which no amount of reading the source can settle.
 > Nothing here is evidence that it does. Section 7 stands unchanged: the protocol is
 > unsigned, the gate is UNMET, and the `<30s` clause remains **UNMEASURED**.
+>
+> **Correction — 2026-09.** Since the note above, `apps/web/src/api.ts` gained a
+> seventh read, `fetchAggregateSavings` (`GET /api/cost/delegation-savings`, M-9),
+> and the cost view renders it as "Delegation savings, whole corpus" with an
+> estimate badge. A fleet-wide savings figure is therefore on screen without picking
+> a session. The per-session analysis is now mounted at `SessionsView.tsx:564` and
+> `CostView.tsx:1118`. The gate is still UNMEASURED; §7 stands.
 
 ---
 

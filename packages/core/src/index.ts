@@ -16,6 +16,7 @@ export type {
   DelegationSavingsResult,
 } from './cost/delegation-savings';
 export { groupSiblingsIntoWaves, DEFAULT_WAVE_THRESHOLD_MS } from './dag/waves';
+export { canonicalizeTimestamp } from './time';
 export {
   parseSession,
   peekSubstrateSessionId,

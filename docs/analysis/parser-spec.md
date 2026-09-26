@@ -7,7 +7,7 @@
 > from six scattered `spike/*/README.md` files when the build starts.
 >
 > **IMPLEMENTED as of 2026-08-15.** This is no longer a proposal on paper. The contract is
-> realised in `packages/core/src/parser/`, persisted by the thirteen migrations in
+> realised in `packages/core/src/parser/`, persisted by the eighteen migrations in
 > `apps/server/src/db/migrations.ts`, and driven over the real corpus by
 > `apps/server/src/corpus/ingest-corpus.ts`; all fourteen gate items in §3 have code behind
 > them. **Implemented is not measured, certified or ratified**, and this file keeps those
@@ -263,6 +263,33 @@ posture: **a file the ingest declined to read is reported, not forgotten.** A sk
 that quietly reads zero while the corpus is being half-ingested is the failure this design
 exists to prevent.
 
+**AMENDED 2026-09-23 (J-6).** That enumeration is one short, and because this section is
+normative for ingest work the omission is a gap in the contract rather than a prose slip. The
+union has a **ninth** member, `too-deep`, and an implementation that does not emit it does not
+satisfy §4.3.
+
+- **Name:** `too-deep`. **Union of record:** `SkipReason` in
+  `apps/server/src/corpus/fs-port.ts`. **Emitted by:** `walkArtifacts` in
+  `apps/server/src/corpus/disk-substrate.ts`.
+- **What it means:** a **real** directory under `<uuid>/subagents/**` whose depth exceeds
+  `ReadLimits.maxDepth` (`DEFAULT_MAX_DEPTH = 4`, PROVISIONAL - real artifacts reach depth 3 at
+  `subagents/workflows/wf_<id>/agent`). The walk declines to enter it, so **every artifact
+  beneath it is unread**, not merely the directory itself. One skip record therefore stands for
+  an unknown number of missing files, which is why it is recorded at all.
+- **Why it is not a symlink-cycle guard.** The depth bound was already there as
+  belt-and-braces against a cycle, but a cycle is refused earlier by the `lstat` symlink rule.
+  What actually trips the bound is a legitimately deep tree - and before this record existed
+  the walk simply returned, dropping those artifacts with no skip, no counter and no log line.
+  That is the one case where "a file the ingest declined to read is reported, not forgotten"
+  was untrue.
+- **`relativePath`** names the directory the walk refused to enter, POSIX-normalised and
+  relative to the session directory, so an operator can see which subtree is missing.
+- **Scope limit, stated so it is not overclaimed:** only the substrate walk records it. The
+  change-detection walk in `apps/server/src/corpus/fingerprint.ts` applies the same depth bound
+  and still returns silently, because it produces a fingerprint rather than a skip list. A
+  too-deep subtree therefore contributes nothing to the fingerprint and is counted once per
+  ingest pass, not once per poll tick.
+
 #### The mirror case — one file name, a *different* uuid inside (`session-id-mismatch`)
 
 `dedupeSessionRefs` settles collisions between **file names**. It cannot see the other half
@@ -370,7 +397,7 @@ child `message.id` sets are **disjoint** → provably no double-count. Partition
 88% of corpus tokens are cheap **cache reads** — a flat per-token rate would be wildly
 wrong. Price each of the **five** buckets (fresh input, output, cache-write-5m,
 cache-write-1h, cache-read) at the model's rate. That set of five is single-sourced as the
-`TokenBucket` union in `packages/shared/src/types/rows.ts`, and the `token_usage.bucket` /
+`TokenBucket` union in `packages/shared/src/types/enums.ts`, and the `token_usage.bucket` /
 `model_pricing.bucket` CHECK constraints are generated from the same five-member list — so
 "how many buckets are there" has exactly one answer in the codebase. *(The earlier "four"
 in this sentence was a miscount against its own parenthetical; corrected 2026-08-15.)*
@@ -384,8 +411,13 @@ unknown model id** — never silently price it at $0.
 > **Shipped as the `model_pricing` seed (note added 2026-08-15).** This table is no longer
 > only a spec proposal: migrations 7 and 11 in `apps/server/src/db/migrations.ts` INSERT
 > exactly these rates into `model_pricing (model, bucket, usd_per_mtok, effective_from)`,
-> with the derived multipliers applied per bucket. Three details a reader should not have to
-> reverse-engineer:
+> with the derived multipliers applied per bucket; migration 18 (2026-09-10) then added ten
+> explicit per-bucket rows for the two model ids the real corpus exposed as unpriced,
+> `claude-opus-5` and `claude-fable-5-1` (Fable 5.1's cache-read rate is 0.025× input, so
+> those rows are not derived by the seed's multipliers); migration 19 (2026-09-26) added
+> five more for `claude-opus-5-5` (cache-read 0.05× input, a third ratio), the id a boot at
+> schema 18 that day found refusing 27 of 61 sessions. Three details a reader should not
+> have to reverse-engineer:
 >
 > - **`effective_from = '2026-01-01'`** is a *coverage floor*, not the authoring date.
 >   `computeCostUsd` resolves the newest rate whose `effectiveFrom` is at or before the
@@ -393,7 +425,9 @@ unknown model id** — never silently price it at $0.
 >   from 2026-07-03, so a floor set at the authoring date would have halted every historical
 >   ingest. One flat mechanism-proof price is applied across the whole observed window.
 > - **The model keys are exact `message.model` byte-strings** (`claude-opus-4-8`,
->   `claude-sonnet-5`, `claude-fable-5`, `claude-haiku-4-5-20251001`, `<synthetic>`), because
+>   `claude-sonnet-5`, `claude-fable-5`, `claude-haiku-4-5-20251001`, `<synthetic>`, and —
+>   since migration 18 — `claude-opus-5`, `claude-fable-5-1`, and since migration 19 —
+>   `claude-opus-5-5`), because
 >   the lookup is a hard exact-string match. Normalising the id on the read side — stripping
 >   the `claude-` prefix or the haiku date suffix — would silently break every real ingest.
 > - **An unpriced model is a `PricingError` halt, not a $0 row.** A dashboard that prices an

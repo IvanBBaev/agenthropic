@@ -531,6 +531,16 @@ button:disabled {
   stroke-opacity: 0.8;
 }
 
+/* The third stroke, for a `source` this build cannot read. Dotted, not a
+   shade of the dashed one: stroke pattern is the only colour-independent
+   channel an edge has, so the three provenances get three patterns. See
+   views/provenance.ts. */
+.edge-unrecognised {
+  stroke: #9aa2ad;
+  stroke-dasharray: 1 4;
+  stroke-opacity: 0.8;
+}
+
 .node-symbol {
   fill: #14161a;
   font-size: 10px;

@@ -5,8 +5,8 @@
  * `<title>` elements inside the tree, the DAG and the sankey are invisible to
  * a screen reader and to anyone who cannot hover. These pure functions build
  * the same honesty facts as prose: the status mix (including `unknown`,
- * unrecorded and unrecognised states), the observed/inferred edge split with
- * the inferring source named, and the unpriced-token gap. The views render
+ * unrecorded and unrecognised states), the observed/inferred/unrecognised edge
+ * split with the inferring source named, and the unpriced-token gap. The views render
  * the string visibly AND point at it with `aria-describedby`, so the
  * uncertainty is never carried by colour or geometry alone.
  */
@@ -14,7 +14,8 @@ import type { AgentNodeDto, OrchestrationEdgeDto } from '../dto';
 import { formatTokens, formatUsd } from '../format';
 import type { CostFlowLayout, FlowNode } from './layout/cost-flow';
 import { isPlaceableEdge } from './layout/layered';
-import { statusMeta } from './status';
+import { edgeProvenance, type EdgeProvenanceKind } from './provenance';
+import { statusMeta, UNRECOGNISED_STATUS_LABEL } from './status';
 
 /** `n label` phrases in first-seen order, e.g. `2 working, 1 unknown`. */
 function tallyStatuses(agents: readonly AgentNodeDto[]): string {
@@ -44,13 +45,42 @@ export interface AgentGraphContext {
    */
   readonly asOf?: string;
   /**
-   * Set only when the payload was truncated: how many agents came back, and
-   * how many the same read counted. Absent means "this is the whole graph",
-   * which is a claim - so a caller that does not know must not set it.
+   * Set when the payload was truncated, or when the agents it returned and the
+   * agents it counted disagree in either direction: how many agents came back,
+   * and how many the same read counted. Absent means "this is the whole
+   * graph", which is a claim - so a caller that does not know must not set it.
+   *
+   * AMENDED 2026-09-26 (RR1). Fewer returned than counted is a slice and is
+   * said as one. More returned than counted is not a slice of anything; it is
+   * stated as a disagreement between the answer and its own count, and this
+   * module declines to say which number is right.
    */
   readonly sliceOf?: {
     readonly returnedAgents: number;
     readonly totalAgents: number;
+  };
+  /**
+   * Set when the edges the read returned and the edges it counted disagree in
+   * either direction: how many came back, and how many the same read counted.
+   * Absent means "the answer carried every edge it counted", which is a claim -
+   * so a caller that does not know must not set it. Fewer returned than counted
+   * is stated as edges not returned; more returned than counted (RR1,
+   * 2026-09-26) is stated as a disagreement, never as a negative gap.
+   *
+   * Added 2026-09-23 (SA-Z4). Distinct from the `Not drawn` clause this module
+   * already computes, and the distinction is the point. That one counts edges
+   * that ARE in the payload and cannot be placed, and it is derived from the
+   * payload, so this module can find it alone. This one counts edges that
+   * never reached the payload at all - `totalEdges` is a COUNT over the whole
+   * table while `edges` keeps only those whose endpoints are among the
+   * returned agents, and the table carries no foreign key, so an edge naming
+   * an agent id with no stored row is counted and can never be returned. No
+   * inspection of `edges` can see an edge that is not in `edges`; only the
+   * caller holds both numbers.
+   */
+  readonly unreturnedEdges?: {
+    readonly returnedEdges: number;
+    readonly totalEdges: number;
   };
 }
 
@@ -88,15 +118,37 @@ export function describeAgentGraph(
   const statusPart =
     agents.length === 0 ? 'No agents.' : `Agents by status: ${tallyStatuses(agents)}.`;
 
-  const observed = edges.filter((edge) => edge.source === 'tool_use').length;
-  const inferredSources = [
-    ...new Set(edges.filter((edge) => edge.source !== 'tool_use').map((edge) => edge.source)),
+  // AMENDED 2026-09-23 (lane-EP). This census used to be a two-way split on
+  // `source === 'tool_use'`, which made `edges.length - observed` the count of
+  // "inferred" edges and folded any unreadable source into it - the paragraph
+  // then named that source inside the inferred parenthetical, so the text
+  // alternative asserted a join path the server had not claimed. Since this
+  // string is what a screen-reader user gets INSTEAD of the picture, it has to
+  // draw the same three-way distinction the strokes now do. It routes through
+  // `edgeProvenance` rather than repeating the test, so the paragraph and the
+  // two charts cannot answer differently about the same edge.
+  const provenances = edges.map((edge) => edgeProvenance(edge.source));
+  const countOf = (kind: EdgeProvenanceKind): number =>
+    provenances.filter((entry) => entry.kind === kind).length;
+  const detailsOf = (kind: EdgeProvenanceKind): readonly string[] => [
+    ...new Set(provenances.filter((entry) => entry.kind === kind).map((entry) => entry.detail)),
   ];
+
+  const observed = countOf('observed');
+  const inferred = countOf('inferred');
+  const unrecognised = countOf(UNRECOGNISED_STATUS_LABEL);
+  const inferredSources = detailsOf('inferred');
   const inferredDetail = inferredSources.length > 0 ? ` (${inferredSources.join(', ')})` : '';
+  // Appended only when there is something to append: a graph whose sources are
+  // all readable reads exactly as it did before, byte for byte.
+  const unrecognisedDetail =
+    unrecognised === 0
+      ? ''
+      : `, ${String(unrecognised)} ${UNRECOGNISED_STATUS_LABEL} (${detailsOf(UNRECOGNISED_STATUS_LABEL).join(', ')})`;
   const edgePart =
     edges.length === 0
       ? 'No edges.'
-      : `Edges: ${String(observed)} observed (tool_use), ${String(edges.length - observed)} inferred${inferredDetail}.`;
+      : `Edges: ${String(observed)} observed (tool_use), ${String(inferred)} inferred${inferredDetail}${unrecognisedDetail}.`;
 
   // AMENDED 2026-09-07 (CS-1). `edgePart` used to be the whole edge story, and
   // it is a census of the SERVED list, not of the drawn one: `computeLayeredLayout`
@@ -122,12 +174,28 @@ export function describeAgentGraph(
   // sentence, which is the same string a fully-priced graph produces. Silence
   // here reads as "everything carries a price"; the gap is now named with the
   // app's own vocabulary for an unreadable count.
-  const unpriced = agents.reduce((sum, agent) => sum + agent.unpricedTokens, 0);
-  const unpricedPart = !Number.isFinite(unpriced)
-    ? ` The unpriced-token total came back ${formatTokens(unpriced)}, so how much of this graph is excluded from every dollar figure is unknown.`
-    : unpriced > 0
-      ? ` ${formatTokens(unpriced)} tokens carry no price and are excluded from every dollar figure.`
+  //
+  // AMENDED 2026-09-25 (KK5). The clause summed every agent's count and then
+  // tested the SUM, so one negative agent (-50) or two that cancel (+100 and
+  // -100) produced a total of <= 0 and no sentence at all - while each node's
+  // hover title (`unpricedTitleSuffix`) shows that count, by unpriced.tsx's rule
+  // that a negative count is as impossible as a NaN one and is shown rather
+  // than swallowed. Anomalies are now judged PER AGENT (non-finite or < 0) and
+  // named with their values; only the valid positive counts are summed, and
+  // that sum is stated as a floor whenever an anomaly sits beside it.
+  const anomalous = agents.filter((agent) => isImpossibleUnpriced(agent.unpricedTokens));
+  const unpriced = agents
+    .filter((agent) => Number.isFinite(agent.unpricedTokens) && agent.unpricedTokens > 0)
+    .reduce((sum, agent) => sum + agent.unpricedTokens, 0);
+  const anomalyPart =
+    anomalous.length === 0
+      ? ''
+      : ` ${String(anomalous.length)} agent${anomalous.length === 1 ? '' : 's'} reported an unpriced-token count that cannot be right (${anomalous.map((agent) => formatTokens(agent.unpricedTokens)).join(', ')}), so how much of this graph is excluded from every dollar figure is unknown.`;
+  const positivePart =
+    unpriced > 0
+      ? ` ${anomalous.length === 0 ? '' : 'At least '}${formatTokens(unpriced)} tokens carry no price and are excluded from every dollar figure.`
       : '';
+  const unpricedPart = `${positivePart}${anomalyPart}`;
 
   // CS-4 (2026-09-08). Order matches the order the two call sites appended
   // these clauses in, so the paragraph a reader hears is the same paragraph:
@@ -135,24 +203,72 @@ export function describeAgentGraph(
   // true two minutes ago"). Both are stated only when the caller knows them -
   // an absent clause here means the caller had nothing to disclose, never that
   // it was dropped on the way.
+  // RR1 (2026-09-26): "N of M" is a slice only when N <= M. The other way
+  // round is a disagreement, and the clause says so without picking a side.
   const slicePart =
     context.sliceOf === undefined
       ? ''
-      : ` This counts the returned slice only: ${String(context.sliceOf.returnedAgents)} of ${String(context.sliceOf.totalAgents)} agents.`;
+      : context.sliceOf.returnedAgents <= context.sliceOf.totalAgents
+        ? ` This counts the returned slice only: ${String(context.sliceOf.returnedAgents)} of ${String(context.sliceOf.totalAgents)} agents.`
+        : ` This counts ${String(context.sliceOf.returnedAgents)} agents while the same read counts only ${String(context.sliceOf.totalAgents)} - the returned graph and the served count disagree, and this page cannot say which is right.`;
   const asOfPart = context.asOf === undefined ? '' : ` As recorded ${context.asOf}, not as of now.`;
+  // SA-Z4 (2026-09-23). Sits with `undrawnPart` rather than with the scope
+  // clause: both are statements about edges this picture does not contain, and
+  // a reader who has only this paragraph needs them next to each other to hear
+  // that they are two different gaps rather than one counted twice. It says
+  // what it knows and stops - the reason an edge was counted but not returned
+  // is a fact about the server's join, and the client holding two numbers
+  // cannot tell a dangling reference from anything else that produced the same
+  // arithmetic.
+  // RR1 (2026-09-26): the subtraction is only a count of missing edges when
+  // returned <= total; more returned than counted is stated as what it is.
+  const unreturnedPart =
+    context.unreturnedEdges === undefined
+      ? ''
+      : context.unreturnedEdges.returnedEdges <= context.unreturnedEdges.totalEdges
+        ? ` Not returned: ${String(context.unreturnedEdges.totalEdges - context.unreturnedEdges.returnedEdges)} of the ${String(context.unreturnedEdges.totalEdges)} edges this same read counts were not in the answer, so they are neither drawn nor described here.`
+        : ` The answer carried ${String(context.unreturnedEdges.returnedEdges)} edges while the same read counts only ${String(context.unreturnedEdges.totalEdges)} - the two disagree, and this page cannot say which is right.`;
 
-  return `${statusPart} ${edgePart}${undrawnPart}${unpricedPart}${slicePart}${asOfPart}`;
+  return `${statusPart} ${edgePart}${undrawnPart}${unreturnedPart}${unpricedPart}${slicePart}${asOfPart}`;
+}
+
+/**
+ * KK6 (2026-09-25). An unpriced count no real usage can produce: unreadable
+ * (non-finite) or below zero. unpriced.tsx's rule is that such a count is
+ * shown rather than swallowed, and `describeAgentGraph` (KK5) judges its
+ * agents by this same test; the sankey's prose and hover share it from here so
+ * the three cannot drift apart.
+ */
+export function isImpossibleUnpriced(tokens: number): boolean {
+  return !Number.isFinite(tokens) || tokens < 0;
+}
+
+/**
+ * How an impossible unpriced count is spoken. An unreadable one already says
+ * so through `formatTokens`; a negative one prints as a plain number, which a
+ * reader could take for a measured figure, so it carries the same "cannot be
+ * right" wording the agent-graph prose uses.
+ */
+export function impossibleUnpricedText(tokens: number): string {
+  return Number.isFinite(tokens)
+    ? `${formatTokens(tokens)}, a count that cannot be right`
+    : formatTokens(tokens);
 }
 
 function describeFlowNode(node: FlowNode): string {
   // AMENDED 2026-09-07 (CS-2). Same hole as the graph total, per node: a
   // non-finite unpriced count failed `> 0` and printed the node as if its
   // whole usage were priced. An unreadable count is now said out loud.
-  const unpriced = !Number.isFinite(node.unpricedTokens)
-    ? ` (plus unpriced: ${formatTokens(node.unpricedTokens)})`
-    : node.unpricedTokens > 0
-      ? ` (plus ~${formatTokens(node.unpricedTokens)} unpriced)`
-      : '';
+  //
+  // AMENDED 2026-09-25 (KK6). A negative count failed `> 0` the same way. Every
+  // impossible count is now named with its value; only a measured zero is
+  // silent.
+  const tokens = node.unpricedTokens;
+  const unpriced = isImpossibleUnpriced(tokens)
+    ? ` (plus unpriced: ${impossibleUnpricedText(tokens)})`
+    : tokens === 0
+      ? ''
+      : ` (plus ~${formatTokens(tokens)} unpriced)`;
   return `${node.label} ${formatUsd(node.value)}${unpriced}`;
 }
 
@@ -244,12 +360,32 @@ export function describeCostFlow(flow: CostFlowLayout, unpricedTokens: number): 
   // AMENDED 2026-09-07 (CS-2). See `describeAgentGraph`: `> 0` treated an
   // unreadable total as an absent one, and the only signal this string carries
   // about unpriced usage is the presence of the sentence.
-  if (!Number.isFinite(unpricedTokens)) {
+  //
+  // AMENDED 2026-09-25 (KK6). A negative total failed `> 0` as silently, and
+  // the total was never read against the nodes it sums: +100 on one node and
+  // -100 on another serve a total of 0 and produced no sentence while the
+  // node list above named the -100. By KK5's rule for `describeAgentGraph`,
+  // an impossible total is named with its value; otherwise every impossible
+  // node count (the hub is excluded - it carries this same total) is named in
+  // one sentence, and a positive total beside one is stated as a floor.
+  const nodeAnomalies = flow.nodes.filter(
+    (node) => node.kind !== 'hub' && isImpossibleUnpriced(node.unpricedTokens),
+  );
+  if (isImpossibleUnpriced(unpricedTokens)) {
     parts.push(
-      `The unpriced-token total came back ${formatTokens(unpricedTokens)}, so how much sits outside this flow is unknown.`,
+      `The unpriced-token total came back ${impossibleUnpricedText(unpricedTokens)}, so how much sits outside this flow is unknown.`,
     );
-  } else if (unpricedTokens > 0) {
-    parts.push(`${formatTokens(unpricedTokens)} tokens carry no price and are outside this flow.`);
+  } else {
+    if (unpricedTokens > 0) {
+      parts.push(
+        `${nodeAnomalies.length === 0 ? '' : 'At least '}${formatTokens(unpricedTokens)} tokens carry no price and are outside this flow.`,
+      );
+    }
+    if (nodeAnomalies.length > 0) {
+      parts.push(
+        `${String(nodeAnomalies.length)} node${nodeAnomalies.length === 1 ? '' : 's'} reported an unpriced-token count that cannot be right (${nodeAnomalies.map((node) => `${node.label} ${formatTokens(node.unpricedTokens)}`).join(', ')}), so how much sits outside this flow is unknown.`,
+      );
+    }
   }
   // CF-2: the hub, stated LAST. Last because everything above enumerates
   // ribbons the reader can trust one at a time, and this is the sentence that

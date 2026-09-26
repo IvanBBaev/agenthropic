@@ -19,14 +19,22 @@
  * The normaliser cancels the classes a transform is free to vary - comments
  * (including annotations a transform INJECTS, such as vite's `@__PURE__` block
  * annotation), whitespace, and separators that are redundant before a closing
- * bracket. After it, vitest agrees with tsx on 12 of the 17, up from 0 - and so
- * does `node --experimental-strip-types`, on the same twelve ids (1-6, 8, 9, 10,
- * 12, 13, 17), also up from 0. Re-measured 2026-09-01 by running all three.
+ * bracket. After it, vitest agrees with tsx on 14 of the 19, up from 0 - and so
+ * does `node --experimental-strip-types`, on the same ids (1-6, 8, 9, 10, 12,
+ * 13, 17, 18, 19), also up from 0. Re-measured 2026-09-01 by running all
+ * three, again on 2026-09-10 when migration 18 was appended, and again under
+ * tsx and vitest on 2026-09-26 when migration 19 was appended.
  *
  * Migration 17 (`agents-outcome-cause`) is the twelfth, appended after the H-1
  * measurement above, and it agrees for a reason its body states: one `db.exec`
  * of a single template literal, carrying no number literal, no `new` expression
  * and no arrow function, so none of the printer classes below can reach it.
+ * Migration 18 (`model-pricing-opus-5-fable-5-1`) is the thirteenth, built to
+ * that shape deliberately: all ten of its rates live inside the SQL text, since
+ * a JS `0.5` would have been re-printed `.5` by tsx and put it in the residual
+ * set next to 7 and 11. Migration 19 (`model-pricing-opus-5-5`) is the
+ * fourteenth, the same shape with five rows; its `0.2` lives in the SQL text
+ * for the same reason.
  *
  * It does NOT reach full executor independence, and that is not fixable while
  * the recorded checksums must stay byte-identical. The differences that survive
@@ -52,8 +60,13 @@
  * That is the byte-identity proof, and `pins the values an operator database
  * records` below re-runs the tsx half of it on every test run. Migration 17's
  * entry was added the same way on 2026-09-01, and the same run re-measured the
- * sixteen already listed: byte-identical again, 16 of 16. A row may be APPENDED
- * to these tables; an existing row changing value is drift, not a re-pin.
+ * sixteen already listed: byte-identical again, 16 of 16. Migration 18's entry
+ * followed on 2026-09-10 under the same procedure, with the seventeen above it
+ * re-measured byte-identical, 17 of 17. Migration 19's entry followed on
+ * 2026-09-26 the same way, with the eighteen above it re-measured
+ * byte-identical under tsx, 18 of 18, and the vitest table re-measured
+ * identical as well. A row may be APPENDED to these tables; an existing row
+ * changing value is drift, not a re-pin.
  *
  * WHY THIS FILE CARRIES `spawner-gate-allow` MARKERS. The no-spawner gate
  * (WP-F5) forbids the whole subprocess API family outright - including, of
@@ -69,7 +82,7 @@
  * one `scripts/check-licenses.mjs` uses for its sanctioned `pnpm licenses` call
  * - and it is per-line, so any OTHER forbidden line added to this file is still
  * caught. The alternative was to delete the tsx runs, which would demote
- * OPERATOR_CHECKSUMS from a measurement re-taken on every CI run to sixteen
+ * OPERATOR_CHECKSUMS from a measurement re-taken on every CI run to nineteen
  * transcribed strings that nothing checks against the shipped file. That trade
  * is not worth making: the pins exist precisely to be a measurement.
  */
@@ -105,13 +118,15 @@ const OPERATOR_CHECKSUMS: Readonly<Record<number, string>> = {
   15: 'bb15868c382415fd34bcf43ef0f2fee939841015a8e26305d73c7834af1c644c',
   16: 'e51b009bbdb6987db41245bcfea3f87dc654e46613eb35feb9b98ed50ddafc80',
   17: '05ff7a6f95a7ff9432e38bd164c593b95c163fdcd1e461008a75e3fea01f1c41',
+  18: 'ec11bd686759b257661764839b23befa7813e89846328f79ce1c3bd48888ce8a',
+  19: '4efb01c611acb6d2723aed7beb74d1e82ec676b970adf64857ce1d40537a6920',
 };
 
 /**
- * The same seventeen, computed inside this vitest process. Spelled as the
+ * The same nineteen, computed inside this vitest process. Spelled as the
  * operator table plus the five overrides, so a migration the two executors
- * agree on - which is every one not listed here, migration 17 included - cannot
- * drift in one table without drifting in the other.
+ * agree on - which is every one not listed here, migrations 17, 18 and 19
+ * included - cannot drift in one table without drifting in the other.
  */
 const IN_PROCESS_CHECKSUMS: Readonly<Record<number, string>> = {
   ...OPERATOR_CHECKSUMS,

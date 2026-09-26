@@ -1,7 +1,8 @@
 # flat-tool-use — hierarchy ground truth (true by construction)
 
-Join path 1 of parser-spec section 4: the `agent-<hex>.meta.json` sidecar carries
-`toolUseId`, which resolves to a `Task` tool_use block in the main transcript.
+The sidecar-anchored flat path of parser-spec section 4.1: the `agent-<hex>.meta.json`
+sidecar carries `toolUseId`, which resolves to an `Agent` tool_use block in the main
+transcript.
 The fixture was built with exactly one spawn, from the main agent.
 
 ## meta

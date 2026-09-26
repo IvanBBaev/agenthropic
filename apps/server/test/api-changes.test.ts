@@ -316,7 +316,8 @@ describe('/api/changes (WP-U11)', () => {
       });
       expect(response.statusCode).toBe(400);
       expect(response.json()).toEqual({
-        error: 'The `since` parameter must be a real ISO-8601 instant in UTC.',
+        error:
+          'The `since` parameter must be an ISO-8601 instant with a zone designator (Z or ±hh:mm), or a bare UTC date.',
       });
     }
   });

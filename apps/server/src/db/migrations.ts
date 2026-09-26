@@ -1098,6 +1098,109 @@ export const migrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    id: 18,
+    name: 'model-pricing-opus-5-fable-5-1',
+    up(db) {
+      // WHY. Booting the real corpus on the owner's machine (2026-09-09,
+      // docs/measurement/time-to-understand-log.md section 0.4) showed two
+      // model ids the seed never named: `claude-opus-5` on 48 of 60 sessions
+      // and `claude-fable-5-1` on 4. The cost engine matches model ids as
+      // exact byte-strings and HALTS on an unknown one ("refusing to price at
+      // $0"), so 52 of 60 sessions never reached the database. A missing
+      // price row is cured by a price row - never by relaxing the gate.
+      //
+      // SOURCE. https://platform.claude.com/docs/en/about-claude/pricing,
+      // fetched 2026-09-10, USD per million tokens:
+      //   Claude Opus 5     input 5   5m write 6.25   1h write 10  read 0.50  output 25
+      //   Claude Fable 5.1  input 10  5m write 12.50  1h write 20  read 0.25  output 50
+      // The rows are EXPLICIT per bucket rather than derived from the input
+      // rate the way migrations 7 and 11 derive theirs, because Fable 5.1
+      // breaks that derivation: its cache-read rate is 0.025x input, not the
+      // 0.1x the seed assumes (Opus 5 does follow 0.1x / 1.25x / 2.0x). Every
+      // figure stays PROVISIONAL under WP-C1's ratification, like the seed's.
+      //
+      // FLOOR. `effective_from` is the seed's coverage floor, 2026-01-01, not
+      // a launch date: a message dated before its model's first row halts the
+      // ingest, and the floor is what lets historical transcripts price at
+      // all (migration 11). It is spelled in the canonical form migration 14
+      // enforces so that the ON CONFLICT target can match a row an operator
+      // already wrote by hand (the measurement log's scratch-database
+      // workaround copies the canonical spelling): a bare '2026-01-01' would
+      // miss that row, insert a second one, and be rewritten by the AFTER
+      // trigger straight into a primary-key violation.
+      //
+      // CONVENTION (migration 11). Data inline in this body, no shared helper,
+      // no reference to PRICING_SEED, so the content checksum covers every
+      // figure. ON CONFLICT DO UPDATE converges an operator-authored row at the
+      // same instant to the official figure instead of aborting; a row at any
+      // other instant, or for any other model, is never touched. Migration 16's
+      // pricing-insert trigger rebuilds the rollup slice for each (model,
+      // bucket) written here, and the corpus watcher re-reads this table every
+      // pass, so parked sessions are re-admitted on the next tick without a
+      // restart. One `db.exec` of one template literal with every number inside
+      // the SQL text: the checksum then comes out the same under tsx and vitest
+      // (test/migration-checksum-pin.test.ts explains why a JS number literal
+      // would not).
+      db.exec(`
+        INSERT INTO model_pricing (model, bucket, usd_per_mtok, effective_from) VALUES
+          ('claude-opus-5',    'input',          5,    '2026-01-01T00:00:00.000Z'),
+          ('claude-opus-5',    'output',         25,   '2026-01-01T00:00:00.000Z'),
+          ('claude-opus-5',    'cache_read',     0.5,  '2026-01-01T00:00:00.000Z'),
+          ('claude-opus-5',    'cache_write_5m', 6.25, '2026-01-01T00:00:00.000Z'),
+          ('claude-opus-5',    'cache_write_1h', 10,   '2026-01-01T00:00:00.000Z'),
+          ('claude-fable-5-1', 'input',          10,   '2026-01-01T00:00:00.000Z'),
+          ('claude-fable-5-1', 'output',         50,   '2026-01-01T00:00:00.000Z'),
+          ('claude-fable-5-1', 'cache_read',     0.25, '2026-01-01T00:00:00.000Z'),
+          ('claude-fable-5-1', 'cache_write_5m', 12.5, '2026-01-01T00:00:00.000Z'),
+          ('claude-fable-5-1', 'cache_write_1h', 20,   '2026-01-01T00:00:00.000Z')
+        ON CONFLICT (model, bucket, effective_from) DO UPDATE SET usd_per_mtok = excluded.usd_per_mtok;
+      `);
+    },
+  },
+  {
+    id: 19,
+    name: 'model-pricing-opus-5-5',
+    up(db) {
+      // WHY. The real-corpus boot of 2026-09-26
+      // (docs/measurement/time-to-understand-log.md section 0.6) refused 27 of
+      // 61 sessions on one model id the table never named: `claude-opus-5-5`,
+      // the model the owner's Claude Code had moved to since the 2026-09-18
+      // boot. Same failure class as migration 18, same cure: a price row, never
+      // a relaxed gate. The cost engine still halts on an unknown id
+      // ("refusing to price at $0"), which is the behaviour parser-spec 5.4
+      // requires - a new model id will keep parking sessions until the row
+      // exists, and this migration is the row.
+      //
+      // SOURCE. https://platform.claude.com/docs/en/about-claude/pricing,
+      // fetched 2026-09-26, USD per million tokens:
+      //   Claude Opus 5.5   input 4   5m write 5   1h write 8   read 0.20  output 20
+      // Opus 5 and Fable 5.1 were re-read from the same page on the same day
+      // and still match migration 18 to the cent. The rows are EXPLICIT per
+      // bucket, as in migration 18: Opus 5.5's cache-read rate is 0.05x input,
+      // neither the seed's 0.1x nor Fable 5.1's 0.025x, so no derivation rule
+      // covers it. Every figure stays PROVISIONAL under WP-C1's ratification.
+      //
+      // FLOOR and CONVENTION are migration 18's, unchanged: `effective_from`
+      // is the seed's coverage floor (2026-01-01, canonical spelling, so the ON
+      // CONFLICT target matches an operator's hand-written row); the data is
+      // inline in one `db.exec` of one template literal with every number
+      // inside the SQL text so the checksum agrees under tsx and vitest; ON
+      // CONFLICT DO UPDATE converges an operator row at the same instant
+      // instead of aborting; migration 16's trigger rebuilds the rollup slice;
+      // the corpus watcher re-reads this table every pass and re-admits the
+      // parked sessions on the next tick without a restart.
+      db.exec(`
+        INSERT INTO model_pricing (model, bucket, usd_per_mtok, effective_from) VALUES
+          ('claude-opus-5-5', 'input',          4,   '2026-01-01T00:00:00.000Z'),
+          ('claude-opus-5-5', 'output',         20,  '2026-01-01T00:00:00.000Z'),
+          ('claude-opus-5-5', 'cache_read',     0.2, '2026-01-01T00:00:00.000Z'),
+          ('claude-opus-5-5', 'cache_write_5m', 5,   '2026-01-01T00:00:00.000Z'),
+          ('claude-opus-5-5', 'cache_write_1h', 8,   '2026-01-01T00:00:00.000Z')
+        ON CONFLICT (model, bucket, effective_from) DO UPDATE SET usd_per_mtok = excluded.usd_per_mtok;
+      `);
+    },
+  },
 ];
 
 export interface MigrationRunResult {

@@ -11,10 +11,39 @@ describe('loadPricing (WP-C1 seed read path)', () => {
     temp = undefined;
   });
 
-  it('returns the full 25-row WP-C1 seed (5 models x 5 buckets)', () => {
+  it('returns the full 40-row table (5 seed models + 2 from migration 18 + 1 from migration 19, x 5 buckets)', () => {
     temp = createMigratedTempDb();
     const pricing = loadPricing(temp.db);
-    expect(pricing).toHaveLength(25);
+    expect(pricing).toHaveLength(40);
+  });
+
+  it('prices a claude-opus-5-5 message instead of halting on an unknown model id (migration 19)', () => {
+    // The 2026-09-26 real-corpus boot parked 27 of 61 sessions on exactly this
+    // id. The gate itself is untouched (a model with no row still throws); the
+    // cure is the row, and this is the read-path proof that the row is there.
+    temp = createMigratedTempDb();
+    const pricing = loadPricing(temp.db);
+    const usage: DedupedUsage[] = [
+      {
+        messageId: 'msg-opus-5-5',
+        model: 'claude-opus-5-5',
+        timestamp: '2026-09-26T00:00:00.000Z',
+        agentId: null,
+        usage: {
+          input: 1_000_000,
+          output: 100_000,
+          cacheRead: 5_000_000,
+          cacheWrite5m: 1_000_000,
+          cacheWrite1h: 500_000,
+        },
+      },
+    ];
+    // 1M input @ $4 + 100k output @ $20 + 5M cache_read @ $0.2 + 1M 5m write @ $5
+    // + 500k 1h write @ $8 = 4 + 2 + 1 + 5 + 4 = 16.
+    expect(computeCostUsd(usage, pricing)).toBeCloseTo(16, 10);
+    expect(() => computeCostUsd([{ ...usage[0]!, model: 'claude-opus-5-6' }], pricing)).toThrow(
+      /unknown model id/,
+    );
   });
 
   it('carries the seeded claude-opus-4-8 input and derived cache_read rates', () => {

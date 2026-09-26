@@ -18,14 +18,14 @@ process refuses to boot, by design.
 > only be quoted as a specification then, but both are now in the tree and were re-read
 > for this revision — `DEFAULT_WEB_ROOT` in `apps/server/src/config.ts` and
 > `registerStaticSite` in `apps/server/src/http/static-site.ts`. Two standing
-> caveats stay load-bearing for anyone actually running this: the **retention policy
-> values are unset** — the sweeper mechanism exists, but its policy is blank and nothing
-> outside `apps/server/src/retention/` ever calls `loadRetentionPolicy`, so no runner is
-> started at boot and the *database* keeps every row and grows without bound (see
-> [Configuration](../usage/configuration.md)). Backup *files* are the one exception and
-> are pruned: each daily backup is followed by a keep-minimum-floored expiry pass
-> (**PROVISIONAL**: 14-day window, newest 7 always kept, pending the OPEN-1 retention
-> ratification). And the hierarchy-accuracy
+> caveats stay load-bearing for anyone actually running this. The **retention policy is
+> signed and wired as of 2026-09-10**: `events` rows older than 90 days and backup files
+> older than 30 days (never below the newest 7) are pruned by a runner chained after each
+> successful daily backup, boot logs a dry run and deletes nothing, and `0` switches a
+> rule off (see [Configuration](../usage/configuration.md) and
+> [backup & restore](../operations/backup-restore.md)) — but `token_usage` is **never**
+> pruned in v1.0, by decision, so the cost ground truth still grows without bound while
+> `events` is now bounded. And the hierarchy-accuracy
 > exit gate reports **NOT CERTIFIED at n = 0**, so the subagent tree you are about to
 > look at is covered by tests but its accuracy on real data is unmeasured.
 
@@ -46,8 +46,22 @@ SPA is worked on.
 
 ## The one-command run
 
-Requires **Node 22+** and **pnpm** (the repo pins `pnpm@11.11.0` through the root
+Requires **Node 22, and only 22** (`.nvmrc`; `engines.node` is `>=22 <23` with
+`engine-strict`, and `pnpm test` / `pnpm start` refuse any other major up front) and **pnpm** (the repo pins `pnpm@11.11.0` through the root
 `package.json` `packageManager` field, so `corepack enable` is enough).
+
+**AMENDED 2026-09-23 (J-1).** The guard's reach is wider than `pnpm test` / `pnpm start`
+now, and naming only those two understates it. `scripts/check-node-version.mjs` currently
+prefixes: the root `start`, `test` and `gate:node`; `apps/server`'s `dev`, `start`, `bench`
+and `test`; `apps/web`'s `dev` and `test`; and the `test` script of `packages/shared`,
+`packages/core` and `packages/test-fixtures`. The rule it follows is "every entry point that
+loads the native binding, plus the root scripts". Deliberately **not** guarded, because none
+of them loads `better-sqlite3`: the root `typecheck`, `lint`, `format`, `format:check` and
+`hooks:install`, `apps/web`'s `build`, and `packages/test-fixtures`' `render-claims`. And the
+guard is a package-script prefix, not a runtime hook, so a direct invocation still bypasses it
+entirely - `npx vitest run --root apps/server` on Node 26 fails in the native-binding cascade
+the guard exists to pre-empt. Two docs said "`pnpm test` / `pnpm start`" because that was the
+whole wiring when they were written.
 
 ```sh
 git clone https://github.com/IvanBBaev/agenthropic.git
@@ -65,11 +79,12 @@ Then open <http://127.0.0.1:4317>, paste the token into the gate, and you are in
 
 ### What `pnpm start` actually does
 
-The root script is a plain two-step composition — no orchestration layer, nothing
-clever:
+The root script is a plain three-step composition — no orchestration layer, nothing
+clever: a Node-major guard (`scripts/check-node-version.mjs` exits non-zero on any Node
+major other than 22, before anything is built), the SPA build, then the server:
 
 ```
-"start": "pnpm --filter @agenthropic/web build && pnpm --filter @agenthropic/server start"
+"start": "node scripts/check-node-version.mjs && pnpm --filter @agenthropic/web build && pnpm --filter @agenthropic/server start"
 ```
 
 1. **`pnpm --filter @agenthropic/web build`** runs `vite build` in `apps/web`. The Vite
@@ -93,6 +108,23 @@ and the startup corpus pass prints one summary line, for example
 `corpus replay: 41/41 sessions ok, 0 failed, 0 skipped, …`. A pass that ingested nothing
 still prints a line naming the reason rather than staying silent (no corpus root, no
 session changed since the last checkpoint, corpus unreadable this pass).
+
+### Stopping it
+
+`Ctrl-C` in the terminal that runs it stops everything: the signal reaches the whole
+foreground process group. Stopping it by PID is different. `pnpm start` and
+`pnpm --filter @agenthropic/server start` run the server as a `tsx` child of a `pnpm`
+wrapper, and a `kill -TERM` sent to the wrapper's PID is not forwarded — the wrapper exits
+and the child keeps listening (observed 2026-09-26: the child was still answering more
+than 10 s after the wrapper got `SIGTERM`; `SIGTERM` to the child itself exited in 0.1 s).
+Signal the server process, not the wrapper: find it by its port,
+
+```sh
+lsof -nP -iTCP:4317 -sTCP:LISTEN
+```
+
+and `kill -TERM` that PID. A launchd or systemd unit that runs the wrapper inherits the
+same problem; point the unit at the server command itself.
 
 ### Why one origin is better than the dev proxy
 
@@ -140,16 +172,35 @@ environment-only, and there is no config file to leave a secret in.
 | `DASHBOARD_POLL_INTERVAL_MS` | Tail-follow poll cadence, in milliseconds. Positive integer. **PROVISIONAL** — chosen, not measured. | `3000` | No |
 | `DASHBOARD_WATCHDOG_MINUTES` | Inactivity window after which an unobserved agent ages `working` → `unknown`. Positive integer. **PROVISIONAL**. | `10` | No |
 | `DASHBOARD_INSTANCE` | Logical instance name stamped onto orchestration edges, for a future multi-machine merge. Read directly by the composition root, not part of the config object. | the OS hostname | No |
+| `DASHBOARD_RETENTION_EVENTS_DAYS` | Age window for normalized `events` rows; older rows are pruned after each successful daily backup. Non-negative integer; `0` switches the rule off; an unparseable value is a startup error. Signed v1.0 policy (D3, 2026-09-08). | `90` | No |
+| `DASHBOARD_RETENTION_BACKUP_DAYS` | Age window for backup files in `<dirname(DASHBOARD_DB_PATH)>/backups`. Non-negative integer; `0` switches the rule off. | `30` | No |
+| `DASHBOARD_RETENTION_BACKUP_KEEP_MIN` | Keep-minimum floor for backup files: the newest N always survive, whatever the window says. Positive integer, never below 1. | `7` | No |
 
 There is deliberately **no host variable**. See the next section.
 
-One family of names is deliberately *absent* from that table rather than missing from it:
-`apps/server/src/retention/policy.ts` defines a `DASHBOARD_RETENTION_*` set
-(`…_EVENTS_DAYS`, `…_TOKEN_USAGE_DAYS`, `…_RAW_EVENTS`, `…_BACKUP_DAYS`,
-`…_BACKUP_DIR`, `…_BACKUP_KEEP_MIN`, `…_MAX_ROWS_PER_RUN`,
-`…_TOKEN_USAGE_ACK_COST_LOSS`), but `loadRetentionPolicy` has **no caller outside that
-directory** — the composition root never invokes it. Setting any of them today therefore
-changes nothing at all. The table above is what the *running* server reads.
+The three `DASHBOARD_RETENTION_*` rows are read by `loadRetentionValues` in
+`apps/server/src/config.ts` and handed to `signedRetentionPolicy` by the composition
+root (wired 2026-09-10). The wider set that `apps/server/src/retention/policy.ts` knows
+(`…_TOKEN_USAGE_DAYS`, `…_RAW_EVENTS`, `…_BACKUP_DIR`, `…_MAX_ROWS_PER_RUN`,
+`…_TOKEN_USAGE_ACK_COST_LOSS`) belongs to the library loader `loadRetentionPolicy`,
+which the composition root still never invokes: setting one of those changes nothing —
+except `DASHBOARD_RETENTION_TOKEN_USAGE_DAYS`, which the server **refuses at startup**
+when set, because the signed v1.0 policy never prunes `token_usage`. The table above is
+what the *running* server reads.
+
+**What "integer" means in those rows (parsing hardened 2026-09).** Every numeric variable
+goes through one helper, `parseDigits`: plain decimal digits (`/^\d+$/`) that also survive
+`Number.isSafeInteger`. Anything else is a startup error rather than a coercion, because
+`Number()` alone is far too lenient for configuration - it reads whitespace as `0` and
+accepts hex, exponent, signed and decimal-point spellings. So `DASHBOARD_PORT=" 80"`,
+`0x1F`, `+80`, `4e3` and `80.0` all fail loudly instead of quietly becoming a port.
+`DASHBOARD_POLL_INTERVAL_MS` carries one extra bound: it is capped at **2147483647**, Node's
+timer ceiling, because a larger `setInterval` delay is silently clamped to 1 ms - a value
+meant as "poll once a month" would otherwise spin. `DASHBOARD_WATCHDOG_MINUTES` has no
+ceiling beyond the safe-integer range. And `DASHBOARD_DB_PATH=` (set but empty) counts as
+**unset**, the same house rule `CLAUDE_PROJECTS_DIR` and `DASHBOARD_WEB_ROOT` follow:
+`better-sqlite3` opens `''` as an anonymous temporary database, so the empty value would
+discard every row at exit and put the backups under a working-directory-relative path.
 
 ### `DASHBOARD_TOKEN` is mandatory, and why there is no anonymous mode
 
@@ -193,6 +244,11 @@ socket binds, the composition root re-reads every bound address and, if any of t
 not loopback, logs a `FATAL:` line and terminates the process — belt and braces for a
 mistake that must never ship.
 
+Since 2026-09 it terminates on an **empty** address list too. "No bound address is
+non-loopback" is vacuously true of no addresses at all, so the earlier check passed in the
+one case where it had verified nothing; the guard now treats an unverifiable invariant as a
+violated one and exits non-zero with its own `FATAL:` line.
+
 This is the single decision the project exists to hold. **Remote access is via an SSH
 port-forward or a Tailscale tunnel only — never a reverse proxy, never a public port.**
 The tunnel carries the transport; the token still applies on top of it, because a
@@ -224,11 +280,11 @@ What the installer actually does, read out of `hooks/install.mjs`:
   `SubagentStop`, `PreCompact`. `SubagentStart` is not a real Claude Code hook and is
   not registered.
 - Each one is a single fail-silent `curl` POST of the hook's stdin JSON to
-  `http://127.0.0.1:<port>/api/hooks/event` — `--silent --fail --max-time 3` with a
+  `http://127.0.0.1:<port>/api/hooks/event` — `--silent --show-error --fail --max-time 3` with a
   trailing `|| true`, so a dead dashboard can never block a Claude Code session.
 - **The token value never enters any process's argv.** The command hands curl the
   variable *name* (`--variable '%DASHBOARD_TOKEN'`) and a single-quoted header template
-  (`--expand-header 'Authorization: Bearer {{DASHBOARD_TOKEN}}'`), so curl reads the
+  (<!-- {% raw %} Liquid on GitHub Pages would otherwise render the {{…}} curl template as an empty string -->`--expand-header 'Authorization: Bearer {{DASHBOARD_TOKEN}}'`<!-- {% endraw %} -->), so curl reads the
   environment itself after argv parsing. This needs **curl ≥ 8.3.0**; an older curl
   rejects the unknown option and sends nothing, degrading to zero telemetry rather than
   to a leaked token.
@@ -387,12 +443,19 @@ Nothing has been ingested yet. In rough order of likelihood:
   server then serves an empty database quite happily.
 - **The replay is still running.** On a large corpus the startup pass takes seconds.
   `GET /api/health` reports `ingest: "replaying"` until it finishes, then `"idle"` —
-  that field is how you tell "warming up" from "idle and current".
+  that field is how you tell "warming up" from "startup pass finished". `"idle"` does
+  not mean the pass succeeded: a replay that could not read the corpus also ends in
+  `"idle"`, and says why in the log. With `DASHBOARD_INGEST=0` the field is absent.
 - **Files were skipped.** A transcript that is oversize, unreadable or otherwise
-  declined is counted and logged (`corpus ingest: skipped … - this session's records are
-  NOT in the dashboard totals.`) and shows up as `ingestSkips` on `/api/health`. A
-  skipped file freezes that session's dollar totals, so it is reported rather than
-  dropped silently.
+  declined is counted and logged (`corpus ingest: skipped … - this file's records are
+  NOT in the dashboard totals (the session's other files, if any, still are).`) and
+  shows up as `ingestSkips` on `/api/health`. The skip is per file, not per session:
+  when a main transcript is declined, the session's subagent transcripts are still
+  ingested, so the session still appears in `/api/sessions` and in the totals with
+  whatever those files carried (observed 2026-09-26: a 151 MiB main transcript skipped
+  as oversize, 367 agents served under it), and nothing on the session marks the
+  gap. A skipped file freezes what it would have contributed, so it is reported
+  rather than dropped silently.
 - **A session failed or was quarantined.** `sessionsExcluded` / `sessionsQuarantined` on
   `/api/health` count sessions whose spend is in *no* total. Both fields are **omitted**
   rather than zeroed when the underlying seam is absent — an absent field means "not
@@ -414,7 +477,7 @@ retention is and is not deleting today.
 - [Getting started](../usage/getting-started.md) — the longer install→configure→verify
   walkthrough, kept with its design-era annotations.
 - [Configuration](../usage/configuration.md) — every setting in depth, including storage,
-  backups and the unset retention policy.
+  backups and the signed retention policy.
 - [Using the dashboard](../usage/dashboard.md) — the four views and how to read them.
 - [Hooks installer](../usage/hooks-installer.md) — the installer in full.
 - [Security model](../security/model.md) · [Remote access](../security/remote-access.md)

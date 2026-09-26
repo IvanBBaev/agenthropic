@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  UNPARSEABLE_BODY_MESSAGE,
   UNREADABLE_BODY_MESSAGE,
   checkHealth,
   fetchAggregateSavings,
@@ -91,6 +92,16 @@ describe('checkHealth', () => {
     });
   });
 
+  it('returns unreachable when an Error rejection carries no message', async () => {
+    fetchMock.mockRejectedValue(new TypeError(' '));
+    expect(await checkHealth('secret')).toEqual({
+      kind: 'unreachable',
+      message: 'network error',
+      reason: 'no-response',
+      status: null,
+    });
+  });
+
   it('returns unreachable when fetch rejects with a non-Error value', async () => {
     fetchMock.mockRejectedValue('offline');
     expect(await checkHealth('secret')).toEqual({
@@ -134,6 +145,23 @@ describe('checkHealth', () => {
       status: 200,
     });
   });
+
+  it('returns unreachable when schemaVersion is a number but not a non-negative safe integer', async () => {
+    // `typeof === 'number'` let through every value the header then painted as
+    // a version: JSON `1e400` parses to Infinity ("schema vInfinity"), and a
+    // fraction or a negative is no schema version either.
+    for (const schemaVersion of [Number.POSITIVE_INFINITY, 1.5, -1, 2 ** 53]) {
+      fetchMock.mockResolvedValue(response(200, { status: 'ok', schemaVersion }));
+      expect(await checkHealth('secret')).toEqual({
+        kind: 'unreachable',
+        message: 'malformed health response',
+        reason: 'malformed',
+        status: 200,
+      });
+    }
+    fetchMock.mockResolvedValue(response(200, { status: 'ok', schemaVersion: 0 }));
+    expect(await checkHealth('secret')).toEqual({ kind: 'ok', schemaVersion: 0 });
+  });
 });
 
 function lastRequest(): { url: string; init: RequestInit } {
@@ -174,6 +202,41 @@ describe('fetchSessions', () => {
     });
   });
 
+  // Every view renders this as "Could not load <thing>: <message>". The server's
+  // `{error}` is a plain string on the wire and nothing checks it says anything,
+  // so an empty one ended that sentence at its own colon - a banner that
+  // announces a failure and then names nothing, which reads as a broken page
+  // rather than as a server that sent no words.
+  it('keeps the status-only message when the server {error} says nothing', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(500, { error: '' }));
+    expect(await fetchSessions('secret-token')).toEqual({
+      kind: 'error',
+      message: 'request failed (HTTP 500)',
+      status: 500,
+    });
+  });
+
+  it('keeps the status-only message when the server {error} is whitespace only', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(503, { error: '   ' }));
+    expect(await fetchSessions('secret-token')).toEqual({
+      kind: 'error',
+      message: 'request failed (HTTP 503)',
+      status: 503,
+    });
+  });
+
+  // An `Error` is not obliged to carry a message, and the non-Error arm beside
+  // this one already knows that "something threw and said nothing" is worth a
+  // sentence of its own.
+  it('maps a rejection with an empty message to the generic one', async () => {
+    fetchMock.mockRejectedValue(new TypeError(''));
+    expect(await fetchSessions('secret-token')).toEqual({
+      kind: 'error',
+      message: 'network error',
+      status: null,
+    });
+  });
+
   it('falls back to a status-only message when the error body is not JSON', async () => {
     fetchMock.mockResolvedValue(textResponse(502));
     expect(await fetchSessions('secret-token')).toEqual({
@@ -211,8 +274,20 @@ describe('fetchSessions', () => {
     tagged with `reason: 'malformed-body'` to keep them out of the "server is
     down" and "your token is wrong" buckets. The assertions are otherwise
     untouched, and still fail on a payload that is let through.
+
+    AMENDED 2026-09-23 (K5). The unification described above went one body too
+    far. Three paths still reach one VERDICT - refused, status as it arrived,
+    `reason: 'malformed-body'` - and that part is unchanged and still asserted
+    below. What is no longer shared is the SENTENCE: a body that never parsed is
+    now named as a body that never parsed, because "a required field is missing,
+    or a figure is not a number" describes a check that, on that path, was never
+    made. The second expectation therefore moves to `UNPARSEABLE_BODY_MESSAGE`,
+    and the test is re-aimed from "both paths say the same thing" - which was
+    the defect - onto the guarantee that outlives it: both paths are refused
+    alike and each says which of the two it was. Swap the two constants and it
+    fails, which is the point.
   */
-  it('rejects a malformed (non-object or unparseable) success body', async () => {
+  it('rejects a malformed (non-object or unparseable) success body, naming which', async () => {
     fetchMock.mockResolvedValue(jsonResponse(200, 'nope'));
     expect(await fetchSessions('secret-token')).toEqual({
       kind: 'error',
@@ -226,10 +301,30 @@ describe('fetchSessions', () => {
     fetchMock.mockResolvedValue(textResponse(200));
     expect(await fetchSessions('secret-token')).toEqual({
       kind: 'error',
-      message: UNREADABLE_BODY_MESSAGE,
+      message: UNPARSEABLE_BODY_MESSAGE,
       status: 200,
       reason: 'malformed-body',
     });
+  });
+
+  /*
+    K5 (2026-09-23). The two sentences are not interchangeable, and the pair of
+    assertions above would still pass if they were merged back into one
+    constant - so the difference itself is pinned here rather than left to the
+    identity of two imports.
+
+    A body that never parsed cannot be blamed on a field, and it cannot be
+    blamed on a version either: a proxy, a tunnel or a cut-short stream all
+    reach this arm, and none of them is a server that is merely older than this
+    page. The old sentence asserted both. What replaces it may claim neither.
+  */
+  it('does not blame a missing field or a version skew for a body that never parsed', () => {
+    expect(UNPARSEABLE_BODY_MESSAGE).toContain('not JSON at all');
+    expect(UNPARSEABLE_BODY_MESSAGE).not.toContain('required field');
+    expect(UNPARSEABLE_BODY_MESSAGE).not.toContain('different versions');
+    // ... while the field-level sentence keeps saying exactly that, for the
+    // path where a field really was looked for and really was not there.
+    expect(UNREADABLE_BODY_MESSAGE).toContain('required field');
   });
 
   it('passes the abort signal through to fetch', async () => {
@@ -455,7 +550,7 @@ describe('no exported fetcher can put the token into a user-visible string (AU-1
  *   - something answered with a non-401 status (the server is up and broken,
  *     and the token was neither accepted nor rejected);
  *   - 200 arrived and the body could not be read (the token WAS accepted -
- *     the auth gate is in front of every route, so a 200 is proof of it - and
+ *     the auth gate is in front of every /api/* route, so a 200 is proof of it - and
  *     it is the page and the server that disagree about the payload).
  *
  * The third told the user to go restart a server that had just authenticated
@@ -767,7 +862,7 @@ describe('CA-8/AU-10 - a body that arrived intact and still cannot be read', () 
   it('says the server answered rather than that it is down or the token is bad', async () => {
     // AU-2 found three unrelated facts collapsed into one "unreachable"
     // sentence. This is the fourth, and it must not be collapsed into any of
-    // them: the request was made, the transport worked, and every route is
+    // them: the request was made, the transport worked, and every /api/* route is
     // auth-gated, so a 200 is proof the token was accepted. A reader told the
     // server is unreachable restarts a live process; a reader told the token is
     // wrong retypes a good token. Both are wasted, and both are wrong.

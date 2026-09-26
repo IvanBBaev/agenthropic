@@ -99,6 +99,39 @@ describe('computeCostFlow', () => {
     expect(foldedLink?.value).toBe(2);
   });
 
+  it('does not let folded models cancel an impossible unpriced count away', () => {
+    const shown = Array.from({ length: MAX_MODEL_NODES }, (_, index) => ({
+      model: `claude-${index}`,
+      tokens: 100,
+      costUsd: 10,
+      unpricedTokens: 0,
+    }));
+    const folded = (unpricedTokens: readonly [number, number]) =>
+      unpricedTokens.map((unpriced, index) => ({
+        model: `claude-folded-${index}`,
+        tokens: 100,
+        costUsd: 1,
+        unpricedTokens: unpriced,
+      }));
+    const otherNode = (unpricedTokens: readonly [number, number]) => {
+      const perModel = [...shown, ...folded(unpricedTokens)];
+      return computeCostFlow(
+        costSummary({
+          totals: {
+            tokens: 100 * perModel.length,
+            costUsd: 10 * MAX_MODEL_NODES + 2,
+            unpricedTokens: 0,
+          },
+          perModel,
+        }),
+      ).nodes.find((node) => node.kind === 'other-models');
+    };
+    // +100 and -100 must not fold into a clean 0: the -100 is unreadable.
+    expect(otherNode([100, -100])?.unpricedTokens).toBeNaN();
+    expect(otherNode([100, Number.POSITIVE_INFINITY])?.unpricedTokens).toBeNaN();
+    expect(otherNode([100, 50])?.unpricedTokens).toBe(150);
+  });
+
   it('keeps unpriced tokens attached to nodes and lists zero-cost models separately', () => {
     const flow = computeCostFlow(
       costSummary({
@@ -528,5 +561,188 @@ describe('the hub node and its prose alternative', () => {
     expect(describeCostFlow(flow, 0)).toContain(
       'claude-a $1.00 (plus unpriced: tokens unreadable)',
     );
+  });
+});
+
+/**
+ * The vanished subject (2026-09-23, lane-P). Every label this layout emits is
+ * printed verbatim by the chart, its legend or one of the notices. A blank
+ * model name or project slug is contract-valid on the wire, and each of these
+ * labels used to pass it straight through into text that then named nothing.
+ */
+describe('computeCostFlow - names the server left blank (lane-P)', () => {
+  it('names a blank model in the zero-cost list', () => {
+    const flow = computeCostFlow(
+      costSummary({
+        totals: { tokens: 500, costUsd: 0, unpricedTokens: 500 },
+        perModel: [{ model: '', tokens: 500, costUsd: 0, unpricedTokens: 500 }],
+      }),
+    );
+    expect(flow.zeroCostModels).toEqual(['blank model name ("")']);
+  });
+
+  it('names a blank model in the undrawable list', () => {
+    const flow = computeCostFlow(
+      costSummary({
+        totals: { tokens: 500, costUsd: 0, unpricedTokens: 0 },
+        perModel: [{ model: '', tokens: 500, costUsd: -1, unpricedTokens: 0 }],
+      }),
+    );
+    expect(flow.undrawable).toEqual([{ label: 'blank model name ("")', costUsd: -1 }]);
+  });
+
+  it('keeps the "model" prefix on a model it can name', () => {
+    const flow = computeCostFlow(
+      costSummary({
+        totals: { tokens: 500, costUsd: 0, unpricedTokens: 0 },
+        perModel: [{ model: 'claude-opus-4', tokens: 500, costUsd: -1, unpricedTokens: 0 }],
+      }),
+    );
+    expect(flow.undrawable).toEqual([{ label: 'model claude-opus-4', costUsd: -1 }]);
+  });
+
+  it('names a blank model node so the legend has something to key', () => {
+    const flow = computeCostFlow(
+      costSummary({
+        sessionCount: 1,
+        totals: { tokens: 1000, costUsd: 1, unpricedTokens: 0 },
+        perModel: [{ model: '', tokens: 1000, costUsd: 1, unpricedTokens: 0 }],
+        topSessions: [
+          {
+            sessionId: 'aaaaaaaa-1111-2222-3333-444444444444',
+            projectSlug: 'agenthropic',
+            tokens: 1000,
+            costUsd: 1,
+            unpricedTokens: 0,
+          },
+        ],
+      }),
+    );
+    const model = flow.nodes.find((node) => node.kind === 'model');
+    expect(model?.label).toBe('blank model name ("")');
+  });
+
+  it('falls through a blank project slug to the session id, as a null slug does', () => {
+    // `??` catches only null, so a slug that is present and says nothing used
+    // to WIN over the id fallback - and the session node, which is the one
+    // thing on that side of the diagram that identifies a session, went
+    // nameless while the id it could have shown sat unused in the same row.
+    const flow = computeCostFlow(
+      costSummary({
+        sessionCount: 1,
+        totals: { tokens: 1000, costUsd: 1, unpricedTokens: 0 },
+        perModel: [{ model: 'claude-opus-4', tokens: 1000, costUsd: 1, unpricedTokens: 0 }],
+        topSessions: [
+          {
+            sessionId: 'aaaaaaaa-1111-2222-3333-444444444444',
+            projectSlug: '',
+            tokens: 1000,
+            costUsd: 1,
+            unpricedTokens: 0,
+          },
+        ],
+      }),
+    );
+    const session = flow.nodes.find((node) => node.kind === 'session');
+    expect(session?.label).toBe('aaaaaaaa…');
+  });
+
+  it('falls through a blank project slug in the undrawable list too', () => {
+    const flow = computeCostFlow(
+      costSummary({
+        sessionCount: 1,
+        totals: { tokens: 1000, costUsd: 0, unpricedTokens: 0 },
+        topSessions: [
+          {
+            sessionId: 'aaaaaaaa-1111-2222-3333-444444444444',
+            projectSlug: '',
+            tokens: 1000,
+            costUsd: -1,
+            unpricedTokens: 0,
+          },
+        ],
+      }),
+    );
+    expect(flow.undrawable).toEqual([{ label: 'session aaaaaaaa…', costUsd: -1 }]);
+  });
+});
+
+/**
+ * ADDED 2026-09-25 (KK6). The prose alternative gated every unpriced clause on
+ * `> 0`, so a negative count - as impossible as a NaN one - read exactly like
+ * a measured zero, and a node total that cancelled (+100 and -100) left no
+ * trace. Same rule as `describeAgentGraph` (KK5): anomalies are named with
+ * their values, and a total stated beside one is a floor.
+ */
+describe('describeCostFlow - unpriced counts that cannot be right (KK6)', () => {
+  function flowWith(models: readonly { model: string; unpricedTokens: number }[]) {
+    return computeCostFlow(
+      costSummary({
+        totals: { tokens: 2000, costUsd: 1.0, unpricedTokens: 0 },
+        perModel: models.map((entry) => ({
+          model: entry.model,
+          tokens: 1000,
+          costUsd: 1.0 / models.length,
+          unpricedTokens: entry.unpricedTokens,
+        })),
+      }),
+    );
+  }
+
+  it('names a negative node count instead of printing the node as fully priced', () => {
+    const prose = describeCostFlow(flowWith([{ model: 'claude-a', unpricedTokens: -50 }]), 0);
+    expect(prose).toContain('claude-a $1.00 (plus unpriced: -50, a count that cannot be right)');
+    expect(prose).toContain(
+      '1 node reported an unpriced-token count that cannot be right (claude-a -50), so how much sits outside this flow is unknown.',
+    );
+    expect(prose).not.toContain('carry no price');
+  });
+
+  it('does not let +100 and -100 cancel into silence', () => {
+    const flow = flowWith([
+      { model: 'claude-a', unpricedTokens: 100 },
+      { model: 'claude-b', unpricedTokens: -100 },
+    ]);
+    const prose = describeCostFlow(flow, 0);
+    expect(prose).toContain('claude-a $0.50 (plus ~100 unpriced)');
+    expect(prose).toContain('claude-b $0.50 (plus unpriced: -100, a count that cannot be right)');
+    expect(prose).toContain('1 node reported an unpriced-token count that cannot be right');
+    expect(prose).not.toContain('At least');
+  });
+
+  it('states a positive total beside an anomalous node as a floor', () => {
+    const flow = flowWith([
+      { model: 'claude-a', unpricedTokens: 100 },
+      { model: 'claude-b', unpricedTokens: Number.POSITIVE_INFINITY },
+      { model: 'claude-c', unpricedTokens: -5 },
+    ]);
+    const prose = describeCostFlow(flow, 100);
+    expect(prose).toContain('At least 100 tokens carry no price and are outside this flow.');
+    expect(prose).toContain(
+      '2 nodes reported an unpriced-token count that cannot be right (claude-b tokens unreadable, claude-c -5)',
+    );
+    expect(prose).toContain('claude-b $0.33 (plus unpriced: tokens unreadable)');
+  });
+
+  it('names a negative total as a count that cannot be right', () => {
+    const prose = describeCostFlow(flowWith([{ model: 'claude-a', unpricedTokens: 0 }]), -50);
+    expect(prose).toContain(
+      'The unpriced-token total came back -50, a count that cannot be right, so how much sits outside this flow is unknown.',
+    );
+    expect(prose).not.toContain('carry no price');
+  });
+
+  it('names an infinite total as unreadable', () => {
+    const prose = describeCostFlow(
+      flowWith([{ model: 'claude-a', unpricedTokens: 0 }]),
+      Number.POSITIVE_INFINITY,
+    );
+    expect(prose).toContain('The unpriced-token total came back tokens unreadable');
+  });
+
+  it('says nothing about unpriced usage when every count is a measured zero', () => {
+    const prose = describeCostFlow(flowWith([{ model: 'claude-a', unpricedTokens: 0 }]), 0);
+    expect(prose).not.toContain('unpriced');
+    expect(prose).not.toContain('no price');
   });
 });

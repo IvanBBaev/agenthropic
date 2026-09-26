@@ -425,6 +425,114 @@ describe('isCostAnalysis', () => {
     ).toBe(false);
   });
 
+  /**
+   * K1 (2026-09-23). `index` is a RAW PRINT twice over: the `#` column renders
+   * `{segment.index + 1}` and the row key is built as
+   * `${agentId ?? 'main'}-${String(index)}`. A server that stopped sending it
+   * numbers every row `NaN` and keys every row identically, which React
+   * reconciles into ONE row - a table that silently loses its other rows while
+   * looking like a complete one. Nothing downstream can say "unreadable" for
+   * it, so the shape check is the only place the absence can be caught.
+   */
+  it('refuses a segment with no `index`, the number the `#` column prints raw', () => {
+    const analysis = costAnalysis();
+    expect(
+      isCostAnalysis(
+        body({
+          ...analysis,
+          compaction: { ...analysis.compaction, segments: [omit(compactionSegment(), 'index')] },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  /**
+   * K2 (2026-09-23). `agentId` and `boundary` are read THROUGH, not printed, so
+   * their absence is a category-1 TypeError during render: the panel is
+   * replaced by an error notice that cannot say what went wrong. Both are
+   * NULLABLE and both nulls are meaningful (`null` agentId is the main thread,
+   * `null` boundary is a segment with no recorded boundary), which is why the
+   * check is `null`-or-shape rather than presence. `agentId` must be a STRING
+   * in particular: `shortId` slices it, and `shortId({})` hands React an object
+   * as a child, which React refuses outright.
+   */
+  it('accepts a segment whose `agentId` is a string and whose `boundary` is a record', () => {
+    const analysis = costAnalysis();
+    expect(
+      isCostAnalysis(
+        body({
+          ...analysis,
+          compaction: {
+            ...analysis.compaction,
+            segments: [
+              compactionSegment({
+                agentId: '00000000-1111-2222-3333-444444444444',
+                boundary: {
+                  agentId: null,
+                  timestamp: '2026-09-23T00:00:00.000Z',
+                  trigger: null,
+                  preTokens: null,
+                },
+              }),
+            ],
+          },
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it.each([
+    ['absent', omit(compactionSegment(), 'agentId')],
+    ['neither null nor a string', compactionSegment({ agentId: 42 as unknown as null })],
+  ])('refuses a segment whose `agentId` is %s', (_label, segment) => {
+    const analysis = costAnalysis();
+    expect(
+      isCostAnalysis(
+        body({
+          ...analysis,
+          compaction: { ...analysis.compaction, segments: [segment] },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it.each([
+    ['absent', omit(compactionSegment(), 'boundary')],
+    ['neither null nor a record', compactionSegment({ boundary: 'yesterday' as unknown as null })],
+  ])('refuses a segment whose `boundary` is %s', (_label, segment) => {
+    const analysis = costAnalysis();
+    expect(
+      isCostAnalysis(
+        body({
+          ...analysis,
+          compaction: { ...analysis.compaction, segments: [segment] },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  /**
+   * K2 (2026-09-23). The per-agent rows shared their check with the delegation
+   * ROLLUP, which carries the same three money fields and no agent id - so the
+   * rows inherited a check that could not require one. Each row is keyed
+   * `key={agent.agentId}` and labelled `shortId(agent.agentId)`, both of which
+   * throw on an absent id, taking the whole analysis panel down.
+   */
+  it('refuses a per-agent savings row with no `agentId`, which keys and labels it', () => {
+    const analysis = costAnalysis();
+    expect(
+      isCostAnalysis(
+        body({
+          ...analysis,
+          delegationSavings: {
+            ...analysis.delegationSavings,
+            perAgent: [omit(agentSavings(), 'agentId')],
+          },
+        }),
+      ),
+    ).toBe(false);
+  });
+
   it('accepts a segment whose `messageCount` and token buckets have holes (rule 2)', () => {
     // Both exemptions in one payload, and both pinned by the CA-1 regression:
     // the row prints "messages unreadable" and "tokens unreadable" instead of
@@ -494,5 +602,70 @@ describe('isCostAnalysis', () => {
         }),
       ),
     ).toBe(false);
+  });
+});
+
+/**
+ * L1 (2026-09-09). The corpus-scope pair that describes the top-sessions
+ * table. `topSessions` is a SLICE, and until these two fields existed the
+ * payload could not say so: `sessionCount` is the population the slice was cut
+ * from and `hasMore` says the slice is short of it. Both are refused when
+ * absent because neither has a renderer that could say "unreadable" in its
+ * place - the first is printed raw as a denominator, and the second gates a
+ * disclosure, so a stale server would render as "5 of undefined sessions" with
+ * the truncation notice quietly withdrawn.
+ *
+ * The fixture derives both from `topSessions.length` unless a case passes them,
+ * so the malformed bodies here are built by spreading over its output: that is
+ * the shape a server version-skew actually puts on the wire, and it is also the
+ * only way to say `null`, which the builder's `??` would otherwise fill in.
+ */
+describe('isCostSummary - the corpus-scope pair (L1)', () => {
+  /** One row of a corpus of 51, i.e. the truncated case the pair exists for. */
+  const truncated = costSummary({
+    topSessions: [{ sessionId: 's', projectSlug: null, tokens: 1, costUsd: 1, unpricedTokens: 0 }],
+    sessionCount: 51,
+  });
+
+  it('accepts a summary carrying both scope fields', () => {
+    expect(isCostSummary(body(truncated))).toBe(true);
+  });
+
+  it('accepts a slice that is the whole corpus, where `hasMore` is false', () => {
+    expect(isCostSummary(body(costSummary()))).toBe(true);
+  });
+
+  it('refuses a missing `sessionCount`, which prints raw as a denominator', () => {
+    expect(isCostSummary(omit(truncated, 'sessionCount'))).toBe(false);
+  });
+
+  it('refuses a `sessionCount` that is not a number', () => {
+    // The string is the numeric-STRING case the global `isFinite` would have
+    // accepted; `null` is the quiet one, since it survives to the screen as a
+    // denominator the server never sent.
+    expect(isCostSummary(body({ ...truncated, sessionCount: '5' }))).toBe(false);
+    expect(isCostSummary(body({ ...truncated, sessionCount: null }))).toBe(false);
+  });
+
+  it('refuses a missing `hasMore`, whose falsiness claims the table is complete', () => {
+    expect(isCostSummary(omit(truncated, 'hasMore'))).toBe(false);
+  });
+
+  it('refuses a `hasMore` that is not a boolean', () => {
+    // Same reasoning as `counts.truncated` in `isGlobalDag`: `0` is a falsy
+    // stand-in for "not truncated" that the server never asserted, and the
+    // string `'true'` is truthy whatever it spells.
+    expect(isCostSummary(body({ ...truncated, hasMore: 0 }))).toBe(false);
+    expect(isCostSummary(body({ ...truncated, hasMore: 'true' }))).toBe(false);
+  });
+
+  it('accepts a fractional `sessionCount` (rule 1)', () => {
+    // Deliberate, not an oversight: rule 1 is SHAPE, NOT SANITY. Half a session
+    // is a server bug that prints as `2.5` and can be disbelieved on sight,
+    // which is a different class from `null` printing as a number nobody sent.
+    // Do not "fix" this into a `Number.isInteger` check - the guard would then
+    // black out a whole cost page over a figure the reader could already see
+    // was wrong.
+    expect(isCostSummary(body({ ...truncated, sessionCount: 2.5 }))).toBe(true);
   });
 });

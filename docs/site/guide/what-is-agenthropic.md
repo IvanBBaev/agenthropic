@@ -19,7 +19,7 @@ is no longer true — see the update immediately below.)*
 >
 > **What runs today**, all verified against the repository: the Fastify server bound to
 > `127.0.0.1:4317` and gated by a mandatory `DASHBOARD_TOKEN`; the SQLite/WAL substrate
-> with a forward-only migration runner (thirteen migrations) and a daily backup timer;
+> with a forward-only migration runner (eighteen migrations) and a daily backup timer;
 > JSONL corpus ingest with replay-on-startup and tail-follow polling that re-reads only
 > new bytes; the persisted subagent DAG (`orchestration_edges`, **five** structural join
 > provenances since migration 13 — `tool_use`, `directory`, `task_notification`,
@@ -29,10 +29,12 @@ is no longer true — see the update immediately below.)*
 > `unknown`) with a watchdog that ages an unobserved agent rather than guessing at its
 > ending; the SSE realtime hub; the read API; and all four dashboard views — live status,
 > session tree, global DAG, cost/Sankey — plus a per-session cost-analysis panel. It is
-> **not released**: no tag, no package, `private: true` at version `0.1.0`, run from a
-> checkout.
+> **not released**: no tag, no published package — version `0.3.0`, publishable in
+> principle (`publishConfig.access: public`, no `private` flag on the root package) but
+> never published, run from a checkout.
 >
-> **Test figures, re-measured 2026-08-15:** **106 test files / 1554 tests**, with **100%
+> **Test figures, re-measured 2026-09-18:** **131 test files / 2428 tests** *(re-measured
+> again 2026-09-23: **140 test files / 2621 tests**)*, with **100%
 > statements, branches, functions and lines** enforced in **all five** packages —
 > `packages/test-fixtures` was folded into the gate rather than left outside it. Two
 > things that does not mean. It is not *unconditionally* merge-blocking: `main` has been
@@ -208,7 +210,8 @@ idea is borrowed from and why forking was rejected, is on
 > **As built, the moat proper is real; the two conveniences are not.** Both hard
 > capabilities ship: the persistent cross-session DAG (`agents` +
 > `orchestration_edges`, the latter keyed by `instance`/`host_id`) and
-> dollar-cost attribution including delegation savings. Three P0 proofs guard them and,
+> dollar-cost attribution including delegation savings. Three P0 moat proofs (plus a fourth
+> over real HTTP) guard them and,
 > since **2026-08-25**, block the merge button for anyone who is not the repository owner —
 > `main` requires the `ci` check, while `enforce_admins` stays off by design so the sole
 > maintainer is not locked out of their own repository
@@ -252,10 +255,12 @@ As of this writing, agenthropic is in the **bootstrap phase**:
   aligned with a sibling project's pattern, but repo structure and the MVP schema
   scope are still open. *(As built: no longer true. The leaning became the decision and
   shipped unchanged — `apps/server`, `apps/web`, `packages/shared`, `packages/core`,
-  `packages/test-fixtures`, `hooks/`, on Node 22, with **106 test files / 1554 tests
+  `packages/test-fixtures`, `hooks/`, on Node 22, with **131 test files / 2428 tests
   passing** and **100%** statements/branches/functions/lines enforced in all five
-  packages, re-measured 2026-08-15. What has *not* happened is a release: no tag, no
-  published package, `private: true` at version `0.1.0`.)*
+  packages, re-measured 2026-09-18 *(re-measured again 2026-09-23: **140 test files /
+  2621 tests**, same 100%)*. What has *not* happened is a release: no tag, no
+  published package — version `0.3.0`, publishable (`publishConfig.access: public`)
+  but never published.)*
 - **A Phase 0 feasibility spike gates everything.** Before any production code is
   written, the spike must confirm — against real, hand-labeled Claude Code sessions —
   that the subagent tree can be built reliably from the JSONL logs alone
@@ -275,7 +280,7 @@ As of this writing, agenthropic is in the **bootstrap phase**:
   *(As built: the gate did not hold as written. Implementation began **2026-07-11** by
   explicit owner override of CD-8, before the paired-capture corpus and the operator's
   tree sign-off were completed. Both load-bearing hedges — dual-layout parsing and
-  child-transcript token summation — are implemented and covered by the three P0
+  child-transcript token summation — are implemented and covered by the three P0 moat
   proofs, but **the spike numbers themselves remain PROVISIONAL** until ratified
   against the hand-labeled corpus. Treat the confidence figure above as an estimate,
   not a measurement.)*

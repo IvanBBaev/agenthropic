@@ -85,6 +85,12 @@ Nothing invokes retention on a timer or over HTTP. So the shipped state is not a
 default policy — it is *no* policy, which is the only honest thing to ship while the question
 is open.
 
+> **Update (2026-09-23).** The numbers are set: the closing board's D3 row
+> (`closing-plan-2026-09-08.md`, signed 2026-09-08) fixed `DASHBOARD_RETENTION_EVENTS_DAYS=90`,
+> `token_usage` never pruned, backups 30 days behind a floor of the 7 newest. `policy.ts`'s header
+> now reads "the v1.0 policy is SIGNED" and `index.ts` runs it after each successful daily backup.
+> The paragraph above is the 2026-08-15 reading, kept for the record.
+
 - [ ] Accept: retention deletes projections only; `events_raw` ages out by segment
       archival (file detach), never row DML. *(Mechanism half implemented 2026-08 —
       projections-only prune shipped; `archive-segments` declared and rejected loudly, not
@@ -391,6 +397,11 @@ a question still waiting for an answer, and nothing below has been answered by b
 *(Amended 2026-08-25: only the OPEN-8 row moved — its enforcement half is no longer
 UNENFORCED. Every other row still reads as it did on 2026-08-15, and no ratification has been
 signed.)*
+*(Amended 2026-09-23: the closing board's **D3** row — "Retention values (OPEN-1/2/3)",
+`closing-plan-2026-09-08.md`, signed 2026-09-08 — fixed `events` 90 days, `token_usage` never,
+backups 30 days behind a floor of the 7 newest, and `apps/server/src/retention/policy.ts` now runs
+them after each daily backup. The Build-status cells below are the 2026-08-15 reading; the Decided
+cells are still yours to fill.)*
 
 | # | Decision | Blocks | Recommendation reached by audit? | Build status (2026-08-15) | Decided (date) |
 |---|---|---|---|---|---|

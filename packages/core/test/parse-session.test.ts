@@ -777,6 +777,87 @@ describe('parseSession — orphan subagent with plain-string content', () => {
   });
 });
 
+// --- legacy <task-notification> recovery is structural, never substring ------
+// parser-spec gate #5: the child-side fallback only reads a `<tool-use-id>` that
+// sits INSIDE a closed `<task-notification>` element which OPENS the content.
+// Prose that merely mentions the tags must never fabricate a parent edge.
+
+describe('parseSession — legacy task-notification recovery requires structural position', () => {
+  const HEX = '0dd5ca1e';
+
+  function parseChildWithContent(content: string): ParsedSession {
+    return parseSession(
+      substrate([
+        {
+          path: `subagents/agent-${HEX}.jsonl`,
+          lines: [
+            jline({
+              sessionId: 'structural-session-uuid',
+              agentId: HEX,
+              type: 'user',
+              timestamp: '2026-07-02T00:00:00.000Z',
+              message: { role: 'user', content },
+            }),
+            jline({
+              sessionId: 'structural-session-uuid',
+              agentId: HEX,
+              type: 'assistant',
+              timestamp: '2026-07-02T00:00:01.000Z',
+              message: {
+                id: 'm_structural',
+                model: 'm',
+                content: [{ type: 'text', text: 'x' }],
+                usage: { input_tokens: 1 },
+              },
+            }),
+          ],
+        },
+      ]),
+    );
+  }
+
+  it('does not fabricate an edge from prose that mentions the tags', () => {
+    const result = parseChildWithContent(
+      'Explain this log line: "<task-notification>" and also the tag ' +
+        '<tool-use-id>toolu_made_up</tool-use-id> from the docs.',
+    );
+    expect(agentById(result, HEX)?.parentAgentId).toBeNull();
+    expect(result.edges).toHaveLength(0);
+  });
+
+  it('recovers the edge from a well-formed leading element (leading whitespace allowed)', () => {
+    const result = parseChildWithContent(
+      '  \n<task-notification><task-id>t1</task-id>' +
+        '<tool-use-id>toolu_real</tool-use-id></task-notification>Task body.',
+    );
+    expect(agentById(result, HEX)?.parentAgentId).toBe('structural-session-uuid');
+    expect(edgeForChild(result, HEX)).toEqual({
+      sessionId: 'structural-session-uuid',
+      parentAgentId: 'structural-session-uuid',
+      childAgentId: HEX,
+      source: 'task_notification',
+      toolUseId: 'toolu_real',
+    });
+  });
+
+  it('ignores a <tool-use-id> that sits outside the element', () => {
+    const result = parseChildWithContent(
+      '<task-notification><task-id>t1</task-id></task-notification>' +
+        'See <tool-use-id>toolu_outside</tool-use-id> for details.',
+    );
+    expect(agentById(result, HEX)?.parentAgentId).toBeNull();
+    expect(result.edges).toHaveLength(0);
+  });
+
+  it('ignores an unclosed element', () => {
+    const result = parseChildWithContent(
+      '<task-notification><tool-use-id>toolu_unclosed</tool-use-id> and nothing closes it',
+    );
+    expect(agentById(result, HEX)?.parentAgentId).toBeNull();
+    expect(result.edges).toHaveLength(0);
+  });
+});
+
 // --- tolerance: unknown record types, blank + non-object lines, sidecars -----
 
 describe('parseSession — tolerates unknown records and non-transcript files', () => {

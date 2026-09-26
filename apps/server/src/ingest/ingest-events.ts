@@ -1,9 +1,9 @@
 /**
  * The `onIngestEvent` contract — the seam between the live ingest loop and the
- * (future) realtime orchestrator. The corpus watcher fires one
- * {@link SessionIngestedEvent} per successfully ingested session and one
- * {@link AgentStatusChangedEvent} per watchdog transition; the orchestrator
- * that owns server.ts bridges them to SSE. This module deliberately imports
+ * realtime hub. The corpus watcher fires one {@link SessionIngestedEvent} per
+ * successfully ingested session and one {@link AgentStatusChangedEvent} per
+ * watchdog transition or M-13 SubagentStop replay; the composition root
+ * (`index.ts`) bridges them to SSE via `toRealtimeEvent`. This module deliberately imports
  * nothing from the corpus/db layers so it can be consumed from anywhere
  * without cycles.
  */
@@ -20,7 +20,7 @@ export interface SessionIngestedEvent {
   readonly costUsd: number | null;
 }
 
-/** Fired after the WP-IN12 watchdog persisted one agent status transition. */
+/** Fired after one agent status transition was persisted (watchdog, hook, or M-13 replay). */
 export interface AgentStatusChangedEvent {
   readonly type: 'agent-status-changed';
   readonly agentId: string;

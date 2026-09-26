@@ -12,12 +12,16 @@
  *    file is classified by the parser's own {@link classifyRelativePath}, so the
  *    reader's allowlist can never drift from what the parser accepts.
  *
- * Hazard posture: every per-file I/O hazard (vanished mid-walk, EACCES,
- * oversize, a non-regular entry, a symlink) is recorded as a {@link SkippedFile}
+ * Hazard posture: every per-file I/O hazard (EACCES on a read OR on the lstat
+ * probe, oversize, a non-regular entry, a symlink, a directory past `maxDepth`,
+ * a directory that could not be listed) is recorded as a {@link SkippedFile}
  * and the walk continues — one unreadable artifact never sinks a session. The
- * SOLE exception is {@link ContainmentError} (a traversal-shaped entry name or a
- * resolved path escaping the root): that is not swallowed, it aborts the run,
- * because it signals a crafted / compromised corpus.
+ * one thing skipped SILENTLY is an entry that is gone (ENOENT / ENOTDIR between
+ * `readdir` and `lstat`): there is nothing there to miss, and reporting it
+ * would only teach the watcher to re-read nothing. The SOLE exception to
+ * "record and continue" is {@link ContainmentError} (a traversal-shaped entry
+ * name or a resolved path escaping the root): that is not swallowed, it aborts
+ * the run, because it signals a crafted / compromised corpus.
  */
 import { basename, join, relative } from 'node:path';
 import { classifyRelativePath, type SubstrateFile } from '@agenthropic/core';
@@ -38,10 +42,10 @@ import {
   isRealDir,
   isSafeEntryName,
   isSessionUuid,
+  probeLstat,
   resolveSubagentsDir,
   splitTranscriptLines,
   toPosix,
-  tryLstat,
 } from './corpus-paths';
 
 const JSONL_SUFFIX = '.jsonl';
@@ -64,9 +68,13 @@ function reasonFor(err: unknown): SkipReason {
  * is a canonical session UUID. `<uuid>/` subdirectories are NOT sessions on
  * their own (an orphan workflow dir with no root transcript is skipped).
  *
- * Never throws on a per-entry hazard (a vanished / unreadable slug or entry is
- * simply skipped). Propagates {@link ContainmentError} for a traversal-shaped
- * name — the one non-recoverable signal.
+ * Never throws on a per-entry hazard. A slug or `<uuid>.jsonl` that VANISHED
+ * is simply skipped; one whose `readdir` / `lstat` failed for any other reason
+ * is recorded in `skipped` as `unreadable` (slug-relative path, errno code),
+ * because a slug that cannot be probed hides every session under it and a main
+ * transcript that cannot be probed is a session the dashboard cannot see.
+ * Propagates {@link ContainmentError} for a traversal-shaped name — the one
+ * non-recoverable signal.
  *
  * The ROOT read is the one hazard that is not per-entry, and it gets its own
  * verdict: a root that VANISHED (ENOENT) reports zero sessions — that is true,
@@ -76,6 +84,7 @@ function reasonFor(err: unknown): SkipReason {
  */
 export function enumerateSessions(fs: CorpusFs, corpusRoot: string): SessionEnumeration {
   const refs: SessionRef[] = [];
+  const unreadableSlugs: SkippedFile[] = [];
 
   let slugNames: string[];
   try {
@@ -94,14 +103,27 @@ export function enumerateSessions(fs: CorpusFs, corpusRoot: string): SessionEnum
     const slugDirAbs = join(corpusRoot, slug);
     assertWithinRoot(corpusRoot, slugDirAbs);
 
-    if (!isRealDir(fs, slugDirAbs)) {
-      continue; // a stray file (e.g. .DS_Store) or a symlinked slug dir → skip
+    const slugProbe = probeLstat(fs, slugDirAbs);
+    if (slugProbe.kind === 'unreadable') {
+      // Same consequence as a slug whose listing fails below: every session
+      // under it is invisible, so "could not look" is recorded, not silenced.
+      unreadableSlugs.push({ relativePath: slug, reason: 'unreadable', code: slugProbe.code });
+      continue;
+    }
+    if (slugProbe.kind === 'gone' || !isRealDir(slugProbe.info)) {
+      continue; // vanished, a stray file (e.g. .DS_Store) or a symlinked slug dir → skip
     }
 
     let entries: string[];
     try {
       entries = fs.readDirNames(slugDirAbs);
-    } catch {
+    } catch (err) {
+      // A slug that vanished holds nothing. Any other failure hides every
+      // session under it, so it is recorded: "could not look" is not "empty".
+      const code = errnoCodeOf(err);
+      if (code !== 'ENOENT') {
+        unreadableSlugs.push({ relativePath: slug, reason: 'unreadable', code });
+      }
       continue;
     }
 
@@ -116,8 +138,18 @@ export function enumerateSessions(fs: CorpusFs, corpusRoot: string): SessionEnum
       const mainAbsPath = join(slugDirAbs, entry);
       assertWithinRoot(corpusRoot, mainAbsPath);
 
-      const st = tryLstat(fs, mainAbsPath);
-      if (st === null || !st.isFile || st.isSymbolicLink) {
+      const main = probeLstat(fs, mainAbsPath);
+      if (main.kind === 'unreadable') {
+        // The transcript is there and cannot be probed: a session the
+        // dashboard cannot see, which is not the same as no session.
+        unreadableSlugs.push({
+          relativePath: `${slug}/${entry}`,
+          reason: 'unreadable',
+          code: main.code,
+        });
+        continue;
+      }
+      if (main.kind === 'gone' || !main.info.isFile || main.info.isSymbolicLink) {
         continue; // gone, a directory, or a symlinked transcript → not a session
       }
 
@@ -130,7 +162,7 @@ export function enumerateSessions(fs: CorpusFs, corpusRoot: string): SessionEnum
     }
   }
 
-  return dedupeSessionRefs(refs);
+  return dedupeSessionRefs(refs, unreadableSlugs);
 }
 
 /**
@@ -148,9 +180,12 @@ export function enumerateSessions(fs: CorpusFs, corpusRoot: string): SessionEnum
  * when it is not, the pick is still one honest, stable choice, and the skipped
  * copies are reported rather than silently shadowed.
  */
-function dedupeSessionRefs(refs: readonly SessionRef[]): SessionEnumeration {
+function dedupeSessionRefs(
+  refs: readonly SessionRef[],
+  alreadySkipped: readonly SkippedFile[],
+): SessionEnumeration {
   const bySession = new Map<string, SessionRef>();
-  const skipped: SkippedFile[] = [];
+  const skipped: SkippedFile[] = [...alreadySkipped];
   for (const ref of refs) {
     const incumbent = bySession.get(ref.sessionId);
     if (incumbent === undefined) {
@@ -196,14 +231,32 @@ function walkArtifacts(
   state: BuildState,
 ): void {
   if (depth > limits.maxDepth) {
-    return; // belt-and-braces against a symlink cycle the lstat guard already blocks
+    // Belt-and-braces against a symlink cycle the lstat guard already blocks —
+    // but a REAL directory this deep is not a cycle, and every artifact under
+    // it is dropped. Record the directory the walk declined to enter, so the
+    // drop is counted like any other skip instead of vanishing.
+    state.skipped.push({
+      relativePath: toPosix(relative(sessionDirAbs, dirAbs)),
+      reason: 'too-deep',
+    });
+    return;
   }
 
   let names: string[];
   try {
     names = fs.readDirNames(dirAbs);
-  } catch {
-    return; // directory vanished / unreadable mid-walk → benign
+  } catch (err) {
+    // A directory that vanished mid-walk is benign. Any other failure hides
+    // every artifact beneath it, so it is recorded rather than swallowed.
+    const code = errnoCodeOf(err);
+    if (code !== 'ENOENT') {
+      state.skipped.push({
+        relativePath: toPosix(relative(sessionDirAbs, dirAbs)),
+        reason: 'unreadable',
+        code,
+      });
+    }
+    return;
   }
 
   for (const name of names) {
@@ -213,11 +266,19 @@ function walkArtifacts(
     const abs = join(dirAbs, name);
     assertWithinRoot(sessionDirAbs, abs);
 
-    const st = tryLstat(fs, abs);
-    if (st === null) {
-      continue; // vanished between readdir and lstat
-    }
     const relPath = toPosix(relative(sessionDirAbs, abs));
+    const probe = probeLstat(fs, abs);
+    if (probe.kind === 'gone') {
+      continue; // vanished between readdir and lstat — nothing to miss
+    }
+    if (probe.kind === 'unreadable') {
+      // The artifact exists and could not even be probed — the same hazard as
+      // a read that fails, and recorded the same way, so the watcher holds
+      // the session un-checkpointed and re-reads it once the probe recovers.
+      state.skipped.push({ relativePath: relPath, reason: 'unreadable', code: probe.code });
+      continue;
+    }
+    const st = probe.info;
 
     if (st.isSymbolicLink) {
       state.skipped.push({ relativePath: relPath, reason: 'symlink' });
@@ -320,9 +381,18 @@ export function buildSessionSubstrate(
   // session dir is synthesised from the transcript stem rather than read off
   // disk, so it is the one component enumeration never lstat'ed, and a symlink
   // there is followed by the kernel before any check here would see it.
-  const subagentsAbs = resolveSubagentsDir(fs, ref.sessionDirAbs);
-  if (subagentsAbs !== null) {
-    walkArtifacts(fs, ref.sessionDirAbs, subagentsAbs, 1, limits, state);
+  // A probe that fails for a reason other than absence is recorded under the
+  // subtree not walked, so an unprobeable `<uuid>/` is never a silently
+  // main-only session.
+  const subagents = resolveSubagentsDir(fs, ref.sessionDirAbs);
+  if (subagents.kind === 'dir') {
+    walkArtifacts(fs, ref.sessionDirAbs, subagents.abs, 1, limits, state);
+  } else if (subagents.kind === 'unreadable') {
+    state.skipped.push({
+      relativePath: subagents.relativePath,
+      reason: 'unreadable',
+      code: subagents.code,
+    });
   }
 
   if (!hasMain && !state.hasAgent) {

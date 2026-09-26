@@ -16,7 +16,7 @@ sharper, where they are softer, and where they are simply wrong.
 A five-lens adversarial workflow (5 parallel senior reviewers, Opus, high effort,
 ~361k subagent tokens) cross-checked every claim against: `docs/ai/DESIGN.md`,
 `CLAUDE.md`, [`../independent-due-diligence.md`](../independent-due-diligence.md),
-the six per-project deep dives in [`../due-diligence/projects/`](../due-diligence/projects/),
+the six per-project deep dives in [`../due-diligence/projects/`](https://github.com/IvanBBaev/agenthropic/tree/main/docs/due-diligence/projects),
 [`../due-diligence/security.md`](../due-diligence/security.md), and the internal
 [`concept-analysis.md`](concept-analysis.md) / [`implementation-plan.md`](implementation-plan.md).
 

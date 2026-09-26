@@ -19,20 +19,21 @@ retention/redaction numbers were fixed by no source document, and `WP-F8`, `WP-D
 and `WP-IN14` were all unmerged. Every command and path below was a placeholder for
 the real operational procedure `WP-F8` would ship; §6 tallies precisely what is
 decided versus still open. *(As built: `WP-F8` and `WP-IN14` are code, `WP-D10`
-shipped as a mechanism whose policy numbers are still blank, and the schedule is an
+runs the v1.0 retention policy signed on 2026-09-08 (D3), and the schedule is an
 in-process daily timer rather than the shell-plus-`launchd` shape sketched in §2.)*
 
-> **Update — 2026-07 (as built; revised 2026-08).** Implementation began 2026-07-11
+> **Update — 2026-07 (as built; revised 2026-09).** Implementation began 2026-07-11
 > and all three work packages above have since landed — though not all of them in the
-> shape this page sketched, and one of them only half-way on purpose.
+> shape this page sketched.
 >
 > **Built and running:** WAL + `foreign_keys` asserted on every connection open, with
 > a throw if either pragma did not take (`apps/server/src/db/connection.ts`, `WP-D2`);
 > backup + restore as code (`apps/server/src/db/backup.ts`, `WP-F8`) — backup via
 > better-sqlite3's **online backup API** (in-process, safe under WAL), restore via
-> removal of any stale `-wal`/`-shm` sidecars, then a copy, then a reopen through the
-> same pragma-asserting path plus a hard refusal to return a database that fails
-> `PRAGMA integrity_check`; the restore path is exercised by
+> a copy to a staged `<dest>.restoring` file, a check of that file through the same
+> pragma-asserting path plus `PRAGMA integrity_check`, and only on `ok` the removal of
+> any stale `-wal`/`-shm` sidecars and the swap into place — a failed check leaves the
+> destination untouched; the restore path is exercised by
 > `apps/server/test/backup.test.ts` on every test run; **a daily backup schedule that
 > actually fires** — an in-process, `unref`-ed `setInterval` started by the
 > composition root (`scheduleDailyBackups`, `apps/server/src/index.ts`), not the
@@ -40,11 +41,13 @@ in-process daily timer rather than the shell-plus-`launchd` shape sketched in §
 > (`apps/server/src/hooks/redact.ts`, `WP-IN14`), applied **before** the idempotency
 > key is computed, pending the OPEN-3 field-list sign-off.
 >
-> **Built as mechanism, deliberately unset as policy:** `WP-D10` retention
-> (`apps/server/src/retention/`). The pruner exists and is tested, but no retention
-> window has been signed off, the row-level runner is wired into nothing, and only the
-> backup-file half of the mechanism reaches production — see §4, which is the section
-> that matters most for reading this page correctly.
+> **Built, and running under a signed policy since 2026-09:** `WP-D10` retention
+> (`apps/server/src/retention/`). The v1.0 policy was signed on 2026-09-08 (D3):
+> `events` rows older than **90 days** are pruned, `token_usage` is **never** pruned,
+> and backup files older than **30 days** expire behind a floor of the **7** newest.
+> The runner is chained onto the daily backup timer and runs only after that cycle's
+> backup succeeded; boot performs a dry run and logs the counts without deleting — see
+> §4, which is the section that matters most for reading this page correctly.
 >
 > **Not built:** the operator-level release drill (`WP-X9`). The live database default
 > is `data/agenthropic.db`, overridable via `DASHBOARD_DB_PATH` (not the
@@ -131,8 +134,8 @@ sqlite3 "${DB_PATH}" ".backup '${BACKUP_FILE}'"
 # backup file is worth nothing (see §3, the tested-restore drill).
 sqlite3 "${BACKUP_FILE}" "PRAGMA integrity_check;"
 
-# Prune backups older than the retention window (§4) — <days> is an operator-set
-# value; no default is fixed by any source document yet.
+# Prune backups older than the retention window (§4) — the shipped default is 30
+# days behind a keep-7 floor; this illustrative script has no floor at all.
 find "${BACKUP_DIR}" -name 'agenthropic-*.db' -mtime "+<days>" -delete
 ```
 
@@ -194,47 +197,67 @@ process instead — the plist below ships with nothing and is installed by nothi
 No `launchd` plist ships in this repository, and nothing installs the one above. The
 schedule that actually runs lives **inside the server process**: `scheduleDailyBackups`
 (`apps/server/src/index.ts`) is started by the composition root next to the database it
-protects, and each tick writes one backup and then expires old ones.
+protects, and each tick writes one backup and then — only if that write succeeded —
+runs the retention pass under the signed policy (§4): expired `events` rows first,
+then old backup files.
 
-| Property | Value | Constant |
+| Property | Value | Where it comes from |
 | --- | --- | --- |
-| Interval | 24 hours | `BACKUP_INTERVAL_MS` |
-| Expiry window | 14 days | `BACKUP_MAX_AGE_DAYS` |
-| Keep-minimum floor | the 7 newest files, always | `BACKUP_KEEP_MINIMUM` |
+| Interval | 24 hours | `BACKUP_INTERVAL_MS` (code constant) |
+| Backup-file expiry window | 30 days; `0` switches it off | `DASHBOARD_RETENTION_BACKUP_DAYS` (default `DEFAULT_RETENTION_BACKUP_DAYS`) |
+| Keep-minimum floor | the 7 newest files, always | `DASHBOARD_RETENTION_BACKUP_KEEP_MIN` (default `DEFAULT_RETENTION_BACKUP_KEEP_MIN`); never below 1 |
+| `events` row window | 90 days; `0` switches it off | `DASHBOARD_RETENTION_EVENTS_DAYS` (default `DEFAULT_RETENTION_EVENTS_DAYS`) |
 | Destination directory | `<dirname of DASHBOARD_DB_PATH>/backups/` | wired in `start()` |
 | Filename | `agenthropic-<ISO timestamp>.db`, e.g. `agenthropic-2026-08-15T03-00-00-000Z.db` (`:` and `.` become `-`) | — |
 
-**All three numbers are PROVISIONAL.** The code says so in its own header, and they
-stay provisional until the OPEN-1 retention decision is ratified
-(`docs/analysis/open-decisions.md`). The keep-minimum floor is what makes a wrong
-window survivable rather than fatal: however badly the age window is set, the seven
-newest backups are never deleted.
+The three retention numbers are the **signed v1.0 policy (D3, 2026-09-08)**, read from
+the environment by `loadConfig` and validated at startup (a non-integer or negative
+value is a startup error, not a fallback — see
+[Configuration](../usage/configuration.md)); the interval is a code constant. The
+keep-minimum floor is what makes a wrong window survivable rather than fatal: however
+badly the age window is set, the seven newest backups are never deleted.
 
 Four properties of this scheduler matter before you rely on it:
 
 - **It is a timer, not a boot task.** The first backup is written one full interval
   after start — roughly 24 hours — not at startup. A server restarted daily therefore
   never takes one. If you need a backup *now*, take it out of band; §3's drill works
-  against any copy.
+  against any copy. Boot does run the retention pass in **dry-run** mode and logs what
+  it *would* remove, so the first real prune happens after the first backup, never
+  before it.
 - **The timer is `unref`-ed.** A pending backup never keeps an otherwise-finished
   process alive, and server shutdown calls `stop()` on the scheduler before closing the
   database.
 - **A failed run logs and waits for the next tick** rather than crashing the server:
-  `database backup failed: <message>` on stderr. The trade is deliberate — the server
-  outliving its backup beats the reverse — but it means that log line, plus the age of
-  the newest file in the backup directory, is the *only* signal that backups have
-  stopped working. Nothing else surfaces it; `/api/health` does not report backup
-  state.
+  `database backup failed: <message>` on stderr, **and the retention pass of that
+  cycle is skipped**: nothing is ever pruned in a cycle whose backup did not land. The
+  trade is deliberate — the server outliving its backup beats the reverse — but it
+  means that log line, plus the age of the newest file in the backup directory, is the
+  *only* signal that backups have stopped working. Nothing else surfaces it;
+  `/api/health` reports neither backup nor retention state.
+- **A failed retention pass logs and never crashes.** `retention failed: <message>`
+  on stderr; the backup of that cycle is already on disk, and the next tick retries.
 - **Overlapping runs are refused, not queued.** The online backup yields between pages,
   so a manual `runOnce()` could otherwise collide with a timer-fired one; a
   re-entrancy flag makes the second call a no-op, so there are never two writers in the
   same directory.
 
-A successful pass logs exactly one line to stdout:
+A successful pass logs two lines to stdout — one per step:
 
 ```
-database backup: wrote <path>, expired <n> old backup(s).
+database backup: wrote <path>.
+retention: events: pruned <n> row(s) older than <cutoff>; backup files: expired <n> older than <cutoff> (<k> kept by the floor); receipt <journal path>.
 ```
+
+The `receipt` suffix appears only when rows were actually deleted (the journal writes
+one entry per deleting run, §4); `<n>+` means the per-run row budget was hit and the
+next tick continues; a backup directory that does not exist yet reads `backup files:
+directory <dir> absent, nothing to expire`; and with both windows set to `0` the line
+is `retention: no rule configured, nothing to prune.` The boot dry run logs the same
+shape, prefixed with the policy in words:
+`retention policy: events: prune after 90 day(s); token_usage: never pruned; backup
+files: expire after 30 day(s), always keeping the newest 7. retention dry run (nothing
+deleted): events: would prune <n> row(s) older than <cutoff>; ...`.
 
 **Why any of this exists.** Every projected table (`sessions`, `agents`,
 `orchestration_edges`, `token_usage`) can be rebuilt by re-reading
@@ -269,9 +292,9 @@ concrete enough to write down as a runbook regardless of who or what runs it:
 
 > **As built:** moment 1 shipped stronger than promised — the restore path is not
 > proven "once" but on **every test run**: `apps/server/test/backup.test.ts` backs up
-> a live database, restores it through `restoreDatabase()` (which reopens via the
-> pragma-asserting `openDatabase` and throws unless `PRAGMA integrity_check` returns
-> `ok`), and compares content. Moment 2 — the operator-level drill re-run per release
+> a live database, restores it through `restoreDatabase()` (which checks a staged copy via the
+> pragma-asserting `openDatabase` and throws, before touching the destination, unless
+> `PRAGMA integrity_check` returns `ok`), and compares content. Moment 2 — the operator-level drill re-run per release
 > candidate and recorded in `RELEASE.md` (`WP-X9`) — remains a manual checklist
 > obligation; a CI-exercised restore is necessary but not sufficient for it, and this
 > page cannot attest it has been performed against real production data.
@@ -302,13 +325,15 @@ Step by step:
 
 1. **Pick a backup artifact** — the most recent one, or a specific dated one from
    inside the retention window (§4).
-2. **Copy it to a scratch path**, never restore in place over the live database.
+2. **Copy it to a scratch path** for the drill. Restoring over the live database is
+   the real-recovery case only, and needs the server stopped first (no open handle on
+   the file).
    `cp /path/to/agenthropic/data/backups/agenthropic-<ts>.db /path/to/scratch/restore-test.db`
 3. **Delete any `-wal`/`-shm` sidecars at the destination first.** In the drill the
    scratch path is usually fresh and has none; in the real recovery case — restoring
    *over* a path that already held a database — this step is the whole difference
-   between a restore and a corruption, and `restoreDatabase()` does it for you before
-   it copies. A leftover `-wal`/`-shm` pair belongs to the database being **replaced**
+   between a restore and a corruption, and `restoreDatabase()` does it for you, after
+   the staged copy has passed its check and just before the swap. A leftover `-wal`/`-shm` pair belongs to the database being **replaced**
    (typically left behind by an unclean shutdown, which is exactly the situation you
    are restoring from). SQLite's recovery-on-open would replay those frames *into* the
    restored image, silently mixing two database states in precisely the disaster path
@@ -320,9 +345,10 @@ Step by step:
    ```sql
    PRAGMA integrity_check;   -- must return exactly "ok"
    ```
-   `restoreDatabase()` runs this check after reopening and **throws rather than
-   returning a handle** if the answer is not `ok` — a restore that hands back a
-   subtly-broken database would be worse than one that fails.
+   `restoreDatabase()` runs this check on the staged `<dest>.restoring` copy and
+   **throws before touching the destination** if the answer is not `ok` — a restore
+   that hands back a subtly-broken database would be worse than one that fails. The
+   rejected staged copy is kept for inspection.
 5. **Boot a scratch instance of the server against the restored file** — a second,
    throwaway process pointed at the copy with `DASHBOARD_DB_PATH=<scratch-copy>` and
    its own `DASHBOARD_PORT`, since the live instance still holds 4317. This scratch
@@ -361,7 +387,7 @@ lists this explicitly as an open Phase-0 input, not a fixed value:
 Concretely: no source document states a retention window in days, which specific
 payload fields the redactor strips, or the size threshold above which a "huge"
 payload is rejected outright versus truncated. Any number quoted elsewhere for these
-(including a `RETENTION_DAYS=<days>` placeholder in the backup script above, which
+(including the `-mtime "+<days>"` placeholder in the backup script above, which
 governs *backup-file* pruning, not row-level TTL) is illustrative, operator-set
 scaffolding — not a sourced default.
 
@@ -377,18 +403,31 @@ truncate strategy on `events_raw` specifically (which would need to be a documen
 narrowly-scoped exception to the no-delete triggers), or something else. This page
 does not invent a resolution; it is tracked as an open issue against `WP-D10`.
 
-> **As built (2026-08):** `WP-D10` shipped as a **mechanism with no policy**
-> (`apps/server/src/retention/`). Every number this section calls open is still open;
-> what changed is that the machinery to enforce a number now exists and is tested.
-> That distinction is the whole point, and the code is arranged so the wrong reading
-> is hard to reach: with nothing configured, the policy is `NO_RETENTION`, the runner
-> short-circuits before opening a transaction, reading a row or touching the
-> filesystem, and behaviour is byte-identical to a build without the module. The
-> row-level runner (`apps/server/src/retention/runner.ts`) is additionally **wired
-> into nothing** — no timer, no route, no CLI in this repository calls it — and its
-> own header states the reason: *a scheduled deleter must not exist before the policy
-> that tells it what to delete has been signed.* The one half of the mechanism that
-> does run in production is backup-file pruning, described below.
+> **As built (2026-08, mechanism; 2026-09, policy):** `WP-D10` shipped first as a
+> **mechanism with no policy** (`apps/server/src/retention/`), and the row-level runner
+> stayed wired into nothing until the policy that tells it what to delete was signed.
+> That happened on **2026-09-08 (decision D3)**, and the numbers this section's design
+> record calls open are now fixed for v1.0:
+>
+> | Target | Policy | Environment variable | Default | Off switch |
+> |---|---|---|---|---|
+> | `events` rows | prune rows older than the window | `DASHBOARD_RETENTION_EVENTS_DAYS` | 90 | `0` |
+> | `token_usage` rows | **never pruned** | none — the policy has no input for it | — | — |
+> | backup files | expire files older than the window, always keeping the newest `keep-min` | `DASHBOARD_RETENTION_BACKUP_DAYS` / `DASHBOARD_RETENTION_BACKUP_KEEP_MIN` | 30 / 7 | `0` days |
+>
+> The wiring (`apps/server/src/index.ts`): `start()` builds the policy from
+> `loadConfig` with `signedRetentionPolicy`, logs the policy in words together with a
+> **dry run** at boot (counts only — boot never deletes), and hands the runner to the
+> daily backup timer, which calls it **only after that cycle's backup succeeded**. A
+> runner failure is logged as `retention failed: <message>` and never crashes the
+> server. Every deleting run still writes its receipt through the append-only journal
+> (`<DASHBOARD_DB_PATH>.retention-journal.jsonl`, next to the database), inside the
+> delete transaction. The mechanism's own safety shape is unchanged: with both
+> windows set to `0` the policy is `NO_RETENTION`, the runner short-circuits before
+> opening a transaction, reading a row or touching the filesystem, and behaviour is
+> byte-identical to a build without the module. Pruning `events` rows does not shorten
+> the startup replay, which reads the JSONL corpus, not the `events` table
+> (`docs/measurement/cold-replay-2026-09.md` §6.4).
 >
 > Two as-built facts narrow the append-only tension rather than resolve it:
 > `events_raw` holds **hook envelopes only** (JSONL transcripts are parsed straight
@@ -418,9 +457,13 @@ fastest way to understand what a future signed policy will and will not be able 
   be worse than not having the name.
 - **Pruning `token_usage` requires an explicit acknowledgement of cost loss.** Those
   rows are the ground truth behind every dollar the dashboard reports, so deleting
-  them permanently lowers the totals for the pruned window. The policy loader refuses
-  the rule unless `DASHBOARD_RETENTION_TOKEN_USAGE_ACK_COST_LOSS` is set. There is no
-  way to prune spend data by accident.
+  them permanently lowers the totals for the pruned window. The library policy loader
+  refuses the rule unless `DASHBOARD_RETENTION_TOKEN_USAGE_ACK_COST_LOSS` is set, and
+  the **signed v1.0 policy never sets it at all**: `signedRetentionPolicy` has no input
+  for a `token_usage` window, a test proves the wired policy cannot name that table
+  whatever the `events` window is, and `loadConfig` refuses to start if
+  `DASHBOARD_RETENTION_TOKEN_USAGE_DAYS` is set. There is no way to prune spend data
+  by accident, and under v1.0 no way to prune it at all.
 - **A prune that cannot write its receipt does not happen.** A real run appends an
   `fsync`-ed JSONL entry — dollars, tokens and sessions removed — inside the delete
   transaction, immediately before commit, so a failed journal write rolls the deletion
@@ -437,27 +480,29 @@ fastest way to understand what a future signed policy will and will not be able 
   that is set but unparseable throws at load time rather than falling back to a
   default. A deletion policy is the last place to be forgiving about input.
 
-One honesty note that has no clean answer yet, stated because an operator will
-otherwise discover it the hard way: **a pruned window can come back.** `token_usage` is
-re-derived from the JSONL corpus, and a restart does not re-read *unchanged*
-transcripts (the WP-IN10 replay checkpoint is honoured while the session row exists,
-and retention never touches that table). So a session that stays idle after a prune
-keeps its rows gone and its totals permanently lower — explainable only through the
-journal receipt — while a session whose transcript changes later is re-read in full,
-which **resurrects** the pruned rows from the corpus, and the next prune removes and
-journals the same dollars again. Which of those two behaviours is correct is exactly
-what OPEN-1 has to decide; until it does, both are the shipped truth.
+One honesty note about the mechanism, stated because a future policy change would
+otherwise discover it the hard way: **a pruned `token_usage` window could come back.**
+`token_usage` is re-derived from the JSONL corpus, and a restart does not re-read
+*unchanged* transcripts (the WP-IN10 replay checkpoint is honoured while the session
+row exists, and retention never touches that table). So a session that stayed idle
+after such a prune would keep its rows gone and its totals permanently lower —
+explainable only through the journal receipt — while a session whose transcript
+changed later would be re-read in full, which **resurrects** the pruned rows from the
+corpus, and the next prune would remove and journal the same dollars again. The
+signed v1.0 policy sidesteps this entirely by never pruning `token_usage`; the
+`events` rows it does prune are projected from hook envelopes, not from the corpus,
+so they do not come back.
 
-### Backup-file retention — the one half that runs
+### Backup-file retention
 
-Backup-file pruning is the only part of the retention mechanism on a live code path,
-and it gets there without a retention policy at all: `scheduleDailyBackups` calls
-`pruneBackupFiles` directly after each backup write, with the constants listed under
-[Scheduling, as built](#scheduling-as-built). Configuring
-`DASHBOARD_RETENTION_BACKUP_DAYS` does **not** change that — those variables are read
-by `loadRetentionPolicy`, which the running server never calls (`loadConfig` reads
-exactly six environment variables, and none of them is a `DASHBOARD_RETENTION_*` one).
-Setting them today configures nothing.
+Backup-file pruning is the second half of the daily retention pass: the runner applies
+the policy's backup-file rule right after the row rule, over the directory the
+scheduler writes into, with the window and floor listed under
+[Scheduling, as built](#scheduling-as-built). `DASHBOARD_RETENTION_BACKUP_DAYS` and
+`DASHBOARD_RETENTION_BACKUP_KEEP_MIN` are the two knobs; `0` days switches the rule
+off, and the floor cannot be set below 1. (Before 2026-09 the scheduler called
+`pruneBackupFiles` directly with compiled-in constants and none of this was
+configurable; that path is gone.)
 
 The filename convention is **normative, not cosmetic**: `pruneBackupFiles` recognizes
 candidates with an anchored `^agenthropic-.+\.db$` pattern, whose source comment names
@@ -479,8 +524,9 @@ a stray file in the backup directory is safe:
   condition to paper over by creating an empty directory that then looks healthy.
 
 The report a run returns (`directory`, `directoryPresent`, `dryRun`, `cutoff`, `found`,
-`deleted`, `keptByMinimum`, `bytesReclaimed`) is what the scheduler's `expired <n> old
-backup(s)` log line summarizes. Nothing surfaces it over HTTP.
+`deleted`, `keptByMinimum`, `bytesReclaimed`) is what the retention log line's
+`backup files: expired <n> older than <cutoff> (<k> kept by the floor)` fragment
+summarizes. Nothing surfaces it over HTTP.
 
 ## 5. Redaction at the ingest boundary — secrets never persisted
 
@@ -538,28 +584,29 @@ different work packages at two different boundaries. See
 | SQLite runs in WAL mode, pragma-asserted on every connection open | **Decided** (`docs/ai/DESIGN.md` §8; `WP-D2`) |
 | A backup exists and its restore path is exercised, not merely assumed to work | **Decided** (`ai/DESIGN.md` §8; `concept-analysis-v2.md` §6; `WP-F8`) |
 | Restore is re-verified at least once per release candidate, tracked in `RELEASE.md` | **Decided** (`concept-analysis-v2.md` §6; `WP-X9`) |
-| A retention TTL and payload redaction exist, live from Phase 1 | **Decided at the requirement level** (CD-10; `WP-D10`) — *as built: redaction is live; retention is a built mechanism with an unset policy and an unwired runner (§4)* |
+| A retention TTL and payload redaction exist, live from Phase 1 | **Decided at the requirement level** (CD-10; `WP-D10`) — *as built: redaction is live; retention runs the signed v1.0 policy after every successful daily backup (§4)* |
 | Redaction runs at the ingest write boundary, before the row exists | **Decided** (`WP-D10` owns the redactor; `WP-IN14` invokes it; development-plan §2 merge #3) |
-| Retention window (days), exact redacted field list, "huge payload" reject-vs-truncate threshold | **Open** — named Phase-0 policy inputs, not fixed as numbers (`concept-analysis-v2.md` §7, open question 6) |
+| Retention window (days) | **Signed** — D3, 2026-09-08: `events` 90 days, `token_usage` never, backup files 30 days behind a keep-7 floor (§4) |
+| Exact redacted field list, "huge payload" reject-vs-truncate threshold | **Open** — named Phase-0 policy inputs, not fixed as numbers (`concept-analysis-v2.md` §7, open question 6) |
 | How the TTL sweeper's row removal reconciles with `events_raw`'s no-UPDATE/DELETE trigger enforcement | **Open tension**, flagged on [data model](../architecture/data-model.md), not resolved in any source document |
 | Literal backup tool, script, and schedule (this page's `sqlite3 .backup` + `launchd` shape) | **Superseded** — the illustrative shape was never built; the real mechanism is the in-process online backup plus the in-process daily timer described under [Scheduling, as built](#scheduling-as-built) |
 | Whether the exercised-restore drill runs in CI, a scheduled job, or a manual runbook step | **Open** — `WP-F8` proves it once in Phase 1; `WP-X9` requires it again per release; the automation detail is unspecified |
 | Webhook credential handling (`token_ref`, distinct from payload redaction) | **Decided**, different mechanism, different WP (`WP-A3`, CD-10) — see §5 |
 
-> **As-built delta to this table (2026-07; revised 2026-08):** rows 1-2 are now
+> **As-built delta to this table (2026-07; revised 2026-09):** rows 1-2 are now
 > **built and test-proven** (pragma assertion in `connection.ts`; backup/restore in
 > `backup.ts`, with the restore — including the stale `-wal` / `-shm` removal —
 > exercised on every test run). Row 3 (`WP-X9` per-release re-run) is an obligation
-> that has not yet had a release to bind to. Row 4 has **split in two**: redaction is
-> live, and the retention half exists as a built mechanism whose policy is
-> deliberately blank, so nothing is being deleted from the database today (§4). Row 5
-> is **built** with the OPEN-3 field list pending sign-off. Rows 6-7 stay **open** and
-> are now the gating pair: the window and field-list numbers are unratified, and the
-> `events_raw` append-only tension is the reason the code refuses to prune that table
-> at all rather than resolving the tension by fiat. Row 8's real mechanism is the
+> that has not yet had a release to bind to. Row 4 is **built on both halves**:
+> redaction is live, and retention runs the signed v1.0 policy after each successful
+> daily backup (§4). Row 5 is **built** with the OPEN-3 field list pending sign-off.
+> Row 6 is **signed** (D3, 2026-09-08) and wired; row 7 (the field list and the
+> huge-payload threshold) stays **open**, as does row 8's append-only tension, which
+> the code still refuses to resolve by fiat: `events_raw` cannot be named by any rule,
+> and the signed policy prunes only the `events` projection. Row 9's real mechanism is the
 > in-process better-sqlite3 online backup driven by an in-process daily timer, not a
-> CLI script under `launchd`. Row 9 is now partially answered: a restore runs in the
-> test suite automatically; the release-time drill remains manual. Row 10's `WP-A3` is
+> CLI script under `launchd`. Row 10 is now partially answered: a restore runs in the
+> test suite automatically; the release-time drill remains manual. Row 11's `WP-A3` is
 > not built (alerts are post-1.0).
 
 ## 7. Roadmap positioning
@@ -568,7 +615,7 @@ different work packages at two different boundaries. See
 |---|---|---|
 | 1 — Foundation, security spine, storage | `WP-D2` | WAL + foreign-key pragma asserted on every connection open |
 | 1 — Foundation, security spine, storage | `WP-F8` | Backup + tested-restore routine built; restore exercised once as Phase-1 proof |
-| 1 — Foundation, security spine, storage | `WP-D10` | Storage-lifecycle redactor (live) + retention sweeper (mechanism built, policy unset, runner unwired — §4) |
+| 1 — Foundation, security spine, storage | `WP-D10` | Storage-lifecycle redactor (live) + retention sweeper (live under the signed v1.0 policy, chained onto the daily backup — §4) |
 | 2 — Ingest substrate | `WP-IN14` | Redaction invoked at the ingest write boundary; "redaction live" is the Phase 2 exit-gate wording |
 | 6 — Operator alerts + release hardening | `WP-X9` | `RELEASE.md` requires an exercised backup restore as a release-blocking checklist line, every release candidate |
 
@@ -585,21 +632,21 @@ Phase-0 spike's CONDITIONAL GO). As built today:
   `apps/server/src/db/backup.ts`), with the restore path — stale-sidecar removal
   included — exercised on every test run.
 - **The backup schedule runs.** It is an in-process daily timer inside the server,
-  not a `launchd` job; see [Scheduling, as built](#scheduling-as-built). Its three
-  numbers (24 h, 14 days, keep 7) are PROVISIONAL defaults, not ratified policy.
+  not a `launchd` job; see [Scheduling, as built](#scheduling-as-built). The interval
+  (24 h) is a code constant; the expiry numbers (30 days, keep 7) are the signed v1.0
+  policy, configurable through `DASHBOARD_RETENTION_BACKUP_DAYS` and
+  `DASHBOARD_RETENTION_BACKUP_KEEP_MIN`.
 - **`WP-IN14` redaction is live** at the hook-ingest boundary, before the
   idempotency key, pending the OPEN-3 sign-off.
-- **`WP-D10` is half-live.** Backup-file pruning runs as part of the daily backup;
-  the database-row sweeper is built, tested, and reached from nothing but its own
-  tests, because its policy is deliberately unset (§4). Nothing prunes a table
-  today, and nothing will until the retention window is ratified and a caller is
-  wired.
+- **`WP-D10` is live.** The retention runner runs after every successful daily
+  backup under the policy signed on 2026-09-08 (D3): `events` rows older than 90 days
+  are pruned, `token_usage` is never pruned, backup files expire at 30 days behind a
+  keep-7 floor (§4). Boot logs a dry run; every deleting run writes a journal receipt.
 - **`WP-X9` has not run**, because there has been no release candidate to run it
   against.
 
-The illustrative script, the `launchd` plist and the policy numbers above remain
-reference shapes — read them as the design's first sketch, not as shipped
-operational procedure.
+The illustrative script and the `launchd` plist above remain reference shapes — read
+them as the design's first sketch, not as shipped operational procedure.
 
 ## See also
 

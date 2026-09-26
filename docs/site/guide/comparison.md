@@ -29,12 +29,14 @@ this page (full grading rationale: [the moat §3](the-moat.md)).
 > `orchestration_edges` exists, and no second host does. The security row was implemented
 > exactly as committed: loopback-only bind, mandatory `DASHBOARD_TOKEN` compared with
 > `timingSafeEqual`, no spawner, no SSRF (the server makes no outbound network request at
-> all). Test figures, re-measured 2026-08-15: **106 test files / 1554 tests**, with **100%
-> statements, branches, functions and lines** enforced in **all five** packages —
-> `packages/test-fixtures` is inside the gate, not excluded from it. Three P0 correctness
+> all). Test figures, re-measured 2026-09-18: **131 test files / 2428 tests**, with **100%
+> statements, branches, functions and lines** enforced in **all five** packages
+> *(re-measured again 2026-09-23: **140 test files / 2621 tests**, same 100%)* —
+> `packages/test-fixtures` is inside the gate, not excluded from it. Three P0 moat
 > proofs run green in CI on every push and pull request — Σ tokens against an
 > independently written reader, a byte-identical double replay, and the DAG rebuilt from
-> JSONL alone after a simulated outage. Calling them *merge-blocking* needs one
+> JSONL alone after a simulated outage — and a fourth P0 proof beside them answers the
+> five daily questions over real HTTP through the booted server. Calling them *merge-blocking* needs one
 > qualification: `main` has been branch-protected since **2026-08-25** and requires the `ci`
 > check, so a red run withholds the merge button from a contributor — but not from the
 > repository owner, because `enforce_admins` is deliberately off. agenthropic has exactly
@@ -43,7 +45,7 @@ this page (full grading rationale: [the moat §3](the-moat.md)).
 > [standing correction](../contributing/decisions/README.md#a-standing-correction-merge-blocking).
 > And coverage of the code is not accuracy of the
 > output — the hierarchy-accuracy exit gate reports **NOT CERTIFIED at n = 0**, because no
-> session has been hand-labeled. Those three proofs are the whole of what is proven;
+> session has been hand-labeled. Those four proofs are the whole of what is proven;
 > nothing here should be read as a broader guarantee. None of it is released, either:
 > there is no tag and no published package.
 >
@@ -287,15 +289,15 @@ governs what is copied-with-attribution versus clean-room reimplemented all live
 > pages link to this section. **The bootstrap phase is over.** Implementation began
 > **2026-07-11**, by explicit owner override of the CD-8 no-code-before-spike gate — not
 > because the gate was cleared. What runs: the loopback-bound, token-gated server; the
-> SQLite/WAL substrate and thirteen migrations; JSONL ingest with replay-on-startup and
+> SQLite/WAL substrate and eighteen migrations; JSONL ingest with replay-on-startup and
 > tail-follow polling; the persisted subagent DAG; the cost engine; the hook receiver and
 > its installer; the status watchdog; the SSE hub; the read API; and all four dashboard
-> views plus a per-session cost-analysis panel. Re-measured 2026-08-15: **106 test files /
-> 1554 tests**, with **100% statements, branches, functions and lines** enforced in **all
-> five** packages — `packages/test-fixtures` was folded inside the gate rather than left
-> out of it. Retention is the one deliberate half-build: the mechanism exists and is
-> tested, the policy is unset pending an owner decision, the default is a no-op, and
-> nothing prunes.
+> views plus a per-session cost-analysis panel. Re-measured 2026-09-18: **131 test files /
+> 2428 tests** *(and again 2026-09-23: **140 test files / 2621 tests**)*, with **100%
+> statements, branches, functions and lines** enforced in **all five** packages — `packages/test-fixtures` was folded inside the gate rather than left
+> out of it. Retention runs under a signed policy as of 2026-09-10: `events` rows older
+> than 90 days and backup files older than 30 days (never below the newest 7) are pruned
+> after each successful daily backup; `token_usage` is never pruned in v1.0, by decision.
 >
 > Four things are still honestly open, and matter more than the feature list: the Phase-0
 > spike numbers remain **PROVISIONAL** until ratified against a hand-labeled corpus; the

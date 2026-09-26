@@ -19,13 +19,18 @@ import Fastify, {
   type FastifyRequest,
   type FastifyServerOptions,
 } from 'fastify';
-import { Type, type TypeBoxTypeProvider } from '@fastify/type-provider-typebox';
-import { isAllowedOrigin, redactTokenInUrl, timingSafeTokenEqual } from '@agenthropic/shared';
+import type { TypeBoxTypeProvider } from '@fastify/type-provider-typebox';
+import {
+  HealthSchema,
+  isAllowedOrigin,
+  redactTokenInUrl,
+  timingSafeTokenEqual,
+} from '@agenthropic/shared';
 import { apiRoutes } from './api/routes';
 import type { SubstrateProvider } from './api/substrate-provider';
 import type { SkipReason } from './corpus/fs-port';
 import type { SqliteDatabase } from './db/connection';
-import { registerStaticSite } from './http/static-site';
+import { NOT_FOUND_MESSAGE, registerStaticSite } from './http/static-site';
 import { RealtimeHub } from './realtime/hub';
 
 export interface BuildServerOptions {
@@ -71,8 +76,10 @@ export interface BuildServerOptions {
    * listening socket BEFORE the startup replay tick, so there is a real window
    * in which the server answers but the corpus is still being re-read —
    * /api/health names it 'replaying' so a probe can tell "warming up" from
-   * "idle and current". When absent (a server built without ingest wiring) the
-   * field is omitted rather than faking a phase.
+   * "startup pass finished". 'idle' does not mean the pass succeeded: a replay
+   * that could not read the corpus also ends in 'idle'. When absent (a server
+   * built without ingest wiring, or booted with ingest off) the field is
+   * omitted rather than faking a phase.
    */
   readonly ingestPhase?: () => 'replaying' | 'idle';
   /**
@@ -116,36 +123,6 @@ export interface BuildServerOptions {
    */
   readonly webRoot?: string;
 }
-
-const HealthResponseSchema = Type.Object(
-  {
-    status: Type.Literal('ok'),
-    schemaVersion: Type.Integer({ minimum: 0 }),
-    // Keys are SkipReason members - enforced at compile time by the
-    // skipCounters seam type; the wire schema stays an open string record so
-    // a new skip reason can never desync route schema from reporter.
-    ingestSkips: Type.Optional(Type.Record(Type.String(), Type.Integer({ minimum: 0 }))),
-    // 'replaying' between the loopback bind and the end of the startup replay
-    // tick, 'idle' after (review M-16). `status` stays 'ok' throughout: a
-    // replaying server is healthy, just not yet current.
-    ingest: Type.Optional(Type.Union([Type.Literal('replaying'), Type.Literal('idle')])),
-    // Duration of the last completed corpus pass (review M-15) — how long the
-    // poll ACTUALLY takes, so an operator can see it approaching the poll
-    // interval. Omitted until a pass has finished.
-    lastTickDurationMs: Type.Optional(Type.Number({ minimum: 0 })),
-    // Messages skipped by the M-12 ownership rule since boot (review M-18) —
-    // spend that IS counted, but under the session that ingested it first.
-    crossSessionUsageCollisions: Type.Optional(Type.Integer({ minimum: 0 })),
-    // Sessions whose latest ingest attempt failed — spend that is counted
-    // NOWHERE, so every dollar total is missing it. `status` stays 'ok': the
-    // server is surviving this correctly, it is just not complete.
-    sessionsExcluded: Type.Optional(Type.Integer({ minimum: 0 })),
-    // The subset that will not be retried until the session's bytes or the
-    // pricing table change — the ones needing a human, typically a missing price.
-    sessionsQuarantined: Type.Optional(Type.Integer({ minimum: 0 })),
-  },
-  { additionalProperties: false },
-);
 
 const STREAM_PATH = '/api/stream';
 
@@ -248,6 +225,14 @@ export function buildServer(options: BuildServerOptions) {
   // leaked the raw driver message in a shape matching no declared schema.
   // 5xx details stay server-side: the raw error goes to the log (a no-op
   // sink when logging is off), never to the client.
+  // Fastify's default 404 handler logs `Route <METHOD>:<url> not found` as a
+  // plain message, which bypasses the redacting `req` serializer - so an
+  // unrouted `POST /api/stream?token=...` wrote the token into the log (and
+  // echoed it in the body). This handler logs nothing and echoes nothing.
+  app.setNotFoundHandler((_request, reply) => {
+    void reply.code(404).send({ error: NOT_FOUND_MESSAGE });
+  });
+
   app.setErrorHandler((error: FastifyError, request, reply) => {
     const statusCode = error.statusCode ?? 500;
     let message = error.message;
@@ -289,7 +274,7 @@ export function buildServer(options: BuildServerOptions) {
     }
   });
 
-  typed.get('/api/health', { schema: { response: { 200: HealthResponseSchema } } }, async () => {
+  typed.get('/api/health', { schema: { response: { 200: HealthSchema } } }, async () => {
     // "No pass yet" and "no seam" both OMIT the field — never a fake number.
     const lastTickDurationMs = options.tickDurationMs?.() ?? null;
     const exclusions = options.ingestExclusions?.();

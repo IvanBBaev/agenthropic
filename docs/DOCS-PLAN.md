@@ -10,7 +10,8 @@ work packages** — one WP → one page → one agent → one PR, in the same sp
 > verdict — the design/analysis source material already exists, so all **conceptual**
 > documentation (Tracks O/A/S/C) was writable **now**, before any code, and has been
 > written. The **usage** docs (Track U) are now also written — as **design-target
-> (pre-Phase-0)** reference, each re-validated against real behavior when its build phase lands.
+> (pre-Phase-0)** reference, each re-validated against real behavior as its build phase landed
+> (as-built "How to read this page" banners, 2026-08).
 >
 > **Progress (2026-07-06):**
 > - **Enablers** `DOC-P0` (IA freeze, §2) and `DOC-P3` (style guide) — **done**.
@@ -25,6 +26,10 @@ work packages** — one WP → one page → one agent → one PR, in the same sp
 >   dashboard/api P4, telegram P5).
 > - **Deferred (need the generator / live CI):** `DOC-P1` (choose+scaffold generator),
 >   `DOC-P2`≡`WP-X7` (Pages publish), `DOC-P4` (home/landing), `DOC-P5` (nav/theme/search).
+> - **Update (2026-08-25):** `DOC-P2`≡`WP-X7` is **done** — `.github/workflows/pages.yml`
+>   publishes `docs/` on the stock GitHub Pages Jekyll builder and the site is live at
+>   <https://ivanbbaev.github.io/agenthropic/>; `DOC-P1`, `DOC-P4` and `DOC-P5` remain
+>   deferred (ADR-0013 still defers the generator choice).
 > - **Verified:** 44 pages, **766 internal file-links, 0 broken**; 76 anchor deep-links, 0
 >   broken under the github-slugger algorithm (VitePress/Docusaurus dialect — the one class
 >   `DOC-P1`/`DOC-P5` must re-validate against the *chosen* generator, since MkDocs slugs
@@ -34,7 +39,7 @@ work packages** — one WP → one page → one agent → one PR, in the same sp
 Source of truth for content: `docs/ai/DESIGN.md` (design basis),
 [`analysis/`](analysis/) (concept-analysis-v2, development-plan, external review,
 animated-room), [`due-diligence/`](due-diligence/) (the evidence base), and the root
-[`README.md`](../README.md) / [`TODO.md`](../TODO.md) / [`DONE.md`](../DONE.md).
+[`README.md`](https://github.com/IvanBBaev/agenthropic/blob/main/README.md) / [`TODO.md`](https://github.com/IvanBBaev/agenthropic/blob/main/TODO.md) / [`DONE.md`](https://github.com/IvanBBaev/agenthropic/blob/main/DONE.md).
 
 ---
 
@@ -59,13 +64,14 @@ animated-room), [`due-diligence/`](due-diligence/) (the evidence base), and the 
 
 ## 2. Site map (information architecture)
 
-Physical content root (`docs-site/` vs generator default) is fixed by `DOC-P1`; slugs
-below are logical.
+Physical content root is `docs/site/` (published from `docs/` by `pages.yml`; whether a
+generator moves it is fixed by `DOC-P1`); slugs below are logical.
 
 ```
 /                       Home / overview                         (O1 → P4)
 guide/
   what-is-agenthropic   Overview & the one-paragraph pitch      (O1)
+  running               Run book, written as-built (2026-08)    (—)
   the-moat              Why build — the five absent features    (O2)
   comparison            vs the field (baseline + 6 rivals)      (O5)
   roadmap               Phases & waves, public-friendly         (O3)
@@ -91,7 +97,7 @@ contributing/
   licensing             Clean-room rule + provenance scan       (C3)
   decisions/            ADRs: CD-1…CD-10, LB1/LB2                (C4)
   governance            SECURITY.md, CoC, issue/PR templates    (C5)
-usage/                  ── WRITTEN as design-target (pre-Phase-0) ──
+usage/                  ── WRITTEN pre-Phase-0, amended as-built (2026-08) ──
   getting-started       Prerequisites, install, run             (U1)
   hooks-installer       Install the Claude Code hooks           (U2)
   configuration         Env vars & config reference             (U3)
@@ -153,15 +159,17 @@ Columns: **WP** · **Sz** (S≈½day / M≈1day / L≈2day of one agent) · **De
 | WP | Sz | Deps | Page | Scope & source inputs |
 |---|---|---|---|---|
 | **DOC-C1** | M | P3 | `contributing/index` | Dev setup, PR flow, the one-WP-one-agent model, the coverage >90% bar. development-plan §Global-DoD; CLAUDE.md. |
-| **DOC-C2** | M | P3 | `contributing/testing` | Golden fixture corpus, the three P0 tests, the 12-scenario negative catalogue, merge-blocking coverage. development-plan Track X (X1–X5). |
+| **DOC-C2** | M | P3 | `contributing/testing` | Golden fixture corpus, the four P0 tests (three reconciliation proofs plus the five-daily-questions proof over real HTTP), the 12-scenario negative catalogue, merge-blocking coverage. development-plan Track X (X1–X5). |
 | **DOC-C3** | M | P3 | `contributing/licensing` | Clean-room rule (cast/disler/nirdiamant all-rights-reserved), attribution (simple10/hoangsonww MIT), CI provenance scan. concept-analysis-v2 LB2/CD-9; development-plan `WP-F5/F6`. |
 | **DOC-C4** | L | P3, P1 | `contributing/decisions/*` | **ADR set:** CD-1…CD-10 + LB1/LB2 + the generator choice (from P1), one file each, in a standard ADR template. concept-analysis-v2 §2–§3. |
 | **DOC-C5** | S | P3 | `contributing/governance` | `SECURITY.md` (private-report path), Code of Conduct, issue/PR templates. Standard OSS governance + DESIGN §8 for the security-report policy. |
 
-### Track U — Usage _(WRITTEN as design-target pre-Phase-0 — re-validate on the named phase)_
+### Track U — Usage _(WRITTEN as design-target pre-Phase-0 — re-validated as-built, 2026-08)_
 
-Written now from the design/build-plan sources, each carrying a **pre-Phase-0 banner** and
-marking undecided values `(planned)` / `(leaning — unconfirmed)`. "Re-validate after" is the
+Written pre-code from the design/build-plan sources and since amended in place: each page
+now opens with an as-built **"How to read this page" banner** (built / not built) where the
+pre-Phase-0 banner stood, and marks any still-undecided value `(planned)` /
+`(leaning — unconfirmed)`. "Re-validate after" is the
 phase whose real behavior the page must be checked against (and corrected if it drifted).
 
 | WP | Sz | Deps | Page | Re-validate after |
@@ -193,7 +201,7 @@ To avoid double-tracking against [`analysis/development-plan.md`](analysis/devel
 | Dev-plan WP | Relationship |
 |---|---|
 | `WP-X7` (GitHub Pages build) | **Fulfilled by `DOC-P2`.** Same deliverable. |
-| `WP-X6` (README green badges + donation) | Stays in the dev plan (needs live CI). `DOC-P4` aligns the home page with the README; badges land via the `badges` skill once CI is green. |
+| `WP-X6` (README green badges + donation) | Stays in the dev plan — **done** (`TODO.md` ticks it): the badges and the donation links have landed in the root `README.md`. `DOC-P4` aligns the home page with the README. |
 | `WP-X9` (`RELEASE.md` + per-role DoD) | Stays in the dev plan (release track). Track C links to it. |
 | `WP-X10` (WORKLOG discipline) | Harness-local, git-excluded — **not** part of the public docs. |
 | `WP-X11` (vector-DB EXPERIMENTAL stub) | ~~Stays; docs reference it as clearly EXPERIMENTAL, off the critical path.~~ **Deleted per best-path §6.3 (applied 2026-07-06)** — docs must not schedule or bless it. |
@@ -218,9 +226,10 @@ dev plan only carried the *build/publish* infra (`WP-X7`), never the pages thems
 Two things the pre-generator authoring cannot settle; both are verified-clean *locally* but
 need a decision when the generator lands:
 
-- **Source-pointer links into `docs/ai/`.** 8 `docs/site/` pages cite `ai/DESIGN.md` as their
-  evidence source. `docs/ai/` is **git-excluded** (harness-local), so those links resolve on
-  this machine but would dangle in the published site. At assembly, either (a) inline the
+- **Source-pointer references to `docs/ai/`.** 18 `docs/site/` pages cite `ai/DESIGN.md` as
+  their evidence source — as plain text, never as a hyperlink (2026-09-23 census: no Markdown
+  link targets it), so nothing dangles in the published site even though `docs/ai/` is
+  **git-excluded** (harness-local). That is option (a) of the original three — (a) inline the
   quoted spans and drop the hyperlink, (b) vendor the cited sections into a published
   `architecture/` page and repoint, or (c) publish a redacted DESIGN excerpt. Links into
   `docs/analysis/` are fine — that tree **is** tracked. *(Do not commit `docs/ai/` to fix this.)*

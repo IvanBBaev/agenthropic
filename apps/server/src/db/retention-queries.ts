@@ -4,10 +4,11 @@
  * or the persisted DAG (see `retention/policy.ts`
  * `RETENTION_PROTECTED_TABLES`).
  *
- * POLICY STATUS: mechanism only. The retention POLICY (how many days of what)
- * is unset and awaits Ivan's OPEN-1/2/3 ratification - see
- * `docs/analysis/open-decisions.md`. Nothing in this file runs unless a policy
- * is configured, and the default policy is a no-op.
+ * POLICY STATUS: the v1.0 policy is signed (D3, 2026-09-08) - `events` rows
+ * older than 90 days expire, `token_usage` is never pruned - and the daily
+ * backup timer runs it (L9). Nothing in this file runs unless a rule is
+ * configured; `DASHBOARD_RETENTION_EVENTS_DAYS=0` makes the events half a
+ * no-op again.
  *
  * BOUNDING. A run must never hold the write lock for an unbounded time on a
  * multi-gigabyte database, so every statement works on a WINDOW: the first
@@ -42,7 +43,11 @@ export interface ExpiredWindow {
   readonly rowsMatched: number;
   /** Greatest id in the window, or null when the window is empty. */
   readonly maxId: number | null;
-  /** True when the window filled the budget - more rows may remain. */
+  /**
+   * True when at least one more expired row lies past the window. It is probed,
+   * not inferred from a full window: exactly `limit` expired rows fill the
+   * window and leave nothing behind.
+   */
   readonly budgetExhausted: boolean;
 }
 
@@ -87,12 +92,16 @@ const EXPIRED = 'occurred_at IS NOT NULL AND occurred_at < @cutoff';
  */
 const TABLE_SQL: Record<PrunableTable, { readonly window: string; readonly remove: string }> = {
   events: {
-    window: `SELECT COUNT(*) AS rows_matched, MAX(id) AS max_id
+    window: `SELECT COUNT(*) AS rows_matched, MAX(id) AS max_id,
+               (SELECT COUNT(*) FROM (SELECT id FROM events WHERE ${EXPIRED}
+                                      ORDER BY id LIMIT 1 OFFSET @limit)) AS more_remain
              FROM (SELECT id FROM events WHERE ${EXPIRED} ORDER BY id LIMIT @limit)`,
     remove: `DELETE FROM events WHERE id <= @maxId AND ${EXPIRED}`,
   },
   token_usage: {
-    window: `SELECT COUNT(*) AS rows_matched, MAX(id) AS max_id
+    window: `SELECT COUNT(*) AS rows_matched, MAX(id) AS max_id,
+               (SELECT COUNT(*) FROM (SELECT id FROM token_usage WHERE ${EXPIRED}
+                                      ORDER BY id LIMIT 1 OFFSET @limit)) AS more_remain
              FROM (SELECT id FROM token_usage WHERE ${EXPIRED} ORDER BY id LIMIT @limit)`,
     remove: `DELETE FROM token_usage WHERE id <= @maxId AND ${EXPIRED}`,
   },
@@ -110,7 +119,16 @@ const WINDOW_COST_SQL = `
       tu.model AS model,
       tu.tokens AS tokens,
       (
-        SELECT mp.usd_per_mtok
+        -- Same rate rule as the dashboard's priced CTE (api/queries.ts): the
+        -- LATEST dated row decides, and a rate that is not a finite,
+        -- non-negative number is UNPRICED - never a negative, infinite or
+        -- text-coerced receipt figure, and never a fallback to an older row.
+        SELECT CASE
+          WHEN typeof(mp.usd_per_mtok) IN ('integer', 'real')
+            AND mp.usd_per_mtok >= 0
+            AND mp.usd_per_mtok < 9e999
+          THEN mp.usd_per_mtok
+        END
         FROM model_pricing mp
         WHERE mp.model = tu.model
           AND mp.bucket = tu.bucket
@@ -161,11 +179,12 @@ export function findExpiredWindow(
   const row = db.prepare(TABLE_SQL[table].window).get({ cutoff, limit }) as {
     rows_matched: number;
     max_id: number | null;
+    more_remain: number;
   };
   return {
     rowsMatched: row.rows_matched,
     maxId: row.max_id,
-    budgetExhausted: row.rows_matched >= limit,
+    budgetExhausted: row.more_remain > 0,
   };
 }
 

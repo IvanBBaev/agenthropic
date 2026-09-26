@@ -2,8 +2,8 @@
 
 **Post-freeze record, not an analysis** (roadmap §8 permits verdict and schedule records;
 this is a schedule record). It plans the *remaining* work only. Everything already built is
-recorded in [`DONE.md`](../../DONE.md); the open board is [`TODO.md`](../../TODO.md); the
-release gate is [`RELEASE.md`](../../RELEASE.md). Where this document and those disagree,
+recorded in [`DONE.md`](https://github.com/IvanBBaev/agenthropic/blob/main/DONE.md); the open board is [`TODO.md`](https://github.com/IvanBBaev/agenthropic/blob/main/TODO.md); the
+release gate is [`RELEASE.md`](https://github.com/IvanBBaev/agenthropic/blob/main/RELEASE.md). Where this document and those disagree,
 `RELEASE.md` wins on what "done" means and `TODO.md` wins on current status.
 
 ## 0. What "100%" means here
@@ -18,7 +18,7 @@ hiding it:
 | Deliberately outside v1.0 | Why | Re-entry trigger |
 |---|---|---|
 | WP-IN11 contingent outbox | JSONL self-reconciles (probe) | sub-second liveness need, or hooks-only data |
-| WP-A1…A4 alerting (v2.0) | best-path §6.1: off the critical path | **KC-5 only** — 14 consecutive days of real use + ≥3 friction-log entries wanting alerts |
+| WP-A1…A7 + A10 alerting (v2.0) | best-path §6.1: off the critical path | **KC-5 only** — 14 consecutive days of real use + ≥3 friction-log entries wanting alerts |
 | Phase 1.5 animated room, context-layer feed | cosmetic / experimental | never, unless asked |
 
 ## 1. Where the last 15% actually is

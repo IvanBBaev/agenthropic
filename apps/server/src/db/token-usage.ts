@@ -161,8 +161,33 @@ export function canonicalizeOccurredAt(value: string): string {
         '(YYYY-MM-DDTHH:mm:ss[.sss]Z or +HH:MM); a usage timestamp is never guessed.',
     );
   }
-  return new Date(epochMs).toISOString();
+  const canonical = new Date(epochMs).toISOString();
+  // The pattern bounds the INPUT year to four digits, but an offset can carry
+  // the instant across a year boundary: '9999-12-31T23:00:00-05:00' is
+  // '+010000-01-01T04:00:00.000Z' and '0000-01-01T00:30:00+01:00' is a
+  // negative expanded year. Neither orders as text with the four-digit form,
+  // which is the whole point of canonicalizing. Only the out-of-range instants
+  // are affected; every other accepted input returns what it always did.
+  if (!FOUR_DIGIT_YEAR_CANONICAL.test(canonical)) {
+    throw new Error(
+      `token_usage.occurred_at ${JSON.stringify(value)} is outside the four-digit year range ` +
+        'once normalized to UTC; its canonical form would not order as text.',
+    );
+  }
+  return canonical;
 }
+
+/**
+ * The canonical form's year prefix. `toISOString` prints years 0-9999 as four
+ * digits and every other year in the signed six-digit expanded form.
+ *
+ * Core's `canonicalizeTimestamp` carries the same range check, but this
+ * function does not delegate to it: core rejects the bare UTC date this column
+ * accepts and accepts fraction lengths other than three, which this column
+ * (and migration 15's guard triggers) reject. Delegating would change the
+ * column's contract in both directions.
+ */
+const FOUR_DIGIT_YEAR_CANONICAL = /^\d{4}-/;
 
 /**
  * `settles` (0/1) is decided per MESSAGE before its five rows are written, so

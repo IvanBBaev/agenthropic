@@ -9,6 +9,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { DagView, DAG_NODE_LIMIT } from '../src/views/DagView';
 import { CLOCK_INTERVAL_MS } from '../src/clock';
 import { createSseClient, type SseClient } from '../src/sse';
+import type { OrchestrationEdgeSource } from '../src/dto';
 import { agentNode, globalDag, jsonResponse, orchestrationEdge } from './fixtures';
 import { MockEventSource } from './mock-event-source';
 
@@ -594,6 +595,42 @@ describe('DagView - the accessible description of the picture (2026-09-08)', () 
     for (const id of described.ids) expect(document.getElementById(id)).not.toBeNull();
   });
 
+  it('KK1: counts only true cycle members and names the agents below the cycle apart', async () => {
+    // main <-> child is the cycle; c and d hang below it and are not in it.
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        200,
+        globalDag({
+          nodes: [
+            agentNode(),
+            agentNode({ id: 'agent-child', type: 'subagent' }),
+            agentNode({ id: 'agent-c', type: 'subagent' }),
+            agentNode({ id: 'agent-d', type: 'subagent' }),
+          ],
+          edges: [
+            orchestrationEdge(),
+            orchestrationEdge({ id: 2, parentAgentId: 'agent-child', childAgentId: 'agent-main' }),
+            orchestrationEdge({ id: 3, parentAgentId: 'agent-child', childAgentId: 'agent-c' }),
+            orchestrationEdge({ id: 4, parentAgentId: 'agent-c', childAgentId: 'agent-d' }),
+          ],
+          counts: { totalSessions: 1 },
+        }),
+      ),
+    );
+    renderView();
+
+    const svg = await screen.findByRole('img', { name: 'global orchestration dag' });
+    expect(
+      screen.getByText(
+        '2 agents sit in a cycle and are placed on a fallback layer; 2 more agents below the cycle are not in it but share that layer.',
+      ),
+    ).toBeDefined();
+    expect(screen.queryByText(/4 agents sit in a cycle/)).toBeNull();
+    expect(describedBy(svg).text).toContain(
+      '2 agents sit in a cycle and are placed on a fallback layer; 2 more agents below the cycle are not in it but share that layer.',
+    );
+  });
+
   it('DG-3: names no id that is absent from the page when there is no cycle', async () => {
     fetchMock.mockResolvedValue(jsonResponse(200, twoAgentDag()));
     renderView();
@@ -605,5 +642,265 @@ describe('DagView - the accessible description of the picture (2026-09-08)', () 
     // No cycle, no caveat: a notice that does not apply is what teaches a
     // reader to stop reading the ones that do.
     expect(described.text).not.toContain('cycle');
+  });
+});
+
+/**
+ * A3 / A4 (2026-09-23), from the Lane A behavioural audit. Both tests are
+ * about a payload that contradicts itself and a page that used to pick the
+ * confident reading: an unpriced count that is not a number (the clause
+ * disappeared, which on a node hover means "fully priced"), and a node array
+ * shorter than the agent count served beside it with `truncated` false (the
+ * caption spoke for the whole corpus over a picture of part of it).
+ */
+describe('DagView claims the served payload does not support (A3, A4)', () => {
+  it('A3: keeps the unpriced clause in a node hover title when the count is unreadable', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        200,
+        globalDag({
+          nodes: [agentNode({ unpricedTokens: Number.NaN })],
+          counts: { totalSessions: 1 },
+        }),
+      ),
+    );
+    renderView();
+
+    const node = await screen.findByTestId('dag-node-agent-main');
+    expect(node.querySelector('title')?.textContent).toContain(', unpriced: tokens unreadable');
+  });
+
+  it('A4: says the drawn graph and the served count disagree when nothing is marked truncated', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        200,
+        globalDag({
+          nodes: [agentNode()],
+          // The flag is a claim ABOUT the answer; the node array IS the answer.
+          counts: { totalAgents: 1200, returnedAgents: 1, totalSessions: 30, truncated: false },
+        }),
+      ),
+    );
+    renderView();
+
+    const notice = await screen.findByTestId('dag-count-disagreement');
+    expect(notice.textContent).toContain('1 of the 1200 agents this same read counts are drawn');
+    expect(notice.textContent).toContain('this picture is a slice of unknown size');
+    // The unqualified corpus caption is the thing this replaces - it read as a
+    // description of the picture, and it was a description of the database.
+    expect(screen.queryByText('1200 agents across 30 sessions, 1 edge.')).toBeNull();
+
+    // DG-3's reader, who gets the diagram as one `role="img"` object, is owed
+    // the same scope: the notice above is on the page, not in the description.
+    const svg = screen.getByRole('img', { name: 'global orchestration dag' });
+    const ids = (svg.getAttribute('aria-describedby') ?? '').split(' ').filter((id) => id !== '');
+    const described = ids.map((id) => document.getElementById(id)?.textContent ?? '').join(' ');
+    expect(described).toContain('This counts the returned slice only: 1 of 1200 agents.');
+  });
+});
+
+/**
+ * SA-Z4 (2026-09-23), handed over from the Lane Z read-API audit. `totalEdges`
+ * is `COUNT(*)` over `orchestration_edges`, and the returned `edges` keep only
+ * those whose BOTH endpoints are among the returned agents. The table carries
+ * no foreign key to agents, so an edge naming an agent id with no stored row is
+ * counted by that COUNT and can never survive that filter: `returnedEdges 0`
+ * against `totalEdges 1`, with `truncated` false. That is none of the three
+ * states the caption distinguished - it fell to the untruncated arm, which
+ * prints the corpus figures with no qualifier, and captioned a picture holding
+ * no lines with the number of edges in the database.
+ *
+ * The page reports the gap and declines to name its cause on purpose. That the
+ * node limit is NOT the explanation is provable here (`truncated` is false);
+ * what the explanation IS is a fact about the server's join that this view does
+ * not hold, and guessing it in the reader's hearing would be the same class of
+ * claim the caption was fixed for.
+ */
+describe('DagView edges counted but not returned (SA-Z4)', () => {
+  function danglingEdgeDag() {
+    return globalDag({
+      nodes: [
+        agentNode(),
+        agentNode({ id: 'agent-child', type: 'subagent', subagentType: 'Explore' }),
+      ],
+      edges: [orchestrationEdge()],
+      // Agents agree, so the A4 notice is silent and this gap is the only one:
+      // two edges name an agent id that has no row, and were never returned.
+      counts: { totalSessions: 1, totalEdges: 3, returnedEdges: 1, truncated: false },
+    });
+  }
+
+  it('captions the edges with both numbers instead of the corpus count alone', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, danglingEdgeDag()));
+    renderView();
+
+    await screen.findByText('2 agents across 1 session, 1 of 3 edges.');
+    // The bare corpus count is the reading this replaces: every other figure in
+    // that sentence describes the picture, so this one was read that way too.
+    expect(screen.queryByText('2 agents across 1 session, 3 edges.')).toBeNull();
+    // The agent counts agree, so the A4 notice must not fire alongside it.
+    expect(screen.queryByTestId('dag-count-disagreement')).toBeNull();
+  });
+
+  it('names the gap, rules out the node limit, and refuses to name a cause', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, danglingEdgeDag()));
+    renderView();
+
+    const notice = await screen.findByTestId('dag-edge-count-disagreement');
+    expect(notice.textContent).toContain('2 of the 3 edges this read counts were not returned');
+    expect(notice.textContent).toContain('the node limit is not the reason');
+    expect(notice.textContent).toContain('this page cannot say what is');
+
+    // DG-3: the summary is the WHOLE description of the diagram for a reader
+    // who cannot see the paragraph above, so the same gap goes into it.
+    const svg = screen.getByRole('img', { name: 'global orchestration dag' });
+    const ids = (svg.getAttribute('aria-describedby') ?? '').split(' ').filter((id) => id !== '');
+    const described = ids.map((id) => document.getElementById(id)?.textContent ?? '').join(' ');
+    expect(described).toContain('Not returned: 2 of the 3 edges this same read counts');
+  });
+
+  it('leaves the paragraph out when the server already claimed truncation', async () => {
+    // The truncation banner prints both edge counts itself; a second paragraph
+    // repeating them buys the reader nothing and reads as two separate gaps.
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        200,
+        globalDag({
+          nodes: [agentNode()],
+          counts: {
+            totalSessions: 9,
+            totalAgents: 900,
+            returnedAgents: 1,
+            totalEdges: 900,
+            returnedEdges: 0,
+            truncated: true,
+          },
+        }),
+      ),
+    );
+    renderView();
+
+    await screen.findByTestId('truncation-banner');
+    expect(screen.queryByTestId('dag-edge-count-disagreement')).toBeNull();
+  });
+
+  it('says nothing when the two edge counts agree', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, twoAgentDag()));
+    renderView();
+
+    await screen.findByText('2 agents across 2 sessions, 1 edge.');
+    expect(screen.queryByTestId('dag-edge-count-disagreement')).toBeNull();
+  });
+
+  /**
+   * Lane-EP, same day: the strokes are the only channel that tells a sighted
+   * reader how the server knows an edge exists, and they used to have two
+   * settings for three facts. A source word this build has not learned drew the
+   * dashed `inferred` line, which asserts a derivation the client cannot know
+   * happened. It now draws its own dotted stroke and quotes the raw word.
+   */
+  it('draws a source word it has not learned as unrecognised, not as inferred', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        200,
+        globalDag({
+          nodes: [
+            agentNode(),
+            agentNode({ id: 'agent-child', type: 'subagent', subagentType: 'Explore' }),
+          ],
+          edges: [orchestrationEdge({ source: 'mcp_spawn' as OrchestrationEdgeSource })],
+          counts: { totalSessions: 1 },
+        }),
+      ),
+    );
+    const { container } = renderView();
+
+    await screen.findByRole('img', { name: 'global orchestration dag' });
+    const line = container.querySelector('line.edge-unrecognised');
+    expect(line).not.toBeNull();
+    expect(line?.querySelector('title')?.textContent).toBe('unrecognised ("mcp_spawn")');
+    expect(container.querySelectorAll('line.edge-inferred')).toHaveLength(0);
+    // The legend explains the stroke the page just drew - drawing a symbol the
+    // legend does not carry is this file's own standing complaint.
+    expect(screen.getByLabelText('edge provenance legend').textContent).toContain('unrecognised');
+  });
+});
+
+/**
+ * RR1 (2026-09-26), from the adversarial review of the A4 / SA-Z4 hunks. Both
+ * disagreement checks are inequalities, but every sentence they gated described
+ * the one direction the audits had seen - fewer returned than counted - and the
+ * edge banner subtracted the two raw. A payload that runs the other way (three
+ * drawn, two counted; three edges returned, two counted) passes the shape guard
+ * and used to print "3 of the 2 agents ... are drawn ... so this picture is a
+ * slice", "-1 of the 2 edges ... were not returned", and "They are not in the
+ * picture below" - a negative figure and two false claims. The page still
+ * reports the disagreement; it names the direction and stops claiming a slice
+ * or a missing edge it cannot see.
+ */
+describe('DagView counts that run the other way (RR1)', () => {
+  function overCountedAgentsDag() {
+    return globalDag({
+      nodes: [
+        agentNode(),
+        agentNode({ id: 'agent-b', type: 'subagent', subagentType: 'Explore' }),
+        agentNode({ id: 'agent-c', type: 'subagent', subagentType: 'Plan' }),
+      ],
+      counts: { totalAgents: 2, totalSessions: 1, truncated: false },
+    });
+  }
+
+  it('reports more drawn than counted without calling the picture a slice', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, overCountedAgentsDag()));
+    renderView();
+
+    const notice = await screen.findByTestId('dag-count-disagreement');
+    expect(notice.textContent).toContain('3 agents are drawn, but this same read counts only 2');
+    expect(notice.textContent).toContain('this page cannot say which is right');
+    // Three drawn out of two is not a slice of anything.
+    expect(notice.textContent).not.toContain('slice');
+    expect(notice.textContent).not.toContain('3 of the 2 agents');
+
+    // DG-3: the description a screen reader gets carries the same direction.
+    const svg = screen.getByRole('img', { name: 'global orchestration dag' });
+    const ids = (svg.getAttribute('aria-describedby') ?? '').split(' ').filter((id) => id !== '');
+    const described = ids.map((id) => document.getElementById(id)?.textContent ?? '').join(' ');
+    expect(described).toContain('This counts 3 agents while the same read counts only 2');
+    expect(described).not.toContain('returned slice only');
+  });
+
+  function overCountedEdgesDag() {
+    return globalDag({
+      nodes: [
+        agentNode(),
+        agentNode({ id: 'agent-child', type: 'subagent', subagentType: 'Explore' }),
+      ],
+      edges: [orchestrationEdge()],
+      // Agents agree; the read says it returned three edges and counts two.
+      counts: { totalSessions: 1, totalEdges: 2, returnedEdges: 3, truncated: false },
+    });
+  }
+
+  it('reports more edges returned than counted without a negative figure', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, overCountedEdgesDag()));
+    renderView();
+
+    await screen.findByText('2 agents across 1 session, 3 edges returned against 2 counted.');
+    expect(screen.queryByText('2 agents across 1 session, 3 of 2 edges.')).toBeNull();
+
+    const notice = screen.getByTestId('dag-edge-count-disagreement');
+    expect(notice.textContent).toContain(
+      '3 edges came back with this read, but the same read counts only 2',
+    );
+    expect(notice.textContent).toContain('this page cannot say which is right');
+    expect(notice.textContent).not.toContain('-1');
+    expect(notice.textContent).not.toContain('not returned');
+    expect(notice.textContent).not.toContain('not in the picture');
+
+    const svg = screen.getByRole('img', { name: 'global orchestration dag' });
+    const ids = (svg.getAttribute('aria-describedby') ?? '').split(' ').filter((id) => id !== '');
+    const described = ids.map((id) => document.getElementById(id)?.textContent ?? '').join(' ');
+    expect(described).toContain('The answer carried 3 edges while the same read counts only 2');
+    expect(described).not.toContain('Not returned:');
   });
 });

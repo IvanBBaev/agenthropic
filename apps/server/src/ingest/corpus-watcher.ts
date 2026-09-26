@@ -8,7 +8,9 @@
  *     via {@link fingerprintSession} — no file content is read to detect change);
  *  2. re-ingests ONLY the sessions whose fingerprint differs from the previous
  *     tick, through {@link runCorpusIngest} with a `sessionFilter` (idempotent,
- *     per-session failure isolation);
+ *     per-session failure isolation), plus any session whose earlier pass
+ *     could not read one of its files, on a capped backoff - lstat cannot see
+ *     a read recover;
  *  3. runs the watchdog sweep, transitioning silent non-terminal agents to
  *     'unknown'.
  *
@@ -36,15 +38,22 @@
  * (Committing unconditionally made a failure terminal — the session would be
  * retried only if its file changed again, and never once it ended, so the
  * dashboard silently showed nothing while /api/health still said "ok".) Retries
- * are bounded: after {@link MAX_INGEST_ATTEMPTS} consecutive failures against
- * the SAME fingerprint the session is QUARANTINED — its fingerprint is
- * committed, which stops the retry loop, and it is re-admitted (with a fresh
- * budget) as soon as its file changes OR the pricing table changes. Pricing is
- * resolved once per pass (when `pricing` is a resolver), and a content change
- * re-admits every session parked by a spent or partly spent budget: the
- * canonical cure for a halt-gate failure is seeding the missing pricing row,
- * and that row must unblock the watcher without a restart (review M-2). A
- * permanently unparseable file therefore
+ * are bounded: after {@link MAX_INGEST_ATTEMPTS} consecutive failed passes,
+ * WHATEVER the bytes did in between, the session is QUARANTINED — its
+ * fingerprint is committed, which stops the every-poll retry — and from then
+ * on a byte change re-reads it only on a schedule that doubles, 1, 2, 4...
+ * passes apart up to {@link REREAD_BACKOFF_CAP_PASSES}, until a read succeeds.
+ * The budget deliberately does NOT restart on new bytes: a LIVE transcript
+ * that Claude Code appends to every few seconds changed its fingerprint on
+ * every poll, so a fingerprint-keyed budget reset to 1/3 each pass and the
+ * watcher re-parsed the whole file, and failed, every 3 s for as long as the
+ * session ran (observed 2026-09-26: 17 s ticks against one refused
+ * transcript). A pricing-table change is the one thing that DOES hand back a
+ * fresh budget: pricing is resolved once per pass (when `pricing` is a
+ * resolver), and a content change re-admits every session parked by a spent
+ * or partly spent budget, because the canonical cure for a halt-gate failure
+ * is seeding the missing pricing row, and that row must unblock the watcher
+ * without a restart (review M-2). A permanently unparseable file therefore
  * costs a bounded number of passes, not a hot loop. Every failure is reported
  * through `onIngestFailure` with a SANITIZED reason (see
  * {@link sanitizeFailureReason}) — session id and reason, never the substrate.
@@ -61,6 +70,7 @@
 import type { PricingEntry } from '@agenthropic/core';
 import { resolveCorpusRoot } from '../corpus/corpus-paths';
 import { enumerateSessions } from '../corpus/disk-substrate';
+import type { EnumeratedSessions } from '../corpus/fs-port';
 import { fingerprintSession } from '../corpus/fingerprint';
 import {
   ContainmentError,
@@ -77,15 +87,29 @@ import type { IngestEvent } from './ingest-events';
 import { runWatchdogSweep } from './watchdog';
 
 /**
- * How many consecutive failed passes a session gets against one unchanged
- * fingerprint before it is quarantined. Small on purpose: the retry exists for
- * a transient cause (a half-written line), not as a substitute for fixing the
- * corpus. A pricing row that arrives is NOT left to this budget: a pricing
+ * How many consecutive failed passes a session gets before it is quarantined,
+ * counted whether or not its bytes moved between them. Small on purpose: the
+ * retry exists for a transient cause (a half-written line), not as a
+ * substitute for fixing the corpus. A pricing row that arrives is NOT left to this budget: a pricing
  * table change re-admits every parked session with a fresh budget, so a
  * session that burned all attempts against a missing price is retried the
  * moment the row is seeded.
  */
 export const MAX_INGEST_ATTEMPTS = 3;
+
+/**
+ * Largest gap, in passes, between re-reads of a session whose files could not
+ * be read, and between re-reads of a QUARANTINED session whose bytes keep
+ * changing. Both back off 1, 2, 4, 8... passes and stop doubling here. Neither
+ * ever gives up, because a file that recovers must be picked up without a
+ * restart. The backoff exists because a file that NEVER recovers (chmod 000),
+ * or a live transcript the halt gate refuses on every pass, would otherwise
+ * cost a full re-parse, database writes and a session-ingested event, which
+ * makes every open dashboard refetch, on every poll forever. At 32 the
+ * worst-case pickup delay stays bounded (32 x the poll interval), and a
+ * permanent fault costs about 3% of the passes an every-poll retry would.
+ */
+export const REREAD_BACKOFF_CAP_PASSES = 32;
 
 /** Maximum length of a reported failure reason, after sanitization. */
 const MAX_REASON_LENGTH = 300;
@@ -101,9 +125,18 @@ export interface IngestFailureReport {
   readonly sessionId: string;
   /** Sanitized reason: single-line, path-free, length-capped. */
   readonly reason: string;
-  /** 1-based count of consecutive failures against this fingerprint. */
+  /**
+   * 1-based count of consecutive failed passes, capped at
+   * {@link MAX_INGEST_ATTEMPTS}: a quarantined session that is re-read on its
+   * backoff schedule and fails again reports the spent budget, not a fourth
+   * attempt it never had.
+   */
   readonly attempt: number;
-  /** False once the session is quarantined until its file changes again. */
+  /**
+   * False once the session is quarantined: it is no longer retried on every
+   * pass. A byte change re-reads it on the doubling schedule, and a pricing
+   * table change re-admits it at once with a fresh budget.
+   */
   readonly willRetry: boolean;
 }
 
@@ -120,8 +153,8 @@ export interface IngestFailureReport {
  *
  * Two figures rather than one because they mean different things to a reader:
  * `failing` will be retried on the next pass and may resolve itself, while
- * `quarantined` will NOT be retried until the session's bytes change or the
- * pricing table does — that one needs a human.
+ * `quarantined` is re-read only on a backoff schedule when its bytes change,
+ * or at once when the pricing table does — that one needs a human.
  */
 export interface IngestExclusions {
   /** Sessions whose latest ingest attempt failed; includes the quarantined. */
@@ -299,8 +332,36 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
 
   /** sessionId → fingerprint of the last SUCCESSFULLY handled enumeration. */
   const fingerprints = new Map<string, string>();
-  /** sessionId → consecutive failures against one fingerprint (retry budget). */
-  const attempts = new Map<string, { fingerprint: string; count: number }>();
+  /**
+   * sessionId → consecutive failed passes (the retry budget), and, once the
+   * budget is spent, the re-read schedule a byte change is held to: `gap`
+   * doubles up to {@link REREAD_BACKOFF_CAP_PASSES} and `dueAt` is the first
+   * pass a change may be read on. Both are 0 while the session is still
+   * within budget, where every pass retries it anyway.
+   */
+  const attempts = new Map<string, { count: number; gap: number; dueAt: number }>();
+  /**
+   * sessionId → re-read schedule for sessions whose last pass could not read
+   * one of their files (EACCES, EIO, EMFILE...) and did not fail. Such a
+   * session is forced back into `changed` once `pass` reaches `dueAt`, with
+   * `gap` doubling up to {@link REREAD_BACKOFF_CAP_PASSES}, until a pass reads
+   * it cleanly. The fingerprint alone cannot do this: it lstat()s and never
+   * reads, so a file that becomes readable again with the same size and mtime
+   * fingerprints exactly as before, and the lost content would wait for a
+   * restart. A fingerprint change still re-reads at once, whatever the
+   * schedule says. Bounded by the sessions on disk: an entry clears on a clean
+   * read, on the session leaving the disk, and on a full replay.
+   */
+  const rereadSchedule = new Map<string, { gap: number; dueAt: number }>();
+  /**
+   * sessionId → project slug the session was last enumerated under. Lets a
+   * pass that could not read a slug tell "hidden by that fault" from "left the
+   * disk" (see {@link accountedFor}). A session known only from a hydrated
+   * checkpoint has no entry until this process enumerates it.
+   */
+  const slugs = new Map<string, string>();
+  /** Passes that reached the fingerprint diff; the clock the backoff counts in. */
+  let pass = 0;
   /** Corpus root the persisted checkpoint was hydrated from; null = not yet. */
   let hydratedRoot: string | null = null;
   /** Pricing content seen by the previous pass; null = no pass yet. */
@@ -334,7 +395,7 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
    * session's stale entry must not survive, or its reappearance would be
    * mistaken for "unchanged" (or inherit a spent retry budget).
    */
-  function pruneMissing<T>(map: Map<string, T>, present: Map<string, string>): void {
+  function pruneMissing<T>(map: Map<string, T>, present: ReadonlySet<string>): void {
     for (const sessionId of [...map.keys()]) {
       if (!present.has(sessionId)) {
         map.delete(sessionId);
@@ -343,10 +404,60 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
   }
 
   /**
+   * The sessions this pass may keep state for: those it enumerated, plus the
+   * known sessions the enumeration could not LOOK at. A slug directory whose
+   * listing or probe failed, or a main transcript whose probe failed, hides
+   * its sessions for the pass without saying they are gone; forgetting them
+   * would prune their fingerprints and drop their persisted checkpoints, and
+   * the moment the fault cleared every session under the slug would be read
+   * again in full (or replayed from scratch after a restart). So a known
+   * session is held while the slug it was last seen under, or its own
+   * transcript, is reported unreadable. A session this process has never
+   * enumerated (hydrated from a checkpoint) has no slug to match and is held
+   * whenever anything at all was unreadable; the first clean pass prunes what
+   * really left. A pass with no unreadable entries prunes exactly as before.
+   */
+  function accountedFor(
+    enumeration: EnumeratedSessions,
+    next: ReadonlyMap<string, string>,
+  ): Set<string> {
+    const present = new Set(next.keys());
+    const unreadable = new Set<string>();
+    for (const skipped of enumeration.skipped) {
+      if (skipped.reason === 'unreadable') {
+        unreadable.add(skipped.relativePath);
+      }
+    }
+    if (unreadable.size === 0) {
+      return present;
+    }
+    for (const sessionId of [
+      ...fingerprints.keys(),
+      ...attempts.keys(),
+      ...rereadSchedule.keys(),
+    ]) {
+      if (present.has(sessionId)) {
+        continue;
+      }
+      const slug = slugs.get(sessionId);
+      if (
+        slug === undefined ||
+        unreadable.has(slug) ||
+        unreadable.has(`${slug}/${sessionId}.jsonl`)
+      ) {
+        present.add(sessionId);
+      }
+    }
+    return present;
+  }
+
+  /**
    * Commit fingerprints and update the retry budget from the pass result: a
    * session that succeeded (or produced no substrate) commits and clears its
    * budget; a session that failed keeps its old fingerprint so the next tick
-   * retries it, until the budget runs out and it is quarantined.
+   * retries it, until the budget runs out and it is quarantined. A quarantined
+   * session that was re-read (its bytes moved and its schedule came due) and
+   * failed again stays quarantined with a doubled gap.
    *
    * Returns the subset that may also be CHECKPOINTED to disk: the sessions this
    * pass actually projected (`projectedIds`, fed by the runner's per-session
@@ -381,20 +492,26 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
         }
         continue;
       }
-      const prior = attempts.get(sessionId);
-      const attempt = prior?.fingerprint === fingerprint ? prior.count + 1 : 1;
-      const willRetry = attempt < MAX_INGEST_ATTEMPTS;
-      attempts.set(sessionId, { fingerprint, count: attempt });
-      if (!willRetry) {
-        // Quarantine by committing: an unchanged, permanently unparseable file
-        // must not be re-read forever. A later append re-admits it.
+      const prior = attempts.get(sessionId) ?? { count: 0, gap: 0, dueAt: 0 };
+      const count = prior.count + 1;
+      const quarantined = count >= MAX_INGEST_ATTEMPTS;
+      let backoff = { gap: 0, dueAt: 0 };
+      if (quarantined) {
+        // Quarantine by committing: a permanently unparseable file must not be
+        // re-read on every poll. A later append re-reads it on the schedule,
+        // whose gap doubles on every re-read that fails again. The gap is 0
+        // while the budget is being spent, so the first re-read after
+        // quarantine is due on the very next pass.
         fingerprints.set(sessionId, fingerprint);
+        const gap = Math.min(Math.max(prior.gap * 2, 1), REREAD_BACKOFF_CAP_PASSES);
+        backoff = { gap, dueAt: pass + gap };
       }
+      attempts.set(sessionId, { count, ...backoff });
       deps.onIngestFailure?.({
         sessionId,
         reason: sanitizeFailureReason(reason),
-        attempt,
-        willRetry,
+        attempt: Math.min(count, MAX_INGEST_ATTEMPTS),
+        willRetry: !quarantined,
       });
     }
     return checkpointable;
@@ -415,6 +532,8 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
       // ingest is idempotent.
       fingerprints.clear();
       attempts.clear();
+      rereadSchedule.clear();
+      slugs.clear();
       hydratedRoot = null;
       return { kind: 'no-corpus-root' };
     }
@@ -427,6 +546,7 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
     if (deps.checkpoints !== undefined && hydratedRoot !== corpusRoot) {
       fingerprints.clear();
       attempts.clear();
+      slugs.clear();
       for (const [sessionId, fingerprint] of deps.checkpoints.load(corpusRoot)) {
         fingerprints.set(sessionId, fingerprint);
       }
@@ -448,17 +568,36 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
         reason: `corpus root unreadable (${enumeration.code ?? 'unknown'})`,
       };
     }
+    pass += 1;
     const changed = new Set<string>();
     const next = new Map<string, string>();
     for (const ref of enumeration.refs) {
       const fingerprint = fingerprintSession(fs, ref, limits);
       next.set(ref.sessionId, fingerprint);
+      slugs.set(ref.sessionId, ref.projectSlug);
       if (fingerprints.get(ref.sessionId) !== fingerprint) {
+        // New bytes, or a session this process has never settled. Read it now,
+        // unless it is quarantined and its backoff schedule is not yet due: a
+        // live transcript the halt gate refuses changes on every poll, and
+        // re-reading it every time is the hot loop quarantine exists to stop.
+        const parked = attempts.get(ref.sessionId);
+        if (parked === undefined || parked.count < MAX_INGEST_ATTEMPTS || pass >= parked.dueAt) {
+          changed.add(ref.sessionId);
+        }
+        continue;
+      }
+      const reread = rereadSchedule.get(ref.sessionId);
+      if (reread !== undefined && pass >= reread.dueAt) {
         changed.add(ref.sessionId);
       }
     }
-    pruneMissing(fingerprints, next);
-    pruneMissing(attempts, next);
+    // Computed BEFORE the prune so the held sessions' own entries still exist
+    // to be matched against the unreadable paths.
+    const present = accountedFor(enumeration, next);
+    pruneMissing(fingerprints, present);
+    pruneMissing(attempts, present);
+    pruneMissing(rereadSchedule, present);
+    pruneMissing(slugs, present);
 
     if (changed.size === 0) {
       return { kind: 'unchanged' };
@@ -467,6 +606,11 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
     // may be written for. Taken from the runner's success event rather than
     // from the summary counts, because the counts are aggregates.
     const projectedIds = new Set<string>();
+    // Sessions projected WITHOUT a file the build could not read (EIO, EACCES,
+    // EMFILE...). Their fingerprint already covers that file (lstat works where
+    // the read failed), so a checkpoint would make a restart skip the session
+    // for good - a restart without the store would have recovered the file.
+    const readIncomplete = new Set<string>();
     const summary = runCorpusIngest({
       db: deps.db,
       pricing,
@@ -478,6 +622,11 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
       ingest: deps.ingest,
       onWarning: deps.onWarning,
       onUsageCollisions: deps.onUsageCollisions,
+      onSessionFilesSkipped: (ref, skipped) => {
+        if (skipped.some((file) => file.reason === 'unreadable')) {
+          readIncomplete.add(ref.sessionId);
+        }
+      },
       sessionFilter: (ref) => changed.has(ref.sessionId),
       onSessionIngested: (event) => {
         projectedIds.add(event.sessionId);
@@ -490,7 +639,29 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
       onStatusReconciled: deps.onIngestEvent,
     });
     const checkpointable = settlePass(changed, next, summary, projectedIds);
-    deps.checkpoints?.commit(corpusRoot, checkpointable, new Set(next.keys()));
+    for (const sessionId of readIncomplete) {
+      checkpointable.delete(sessionId);
+    }
+    // settlePass has just committed the fingerprint of every read-incomplete
+    // session that did not fail, so without a schedule the next pass would see
+    // it as unchanged. A session that FAILED is left to the retry budget
+    // instead: it re-reads every pass until quarantine and on the budget's own
+    // backoff after that, and a second schedule would reopen the very loop
+    // that quarantine exists to close. The gap keeps doubling across a
+    // byte-change re-read too: new bytes say nothing about whether the fault
+    // has gone.
+    for (const sessionId of changed) {
+      if (readIncomplete.has(sessionId) && !attempts.has(sessionId)) {
+        const prior = rereadSchedule.get(sessionId);
+        const gap = prior === undefined ? 1 : Math.min(prior.gap * 2, REREAD_BACKOFF_CAP_PASSES);
+        rereadSchedule.set(sessionId, { gap, dueAt: pass + gap });
+      } else {
+        rereadSchedule.delete(sessionId);
+      }
+    }
+    // `present`, not the enumerated set: a session hidden by an unreadable slug
+    // keeps its persisted checkpoint, as it keeps its in-memory fingerprint.
+    deps.checkpoints?.commit(corpusRoot, checkpointable, present);
     return { kind: 'ingested', summary };
   }
 

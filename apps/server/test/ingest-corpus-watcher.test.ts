@@ -362,7 +362,7 @@ describe('createCorpusWatcher', () => {
       });
     });
 
-    it('re-admits a quarantined session once its file changes', () => {
+    it('re-reads a quarantined session whose file changes, on a backoff, with the spent budget', () => {
       const slugTree: MutableTree = { [`${SESSION_A}.jsonl`]: file(MAIN, { mtimeMs: 1 }) };
       const calls: string[] = [];
       const failures: IngestFailureReport[] = [];
@@ -378,14 +378,22 @@ describe('createCorpusWatcher', () => {
       calls.length = 0;
       failures.length = 0;
 
-      // New content deserves a fresh budget: the attempt counter restarts.
+      // New content is read again, but it does NOT hand back a fresh budget: a
+      // live transcript changes on every poll, and a budget that restarted on
+      // new bytes never quarantined it (the every-3-s re-parse observed
+      // 2026-09-26). The first change after quarantine is read at once (gap 1)
+      // and reported as the spent budget; a second change on the very next
+      // pass waits for the doubled gap.
       slugTree[`${SESSION_A}.jsonl`] = file(MAIN + MAIN, { size: 99, mtimeMs: 42 });
-      watcher.tick();
+      expect(watcher.tick().kind).toBe('ingested');
+      slugTree[`${SESSION_A}.jsonl`] = file(MAIN + MAIN + MAIN, { size: 150, mtimeMs: 43 });
+      expect(watcher.tick().kind).toBe('unchanged');
 
       expect(calls).toEqual([`${SESSION_A}.jsonl`]);
       expect(failures).toEqual([
-        { sessionId: SESSION_A, reason: REASON, attempt: 1, willRetry: true },
+        { sessionId: SESSION_A, reason: REASON, attempt: MAX_INGEST_ATTEMPTS, willRetry: false },
       ]);
+      expect(watcher.exclusions()).toEqual({ failing: 1, quarantined: 1 });
     });
 
     it('advances the fingerprint once a retry finally succeeds', () => {

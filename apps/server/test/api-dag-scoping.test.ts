@@ -166,4 +166,50 @@ describe('getGlobalDag rollup scoping (M-5)', () => {
       truncated: true,
     });
   });
+
+  it('caps edges on both endpoints but serves parentAgentId as persisted, cap or not (F4)', () => {
+    seed(temp.db);
+    // A third session whose main agent is OLDER (by last_seen_at) than its own
+    // subagents, so a recent-first cap of 2 keeps the children and drops the
+    // parent: k-sub1 (02:00) and k-sub2 (01:00) make it, k-main (00:30) does not.
+    temp.db.exec(`
+      INSERT INTO sessions (id, project_slug, started_at, last_activity_at, status) VALUES
+        ('s3', 'proj-z', '2026-07-14T00:00:00Z', '2026-07-14T02:00:00Z', 'active');
+      INSERT INTO agents (id, session_id, type, subagent_type, status, parent_agent_id, first_seen_at, last_seen_at) VALUES
+        ('k-main', 's3', 'main', NULL, 'working', NULL, '2026-07-14T00:00:00Z', '2026-07-14T00:30:00Z'),
+        ('k-sub1', 's3', 'subagent', 'explorer', 'working', 'k-main', '2026-07-14T00:10:00Z', '2026-07-14T02:00:00Z'),
+        ('k-sub2', 's3', 'subagent', 'planner', 'completed', 'k-sub1', '2026-07-14T00:20:00Z', '2026-07-14T01:00:00Z');
+      INSERT INTO orchestration_edges (session_id, parent_agent_id, child_agent_id, source, instance, host_id, created_at) VALUES
+        ('s3', 'k-main', 'k-sub1', 'tool_use', 'default', 'host-1', '2026-07-14T00:10:00Z'),
+        ('s3', 'k-sub1', 'k-sub2', 'tool_use', 'default', 'host-1', '2026-07-14T00:20:00Z');
+    `);
+
+    const dag = getGlobalDag(temp.db, 2);
+
+    expect(dag.nodes.map((n) => n.id)).toEqual(['k-sub1', 'k-sub2']);
+    const nodeIds = new Set(dag.nodes.map((n) => n.id));
+    // `parentAgentId` is the persisted data fact, NOT subject to the cap: the
+    // tree is a data fact, not a UI reconstruction, so the client is told the
+    // real parent even when that parent is not in this slice.
+    const parentsOutsideCap = dag.nodes
+      .filter((n) => n.parentAgentId !== null && !nodeIds.has(n.parentAgentId))
+      .map((n) => [n.id, n.parentAgentId]);
+    expect(parentsOutsideCap).toEqual([['k-sub1', 'k-main']]);
+    // Edges, by contrast, are capped on BOTH endpoints: the k-main -> k-sub1
+    // edge is dropped, the k-sub1 -> k-sub2 edge is kept.
+    expect(dag.edges).toHaveLength(1);
+    expect(dag.edges[0]).toMatchObject({ parentAgentId: 'k-sub1', childAgentId: 'k-sub2' });
+    for (const edge of dag.edges) {
+      expect(nodeIds.has(edge.parentAgentId)).toBe(true);
+      expect(nodeIds.has(edge.childAgentId)).toBe(true);
+    }
+    expect(dag.counts).toEqual({
+      totalSessions: 3,
+      totalAgents: 7,
+      totalEdges: 4,
+      returnedAgents: 2,
+      returnedEdges: 1,
+      truncated: true,
+    });
+  });
 });

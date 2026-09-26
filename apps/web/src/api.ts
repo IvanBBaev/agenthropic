@@ -25,6 +25,12 @@
  * module for why the checks are hand-written (no runtime dependency on
  * `@agenthropic/shared`, hence no TypeBox in the browser bundle) and for exactly
  * where the strictness line sits.
+ *
+ * AMENDED 2026-09-23 (lane-P): the two copied strings are now also checked for
+ * CONTENT, not just type - see `copiedMessage` below. The AU-1 promise is
+ * unweakened: a copied string still reaches a view only through `redact`, and
+ * the fallbacks that replace an empty one are literals written in this module,
+ * so they cannot carry a token that this module never put in them.
  */
 import type {
   AggregateDelegationSavingsDto,
@@ -42,6 +48,7 @@ import {
   isSessionList,
   isSessionTree,
 } from './dto-guards';
+import { hasVisibleText } from './format';
 
 /** Stands in for the token wherever a message would otherwise have quoted it. */
 const REDACTED = '[redacted]';
@@ -60,6 +67,29 @@ function redact(message: string, token: string): string {
 }
 
 /**
+ * A message this module COPIES out of somewhere else, or the sentence this
+ * module wrote for the case where the copy says nothing (2026-09-23, lane-P).
+ *
+ * The two copied strings are the ones the AU-1 note above names - a rejected
+ * fetch's `error.message` and the server's `{error}` body - and neither is
+ * obliged to carry words. `new Error('')` is legal, and `{"error": ""}` passes
+ * every check this build makes, because `typeof x === 'string'` is a question
+ * about the type and not about the contents. Both ended up rendered by the
+ * views into `Could not load <thing>: <message>`, which with nothing in the
+ * slot reads `Could not load sessions: ` - a banner that announces a failure
+ * and then names none, so the reader concludes the page is broken rather than
+ * that the server sent no words. The fallback is not a guess: it is the
+ * status-only sentence this module had already composed, or the generic
+ * `network error` the non-Error arm beside it has always used.
+ *
+ * Whitespace counts as nothing, because a message of three spaces is
+ * pixel-identical to a message of none once it is in the DOM.
+ */
+function copiedMessage(raw: string, token: string, fallback: string): string {
+  return hasVisibleText(raw) ? redact(raw, token) : fallback;
+}
+
+/**
  * Why an unreachable health probe is not one fact (AU-2).
  *
  * - `no-response`: nothing answered. The server is down, or the browser is
@@ -67,8 +97,9 @@ function redact(message: string, token: string): string {
  * - `server-error`: something answered with a non-401 status. The server IS
  *   running - telling the user it is unreachable sends them to restart a live
  *   process - and the token was still not judged.
- * - `malformed`: 200 arrived and the body could not be read. Every route is
- *   auth-gated, so a 200 is proof the token was ACCEPTED; the disagreement is
+ * - `malformed`: 200 arrived and the body could not be read. Every /api/* route
+ *   is auth-gated (only the static SPA is not), so a 200 is proof the token was
+ *   ACCEPTED; the disagreement is
  *   between this build and the server's payload shape, not about the token.
  */
 export type HealthUnreachableReason = 'no-response' | 'server-error' | 'malformed';
@@ -87,7 +118,8 @@ export type HealthResult =
 /**
  * Validate a token by probing GET /api/health.
  *
- * - 200 with a well-formed body -> `ok` (+ the integer schemaVersion);
+ * - 200 with a well-formed body -> `ok` (+ the schemaVersion, a non-negative
+ *   safe integer; any other number is a malformed body);
  * - 401 -> `unauthorized` (bad token);
  * - any network failure, non-401 error status, or malformed body ->
  *   `unreachable` with a token-free message.
@@ -102,7 +134,7 @@ export async function checkHealth(token: string, signal?: AbortSignal): Promise<
   } catch (error) {
     return {
       kind: 'unreachable',
-      message: redact(error instanceof Error ? error.message : 'network error', token),
+      message: copiedMessage(error instanceof Error ? error.message : '', token, 'network error'),
       reason: 'no-response',
       status: null,
     };
@@ -138,7 +170,14 @@ export async function checkHealth(token: string, signal?: AbortSignal): Promise<
     };
   }
   const schemaVersion = (body as Record<string, unknown>)['schemaVersion'];
-  if (typeof schemaVersion !== 'number') {
+  // PP5: `typeof === 'number'` alone admitted Infinity (JSON `1e400`), 1.5 and
+  // -1, which the header then painted as "schema vInfinity". The promise above
+  // is an integer version, so anything else is a malformed body.
+  if (
+    typeof schemaVersion !== 'number' ||
+    !Number.isSafeInteger(schemaVersion) ||
+    schemaVersion < 0
+  ) {
     return {
       kind: 'unreachable',
       message: 'malformed health response',
@@ -157,9 +196,10 @@ export async function checkHealth(token: string, signal?: AbortSignal): Promise<
  *
  * The `error` arm carries the HTTP `status` alongside the message because the
  * failures are NOT interchangeable and must not be collapsed into one "could
- * not load" sentence: 503 means the feature is switched off on this server,
- * 404 means the corpus has no such session, 422 means the data itself cannot
- * be priced or parsed, and 500 is a deliberately detail-free server fault.
+ * not load" sentence: 503 means per-session analysis is unavailable on this
+ * server, 404 means the corpus has no such session, 422 means the data itself
+ * cannot be priced, parsed or analysed, and 500 is a deliberately detail-free
+ * server fault.
  * `status` is `null` only when no HTTP response existed at all (network or
  * abort failure), which is again a different fact from any of the above.
  *
@@ -184,7 +224,7 @@ export type ApiResult<T> =
  *
  * `'malformed-body'` marks the THIRD kind of failure, the one that has no HTTP
  * status of its own: the request was made, the transport worked, the auth gate
- * passed (every route is gated, so a 2xx is proof the token was accepted) - and
+ * passed (every /api/* route is gated, so a 2xx is proof the token was accepted) - and
  * the payload still cannot be trusted. It is neither "the server is down" nor
  * "your token is wrong", and a UI that renders it as either sends the reader to
  * fix a thing that is not broken. Absent on every other failure, where `status`
@@ -206,6 +246,34 @@ export const UNREADABLE_BODY_MESSAGE =
   'the server answered and the token was accepted, but this page cannot read the response body - ' +
   'a required field is missing, or a figure is not a number. Nothing is shown rather than a wrong ' +
   'number; this page and the server are probably different versions.';
+
+/**
+ * K5 (2026-09-23). What the reader is told when the body never parsed at all.
+ *
+ * The sentence above used to cover this case too, and of the three failures it
+ * was handed it was the one it described wrongly. "A required field is missing,
+ * or a figure is not a number" is an accurate account of a body that PARSED and
+ * then failed its shape check - the page read fields and found them absent or
+ * non-numeric. When `response.json()` itself throws there are no fields: no key
+ * was ever looked at, and the closing clause sends the reader to compare
+ * versions of a page and a server that may both be current while a proxy, a
+ * tunnel or a truncated stream answered in between. This module's sibling
+ * `analysisErrorText` states the principle for exactly this mistake - "naming
+ * the wrong cause is worse than naming none: it sends the reader to fix a thing
+ * that is not broken" - and it was being made one function away.
+ *
+ * So this one names only what is known, including the limit of what is known:
+ * the answer was not JSON, and a non-JSON answer carries nothing that says
+ * WHOSE answer it was. `reason` stays `'malformed-body'` for both, because the
+ * classification is still right - the transport worked, the token was accepted,
+ * the payload cannot be trusted. It is the sentence, not the bucket, that was
+ * over-claiming.
+ */
+export const UNPARSEABLE_BODY_MESSAGE =
+  'the server answered and the token was accepted, but the response body is not JSON at all, so ' +
+  'this page cannot read it. Nothing is shown rather than a wrong number. A body that never ' +
+  'parsed says nothing about where it came from: this page cannot tell a server of another ' +
+  'version from an answer cut short, or from something in between answering in its place.';
 
 /**
  * One GET against the same origin. 401 -> `unauthorized`; other non-2xx ->
@@ -239,7 +307,7 @@ async function getJson<T>(
   } catch (error) {
     return {
       kind: 'error',
-      message: redact(error instanceof Error ? error.message : 'network error', token),
+      message: copiedMessage(error instanceof Error ? error.message : '', token, 'network error'),
       status: null,
     };
   }
@@ -251,7 +319,7 @@ async function getJson<T>(
     try {
       const body: unknown = await response.json();
       const serverError = (body as Record<string, unknown> | null)?.['error'];
-      if (typeof serverError === 'string') message = redact(serverError, token);
+      if (typeof serverError === 'string') message = copiedMessage(serverError, token, message);
     } catch {
       // Keep the status-only message; the body is not required to be JSON.
     }
@@ -263,7 +331,9 @@ async function getJson<T>(
   } catch {
     return {
       kind: 'error',
-      message: UNREADABLE_BODY_MESSAGE,
+      // K5 (2026-09-23): was UNREADABLE_BODY_MESSAGE. Nothing parsed here, so
+      // no field was ever checked and none can be blamed.
+      message: UNPARSEABLE_BODY_MESSAGE,
       // The transport succeeded; it is the payload that is wrong, so the status
       // stays as it arrived rather than being laundered into a fake 5xx.
       status: response.status,
@@ -273,6 +343,11 @@ async function getJson<T>(
   if (typeof body !== 'object' || body === null) {
     return {
       kind: 'error',
+      // K5 (2026-09-23): this arm KEEPS the field-level sentence. A body that
+      // parsed to `null`, a number or a string was read, and what the page
+      // found was an absence of every field it needed - which is what that
+      // sentence says. Only the arm above, where nothing parsed, was describing
+      // a check it never got to make.
       message: UNREADABLE_BODY_MESSAGE,
       status: response.status,
       reason: 'malformed-body',
@@ -363,9 +438,10 @@ export function fetchAggregateSavings(
  * and the delegation-savings counterfactual for ONE session.
  *
  * This route reads the raw transcripts, so it has a wider failure surface than
- * the database-backed reads: 503 when the server has no corpus configured, 404
- * when the corpus holds no transcript for the id, 422 when the transcript
- * cannot be parsed or a model cannot be priced, 500 (detail-free) otherwise.
+ * the database-backed reads: 503 when corpus access is unavailable (no provider,
+ * no corpus root, or an unreadable root), 404 when the corpus holds no transcript
+ * for the id, 422 when the transcript cannot be parsed, holds no analysable
+ * records, or a model cannot be priced, 500 (detail-free) otherwise.
  * The caller must tell those apart - see `ApiResult`'s `status`.
  */
 export function fetchCostAnalysis(

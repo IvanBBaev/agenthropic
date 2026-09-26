@@ -29,13 +29,13 @@ paired-capture corpus. See [the Phase-0 corpus probe](../../analysis/phase0-prob
 >
 > Short version of what is true today: implementation began **2026-07-11**, by explicit
 > owner override of the CD-8 no-code-before-GO gate — **not** because the gate opened.
-> Running now: the loopback-bound, token-gated server; SQLite/WAL with thirteen migrations
+> Running now: the loopback-bound, token-gated server; SQLite/WAL with eighteen migrations
 > and a daily backup timer; JSONL ingest with replay-on-startup and tail-follow polling;
 > the persisted subagent DAG; the cost engine; the hook receiver and its installer; the
 > status watchdog; the SSE hub; the read API; and all four dashboard views plus a
-> per-session cost-analysis panel. **106 test files / 1554 tests pass** (re-measured
-> 2026-08-15), with **100%** statements/branches/functions/lines enforced in all five
-> packages. The three P0 correctness proofs are green in CI on every push and pull request,
+> per-session cost-analysis panel. **131 test files / 2428 tests pass** (re-measured
+> 2026-09-18; re-measured again 2026-09-23 as **140 test files / 2621 tests**), with
+> **100%** statements/branches/functions/lines enforced in all five packages. The three P0 moat proofs (plus a fourth P0 proof that answers the five daily questions over real HTTP) are green in CI on every push and pull request,
 > and since **2026-08-25** they are **merge-blocking for anyone who is not the repository
 > owner**: `main` requires the `ci` check, so a red run withholds a contributor's merge
 > button. It does not withhold the owner's — `enforce_admins` is deliberately off, because
@@ -44,8 +44,9 @@ paired-capture corpus. See [the Phase-0 corpus probe](../../analysis/phase0-prob
 > with every "merge-blocking" claim on this page; see
 > [the standing correction](../contributing/decisions/README.md#a-standing-correction-merge-blocking).
 > **The documentation site went live the same day**, at
-> <https://ivanbbaev.github.io/agenthropic/>. Retention is **mechanism-built and
-> policy-unset**: it exists, it is tested, and by default it does nothing.
+> <https://ivanbbaev.github.io/agenthropic/>. Retention is **built, signed and wired as
+> of 2026-09-10**: `events` at 90 days, backup files at 30 days behind a floor of 7,
+> `token_usage` never — run after each successful daily backup.
 > **Phases 5–6 (alerting) are not started,
 > are v2.0, are entered only via KC-5, and may never start** — the operator-alerts API and
 > UI were cut outright. The Phase-0 numbers quoted above and below remain **PROVISIONAL**
@@ -65,7 +66,7 @@ a deferral *is* the failure.
 |---|---|---|---|---|
 | **KC-0** | 2026-07-13 | Gate A signed **and** the friction log opened **and** ≥1 rival dashboard installed for a two-week trial | Archive the repo; salvage the security posture and probe method as a write-up | **PASSED UNMET** — Gate A was signed 2026-07-10, but the friction log was never opened and no rival was ever installed. 2 of 5 boxes open at the deadline. |
 | **KC-1** | 2026-07-27 | The WP-S7 verdict written (GO or CONDITIONAL-GO) **and** the throwaway DAG-with-dollars render exists **and** the 14-day friction log does **not** show a rival answering ≥4 of the 5 daily questions acceptably | Archive | **PASSED UNMET** — see below. |
-| **KC-2** | 2026-09-14 | Phases 1–2 exit gates green (security spine live, coverage gate blocking, ingest idempotent, kill+restart zero-loss) | Descope per the ladder if the P0 chain is intact; otherwise archive | Not yet reached. The coverage gate is configured at 100% and fails the CI run, and since 2026-08-25 "blocking" is literal for a contributor: `main` requires the `ci` check. The repository owner stays exempt by design (`enforce_admins` off — one maintainer, one direct-push workflow). |
+| **KC-2** | 2026-09-14 | Phases 1–2 exit gates green (security spine live, coverage gate blocking, ingest idempotent, kill+restart zero-loss) | Descope per the ladder if the P0 chain is intact; otherwise archive | **MET** — ticked 2026-09-18, four days after the date (the bookkeeping was late, not the condition: nothing in the tree changed after 2026-09-10). Phase 1 and Phase 2 exit gates green — 2,428 tests, 100% coverage in all five packages, the coverage gate failing the CI run when it slips — zero velocity rebases applied, and the descope ladder was not pulled. "Blocking" is literal for a contributor since 2026-08-25 (`main` requires the `ci` check); the repository owner stays exempt by design (`enforce_admins` off — one maintainer, one direct-push workflow). |
 | **KC-3** | 2026-10-12 | The three P0 release blockers green and merge-blocking | Archive — "the moat proof *is* the project" | Not yet reached, and not yet due. The three proofs are green in CI, and since 2026-08-25 the *merge-blocking* half of the condition holds for anyone who is not the repository owner — `main` requires the `ci` check, with `enforce_admins` deliberately off so the sole maintainer is not locked out of their own repository ([the standing correction](../contributing/decisions/README.md#a-standing-correction-merge-blocking)). That half only; the checkpoint itself is not declared passed. |
 | **KC-4** | **2026-12-01** | v1.0 tagged: five daily questions answerable, <30s time-to-understand, tree/DAG served from `orchestration_edges`, every dollar traceable. **This date does not move.** | Archive + a public write-up of what was learned. No third rebase exists. | Not yet reached. Note that one clause of this condition — the <30s figure — has never been measured, so it cannot currently be evaluated any more than KC-1's could. |
 | **KC-5** | earned, never dated | v2.0 entry: **14 consecutive days of real daily use of v1.0 by its own author**, plus ≥3 dated friction-log entries asking for alerts | v2 cancelled; maintenance mode | Not entered; may never be — **and never entering it is a success of the roadmap, not a failure.** |
@@ -147,12 +148,14 @@ and are kept, amended, rather than deleted:
   `gh api repos/IvanBBaev/agenthropic/branches/main/protection --jq '{contexts: .required_status_checks.contexts, enforce_admins: .enforce_admins.enabled}'`
   → `{"contexts":["ci"],"enforce_admins":false}`. The required context is `ci`, the job id
   in `.github/workflows/ci.yml` — not `CI`, which is only the workflow's display name.
-- **Retention is mechanism-built and policy-unset.** Pruning, an audit journal,
-  backup-file expiry and a runner all exist and are covered by tests. What does not exist
-  is a decision about how many days of what to keep, because a retention TTL has to be
-  reconciled with an append-only `events_raw` first. The shipped default is a no-op and no
-  runner starts at boot, so storage still grows without bound — but the honest description
-  is "the policy is unset", not "the feature is missing".
+- **Retention is built, signed and wired (2026-09-10).** Pruning, an audit journal,
+  backup-file expiry and a runner all exist and are covered by tests, and the decision
+  about how many days of what to keep was made by the owner on 2026-09-08 (D3): `events`
+  rows older than 90 days and backup files older than 30 days (never below the newest 7)
+  are pruned after each successful daily backup; the append-only `events_raw` is never a
+  delete target. `token_usage` is never pruned in v1.0, by decision, so that one table
+  still grows without bound — the honest description is "bounded by policy except the
+  cost ground truth", not "the feature is missing".
 - **The accuracy gate has never run on real labels.** `n = 0` of the ≥52 needed.
 
 Resolved since this section was first written: the repository's `LICENSE` (MIT) is
@@ -309,7 +312,9 @@ building and publishing.
 > branches, functions and lines in **all five** packages — `packages/test-fixtures`
 > included, because `getFixture` and the fixture builders are real code whose defects fail
 > silently through every test that consumes them — and the static guards, which do turn
-> the build red on a deliberately introduced spawner, SSRF sink, or disallowed license.
+> the build red on a deliberately introduced spawner, wide bind, WebSocket server, dynamic
+> `eval`, or disallowed license (no static SSRF guard exists — the server has no outbound
+> HTTP client, and the no-SSRF invariant is held by review, not by a script).
 >
 > Two clauses of the exit gate were open for the whole of this project's life, and both were
 > owner actions rather than code. Both were performed on **2026-08-25**:
@@ -545,8 +550,9 @@ a dated, versioned price.
 > cost-flow view — joined afterwards by a per-session cost-analysis panel, because the
 > `cost-analysis` endpoint had shipped without a consumer and "all five daily questions
 > answerable from the UI" was therefore true of the server and false of the dashboard.
-> `apps/web` carries 283 tests across 17 files (2026-08-15) and — since 2026-07-30 —
-> actually runs them under a coverage gate, now set at 100%.
+> `apps/web` carries 283 tests across 17 files (2026-08-15; 697 across 22 files on
+> 2026-09-18) and — since 2026-07-30 — actually runs them under a coverage gate, now set
+> at 100%.
 >
 > Two of the exit-gate clauses hold literally. The tree and global DAG are served by
 > SQL over the persisted `orchestration_edges` table (`apps/server/src/db/edges.ts` →
@@ -619,8 +625,7 @@ release checklist is complete.
 > from v1.0. The release-hardening half, which never depended on alerting, exists:
 > [`RELEASE.md`](https://github.com/IvanBBaev/agenthropic/blob/main/RELEASE.md)
 > enumerates every build-failing gate and the backup-restore drill. Its remaining
-> unticked boxes are human acts — ratifying the labeled corpus (LABEL-ME), settling the
-> retention policy's OPEN-1/2/3 values, timing the "<30s to understand a session" claim
+> unticked boxes are human acts — ratifying the labeled corpus (LABEL-ME), timing the "<30s to understand a session" claim
 > with a stopwatch, opening the friction log, and installing a rival dashboard for the
 > two-week trial — not missing code. (Three boxes on that list have since been ticked: the
 > `LICENSE` file is tracked, and on 2026-08-25 GitHub Pages was enabled and `main` was

@@ -1,6 +1,7 @@
 /**
  * Registry + typed loader for the synthetic fixture corpus
- * (parser-spec section 4 join paths + the N3 usage-dedup case).
+ * (parser-spec section 4.1 provenances, gate item 4 depth-2, the N3
+ * usage-dedup case and the WP-U10 outcome terminals).
  */
 import { agentOutcomeErrors } from './agent-outcome-errors.js';
 import { depth2Sync } from './depth-2-sync.js';

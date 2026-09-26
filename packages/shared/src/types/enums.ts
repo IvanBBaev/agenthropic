@@ -35,10 +35,10 @@
  * Migrating it rather than copying it is the point: one declaration, or the
  * two drift.
  *
- * The package index now re-exports these three BY NAME rather than with
+ * The package index now re-exports these two BY NAME rather than with
  * `export type *`. That is deliberate: a star export is what let a duplicate
- * declaration hide in plain sight for weeks. With every export named, the next
- * duplicate is a compile error instead of a silent shadow.
+ * declaration hide in plain sight for weeks. With these exports named, the next
+ * duplicate of them is a compile error instead of a silent shadow.
  */
 
 /** The five priced token buckets (parser-spec section 5.4). */

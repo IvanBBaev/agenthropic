@@ -1,0 +1,4 @@
+# Rendered LABEL-ME claim pages (written by `pnpm --filter @agenthropic/test-fixtures
+# render-claims -- <id>`) quote raw lines of the git-excluded spike/ corpus.
+# They are local-only by construction; nothing under .render/ is ever committed.
+.render/

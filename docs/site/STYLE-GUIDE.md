@@ -71,11 +71,12 @@ Constraints on every amendment:
   - **branch protection on `main` requires the `ci` check** (since 2026-08-25) but leaves
     `enforce_admins` off on purpose, so a CI gate blocks a contributor's merge and not the
     sole maintainer's direct push — say which one you mean;
-  - the **retention policy values are unset** — the mechanism is built, the numbers await
-    OPEN-1/2/3, and the shipped default is a no-op.
-- **Don't overclaim the proofs.** Three P0 correctness proofs are green in CI on every push
+  - the **retention policy values are signed** (D3, 2026-09-08): `events` rows expire after
+    90 days, backup files after 30 days behind a floor of the 7 newest, `token_usage` is
+    never pruned, and those numbers are the shipped defaults.
+- **Don't overclaim the proofs.** Three P0 moat proofs are green in CI on every push
   and pull request (Σ tokens vs JSONL · byte-identical double replay · DAG rebuilt from
-  JSONL alone). Cite those precisely; do not stretch them into a general correctness
+  JSONL alone), plus a fourth P0 proof that answers the five daily questions over real HTTP. Cite those precisely; do not stretch them into a general correctness
   guarantee — and **say whose merge they block.** Since 2026-08-25 a branch-protection rule
   on `main` requires the `ci` check, so a red run does withhold a contributor's merge
   button. It does not stop the sole maintainer: `enforce_admins` is off by design, because
@@ -91,7 +92,9 @@ Constraints on every amendment:
 - **Cross-links:** relative Markdown links to sibling pages by slug — e.g. a page under
   `security/` links the data model as `../architecture/data-model.md`; a page under
   `architecture/` links a sibling as `data-model.md`.
-- **No generator-specific frontmatter** in content pages — added at assembly.
+- **No generator-specific frontmatter** in content pages — the Pages build renders plain
+  pages as-is (`jekyll-optional-front-matter`, listed in `.github/workflows/pages.yml`), so
+  none is added at assembly either.
 - **ADRs** use [`contributing/decisions/_adr-template.md`](contributing/decisions/_adr-template.md).
 
 ## Definition of Done (per page)

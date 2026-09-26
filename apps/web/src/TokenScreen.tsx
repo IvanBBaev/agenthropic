@@ -27,6 +27,18 @@
  * different document, focus falls back to `document.body`, and a non-sighted
  * user is told nothing has changed. The notice is now bound to the field the
  * same way the error already was, and the arrival moves the caret there.
+ *
+ * AMENDED 2026-09-23 (B1). The field stays editable while a probe is in flight
+ * - only the button is disabled - so a user who corrects a mistyped token
+ * before the verdict on the old one lands was shown "Invalid token: the server
+ * rejected it." beside a string the server had never seen, with `aria-invalid`
+ * on the input asserting the same thing to a screen reader. The onChange
+ * handler below already states the policy this broke ("a stale verdict left on
+ * screen is a claim nobody made"); it simply could not enforce it against a
+ * verdict that arrives AFTER the edit. A verdict is now stored together with
+ * the string it judges, so the screen can tell the two apart: when the field
+ * has moved on under it, the sentence says which string it is about and the
+ * field - whose contents nothing has judged - is not marked invalid.
  */
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { checkHealth, type HealthResult } from './api';
@@ -42,6 +54,26 @@ export interface TokenScreenProps {
 const EMPTY_TOKEN_ERROR = 'The token field is empty - paste the dashboard token first.';
 
 /**
+ * Appended when the field no longer holds the string the verdict judges (B1).
+ * It names the subject rather than withdrawing the verdict: the probe really
+ * did fail, and dropping that on the floor would leave the user waiting for an
+ * answer that has already come and gone.
+ */
+const STALE_VERDICT_NOTE =
+  'That verdict is about the token that was submitted; the field has been edited since, and the text now in it has not been checked.';
+
+/**
+ * A displayed message together with the exact string it is a verdict about -
+ * the trimmed field text at submit time, or `''` for the empty-field answer.
+ * Keeping the subject is what lets the screen notice that the field has moved
+ * on since the verdict was asked for.
+ */
+interface TokenVerdict {
+  readonly message: string;
+  readonly judged: string;
+}
+
+/**
  * Turn a failed health probe into the sentence that is actually true (AU-2).
  * The three `unreachable` reasons are three different situations with three
  * different next actions, and only one of them is about the token.
@@ -54,7 +86,10 @@ function describeFailure(result: Exclude<HealthResult, { kind: 'ok' }>): string 
     case 'no-response':
       return `Server unreachable: ${result.message}. Nothing answered on this origin - check that the dashboard server is running.`;
     case 'server-error':
-      return `The server answered, and the health check failed: ${result.message}. The server is running, so the token was neither accepted nor rejected - try again once the server is healthy.`;
+      // PP2: an HTTP error proves only that SOMETHING answered on this origin.
+      // Under the two-dev-server setup Vite's proxy answers 500 itself when the
+      // API server is down, so "the server is running" was not known.
+      return `Something on this origin answered with HTTP ${String(result.status)} - the dashboard server, or a proxy in front of it - and the health check failed: ${result.message}. The token was neither accepted nor rejected - check that the dashboard server is running and healthy, then try again.`;
     case 'malformed':
       return `The server accepted this token, but this page cannot read its health response (${result.message}). The token is fine; this build and the server disagree about the shape of the data.`;
   }
@@ -63,7 +98,7 @@ function describeFailure(result: Exclude<HealthResult, { kind: 'ok' }>): string 
 export function TokenScreen({ onSuccess, notice }: TokenScreenProps) {
   const [value, setValue] = useState('');
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<TokenVerdict | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   /**
@@ -92,6 +127,13 @@ export function TokenScreen({ onSuccess, notice }: TokenScreenProps) {
    * Both the notice and the error describe this one field, so both ids belong
    * here; a screen reader reads them in order at the point of correction.
    */
+  /**
+   * The verdict on screen judges `error.judged`; the field holds `value`. They
+   * can only differ through the in-flight race B1 describes, because any edit
+   * made while a verdict is displayed clears it outright.
+   */
+  const staleVerdict = error !== null && error.judged !== value.trim();
+
   const describedBy = [
     notice !== undefined ? 'token-notice' : null,
     error !== null ? 'token-error' : null,
@@ -107,7 +149,7 @@ export function TokenScreen({ onSuccess, notice }: TokenScreenProps) {
     if (token.length === 0) {
       // Deliberately without a request: the answer is knowable here, and a
       // probe with an empty credential only teaches the log a bad habit.
-      setError(EMPTY_TOKEN_ERROR);
+      setError({ message: EMPTY_TOKEN_ERROR, judged: '' });
       refocus();
       return;
     }
@@ -119,7 +161,7 @@ export function TokenScreen({ onSuccess, notice }: TokenScreenProps) {
       onSuccess(token);
       return;
     }
-    setError(describeFailure(result));
+    setError({ message: describeFailure(result), judged: token });
     refocus();
   }
 
@@ -144,7 +186,7 @@ export function TokenScreen({ onSuccess, notice }: TokenScreenProps) {
         ref={inputRef}
         type="password"
         autoComplete="off"
-        aria-invalid={error !== null}
+        aria-invalid={error !== null && !staleVerdict}
         // Bound to the live region so the reason is re-read at the field the
         // focus has just moved to, instead of only once as it appears.
         // AMENDED 2026-09-07 (TK-3): this bound only `token-error`, so a
@@ -163,7 +205,7 @@ export function TokenScreen({ onSuccess, notice }: TokenScreenProps) {
       />
       {error !== null && (
         <p className="status-error" role="alert" id="token-error">
-          {error}
+          {staleVerdict ? `${error.message} ${STALE_VERDICT_NOTE}` : error.message}
         </p>
       )}
       <button type="submit" disabled={busy}>

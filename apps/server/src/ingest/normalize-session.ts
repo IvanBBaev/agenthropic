@@ -27,6 +27,7 @@
  * statement in the transcript, and it is the only producer the `'error'` status
  * has ever had.
  */
+import { canonicalizeTimestamp } from '@agenthropic/core';
 import type { ParsedAgent, ParsedSession, DedupedUsage } from '@agenthropic/core';
 import type { AgentOutcomeCause, AgentStatus } from '@agenthropic/shared';
 import type { AgentUpsert } from '../db/agents';
@@ -34,7 +35,8 @@ import type { OrchestrationEdgeInsert } from '../db/edges';
 import type { SessionUpsert } from '../db/sessions';
 
 /**
- * The ONLY status ingest ever asserts.
+ * The only status ingest asserts from reading alone (an observed ERROR_CAUSES
+ * outcome asserts 'error' instead - see {@link statusForOutcome}).
  *
  * READING A TRANSCRIPT PROVES ACTIVITY, NEVER TERMINATION. A JSONL file that
  * has stopped growing is indistinguishable from one whose next line has not
@@ -229,6 +231,29 @@ function maxLastActivity(agents: readonly ParsedAgent[]): string | null {
 }
 
 /**
+ * The agent with both span instants in canonical `toISOString` form.
+ *
+ * THE TIMESTAMP BOUNDARY. The parser hands over each transcript's first/last
+ * record `timestamp` verbatim (parser-spec: started/ended = first/last record
+ * ts), and every column they land in — `agents.first_seen_at`/`last_seen_at`,
+ * `sessions.started_at`/`last_activity_at` — is compared as TEXT by the
+ * monotonic `MAX()` and the status CASE. Text order is instant order only for
+ * one shared spelling, so an offset, a missing fraction or a junk string would
+ * store an anchor that misorders, and MAX would keep a wrongly "larger" one
+ * forever. The min/max below compare as text too, so they run on the canonical
+ * values. Canonical input is returned byte-identical (the P0 double-replay
+ * proof depends on it); an unparsable value throws, failing this session's
+ * ingest loudly instead of poisoning its anchor.
+ */
+function withCanonicalSpan(agent: ParsedAgent): ParsedAgent {
+  return {
+    ...agent,
+    startedAt: canonicalizeTimestamp(agent.startedAt, `agent "${agent.id}" startedAt`),
+    endedAt: canonicalizeTimestamp(agent.endedAt, `agent "${agent.id}" endedAt`),
+  };
+}
+
+/**
  * Turn one parsed session into the exact rows the projection will write.
  * Pure — see the module doc.
  */
@@ -236,11 +261,12 @@ export function normalizeSession(
   parsed: ParsedSession,
   options: NormalizeOptions,
 ): NormalizedSession {
-  const nodeIds = new Set(parsed.agents.map((agent) => agent.id));
-  const orderedAgents = topoOrderAgents(parsed.agents, nodeIds);
+  const parsedAgents = parsed.agents.map(withCanonicalSpan);
+  const nodeIds = new Set(parsedAgents.map((agent) => agent.id));
+  const orderedAgents = topoOrderAgents(parsedAgents, nodeIds);
 
-  const main = parsed.agents.find((agent) => agent.type === 'main');
-  const startedAt = main?.startedAt ?? minStartedAt(parsed.agents);
+  const main = parsedAgents.find((agent) => agent.type === 'main');
+  const startedAt = main?.startedAt ?? minStartedAt(parsedAgents);
 
   // FK-safe by construction: a parent is referenced only once it has been
   // emitted earlier in THIS loop. For the normal parent-first forest this is
@@ -285,7 +311,7 @@ export function normalizeSession(
       id: parsed.sessionId,
       projectSlug: options.projectSlug,
       startedAt,
-      lastActivityAt: maxLastActivity(parsed.agents),
+      lastActivityAt: maxLastActivity(parsedAgents),
       status: LIVENESS_STATUS,
     },
     agents,

@@ -27,6 +27,10 @@ Rules of this document:
       **2026-12-01 (KC-4)**. Note honestly: KC-0 (2026-07-13) and KC-1 (2026-07-27)
       both passed unmet and work continued only under the owner overrides recorded in
       `TODO.md`; the tag decision is the owner's, made with that record in view.
+      KC-2 (2026-09-14) was met — Phase 1 and Phase 2 exit gates green, zero velocity
+      rebases — and ticked on 2026-09-18, four days after its date, because the session
+      owning the tick was inactive in between (the tree did not change). KC-3 is
+      2026-10-12.
 - [ ] **[HUMAN] LABEL-ME ratification.** The five
       `spike/corpus/sessions/<short>/LABEL-ME.md` trees (224 per-edge blanks) are
       hand-filled by Ivan ([`docs/analysis/phase0-verdict.md`](docs/analysis/phase0-verdict.md)
@@ -60,15 +64,16 @@ compare); SSE same-origin; no-spawner grep/static gate; no-SSRF (webhook targets
 operator-configured, never dialed from a payload); WAL + tested restore; >90% coverage
 blocks merges."**
 
-Run each gate locally on the release commit; all six are the same commands CI runs
+Run each gate locally on the release commit; the six below plus the web production build
+(`pnpm --filter @agenthropic/web build`) are the same seven commands CI runs
 (`.github/workflows/ci.yml`):
 
 - [ ] `pnpm run typecheck`
 - [ ] `pnpm run lint`
 - [ ] `pnpm run format:check`
-- [ ] `pnpm run test` — the full workspace suite (**106 test files / 1554 tests** on a
-      local run of 2026-08-15; the figure moves as the tree does, so re-measure on the
-      release commit rather than trusting this line). Coverage: **all five** packages —
+- [ ] `pnpm run test` — the full workspace suite (**140 test files / 2621 tests** on a
+      local run of 2026-09-23, up from 131 / 2428 on 2026-09-18; the figure moves as the
+      tree does, so re-measure on the release commit rather than trusting this line). Coverage: **all five** packages —
       `@agenthropic/server`, `@agenthropic/web`, `@agenthropic/core`,
       `@agenthropic/shared` and `@agenthropic/test-fixtures` — run `vitest run --coverage`
       against **100/100/100/100** thresholds (each package's `vitest.config.ts`).
@@ -114,8 +119,9 @@ trail).
       `apps/server/test/security-contract.test.ts`; statically guarded by
       `gate:spawner`'s wide-bind patterns.
 - [ ] **Mandatory `DASHBOARD_TOKEN` or the server refuses to start; timing-safe
-      compare** — enforced in `apps/server/src/config.ts` + the auth layer under
-      `apps/server/src/api/`; proven by `apps/server/test/config.test.ts` and
+      compare** — enforced in `apps/server/src/config.ts` (via `requireDashboardToken` in
+      `packages/shared/src/security/index.ts`) + the global `onRequest` gate in
+      `apps/server/src/server.ts`; proven by `apps/server/test/config.test.ts` and
       `apps/server/test/security-contract.test.ts`.
 - [ ] **All endpoints auth-gated** — proven by `apps/server/test/security-contract.test.ts`
       and the per-route suites (`apps/server/test/api-*.test.ts`,
@@ -162,8 +168,10 @@ The canonical P0 set ([`docs/site/contributing/testing.md`](docs/site/contributi
 §4; `WP-X3`/`WP-IN13`): release-blocking, and no other feature work substitutes for
 them. Test bodies live under `apps/server/test/p0/`.
 
-> **Status honesty (updated 2026-08-25):** the three P0 test bodies exist and pass
-> (`apps/server/test/p0/`, 3 files / 13 tests green). The half that makes them *blockers*
+> **Status honesty (updated 2026-08-25; counts re-measured 2026-09-18):** the three P0
+> test bodies exist and pass, and a fourth proof — CD-10's five daily questions answered
+> over real HTTP, `p0-five-daily-questions.test.ts` — sits beside them
+> (`apps/server/test/p0/`, 4 files / 19 tests green). The half that makes them *blockers*
 > arrived on 2026-08-25: `main` now requires the `ci` check (§0), so a red P0 does
 > withhold a contributor's merge button. It does not withhold the sole maintainer's push —
 > `enforce_admins` is off by design — so "blocker" here means "blocking for anyone who is
@@ -336,8 +344,21 @@ pnpm install --frozen-lockfile
 pnpm run typecheck
 pnpm run lint
 pnpm run format:check
+pnpm --filter @agenthropic/web build
 pnpm run test
 pnpm run gate:spawner
 pnpm run gate:licenses
 # then: §5 live restore drill, §0/§4/§6 gh api verifications
 ```
+
+Last rehearsal of this block on a non-release tree: **2026-09-18**, HEAD `39e565a` plus
+the uncommitted working tree — every command above exited 0 (131 test files / 2428 tests,
+100% on all four axes in all five packages; the spawner allowlist held the policy file
+only; 412 packages under the license gate with one documented exception), and the §2, §4
+and §6 scriptable verifications passed. *(Partial re-run 2026-09-23 on the same HEAD with
+a further-changed working tree - `pnpm -r test`, `gate:spawner` and `gate:licenses` only,
+not the restore drill or the `gh api` checks: all three exited 0, at 140 test files / 2621
+tests with the same 100% in all five packages, 282 files scanned by the spawner gate, and
+412 packages / 429 installed versions under the license gate with the same one documented
+exception. That is a re-measurement, not a second rehearsal.)* A rehearsal ticks no box: every box on this page
+is ticked on the release commit only. The record is on the `TODO.md` Wave 4 row.

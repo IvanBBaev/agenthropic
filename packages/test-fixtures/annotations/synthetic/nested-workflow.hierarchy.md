@@ -1,6 +1,6 @@
 # nested-workflow — hierarchy ground truth (true by construction)
 
-The `workflows/wf_*/subagents/` layout. Workflow subagents carry no `toolUseId`
+The `subagents/workflows/wf_*/` layout. Workflow subagents carry no `toolUseId`
 in their sidecar, so the only available join is the directory itself: both
 agents were spawned by the main agent inside one workflow.
 

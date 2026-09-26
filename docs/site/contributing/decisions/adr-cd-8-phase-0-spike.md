@@ -88,6 +88,11 @@ and pull request and fail the run; since 2026-08-25 `main` is branch-protected o
 design (`enforce_admins: false`). See
 [the standing correction](README.md#a-standing-correction-merge-blocking).
 
+*(As built — 2026-09-22: `apps/server/test/p0/` holds four P0 proofs; the fourth,
+`p0-five-daily-questions.test.ts` (2026-08-07), proves the CD-10 five-questions exit gate
+over real HTTP through the booted server and is not one of the three G0.1/G0.4 proofs
+counted above.)*
+
 **Second, and more to the point for an ADR about a gate that was overridden: no part of the
 override has been retired.** `WP-S7` has still not run. `WP-S3` / G0.1b has still not been
 run as a formal probe. No hand-labelled corpus exists, so the ≥95% hierarchy criterion
@@ -97,7 +102,8 @@ reporting a number it cannot defend. Every Phase-0 figure remains **PROVISIONAL*
 
 The evidence base *has* grown since 2026-07-30 — the coverage bar is now 100 across five
 packages ([ADR-0009](adr-cd-7-security-and-coverage-boundary.md)), the P0 proofs still
-hold, and six further migrations have landed without disturbing them. But it has grown in
+hold, and six further migrations have landed without disturbing them *(eleven by
+2026-09-19 — eighteen migrations in all, the P0 proofs still holding)*. But it has grown in
 the same direction it already pointed: more tests, written by the same author, against
 fixtures rather than the ratified paired-capture corpus this ADR asked for. That is worth
 having and it is not what was specified. **An override does not become a pass by ageing

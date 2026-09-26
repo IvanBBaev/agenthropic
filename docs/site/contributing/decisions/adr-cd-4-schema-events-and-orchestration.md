@@ -42,7 +42,7 @@ other. This is a deliberate honesty affordance, not a placeholder.
 | `token_usage.service_tier` / `speed` / `inference_geo` | a single `bucket` column, `CHECK (bucket IN ('input','output','cache_read','cache_write_5m','cache_write_1h'))`, with `UNIQUE (message_id, bucket)` | The five priced buckets are what the corpus actually distinguishes (parser-spec §5.4). The UNIQUE key is load-bearing: naive row summation over-counts by **~2.4–2.7×** — a `PROVISIONAL` single-corpus range, not a constant (parser-spec §5.2). |
 | `token_usage.compaction_baseline TEXT` | `is_compaction_baseline INTEGER NOT NULL DEFAULT 0` | Same guarantee (a compacted session still reprices), expressed as a flag on the row rather than a separate reference. |
 | `model_pricing (model, effective_from, verified_on)` | `model_pricing (model, bucket, usd_per_mtok, effective_from)`, PK `(model, bucket, effective_from)` | **There is no `verified_on` column.** Pricing is versioned by `effective_from` only, and is bucket-aware (a cache-read token is not priced like an input token). The auditability the sketch wanted from `verified_on` is not in the schema. |
-| `orchestration_edges.derived_from_event_id NOT NULL`, `UNIQUE (parent, child, instance)` | `source TEXT CHECK (source IN ('tool_use','directory','task_notification','queue_operation'))`, `UNIQUE (session_id, parent_agent_id, child_agent_id)` | Edges derive from parsed JSONL, not from an `events_raw` row (see [ADR-0004](adr-cd-2-immutable-substrate-projection.md)'s as-built update), so `derived_from_event_id` had nothing to point at. `source` records *which of the four detection mechanisms* found the edge — strictly more useful for auditing the DAG than a raw-row pointer would have been. `instance` and `host_id` are still `NOT NULL` on every row, as §6 requires. |
+| `orchestration_edges.derived_from_event_id NOT NULL`, `UNIQUE (parent, child, instance)` | `source TEXT CHECK (source IN ('tool_use','directory','task_notification','queue_operation'))`, `UNIQUE (session_id, parent_agent_id, child_agent_id)` | Edges derive from parsed JSONL, not from an `events_raw` row (see [ADR-0004](adr-cd-2-immutable-substrate-projection.md)'s as-built update), so `derived_from_event_id` had nothing to point at. `source` records *which of the detection mechanisms* found the edge (four at this writing; a fifth, `legacy_explore`, since migration 13 — see the 2026-08-15 update) — strictly more useful for auditing the DAG than a raw-row pointer would have been. `instance` and `host_id` are still `NOT NULL` on every row, as §6 requires. |
 | `agents.status IN ('working','waiting','completed','error')` | the same four plus `'unknown'` | The corpus contains agents whose terminal state is genuinely not determinable. `'unknown'` is preferred over silently defaulting one of the other four. |
 
 **On "a fixture model with no price row FAILS CI":** the mechanism shipped as a
@@ -98,6 +98,44 @@ both histories to the same rows and leaves operator-authored pricing untouched. 
 ADR's Consequences section named "a single, always-forward-only migration chain" as
 the cost of this schema; this is the record of that cost being paid once, in the one
 way it can be — by an additional forward migration, never by editing history.
+
+## As-built update — 2026-09-18
+
+**Verdict: still holds. The chain is eighteen migrations, not thirteen.** The five added
+since the update above, with what each one is for:
+
+- `model-pricing-canonical-effective-from` (14) and `token-usage-canonical-occurred-at`
+  (15) — review M-21. The dated-rate comparison `effective_from <= occurred_at` is a
+  BINARY-collated text comparison in the API's priced CTE, while core's `computeCostUsd`
+  compares epoch milliseconds; the two agreed only while the stored text sorted
+  chronologically, and mixed spellings of the same instant (`'2026-06-01T00:00:00Z'`
+  against `'…00:00:00.000Z'`, or an offset form such as `'…20:00:00-05:00'`) made the
+  CTE pick a different rate row than the halt gate had approved, or no row at all. The
+  two migrations canonicalize both operands to one spelling, `YYYY-MM-DDTHH:mm:ss.sssZ`,
+  for every row already stored and every row written from then on.
+- `token-usage-rollup` (16) — review M-19. A persisted rollup of `token_usage`,
+  maintained incrementally by the write path and pinned equal to a direct grouped scan
+  by an equivalence suite; the cost summary now reads it. In the terms of the paragraph
+  above it is a table of work-already-done: dropping it costs a rebuild and changes no
+  output. `token_usage` itself is unchanged and still never pruned.
+- `agents-outcome-cause` (17) — a nullable `outcome_cause` column on `agents` with an
+  inline `CHECK` enum. It answers "why did it end that way" next to `status`'s "where is
+  it now"; every pre-existing row reads NULL, the honest value for an outcome nobody
+  observed.
+- `model-pricing-opus-5-fable-5-1` (18) — ten `model_pricing` rows *(corrected 2026-09-22: one
+  per priced bucket, written explicitly rather than derived from the input rate, because
+  Fable 5.1 does not follow the seed's derivation)*, for the two
+  model ids the first boot over the owner's real corpus (2026-09-09) exposed as unpriced,
+  which the `PricingError` halt gate had refused on 52 of 60 sessions. Migration 11's
+  lesson, applied again: a missing row is cured by a forward migration that adds a row,
+  never by relaxing the gate and never by editing a seed an operator database has already
+  applied. The 2026-09-18 rerun at schema 18 admitted 54 of 54 sessions. Migration 19
+  (2026-09-26) repeated the cure for `claude-opus-5-5` (five explicit rows; cache-read
+  0.05× input) after a boot at schema 18 that day refused 27 of 61 sessions on it.
+
+None of the five touches `events_raw`, its triggers, or `orchestration_edges`; the
+five-value `source` CHECK and the PROVISIONAL `legacy_explore` heuristic stand as
+described above.
 
 ## Context
 

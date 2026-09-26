@@ -67,8 +67,9 @@
  * RULE 2 - DEFER TO A RENDERER THAT IS ALREADY HONEST. A leaf whose every
  * consumer answers a missing value with an explicit marker is left unchecked,
  * because refusing the payload would REPLACE a precise "this one cell could not
- * be read" with "none of this page can be shown". Three exemptions are claimed
- * under this rule, each pinned by an existing test:
+ * be read" with "none of this page can be shown". Four exemptions are claimed
+ * under this rule, each pinned by an existing test - the three numeric ones
+ * below, plus enum membership in the unchecked list further down (DG-4):
  *   - the five `statusCounts` buckets: `bucketCount` returns `undefined` for a
  *     bucket the server omitted and the board prints NO_FIGURE_META - honesty
  *     suite, "renders an explicit unknown marker, never a blank next to the
@@ -92,11 +93,30 @@
  *     `subagentsPriced + subagentsSkipped` is interpolated as the denominator of
  *     a coverage claim.
  *
- * Left unchecked besides the three exemptions:
+ * Left unchecked besides the three numeric exemptions:
  *   - strings - ids, model names, day labels, project slugs. A wrong string
  *     prints as itself and is self-evident; it cannot masquerade as a precise
  *     figure. Rejecting a cost summary over an odd day label would be exactly
  *     the blackout-for-a-typo trade rule 1 exists to refuse;
+ *
+ *     AMENDED 2026-09-23 (lane-M). The VERDICT stands - `day` is still unchecked
+ *     here, and tightening it would still be the blackout-for-a-typo trade - but
+ *     the reason given for it was too broad. "A wrong string prints as itself
+ *     and is self-evident; it cannot masquerade as a precise figure" is true of
+ *     an id or a model name, and was false of `day`: nothing printed it, the
+ *     cost windows ROUTED on it. A row carrying `''` matched no window and fell
+ *     out of all four buckets, so its tokens and dollars left the page while the
+ *     four totals still read as a partition of the whole; and `'2026-8-5'` sorts
+ *     lexicographically above `'2026-08-15'`, so a ten-day-old row was announced
+ *     as future-dated evidence that the corpus and the browser disagree about
+ *     the clock. That is a string masquerading as a precise figure, by way of
+ *     the arithmetic it silently selected. The defence belongs where it now
+ *     lives - `isReadableDay` in `views/cost-windows.ts`, which round-trips the
+ *     day through `Date.parse` and routes anything that does not survive into an
+ *     explicit `unreadableDay` bucket the view discloses. The rule to carry
+ *     forward: a string is safe to leave unchecked when it is only ever
+ *     RENDERED, and is not when something COMPARES or BUCKETS on it.
+ *
  *   - enum membership (`status`, `source`, `outcomeCause`) - the views already
  *     funnel an unrecognised value into an explicit "unknown" bucket, which is
  *     rule 2 again;
@@ -129,6 +149,27 @@
  *     guard open, and `status.test.ts` (SV-3) holds the renderer honest. Tighten
  *     either and the other fails.
  *
+ *     AMENDED 2026-09-23 (lane-EP). DG-4 audited the exemption one field at a
+ *     time and stopped at two of the three. `status` had `statusMeta` and
+ *     `outcomeCause` had `outcomeCauseText`; both answer `unrecognised (...)`
+ *     for a word they do not know AND for a value that is not a word. `source`
+ *     had no such renderer at all. Four sites asked `source === 'tool_use'` and
+ *     sent everything else down the `inferred` arm, so the exemption above was
+ *     claimed - in the amendment written to check exactly this - against a
+ *     funnel that did not exist for the field in the middle of its own list.
+ *
+ *     The failure is worse than the one DG-4 found, because `inferred` is not a
+ *     vaguer word for the same thing: it is a positive claim that the server
+ *     DERIVED the parent-child link, made on the sole evidence that the word
+ *     was not `tool_use`. A source this build has not learned could equally be
+ *     a new OBSERVATION, in which case the page understated the graph. Both
+ *     legends made it concrete by enumerating the four inferred sources beside
+ *     a dashed stroke that, by construction, was also being drawn for words not
+ *     on that list. The exemption STANDS for the same reason as above, and
+ *     `views/provenance.ts` is now the funnel it was always said to have:
+ *     `provenance.test.ts` holds the renderer honest from one end and the
+ *     guard test holds the check open from the other.
+ *
  *   - fields no view reads (`limit`, `offset` on the session list). Checking one
  *     can only ever cost a blackout, since nothing downstream could have
  *     misreported it;
@@ -140,6 +181,36 @@
  *
  * Consequently these predicates certify the load-bearing subset of each DTO, not
  * the whole contract, and `api.ts` says so where it casts.
+ *
+ * AMENDED 2026-09-09 (L1). `GET /api/cost/summary` gained two required fields,
+ * `sessionCount` and `hasMore`, and both are now checked. Neither is a new
+ * category: they are the two failure modes this header already names, arriving
+ * on one payload.
+ *
+ * `sessionCount` is the POPULATION the `topSessions` slice was cut from, and
+ * the scope sentence over that table prints it RAW as a denominator - "5 of 51
+ * sessions". No formatter stands between it and the screen, so an absent
+ * counter renders literally, exactly as the header's raw-print bullet says
+ * template interpolation renders `undefined`, and the table then claims to be
+ * five sessions out of nothing. `hasMore` is a DISCLOSURE GATE, spelled the way
+ * every honesty notice in this app is spelled, so an absent flag is false and
+ * silently withdraws the sentence that says the table is only a slice - the
+ * falsiness failure the header already names for `unpricedTokens` and
+ * `counts.truncated`. Rule 2 claims no exemption for either: there is no
+ * renderer that answers a missing one with "unreadable" in that one cell, so
+ * the whole body is refused and a stale server is named as stale.
+ *
+ * The two are checked with DIFFERENT strictness, and the difference is rule 1.
+ * `sessionCount` goes through `hasNumbers` - `typeof x === 'number'`, nothing
+ * more. A `Number.isInteger` test here would contradict the rule this header
+ * spends its longest section justifying, and the unchecked list already says
+ * why: a fractional count is a SERVER bug that displays as the number it
+ * actually is and can be disbelieved, which is a different class from `null`,
+ * which displays as a number the server never sent. `hasMore` is checked as a
+ * boolean on the precedent of `counts.truncated` in `isGlobalDag` - "the one
+ * boolean worth refusing a payload over ... an absent flag is not a blank - it
+ * is an assertion of completeness" - the same flag over a table rather than a
+ * graph.
  */
 
 // --- primitives --------------------------------------------------------------
@@ -288,7 +359,23 @@ function hasOptionalCoverage(body: Record<string, unknown>): boolean {
   return coverage === undefined || (isRecord(coverage) && hasNumbers(coverage, COVERAGE_NUMBERS));
 }
 
-/** `GET /api/cost/summary` - the KPI row, the day windows and the cost flow. */
+/**
+ * The corpus-scope counter beside the top-sessions table: how many sessions the
+ * corpus holds, not how many rows the slice carries. `hasMore` travels with it
+ * but is a boolean, so it is checked in place rather than listed here.
+ */
+const COST_SUMMARY_NUMBERS = ['sessionCount'] as const;
+
+/**
+ * `GET /api/cost/summary` - the KPI row, the day windows and the cost flow.
+ *
+ * AMENDED 2026-09-09 (L1). And the scope sentence over the top-sessions table,
+ * which is what the two checks below defend. `sessionCount` is interpolated
+ * raw as the denominator of "n of N sessions", and `hasMore` gates the notice
+ * that the table is a slice, so a server that predates the pair is refused
+ * whole rather than rendered as "5 of undefined sessions" with the truncation
+ * notice silently withdrawn.
+ */
 export function isCostSummary(body: Record<string, unknown>): boolean {
   const totals = recordAt(body, 'totals');
   return (
@@ -297,6 +384,13 @@ export function isCostSummary(body: Record<string, unknown>): boolean {
     isArrayOfRecords(body['perModel'], hasCostRowNumbers) &&
     isArrayOfRecords(body['perDay'], hasCostRowNumbers) &&
     isArrayOfRecords(body['topSessions'], hasCostRowNumbers) &&
+    // The population the slice above was cut from, printed raw as a
+    // denominator: an absent counter reaches the reader as itself.
+    hasNumbers(body, COST_SUMMARY_NUMBERS) &&
+    // The second boolean worth refusing a payload over, on the precedent of
+    // `counts.truncated` in `isGlobalDag`: an absent flag is not a blank - it
+    // is an assertion of completeness, here about a table rather than a graph.
+    typeof body['hasMore'] === 'boolean' &&
     hasOptionalCoverage(body)
   );
 }
@@ -330,18 +424,72 @@ export function isAggregateSavings(body: Record<string, unknown>): boolean {
 }
 
 const COMPACTION_NUMBERS = ['naiveUsd', 'repricedUsd', 'deltaUsd', 'compactionCount'] as const;
-const SEGMENT_NUMBERS = ['usd'] as const;
+const SEGMENT_NUMBERS = ['usd', 'index'] as const;
 
 /**
  * Only the `tokens` OBJECT and `usd` are checked. `segmentTokens(segment.tokens)`
  * reads five properties off `tokens`, so its absence throws - but the buckets
- * inside it, and `messageCount` beside it, are the two exemptions rule 2 names:
+ * inside it, and `messageCount` beside it, are two of the exemptions rule 2 names:
  * a missing bucket makes the row's sum non-finite and `formatTokens` prints
  * "tokens unreadable", and `messageCountLabel` prints "messages unreadable".
  * Refusing the payload would trade those two precise cells for an empty panel.
+ *
+ * AMENDED 2026-09-23 (K1, K2). The sentence above is still the rule; the row it
+ * was applied to had three more fields that the rule sends the other way, and
+ * none of them was audited against it. Each is a category this header already
+ * names, so nothing new is being decided here - only applied.
+ *
+ * K1 - `index` is a RAW PRINT, now in `SEGMENT_NUMBERS`. `SessionCostAnalysis`
+ * renders the leading `#` column as `{segment.index + 1}` and keys the row as
+ * `${agentId ?? 'main'}-${String(index)}`. No formatter stands between either
+ * and the screen, which is the header's raw-print bullet verbatim: an absent
+ * counter numbers every segment `NaN` down a column of otherwise real figures,
+ * and every row keys to the same `main-undefined`, which React reconciles as
+ * one row - so the table also silently loses segments it was handed. Rule 2
+ * claims no exemption because there is no renderer that says "unreadable" in
+ * that one cell; `index` reaches the DOM through arithmetic and `String`.
+ *
+ * K2 - `agentId` and `boundary` are read THROUGH, so their absence is the
+ * TypeError of category 1, exactly as `tokens`' absence is. Both are nullABLE
+ * and both nulls are handled and meaningful - a null `agentId` prints "main"
+ * and a null `boundary` prints "session start" - which is why the test is "null
+ * or the right kind of thing" rather than a bare presence check. Undefined is a
+ * different fact and is handled nowhere: `shortId(segment.agentId)` reads
+ * `.length` off it and `segment.boundary.trigger` reads `.trigger` off it, and
+ * the route error boundary then replaces the panel with a notice that cannot
+ * say what went wrong. `agentId` is additionally required to be a STRING, which
+ * is not a retreat from rule 1's string exemption: that exemption covers a
+ * WRONG string, which prints as itself, and `shortId(42)` prints as itself too -
+ * but `shortId({})` returns the object unchanged and React refuses an object as
+ * a child, which takes the panel down as surely as the undefined does.
  */
 function isCompactionSegment(row: Record<string, unknown>): boolean {
-  return recordAt(row, 'tokens') !== null && hasNumbers(row, SEGMENT_NUMBERS);
+  const agentId = row['agentId'];
+  const boundary = row['boundary'];
+  return (
+    recordAt(row, 'tokens') !== null &&
+    hasNumbers(row, SEGMENT_NUMBERS) &&
+    (agentId === null || typeof agentId === 'string') &&
+    (boundary === null || isRecord(boundary))
+  );
+}
+
+/**
+ * K2 (2026-09-23). One `perAgent` row of the delegation estimate: the three
+ * dollar figures, plus the `agentId` the row is read through.
+ *
+ * `hasSavingsNumbers` alone cannot stand here, because it is shared with the
+ * delegation ROLLUP, which carries the same three figures and no agent id -
+ * and a predicate that certifies the rollup cannot also certify what the rows
+ * have that the rollup does not. The row is rendered as
+ * `<code>{shortId(agent.agentId)}</code>` under `key={agent.agentId}`, so an
+ * absent id throws inside `shortId` and takes the whole delegation table with
+ * it. The schema types it a plain `Type.String()`, not a nullable one: unlike
+ * a compaction segment, a per-agent savings row with no agent is not a fact
+ * this panel has any way to render.
+ */
+function isAgentSavingsRow(row: Record<string, unknown>): boolean {
+  return hasSavingsNumbers(row) && typeof row['agentId'] === 'string';
 }
 
 /** `GET /api/sessions/:id/cost-analysis` - compaction repricing + delegation savings. */
@@ -354,7 +502,7 @@ export function isCostAnalysis(body: Record<string, unknown>): boolean {
     hasNumbers(compaction, COMPACTION_NUMBERS) &&
     isArrayOfRecords(compaction['segments'], isCompactionSegment) &&
     hasSavingsNumbers(delegationSavings) &&
-    isArrayOfRecords(delegationSavings['perAgent'], hasSavingsNumbers) &&
+    isArrayOfRecords(delegationSavings['perAgent'], isAgentSavingsRow) &&
     // Counted (`.length`) to report how many subagents were left out; an absent
     // array crashes the panel, and an absent COUNT would erase the exclusion.
     Array.isArray(delegationSavings['skippedAgentIds'])

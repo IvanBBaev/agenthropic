@@ -956,4 +956,320 @@ describe('migration runner (WP-D3)', () => {
       }
     });
   });
+
+  /**
+   * Migration 18: explicit five-bucket rows for the two model ids the real
+   * corpus uses and the seed never named (`claude-opus-5`, `claude-fable-5-1`).
+   * The finding is in docs/measurement/time-to-understand-log.md section 0.4:
+   * 52 of 60 sessions refused by the halt gate for want of these rows.
+   */
+  /**
+   * Migration 18's cases assert that it "applies only itself"; with 19 appended
+   * to the exported list that stays true only when the run is bounded here.
+   */
+  const throughMigration18 = migrations.filter((m) => m.id <= 18);
+
+  describe('migration 18 (model-pricing-opus-5-fable-5-1)', () => {
+    const FLOOR = '2026-01-01T00:00:00.000Z';
+    const OFFICIAL_RATES: ReadonlyArray<{ model: string; bucket: string; usd_per_mtok: number }> = [
+      // https://platform.claude.com/docs/en/about-claude/pricing, fetched 2026-09-10.
+      { model: 'claude-fable-5-1', bucket: 'cache_read', usd_per_mtok: 0.25 },
+      { model: 'claude-fable-5-1', bucket: 'cache_write_1h', usd_per_mtok: 20 },
+      { model: 'claude-fable-5-1', bucket: 'cache_write_5m', usd_per_mtok: 12.5 },
+      { model: 'claude-fable-5-1', bucket: 'input', usd_per_mtok: 10 },
+      { model: 'claude-fable-5-1', bucket: 'output', usd_per_mtok: 50 },
+      { model: 'claude-opus-5', bucket: 'cache_read', usd_per_mtok: 0.5 },
+      { model: 'claude-opus-5', bucket: 'cache_write_1h', usd_per_mtok: 10 },
+      { model: 'claude-opus-5', bucket: 'cache_write_5m', usd_per_mtok: 6.25 },
+      { model: 'claude-opus-5', bucket: 'input', usd_per_mtok: 5 },
+      { model: 'claude-opus-5', bucket: 'output', usd_per_mtok: 25 },
+    ];
+
+    function corpusModelRows(db: SqliteDatabase): unknown[] {
+      return db
+        .prepare(
+          `SELECT model, bucket, usd_per_mtok, effective_from FROM model_pricing
+            WHERE model IN ('claude-opus-5', 'claude-fable-5-1')
+            ORDER BY model, bucket, effective_from`,
+        )
+        .all();
+    }
+
+    function withSchema17Db(slug: string, body: (db: SqliteDatabase) => void): void {
+      const dir = mkdtempSync(join(tmpdir(), `agenthropic-mig18-${slug}-`));
+      const db = openDatabase(join(dir, 'v17.db'));
+      try {
+        runMigrations(
+          db,
+          migrations.filter((m) => m.id <= 17),
+        );
+        expect(currentSchemaVersion(db)).toBe(17);
+        body(db);
+      } finally {
+        db.close();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+
+    it('seeds both corpus model ids with the official per-bucket rates at the canonical floor', () => {
+      temp = createMigratedTempDb();
+      expect(corpusModelRows(temp.db)).toEqual(
+        OFFICIAL_RATES.map((row) => ({ ...row, effective_from: FLOOR })),
+      );
+    });
+
+    it('writes cache_read explicitly because Fable 5.1 does not follow the 0.1x derivation', () => {
+      // Migrations 7 and 11 derive cache_read as 0.1 x input. Fable 5.1's
+      // published cache-read rate is 0.025 x input; a derived row would have
+      // priced every one of its cache reads four times too high. Opus 5 does
+      // follow the derivation, so the two models together prove the rows are
+      // copied from the source, not computed.
+      temp = createMigratedTempDb();
+      const rate = temp.db
+        .prepare('SELECT usd_per_mtok FROM model_pricing WHERE model = ? AND bucket = ?')
+        .pluck();
+      expect(rate.get('claude-fable-5-1', 'cache_read')).toBe(0.25);
+      expect(rate.get('claude-fable-5-1', 'cache_read')).not.toBe(
+        (rate.get('claude-fable-5-1', 'input') as number) * 0.1,
+      );
+      expect(rate.get('claude-opus-5', 'cache_read')).toBe(
+        (rate.get('claude-opus-5', 'input') as number) * 0.1,
+      );
+    });
+
+    it('applies only itself on a schema-17 database and leaves every seed row byte-identical', () => {
+      withSchema17Db('append', (db) => {
+        const before = pricingRows(db);
+        expect(before).toHaveLength(25);
+
+        expect(runMigrations(db, throughMigration18).appliedIds).toEqual([18]);
+
+        const after = pricingRows(db) as Array<{ model: string }>;
+        expect(after).toHaveLength(35);
+        expect(
+          after.filter((r) => r.model !== 'claude-opus-5' && r.model !== 'claude-fable-5-1'),
+        ).toEqual(before);
+        // Second run: nothing pending, nothing rewritten.
+        expect(runMigrations(db, throughMigration18).appliedIds).toEqual([]);
+        expect(pricingRows(db)).toEqual(after);
+      });
+    });
+
+    it('converges an operator placeholder at the floor to the official rate and leaves other instants alone', () => {
+      withSchema17Db('operator-rows', (db) => {
+        // The measurement log's scratch-database workaround: copy the nearest
+        // seeded model's rows under the corpus id. That leaves Fable 5.1's
+        // cache_read at 1.0 (10 x 0.1), which migration 18 must overwrite -
+        // and must be able to, which is why its floor is spelled canonically.
+        db.exec(
+          `INSERT INTO model_pricing (model, bucket, usd_per_mtok, effective_from)
+           SELECT 'claude-fable-5-1', bucket, usd_per_mtok, effective_from
+             FROM model_pricing WHERE model = 'claude-fable-5'`,
+        );
+        // A genuinely operator-authored rate change at a later instant.
+        db.prepare(
+          'INSERT INTO model_pricing (model, bucket, usd_per_mtok, effective_from) VALUES (?, ?, ?, ?)',
+        ).run('claude-opus-5', 'input', 7, '2026-10-01');
+
+        expect(runMigrations(db, throughMigration18).appliedIds).toEqual([18]);
+
+        expect(corpusModelRows(db)).toEqual([
+          ...OFFICIAL_RATES.filter((r) => r.model === 'claude-fable-5-1').map((row) => ({
+            ...row,
+            effective_from: FLOOR,
+          })),
+          {
+            model: 'claude-opus-5',
+            bucket: 'cache_read',
+            usd_per_mtok: 0.5,
+            effective_from: FLOOR,
+          },
+          {
+            model: 'claude-opus-5',
+            bucket: 'cache_write_1h',
+            usd_per_mtok: 10,
+            effective_from: FLOOR,
+          },
+          {
+            model: 'claude-opus-5',
+            bucket: 'cache_write_5m',
+            usd_per_mtok: 6.25,
+            effective_from: FLOOR,
+          },
+          { model: 'claude-opus-5', bucket: 'input', usd_per_mtok: 5, effective_from: FLOOR },
+          {
+            model: 'claude-opus-5',
+            bucket: 'input',
+            usd_per_mtok: 7,
+            effective_from: '2026-10-01T00:00:00.000Z',
+          },
+          { model: 'claude-opus-5', bucket: 'output', usd_per_mtok: 25, effective_from: FLOOR },
+        ]);
+      });
+    });
+
+    it('re-prices usage already stored for the new models through the rollup pricing trigger', () => {
+      withSchema17Db('rollup', (db) => {
+        // A usage row for an unpriced model can exist at schema 17 only by a
+        // hand write (the ingest halt gate refuses the session whole), but the
+        // rollup must still follow the table: migration 16's AFTER INSERT ON
+        // model_pricing trigger rebuilds the slice, so the row moves from the
+        // unpriced key ('' rate) to the floor rate with no re-ingest.
+        insertSession(db, 'sess-18');
+        db.prepare(
+          `INSERT INTO token_usage
+             (session_id, agent_id, message_id, model, bucket, tokens, is_compaction_baseline, occurred_at)
+           VALUES ('sess-18', NULL, 'msg-18', 'claude-opus-5', 'input', 1000, 0, '2026-09-01T00:00:00.000Z')`,
+        ).run();
+        const rollupRates = (): unknown[] =>
+          db
+            .prepare(
+              `SELECT rate_effective_from, tokens FROM token_usage_rollup
+                WHERE model = 'claude-opus-5' AND bucket = 'input'`,
+            )
+            .all();
+        expect(rollupRates()).toEqual([{ rate_effective_from: '', tokens: 1000 }]);
+
+        expect(runMigrations(db, throughMigration18).appliedIds).toEqual([18]);
+
+        expect(rollupRates()).toEqual([{ rate_effective_from: FLOOR, tokens: 1000 }]);
+      });
+    });
+  });
+
+  /**
+   * Migration 19: explicit five-bucket rows for `claude-opus-5-5`, the one
+   * model id the 2026-09-26 real-corpus boot found missing
+   * (docs/measurement/time-to-understand-log.md section 0.6: 27 of 61 sessions
+   * refused by the halt gate for want of these rows). Same shape and same
+   * guarantees as migration 18, proven the same way.
+   */
+  describe('migration 19 (model-pricing-opus-5-5)', () => {
+    const FLOOR = '2026-01-01T00:00:00.000Z';
+    const OFFICIAL_RATES: ReadonlyArray<{ model: string; bucket: string; usd_per_mtok: number }> = [
+      // https://platform.claude.com/docs/en/about-claude/pricing, fetched 2026-09-26.
+      { model: 'claude-opus-5-5', bucket: 'cache_read', usd_per_mtok: 0.2 },
+      { model: 'claude-opus-5-5', bucket: 'cache_write_1h', usd_per_mtok: 8 },
+      { model: 'claude-opus-5-5', bucket: 'cache_write_5m', usd_per_mtok: 5 },
+      { model: 'claude-opus-5-5', bucket: 'input', usd_per_mtok: 4 },
+      { model: 'claude-opus-5-5', bucket: 'output', usd_per_mtok: 20 },
+    ];
+
+    function opus55Rows(db: SqliteDatabase): unknown[] {
+      return db
+        .prepare(
+          `SELECT model, bucket, usd_per_mtok, effective_from FROM model_pricing
+            WHERE model = 'claude-opus-5-5'
+            ORDER BY model, bucket, effective_from`,
+        )
+        .all();
+    }
+
+    function withSchema18Db(slug: string, body: (db: SqliteDatabase) => void): void {
+      const dir = mkdtempSync(join(tmpdir(), `agenthropic-mig19-${slug}-`));
+      const db = openDatabase(join(dir, 'v18.db'));
+      try {
+        runMigrations(db, throughMigration18);
+        expect(currentSchemaVersion(db)).toBe(18);
+        body(db);
+      } finally {
+        db.close();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+
+    it('seeds claude-opus-5-5 with the official per-bucket rates at the canonical floor', () => {
+      temp = createMigratedTempDb();
+      expect(currentSchemaVersion(temp.db)).toBe(19);
+      expect(opus55Rows(temp.db)).toEqual(
+        OFFICIAL_RATES.map((row) => ({ ...row, effective_from: FLOOR })),
+      );
+    });
+
+    it('writes cache_read explicitly because Opus 5.5 follows neither the 0.1x nor the 0.025x rule', () => {
+      // The seed derives cache_read as 0.1 x input; Fable 5.1 (migration 18)
+      // is 0.025x. Opus 5.5's published rate is 0.05x input - a third ratio,
+      // which is why the row is copied from the source, not computed.
+      temp = createMigratedTempDb();
+      const rate = temp.db
+        .prepare('SELECT usd_per_mtok FROM model_pricing WHERE model = ? AND bucket = ?')
+        .pluck();
+      const input = rate.get('claude-opus-5-5', 'input') as number;
+      expect(rate.get('claude-opus-5-5', 'cache_read')).toBe(0.2);
+      expect(rate.get('claude-opus-5-5', 'cache_read')).toBeCloseTo(input * 0.05, 12);
+      expect(rate.get('claude-opus-5-5', 'cache_read')).not.toBe(input * 0.1);
+      expect(rate.get('claude-opus-5-5', 'cache_read')).not.toBe(input * 0.025);
+    });
+
+    it('applies only itself on a schema-18 database and leaves every earlier row byte-identical', () => {
+      withSchema18Db('append', (db) => {
+        const before = pricingRows(db);
+        expect(before).toHaveLength(35);
+
+        expect(runMigrations(db).appliedIds).toEqual([19]);
+
+        const after = pricingRows(db) as Array<{ model: string }>;
+        expect(after).toHaveLength(40);
+        expect(after.filter((r) => r.model !== 'claude-opus-5-5')).toEqual(before);
+        // Second run: nothing pending, nothing rewritten.
+        expect(runMigrations(db).appliedIds).toEqual([]);
+        expect(pricingRows(db)).toEqual(after);
+      });
+    });
+
+    it('converges an operator placeholder at the floor to the official rate and leaves other instants alone', () => {
+      withSchema18Db('operator-rows', (db) => {
+        // The measurement log's scratch-database workaround, applied to the
+        // 2026-09-26 boot: copy the nearest seeded model's rows (Opus 5) under
+        // the new id. Every one of the five is wrong for Opus 5.5 - input 5
+        // for 4, cache_read 0.5 for 0.2 - and every one must be overwritten,
+        // which is what the canonical floor spelling buys.
+        db.exec(
+          `INSERT INTO model_pricing (model, bucket, usd_per_mtok, effective_from)
+           SELECT 'claude-opus-5-5', bucket, usd_per_mtok, effective_from
+             FROM model_pricing WHERE model = 'claude-opus-5'`,
+        );
+        // A genuinely operator-authored rate change at a later instant.
+        db.prepare(
+          'INSERT INTO model_pricing (model, bucket, usd_per_mtok, effective_from) VALUES (?, ?, ?, ?)',
+        ).run('claude-opus-5-5', 'output', 30, '2026-11-01');
+
+        expect(runMigrations(db).appliedIds).toEqual([19]);
+
+        expect(opus55Rows(db)).toEqual([
+          ...OFFICIAL_RATES.map((row) => ({ ...row, effective_from: FLOOR })).slice(0, 4),
+          { model: 'claude-opus-5-5', bucket: 'output', usd_per_mtok: 20, effective_from: FLOOR },
+          {
+            model: 'claude-opus-5-5',
+            bucket: 'output',
+            usd_per_mtok: 30,
+            effective_from: '2026-11-01T00:00:00.000Z',
+          },
+        ]);
+      });
+    });
+
+    it('re-prices usage already stored for claude-opus-5-5 through the rollup pricing trigger', () => {
+      withSchema18Db('rollup', (db) => {
+        insertSession(db, 'sess-19');
+        db.prepare(
+          `INSERT INTO token_usage
+             (session_id, agent_id, message_id, model, bucket, tokens, is_compaction_baseline, occurred_at)
+           VALUES ('sess-19', NULL, 'msg-19', 'claude-opus-5-5', 'input', 1000, 0, '2026-09-20T00:00:00.000Z')`,
+        ).run();
+        const rollupRates = (): unknown[] =>
+          db
+            .prepare(
+              `SELECT rate_effective_from, tokens FROM token_usage_rollup
+                WHERE model = 'claude-opus-5-5' AND bucket = 'input'`,
+            )
+            .all();
+        expect(rollupRates()).toEqual([{ rate_effective_from: '', tokens: 1000 }]);
+
+        expect(runMigrations(db).appliedIds).toEqual([19]);
+
+        expect(rollupRates()).toEqual([{ rate_effective_from: FLOOR, tokens: 1000 }]);
+      });
+    });
+  });
 });

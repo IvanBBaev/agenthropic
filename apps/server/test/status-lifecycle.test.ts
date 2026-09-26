@@ -39,6 +39,7 @@ import { getFixture } from '@agenthropic/test-fixtures';
 import { loadConfig } from '../src/config';
 import { applyAgentStatus, setAgentStatus } from '../src/db/agents';
 import { SqliteEventStore } from '../src/db/event-store';
+import { upsertSession } from '../src/db/sessions';
 import { applyHookLiveness, resolveHookStatusTarget } from '../src/hooks/liveness-status';
 import { HOOK_DELIVERY_ID_HEADER, HOOK_EVENT_PATH, registerHookRoutes } from '../src/hooks/routes';
 import { createCorpusWatcher } from '../src/ingest/corpus-watcher';
@@ -337,6 +338,18 @@ describe('status lifecycle', () => {
       expect(resolveHookStatusTarget('SubagentStop', 42)).toBeNull();
     });
 
+    it('refuses a SubagentStop that names the session id (the MAIN agent) as its subagent', () => {
+      // The main agent's id IS the session uuid, and SubagentStop by definition
+      // speaks for a subagent. Accepting it would mark the still-running main
+      // agent 'completed' — an ending nobody observed.
+      expect(
+        resolveHookStatusTarget('SubagentStop', { session_id: SESSION_ID, agent_id: SESSION_ID }),
+      ).toBeNull();
+      expect(
+        resolveHookStatusTarget('SubagentStop', { sessionId: SESSION_ID, agentId: SESSION_ID }),
+      ).toBeNull();
+    });
+
     it('refuses a transcript_path that is present but unusable', () => {
       expect(resolveHookStatusTarget('SubagentStop', { transcript_path: '' })).toBeNull();
       expect(resolveHookStatusTarget('SubagentStop', { transcript_path: 42 })).toBeNull();
@@ -377,6 +390,20 @@ describe('status lifecycle', () => {
       expect(statusOfSession(temp, SESSION_ID)).toBe('working');
     });
 
+    it('a SubagentStop naming the session id leaves the main agent and the session working', () => {
+      ingestSession(getFixture('flat-tool-use'), deps());
+
+      const events = applyHookLiveness(temp.db, 'SubagentStop', {
+        session_id: SESSION_ID,
+        agent_id: SESSION_ID,
+      });
+
+      expect(events).toEqual([]);
+      expect(statusOfAgent(temp, SESSION_ID)).toBe('working');
+      expect(statusOfSession(temp, SESSION_ID)).toBe('working');
+      expect(statusOfAgent(temp, SUBAGENT_ID)).toBe('working');
+    });
+
     it("a fresh observation overrides an inferred 'unknown' — observed beats inferred", () => {
       ingestSession(getFixture('flat-tool-use'), deps());
       setAgentStatus(temp.db, SESSION_ID, 'unknown');
@@ -392,6 +419,36 @@ describe('status lifecycle', () => {
       applyHookLiveness(temp.db, 'Stop', { session_id: SESSION_ID });
 
       expect(applyHookLiveness(temp.db, 'Stop', { session_id: SESSION_ID })).toEqual([]);
+    });
+
+    it("re-mirrors the session when a repeat Stop finds the main agent already 'waiting'", () => {
+      ingestSession(getFixture('flat-tool-use'), deps());
+      applyHookLiveness(temp.db, 'Stop', { session_id: SESSION_ID });
+      expect(statusOfSession(temp, SESSION_ID)).toBe('waiting');
+      // The next ingest tick after a SUBAGENT advanced. `sessions.last_activity_at`
+      // is the max across ALL agents (normalize-session.ts), while the main
+      // agent's `last_seen_at` is its own - so the session row reverts to
+      // 'working' and the main agent legitimately stays 'waiting'. This is the
+      // ordinary orchestration case: the main agent is idle precisely BECAUSE a
+      // subagent it dispatched is still writing.
+      upsertSession(temp.db, {
+        id: SESSION_ID,
+        projectSlug: 'test-slug',
+        startedAt: '2026-07-11T00:00:00.000Z',
+        lastActivityAt: '2099-01-01T00:00:00.000Z',
+        status: 'working',
+      });
+      expect(statusOfSession(temp, SESSION_ID)).toBe('working');
+
+      // Claude Code fires `Stop` once per TURN, so the next idle turn delivers
+      // a second one. The agent already holds 'waiting', so the transition is a
+      // no-op - and the session mirror is skipped with it, leaving the session
+      // asserting 'working' after a hook observed its main agent idle. Once
+      // diverged it never re-converges: every later Stop is a no-op too.
+      applyHookLiveness(temp.db, 'Stop', { session_id: SESSION_ID });
+
+      expect(statusOfAgent(temp, SESSION_ID)).toBe('waiting');
+      expect(statusOfSession(temp, SESSION_ID)).toBe('waiting');
     });
 
     it('emits nothing for a hook that names no target', () => {
@@ -458,7 +515,7 @@ describe('status lifecycle', () => {
 
   describe('applyAgentStatus (the UPDATE-only primitive)', () => {
     it('returns null for an unknown agent id and writes nothing', () => {
-      expect(applyAgentStatus(temp.db, 'nope', 'waiting')).toBeNull();
+      expect(applyAgentStatus(temp.db, 'nope', 'waiting', SESSION_ID)).toBeNull();
       const count = temp.db.prepare('SELECT COUNT(*) AS n FROM agents').get() as { n: number };
       expect(count.n).toBe(0);
     });

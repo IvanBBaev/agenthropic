@@ -18,8 +18,9 @@ and price rates are illustrative pending those migrations; every bucket dimensio
 constraint, and invariant named in the tables is sourced.
 
 > **Update — 2026-07 (as built).** The paragraph above described the pre-code state.
-> Implementation began 2026-07-11, and the schema is now **real**: **thirteen** ordered,
-> idempotent, in-code migrations in `apps/server/src/db/migrations.ts`, each applied inside
+> Implementation began 2026-07-11, and the schema is now **real**: **eighteen** ordered,
+> idempotent, in-code migrations in `apps/server/src/db/migrations.ts` (thirteen when this
+> note was first written; the ledger table below is current as of 2026-09-19), each applied inside
 > a transaction that also records its id, name and a **sha-256 content checksum** in the
 > runner's own `schema_version` table (running the runner twice applies nothing). The SQL
 > blocks on this page have been replaced with the **actual migration DDL**; the original
@@ -42,10 +43,11 @@ constraint, and invariant named in the tables is sourced.
 | `events_raw` | Substrate | **Built** (migration 1) | Immutable, idempotency-keyed landing zone — as built, for **hook deliveries only** (JSONL never lands here) | CD-2, CD-4, `WP-D4` |
 | `events` | Normalized | **Built** (migration 3) | As built: the **hook liveness timeline** — identifiers only, FK-linked to `events_raw`, written in the same transaction | CD-4, `WP-D5` |
 | `sessions` | Projection | **Built** (migration 2) | One row per Claude Code session | `WP-D6` |
-| `agents` | Projection | **Built** (migration 4) | Self-referential subagent tree — a data fact, not a UI reconstruction; as built the `status` CHECK carries **five** values incl. `'unknown'` | DESIGN §4, `WP-D6` |
+| `agents` | Projection | **Built** (migration 4; `outcome_cause` added by 17) | Self-referential subagent tree — a data fact, not a UI reconstruction; as built the `status` CHECK carries **five** values incl. `'unknown'`, and a nullable six-value `outcome_cause` says *why* an agent ended | DESIGN §4, `WP-D6`, `WP-U13` |
 | `orchestration_edges` | Projection (moat) | **Built** (migration 5; rebuilt by migration 13, indexed by 12) | Persisted, per-instance parent→child edges; the source every tree/DAG view queries; as built derived from JSONL via **five** provenance-tagged join paths | DESIGN §4/§6, CD-4, `WP-D7`, `WP-IN8` |
-| `token_usage` | Projection | **Built** (migration 6; attribution repaired by 8, indexed by 10) | Ground-truth token rows — as built one row per `(message_id, bucket)` over five priced buckets | DESIGN §4, CD-3/CD-4, `WP-D8` |
-| `model_pricing` | Reference | **Built** (migration 7, converged by 11; `PROVISIONAL` seed) | Versioned per-token rates, dated, per `(model, bucket)` | CD-4, `WP-C1` |
+| `token_usage` | Projection | **Built** (migration 6; attribution repaired by 8, indexed by 10, `occurred_at` canonicalized and guarded by 15) | Ground-truth token rows — as built one row per `(message_id, bucket)` over five priced buckets; never pruned | DESIGN §4, CD-3/CD-4, `WP-D8` |
+| `token_usage_rollup` | Derived (work already done) | **Built** (migration 16) | Persisted rollup of `token_usage` at grain `(session_id, model, bucket, day, rate_effective_from)` — tokens and the resolved pricing row, never dollars — kept exact by triggers on both `token_usage` and `model_pricing`; the table `GET /api/cost/summary` reads; equal to a direct grouped scan by construction and pinned to it by an equivalence suite | review M-19, `WP-U4` |
+| `model_pricing` | Reference | **Built** (migration 7, converged by 11, `effective_from` canonicalized and guarded by 14, ten rows for two models added by 18; `PROVISIONAL` seed) | Versioned per-token rates, dated, per `(model, bucket)` | CD-4, `WP-C1` |
 | `ingest_checkpoints` | Operational cache | **Built** (migration 9) | Opt-in durable replay memory: which sessions' bytes have not moved since the last run. A cache of work already done — never dashboard truth | `WP-IN10` |
 | `schema_version` | Runner bookkeeping | **Built** (the runner itself) | One row per applied migration: id, name, applied-at, sha-256 content checksum | `WP-D3` |
 | `alert_rules` | Alerting (post-1.0, KC-5 gated) | Designed, **not built** | Operator-defined trigger conditions | DESIGN §4/§7, `WP-A2` |
@@ -91,6 +93,11 @@ leaves the schema byte-identical.
 | 11 | `model-pricing-seed-convergence` | Data repair: converge databases that ran migration 7 before its seed was edited |
 | 12 | `orchestration-edge-endpoint-indexes` | `parent_agent_id` / `child_agent_id` indexes on the edge table |
 | 13 | `orchestration-edges-legacy-explore-source` | Rebuilds the edge table to admit the fifth `source` value, `legacy_explore` |
+| 14 | `model-pricing-canonical-effective-from` | Rewrites every `model_pricing.effective_from` to the one canonical spelling `YYYY-MM-DDTHH:mm:ss.sssZ`, then installs a guard/canonicalize trigger pair so no other spelling can be stored again |
+| 15 | `token-usage-canonical-occurred-at` | The same for `token_usage.occurred_at` — the other operand of the dated-rate comparison; the rewrite halts on an unparseable value rather than guessing |
+| 16 | `token-usage-rollup` | `token_usage_rollup` (`WITHOUT ROWID`) + its index, seeded from `token_usage`, then six triggers that keep it exact under every mutation of `token_usage` or `model_pricing` |
+| 17 | `agents-outcome-cause` | `ALTER TABLE agents ADD COLUMN outcome_cause`, nullable, with an inline six-value CHECK |
+| 18 | `model-pricing-opus-5-fable-5-1` | Ten explicit rate rows — all five buckets for each of the two model ids the real corpus exposed as unpriced |
 
 Three properties of that list are worth stating explicitly, because they are the reason
 the ledger table exists at all.
@@ -117,6 +124,18 @@ not pretend the past was verified.
 exist because a schema that only ever adds tables cannot fix a database that already holds
 rows written under an older understanding — and re-ingesting is not always available, since
 the transcripts behind an old session may no longer be on disk.
+
+**A rewrite is only half a repair; the other half is a trigger** (migrations 14 and 15,
+added 2026-09). The dated-rate comparison `effective_from <= occurred_at` runs as a
+BINARY-collated text comparison in the API's priced CTE, while the ingest-side halt gate
+compares epoch milliseconds; the two agreed only while the stored text sorted
+chronologically, and mixed spellings of one instant (`…T00:00:00Z` beside
+`…T00:00:00.000Z`, the form Claude Code JSONL actually writes) made the API silently bill
+a rate the gate never approved. Each of the two migrations rewrites every stored value to
+one spelling **and** installs a `BEFORE` guard that rejects anything that is not a bare UTC
+date or a zoned ISO-8601 instant plus an `AFTER` trigger that canonicalizes what the guard
+admitted — so the repair cannot be undone by the next `INSERT`, whether it comes from the
+writer or from an operator at the `sqlite3` prompt.
 
 ## The one-way pipeline: raw → normalized → projected
 
@@ -250,9 +269,12 @@ Rationale, per column/constraint — updated to the as-built facts:
 > is never contradicted, and only `events` and `token_usage` are prunable at all. The
 > archive-and-truncate option is **declared and rejected loudly**: configuring
 > `rawEvents: 'archive-segments'` throws, naming itself as the recommended but unimplemented
-> resolution of OPEN-1, rather than silently degrading to keep-forever. The decision
-> OPEN-1 itself is still the owner's, and no TTL value is set — the default policy deletes
-> nothing, ever. `WP-D10` is therefore **not done**.)*
+> resolution of OPEN-1, rather than silently degrading to keep-forever. The library
+> default `NO_RETENTION` deletes nothing, ever; the *server* has run under the signed v1.0
+> policy since 2026-09-10 — `events` at 90 days, `token_usage` never, backup files at 30
+> days behind a floor of 7 — so `WP-D10` is **done**; see the closing note under
+> [What's decided vs. open](#whats-decided-vs-open) and
+> [backup & restore](../operations/backup-restore.md).)*
 
 ## `events` — the hook liveness timeline
 
@@ -378,6 +400,26 @@ cascades into deleting its subtree, it just detaches it.
 > staleness anchor. A later re-ingest upserts whatever status the JSONL evidence supports,
 > so a stale `unknown` yields to the durable record.
 
+> **As built, 2026-09 — one more column.** Migration 17 (`agents-outcome-cause`) adds
+>
+> ```sql
+> ALTER TABLE agents ADD COLUMN outcome_cause TEXT
+>   CHECK (outcome_cause IS NULL OR outcome_cause IN
+>     ('concurrency_limit','user_interrupt','permission_failed',
+>      'dispatch_unavailable','terminated_early','unclassified'));
+> ```
+>
+> `status` answers *where is this agent now*; `outcome_cause` answers *why did it end that
+> way*, and most causes are not failures — a user interrupt is the commonest cause that
+> resolves to a real agent, and `concurrency_limit` is a scheduling fact with no failed
+> agent in it — which is why the two are not folded together. It is a column and not a
+> side table because the fact is one closed enum per agent, 1:1 with the row that already
+> exists. Every pre-existing row reads `NULL`, the honest value for an outcome nobody
+> observed. Ingest writes it from the transcript's terminal record; the API serves it as
+> `outcomeCause`, a required nullable field of the agent DTO; the session tree lists any
+> non-`NULL` value verbatim. Whether the Live view shows it is an open owner decision
+> (D9 on the `TODO.md` closing board).
+
 ## `orchestration_edges` — the persisted DAG (the moat artifact)
 
 This table is the concrete artifact behind the project's central differentiator (DESIGN
@@ -465,6 +507,11 @@ Rationale — updated to the as-built facts:
   column), the per-instance/host key, and the idempotent dedupe that a plain parent
   pointer cannot. As built this holds: both the session tree and the global DAG endpoints
   query persisted edges, never a render-time reconstruction.
+  *(**AMENDED 2026-09-23 (J-3)**: that covers the edges, not the per-node token figures, which
+  come from `token_usage` rather than from `orchestration_edges`. Both endpoints now scope a
+  node's usage to `(agent_id, session_id)`; the global DAG grouped by `agent_id` alone until
+  this date, so an agent id present in several sessions had them all summed onto one node. See
+  [the DAG moat](dag-moat.md).)*
 
 > **Empirically confirmed by the desktop probe.** The 2026-07-04 read-only corpus probe
 > ([`phase0-probe.md`](../../analysis/phase0-probe.md)) found **zero** `Task` tool blocks
@@ -567,6 +614,68 @@ Rationale — updated to the as-built facts:
 Full cost mechanics — dated-price resolution, delegation-savings, and PreCompact
 repricing — belong to [the cost model](../architecture/cost-model.md).
 
+## `token_usage_rollup` — the bounded cost read
+
+Added 2026-09 by migration 16 (`token-usage-rollup`, review M-19). `token_usage` is the
+one table whose retention is deliberately refused — cost history *is* the product — so it
+grows with corpus age forever, and `GET /api/cost/summary` used to price and group all of
+it on every cold read. This table bounds that read. It is a table of **work already done**,
+in the sense the `ingest_checkpoints` entry uses: dropping it costs a rebuild and changes
+no output, because it equals a direct grouped scan of `token_usage` by construction.
+
+```sql
+CREATE TABLE token_usage_rollup (
+  session_id          TEXT    NOT NULL,
+  model               TEXT    NOT NULL,
+  bucket              TEXT    NOT NULL,
+  day                 TEXT    NOT NULL,
+  rate_effective_from TEXT    NOT NULL,
+  tokens              INTEGER NOT NULL,
+  row_count           INTEGER NOT NULL,
+  PRIMARY KEY (session_id, model, bucket, day, rate_effective_from)
+) WITHOUT ROWID;
+CREATE INDEX idx_token_usage_rollup_model_bucket ON token_usage_rollup(model, bucket);
+```
+
+- **The grain pins the resolved pricing row, not merely the day.** The review asked for
+  `(session, model, day)`; that grain is unsound twice over. Rates are keyed by
+  `(model, bucket)`, so input and output tokens of one model cannot share a row that is
+  ever repriced from tokens. And a `model_pricing.effective_from` that falls mid-day splits
+  one `(session, model, bucket, day)` group across two rates — 1000 tokens at one rate plus
+  1000 at another is not 2000 tokens at either, and no arithmetic on a stored total
+  recovers the split. Carrying `rate_effective_from` in the key makes the rollup exact on
+  precisely the days a price changed, which are the days an operator looks at.
+- **Tokens, never dollars.** The row stores what was measured and *which* rate row won;
+  the dollar is computed at read time as a lookup on that stored key. A rate correction
+  therefore never leaves a stale dollar behind — the pricing triggers below rebuild the
+  affected `(model, bucket)` slice instead.
+- **A NULL-free key.** SQLite treats `NULL`s as distinct under a uniqueness constraint, so
+  a nullable key column would make `ON CONFLICT` never match and the table would collect
+  one un-mergeable row per event. `day` is `'unknown'` when `occurred_at` is `NULL` (the
+  sentinel the summary already used) and `rate_effective_from` is `''` when no rate
+  resolves — a value migration 14's guard makes unstorable in `model_pricing`, so it cannot
+  collide with a real one.
+- **`WITHOUT ROWID`** so the table *is* its primary key and records no insertion order:
+  the file stays byte-identical under the P0 double-replay proof regardless of the order in
+  which groups first appeared.
+- **Six triggers keep it exact.** `AFTER INSERT` / `UPDATE` / `DELETE` on `token_usage`
+  apply the row's delta to its group; `AFTER INSERT` / `UPDATE` / `DELETE` on
+  `model_pricing` recompute the affected `(model, bucket)` slice as a **full rebuild**, not a
+  delta, because a full rebuild is idempotent and therefore immune to the order in which
+  the triggers fire. Every key expression wraps both timestamps in the same canonical
+  `strftime` form that migrations 14 and 15 enforce.
+- **The reader has no fallback.** `getCostSummary` selects from this table and throws if
+  it is absent; it does not quietly rescan `token_usage`. The cutover was a separate change
+  from the migration and is pinned by the equivalence suite
+  (`apps/server/test/db-token-usage-rollup-equivalence.test.ts`,
+  `db-token-usage-rollup-seed.test.ts`, `db-token-usage-rollup-trigger-order.test.ts` on
+  the table itself; `api-cost-summary-equivalence.test.ts` on the read) — the suite compares
+  the table against a direct grouped scan after every mutation shape, which is the whole
+  value of the table. The code records the measured effect on a synthetic 751,275-row
+  ledger on one M4 Mac Mini: a cold summary read went from a median of 947 ms of blocked
+  event loop to 58 ms, interleaved so neither path got the warmer cache. Treat the shape as
+  the finding and the numbers as that ledger on that machine.
+
 ## `model_pricing` — versioned rates
 
 CD-4: *"versioned `model_pricing` (`effective_from`, `verified_on`)."* `WP-C1` adds the
@@ -605,8 +714,9 @@ CREATE TABLE model_pricing (
 
 ### What the seed actually contains
 
-Five models, each expanded into all five buckets at one `effective_from` floor of
-`2026-01-01`:
+Eight models at one `effective_from` floor of `2026-01-01` — five from the original seed
+(migrations 7 and 11), each expanded into all five buckets, two added explicitly by
+migration 18 on 2026-09-10 and one by migration 19 on 2026-09-26:
 
 | `model` | input $/Mtok | output $/Mtok |
 |---|---|---|
@@ -615,9 +725,20 @@ Five models, each expanded into all five buckets at one `effective_from` floor o
 | `claude-fable-5` | 10 | 50 |
 | `claude-haiku-4-5-20251001` | 1 | 5 |
 | `<synthetic>` | 0 | 0 |
+| `claude-opus-5` (migration 18) | 5 | 25 |
+| `claude-fable-5-1` (migration 18) | 10 | 50 |
+| `claude-opus-5-5` (migration 19) | 4 | 20 |
 
-The three cache buckets are **derived** from the input rate rather than listed separately:
-`cache_read` at 0.1×, `cache_write_5m` at 1.25×, `cache_write_1h` at 2.0×.
+For the five seed models the three cache buckets are **derived** from the input rate rather
+than listed separately: `cache_read` at 0.1×, `cache_write_5m` at 1.25×, `cache_write_1h`
+at 2.0×. Migration 18's two models carry all five buckets **explicitly**, copied from the
+platform pricing page fetched 2026-09-10: Opus 5 reads cache at 0.50 and writes it at 6.25
+(5-minute) / 10 (1-hour), which happens to follow the derivation; Fable 5.1 reads cache at
+0.25 — 0.025× its input rate, not 0.1× — and writes it at 12.50 / 20. A derived row would
+have priced every Fable 5.1 cache read four times too high, which is why the derivation was
+not reused. Migration 19's Opus 5.5 reads cache at 0.20 — 0.05× its input rate, a third
+ratio no derivation covers — and writes it at 5 / 8, copied from the same page fetched
+2026-09-26. All 40 rows carry the same PROVISIONAL label.
 
 Two details in that table are load-bearing rather than cosmetic. The keys are the **exact
 `message.model` byte-strings** emitted in the corpus, verified 2026-07-13 against
@@ -627,6 +748,17 @@ exact-string lookup and halts on any id absent from the table, so a bare `opus-4
 without the `claude-` prefix — or a haiku key without its date suffix — would make every
 real ingest halt. The right fix for a new model is always to add its exact string, never to
 "normalize" the id on the read side.
+
+That is exactly what happened next. A boot over the real corpus on 2026-09-09
+(`docs/measurement/time-to-understand-log.md` §0.4) found the corpus had moved on to
+`claude-opus-5` (48 of 60 sessions) and `claude-fable-5-1` (4 sessions), neither in the
+seed, so 52 sessions halted at the gate and 8 reached the database. A second boot on
+2026-09-18, at schema 18 over the same machine's corpus (54 sessions by then), admitted 54 of
+54 with `sessionsExcluded` 0 (§0.5 of the same log). Migration 18 adds those two exact
+strings and nothing else; it is the first migration shipped under the rule the
+migration-11 paragraph below ends on. A third boot on 2026-09-26, still at schema 18, found
+the corpus had moved again, to `claude-opus-5-5`: 27 of 61 sessions refused, 34 admitted
+(§0.6). Migration 19 adds that one exact string the same way.
 
 The `effective_from` floor is **not** the seed's authoring date. `computeCostUsd` resolves
 the latest rate with `effective_from <=` the message timestamp and throws when none is
@@ -652,6 +784,19 @@ than shared through a helper, on purpose: the content checksum covers the functi
 source, and a shared helper would let a future rate-multiplier edit escape it. Since then,
 the pricing constants are **frozen** and covered by every migration's checksum; a price
 change must ship as a new migration carrying its own inline data.
+
+**Migration 18 is that rule applied once.** It inserts ten rows inline — the two corpus
+models above, five buckets each, at the same floor spelled in the canonical form migration
+14 enforces — with `ON CONFLICT DO UPDATE` on the primary key, so a row an operator wrote
+by hand at that instant (the measurement log's scratch-database workaround) converges to
+the official figure instead of aborting the boot, while a row at any other instant or for
+any other model is never touched. Its numbers live inside the SQL text rather than as
+JavaScript literals, so the content checksum comes out identical under every executor the
+repo runs (`apps/server/test/migration-checksum-pin.test.ts` explains why a JavaScript
+`0.5` would not). One figure it deliberately leaves alone: the pricing page fetched the
+same day lists Sonnet 5 at 2 / 10 where the seed carries 3 / 15. That is a rate change,
+not a coverage gap, and it waits for the owner's decision as a migration 19 rather than
+being folded in here.
 
 ## `ingest_checkpoints` — durable replay memory
 
@@ -781,9 +926,15 @@ roadmap of record.)*
 >   contradicted. What is **not** decided is *policy* — no TTL value is set, and the default
 >   configuration is a byte-identical no-op. `WP-D10` therefore remains **not done**; see
 >   [ingest & reconciliation](../architecture/ingest-reconciliation.md).
+>   **Closed 2026-09-10:** the policy was signed on 2026-09-08 (D3) and wired — `events`
+>   rows older than 90 days are pruned, backup files older than 30 days expire behind a
+>   floor of the 7 newest, `token_usage` is never pruned, `events_raw` stays on the
+>   protected list. `WP-D10` is done; the operator view is
+>   [backup & restore](../operations/backup-restore.md).
 > - **MVP schema scope** — resolved by shipping. Nine tables exist: `events_raw`, `events`,
 >   `sessions`, `agents`, `orchestration_edges`, `token_usage`, `model_pricing`,
->   `ingest_checkpoints`, plus the runner's own `schema_version`. The four alert/webhook
+>   `ingest_checkpoints`, plus the runner's own `schema_version` — ten since 2026-09, when
+>   migration 16 added `token_usage_rollup`. The four alert/webhook
 >   tables do not (post-1.0, KC-5).
 > - **`projects` / `filters`** — still not modeled anywhere; neither was created. The gap
 >   closed itself in practice: `sessions.project_slug` carries the only project fact the

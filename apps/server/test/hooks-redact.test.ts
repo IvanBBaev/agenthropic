@@ -161,4 +161,22 @@ describe('redactSecrets (WP-IN14)', () => {
     expect(input.nested.token).toBe('x');
     expect(input.nested.list[0]?.secret).toBe('y');
   });
+  it('keeps a __proto__ field as ordinary data instead of dropping it', () => {
+    // `scrubbed[key] = ...` on a plain object invokes Object.prototype's
+    // __proto__ SETTER, so the field never becomes an own property of the
+    // result: it disappears from the value that is stored, and its object
+    // value silently becomes the result's prototype. Everything downstream
+    // reads ids with `record[key]`, which follows the prototype chain - so the
+    // envelope's hookName and the events projection's ids can be lifted from
+    // evidence that appears nowhere in the stored payload.
+    const input: unknown = JSON.parse(
+      '{"__proto__":{"hook_event_name":"SubagentStop","agent_id":"agent-ff"},"cwd":"/tmp"}',
+    );
+
+    const output = redactSecrets(input) as Record<string, unknown>;
+
+    expect(Object.keys(output)).toEqual(['__proto__', 'cwd']);
+    expect(Object.getPrototypeOf(output)).toBe(Object.prototype);
+    expect((output as { hook_event_name?: unknown }).hook_event_name).toBeUndefined();
+  });
 });

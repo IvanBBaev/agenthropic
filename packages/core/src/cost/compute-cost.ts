@@ -10,7 +10,7 @@
  */
 import type { TokenBucket } from '@agenthropic/shared';
 import type { DedupedUsage, PricingEntry, TokenBuckets } from '../types';
-import { parseTimestampMs } from '../time';
+import { parsePricingInstantMs, parseTimestampMs } from '../time';
 
 /** Unknown model, missing bucket price, or malformed pricing table. */
 export class PricingError extends Error {
@@ -42,7 +42,7 @@ function buildPricingIndex(pricing: readonly PricingEntry[]): PricingIndex {
         `pricing for model "${entry.model}" bucket "${entry.bucket}": usdPerMtok must be a non-negative finite number (got ${String(entry.usdPerMtok)})`,
       );
     }
-    const effectiveFromMs = parseTimestampMs(
+    const effectiveFromMs = parsePricingInstantMs(
       entry.effectiveFrom,
       `pricing for model "${entry.model}" bucket "${entry.bucket}"`,
     );

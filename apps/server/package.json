@@ -11,10 +11,10 @@
   },
   "//": "`start` runs the server FROM TYPESCRIPT SOURCE under tsx on purpose. Do NOT replace it with a build step - no tsc emit, no esbuild/rollup bundle, no `node --experimental-strip-types`. Reason (measured 2026-08-29, re-checked 2026-08-31): the H-1 migration guard in src/db/migrations.ts checksums `migration.up.toString()` after `normalise`, which cancels comments, whitespace (in code AND inside string/template literals) and separators that are redundant before a closing `)`, `]` or `}`. That normalisation removed most, but NOT all, of the executor dependence: tsx/esbuild also re-prints what the other two executors pass through, for exactly three measured reasons - numeric literals (`0.1` -> `.1`), `new Map()` -> `new Map` and dropped empty statements - plus its `keepNames` `__name` wrapper around arrows. String quoting was probed and is NOT a cause: both printers chose identical quotes in every migration body. Measured across tsx, vitest and node --experimental-strip-types: before normalisation all three disagreed on all sixteen migrations; after it, vitest and node each agree with tsx on eleven of sixteen, and migrations 7, 11, 14, 15 and 16 still differ. Those five are pinned as data in test/migrations-checksum-stability.test.ts. Every checksum already stored in every existing `schema_version` row was produced under the tsx/esbuild transform, so switching the executor - or adding a real build - flips those five and makes runMigrations fail on every existing user database. Cancelling the remaining five would mean re-printing literals into a canonical form, which by definition changes the bytes tsx produces today, i.e. it invalidates those same stored checksums. tsx therefore stays a devDependency even though `start` is a run path: this package is private and the supported way to run it is from the repo checkout.",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "start": "tsx src/index.ts",
-    "bench": "tsx bench/corpus-scale.ts",
-    "test": "vitest run --coverage"
+    "dev": "node ../../scripts/check-node-version.mjs && tsx watch src/index.ts",
+    "start": "node ../../scripts/check-node-version.mjs && tsx src/index.ts",
+    "bench": "node ../../scripts/check-node-version.mjs && tsx bench/corpus-scale.ts",
+    "test": "node ../../scripts/check-node-version.mjs && vitest run --coverage"
   },
   "dependencies": {
     "@agenthropic/core": "workspace:*",

@@ -52,14 +52,15 @@ The scaffold exists and the commands in this guide are runnable:
 |---|---|
 | Can I `pnpm install` and run something? | **Yes.** `pnpm install` against the committed `pnpm-lock.yaml`, then `pnpm --filter @agenthropic/server dev` (needs `DASHBOARD_TOKEN`) and `pnpm --filter @agenthropic/web dev`. |
 | Is the stack decided? | **Locked and built**: Fastify + TypeBox, `better-sqlite3` (single driver), React/Vite/D3, SSE, in a pnpm monorepo — `apps/server`, `apps/web`, `packages/shared`, `packages/core`, `packages/test-fixtures`, `hooks/`. |
-| What Node version? | **Node 22** (`engines.node: ">=22"`), `pnpm@11.11.0` pinned via `packageManager`. |
+| What Node version? | **Node 22 only** (`.nvmrc`; `engines.node: ">=22 <23"`, `engine-strict` in `.npmrc`; `pnpm test` / `pnpm start` refuse any other major via `scripts/check-node-version.mjs`), `pnpm@11.11.0` pinned via `packageManager`. |
 | When does the scaffold land? | It landed. `WP-F1`'s dependency on a `WP-S7` **GO** was resolved by an owner override, not by a GO — see the note below. |
 | Where do lint/test commands come from? | They exist at the repo root: `pnpm run typecheck` · `lint` · `format:check` · `test` · `gate:spawner` · `gate:licenses`. |
-| Is the test suite real? | **106 test files / 1554 tests**, green, with lines/branches/functions/statements each pinned and held at **100** in all five packages. See [Testing & quality](testing.md). |
+| Is the test suite real? | **131 test files / 2428 tests** (re-measured 2026-09-18; re-measured again 2026-09-23 as **140 test files / 2621 tests**), green, with lines/branches/functions/statements each pinned and held at **100** in all five packages. See [Testing & quality](testing.md). |
+| How far does the Node guard reach? | **Wider than the Node row above says.** `scripts/check-node-version.mjs` prefixes the root `start`, `test` and `gate:node`; `apps/server`'s `dev`, `start`, `bench` and `test`; `apps/web`'s `dev` and `test`; and the `test` script of `packages/shared`, `packages/core` and `packages/test-fixtures`. It does **not** prefix `typecheck`, `lint`, `format`, `format:check`, `hooks:install`, `apps/web`'s `build` or `render-claims` - none of those loads the native binding. It is a package-script prefix, not a runtime hook, so `npx vitest run --root apps/server` bypasses it. *(**AMENDED 2026-09-23 (J-1)** - the "`pnpm test` / `pnpm start`" phrasing in the Node row was the complete wiring when that row was written.)* |
 | Do those gates block a merge? | **Yes — for a contributor.** Since **2026-08-25** `main` is branch-protected with the `ci` check required (lowercase `ci` — the job id in `.github/workflows/ci.yml`, not its `CI` display name), and force-pushes and deletion of `main` are refused for everyone. **Not for the repository owner:** `enforce_admins` is deliberately off, because a single-maintainer repo whose normal working mode is a direct push to `main` cannot lock out its sole maintainer. See [the standing correction](decisions/README.md#a-standing-correction-merge-blocking) and [Governance](governance.md). |
 
-[`TODO.md`](../../../TODO.md) at the repo root remains the live, authoritative status of
-what's done vs. open, and [`DONE.md`](../../../DONE.md) Milestone 1 records the
+[`TODO.md`](https://github.com/IvanBBaev/agenthropic/blob/main/TODO.md) at the repo root remains the live, authoritative status of
+what's done vs. open, and [`DONE.md`](https://github.com/IvanBBaev/agenthropic/blob/main/DONE.md) Milestone 1 records the
 implementation phase. The [Roadmap](../guide/roadmap.md) carries the checkpoint calendar.
 
 ### Why there was nothing to scaffold — and what changed
@@ -174,8 +175,8 @@ Every WP, in every phase, is held to the same bar
   withheld merge button did not exist until 2026-08-25. It exists now — `main` requires the
   `ci` check — so the clause holds for a contributor, but not for the repository owner,
   since `enforce_admins` is deliberately off in a single-maintainer repository. Both halves
-  of that are covered below, in [the standing
-  correction](decisions/README.md#a-standing-correction-merge-blocking), and on
+  of that are covered below, in
+  [the standing correction](decisions/README.md#a-standing-correction-merge-blocking), and on
   [Testing & quality](testing.md) §6.1.)*
 - No security invariant is weakened: loopback-only bind, mandatory-token-or-fail-startup,
   SSE same-origin, no subprocess spawner, no SSRF, secrets never in SQLite/SSE/logs.
@@ -216,8 +217,8 @@ working mode is a direct push to `main`, and turning it on would lock the sole m
 out of their own repository. So a red run withholds the merge button from a contributor, not
 from the repository owner. Verify with
 `gh api repos/IvanBBaev/agenthropic/branches/main/protection --jq '{contexts: .required_status_checks.contexts, enforce_admins: .enforce_admins.enabled}'`
-→ `{"contexts":["ci"],"enforce_admins":false}`; the full write-up is [the standing
-correction](decisions/README.md#a-standing-correction-merge-blocking). See
+→ `{"contexts":["ci"],"enforce_admins":false}`; the full write-up is
+[the standing correction](decisions/README.md#a-standing-correction-merge-blocking). See
 [Testing & quality](testing.md) §6.1 for the mechanism and its three honest gaps.
 
 ## WORKLOG discipline
@@ -229,7 +230,7 @@ on this docs site; it exists purely as the project's own audit trail of what was
 and why. `WP-X10` — "WORKLOG discipline: template + presence check" — is the WP that
 formalizes this as a checked convention rather than an informal habit: a template plus
 a presence check that a WP isn't considered closed without a corresponding entry
-([`TODO.md`](../../../TODO.md), [`development-plan.md`](../../analysis/development-plan.md)
+([`TODO.md`](https://github.com/IvanBBaev/agenthropic/blob/main/TODO.md), [`development-plan.md`](../../analysis/development-plan.md)
 Track X). It is one of only two dep-free work packages in wave 1 (alongside `WP-S1`),
 so it is actionable immediately, ahead of any scaffold.
 
@@ -274,8 +275,8 @@ diverged from the decision, the divergence is added as a dated as-built section 
 original decision text is left standing, because an ADR that is edited to match reality
 stops being a record of what was decided. Repository governance — the security-report
 path, code of conduct, and issue/PR templates — is documented on
-[Governance](governance.md); several of those artifacts do not exist yet, and that page
-says which.
+[Governance](governance.md); one of those artifacts (`CODE_OF_CONDUCT.md`) does not exist yet,
+and that page says so.
 
 ## See also
 
@@ -293,5 +294,5 @@ says which.
   checked against.
 - [`development-plan.md`](../../analysis/development-plan.md) — the full 75-WP
   catalog, dependency DAG, waves, and Global Definition of Done (§8).
-- [`TODO.md`](../../../TODO.md) / [`DONE.md`](../../../DONE.md) — live open work and
+- [`TODO.md`](https://github.com/IvanBBaev/agenthropic/blob/main/TODO.md) / [`DONE.md`](https://github.com/IvanBBaev/agenthropic/blob/main/DONE.md) — live open work and
   completed milestones.

@@ -9,7 +9,9 @@ else, in every deployment, on every machine, whether you are sitting at the Mac 
 own keyboard or connecting from a laptop on the other side of the world. A tunnel is a
 private pipe that carries bytes from a remote client into that one loopback socket; it
 never asks the application to listen anywhere else, and it never weakens the mandatory
-auth check that gates every request arriving on that socket (`DESIGN.md` §8).
+auth check that gates every `/api/*` request arriving on that socket (`DESIGN.md` §8; the
+built SPA shell and its static assets, which hold no secret, are the only unauthenticated
+surface).
 
 > **Status (updated 2026-07, as built).** This page was written pre-Phase-0; the
 > server it describes now exists. Implementation began 2026-07-11: the server binds
@@ -186,10 +188,11 @@ loopback-bound, unaffected either way.
 
 Whichever carrier you use, the tunnel is transport only. It does not touch, weaken, or
 bypass the mandatory token check (`DESIGN.md` §8: *"Auth token is mandatory, not
-opt-in... Use `timingSafeEqual`."*). Every request that reaches the dashboard — whether
-it originated at the Mac Mini's own keyboard or arrived over an SSH forward or a
+opt-in... Use `timingSafeEqual`."*). Every `/api/*` request that reaches the dashboard —
+whether it originated at the Mac Mini's own keyboard or arrived over an SSH forward or a
 Tailscale tunnel — is the same HTTP request to the same loopback socket, checked the
-same way. There is no "trusted because it came through the tunnel" bypass, and there
+same way (only the built SPA shell and its static assets are served without a token).
+There is no "trusted because it came through the tunnel" bypass, and there
 must never be one.
 
 Framed against the attacker models the field's own failures established: an SSH

@@ -9,12 +9,14 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { SessionsView, SESSION_LIST_LIMIT } from '../src/views/SessionsView';
 import { CLOCK_INTERVAL_MS } from '../src/clock';
 import { createSseClient, type SseClient } from '../src/sse';
+import type { AgentNodeDto, OrchestrationEdgeSource } from '../src/dto';
 import {
   agentNode,
   costAnalysis,
   deferred,
   jsonResponse,
   orchestrationEdge,
+  outcomeCauseAgents,
   sessionList,
   sessionSummary,
   sessionTree,
@@ -342,6 +344,14 @@ describe('SessionsView', () => {
     routeFetch({ list: jsonResponse(500, { error: 'Internal server error.' }) });
     renderView();
     await screen.findByText(/Could not load sessions: Internal server error\./);
+  });
+
+  // The reader-visible half of the same guarantee: the banner is the only place
+  // a failed read is explained, so it may never end at its own colon.
+  it('still explains the failure when the server sends an empty {error}', async () => {
+    routeFetch({ list: jsonResponse(500, { error: '' }) });
+    renderView();
+    await screen.findByText(/Could not load sessions: request failed \(HTTP 500\)/);
   });
 
   it('says "Showing N of M" when the list is truncated by the page size', async () => {
@@ -737,6 +747,42 @@ describe('SessionsView - the accessible description of the tree (2026-09-08)', (
     for (const id of described.ids) expect(document.getElementById(id)).not.toBeNull();
   });
 
+  it('KK1: counts only true cycle members and names the agents below the cycle apart', async () => {
+    routeFetch({
+      tree: jsonResponse(
+        200,
+        sessionTree({
+          agents: [
+            agentNode(),
+            agentNode({ id: 'agent-child', type: 'subagent' }),
+            agentNode({ id: 'agent-c', type: 'subagent' }),
+            agentNode({ id: 'agent-d', type: 'subagent' }),
+          ],
+          edges: [
+            orchestrationEdge(),
+            orchestrationEdge({ id: 2, parentAgentId: 'agent-child', childAgentId: 'agent-main' }),
+            orchestrationEdge({ id: 3, parentAgentId: 'agent-child', childAgentId: 'agent-c' }),
+            orchestrationEdge({ id: 4, parentAgentId: 'agent-c', childAgentId: 'agent-d' }),
+          ],
+        }),
+      ),
+    });
+    renderView();
+    await screen.findByRole('list', { name: 'session list' });
+    fireEvent.click(screen.getByRole('button', { name: /agenthropic/ }));
+
+    const svg = await screen.findByRole('img', { name: /agent tree for session/ });
+    expect(
+      screen.getByText(
+        '2 agents sit in a cycle and are placed on a fallback layer; 2 more agents below the cycle are not in it but share that layer.',
+      ),
+    ).toBeDefined();
+    expect(screen.queryByText(/4 agents sit in a cycle/)).toBeNull();
+    expect(describedBy(svg).text).toContain(
+      '2 agents sit in a cycle and are placed on a fallback layer; 2 more agents below the cycle are not in it but share that layer.',
+    );
+  });
+
   it('DG-3: names no id that is absent from the page when there is no cycle', async () => {
     routeFetch();
     renderView();
@@ -748,5 +794,343 @@ describe('SessionsView - the accessible description of the tree (2026-09-08)', (
     expect(described.ids.length).toBeGreaterThan(0);
     for (const id of described.ids) expect(document.getElementById(id)).not.toBeNull();
     expect(described.text).not.toContain('cycle');
+  });
+});
+
+/**
+ * L5 (2026-09-09), WP-U13 / decision D4: "the cause as text on error rows in
+ * the Live view and the session tree, no new view, no colour".
+ *
+ * `outcomeCause` has been persisted (migration 17) and served on every agent
+ * node since WP-U10, and until now no view rendered it: the database knew why
+ * a run ended and the reader was never told. These tests pin what the six
+ * causes say, what a NULL one says (nothing - never "ok"), and that the
+ * surface is not narrowed to `status === 'error'`, which would show one cause
+ * in six.
+ *
+ * A separate describe so nothing above is disturbed; the file-level
+ * beforeEach/afterEach still apply.
+ */
+describe('SessionsView - the observed outcome cause (2026-09-09, L5)', () => {
+  /** A cause string, as it arrives from a server this build may not match. */
+  type OutcomeCause = NonNullable<AgentNodeDto['outcomeCause']>;
+
+  /** The ids `aria-describedby` names, and the prose they actually resolve to. */
+  function describedBy(svg: Element): { readonly ids: string[]; readonly text: string } {
+    const ids = (svg.getAttribute('aria-describedby') ?? '').split(' ').filter((id) => id !== '');
+    return { ids, text: ids.map((id) => document.getElementById(id)?.textContent ?? '').join(' ') };
+  }
+
+  /** Render the tree for `agents` and return one string per outcome row. */
+  async function outcomeRows(agents: readonly AgentNodeDto[]): Promise<string[]> {
+    routeFetch({ tree: jsonResponse(200, sessionTree({ agents: [...agents], edges: [] })) });
+    renderView();
+    await screen.findByRole('list', { name: 'session list' });
+    fireEvent.click(screen.getByRole('button', { name: /agenthropic/ }));
+    const list = await screen.findByRole('list', { name: 'observed agent outcomes' });
+    return Array.from(list.querySelectorAll('li')).map((row) => row.textContent ?? '');
+  }
+
+  it('L5: renders each of the six persisted causes verbatim, one row per agent', async () => {
+    // Verbatim is the point: every paraphrase would have to decide whether a
+    // refused spawn is a failure, and the recorded token decides nothing.
+    expect(await outcomeRows(outcomeCauseAgents())).toEqual([
+      'Explore fa11ed01 - terminated_early',
+      'general-purpose de1e7ed2 - user_interrupt',
+      'Plan c0ffee01 - concurrency_limit',
+      'statusline-setup c0ffee02 - permission_failed',
+      'code-reviewer c0ffee03 - dispatch_unavailable',
+      'doc-writer c0ffee04 - unclassified',
+    ]);
+  });
+
+  it('L5: does NOT narrow the surface to agents whose status is error', async () => {
+    const agents = outcomeCauseAgents();
+    // The tension this test exists for: `ERROR_CAUSES` in the normalizer is
+    // the one-element set { terminated_early } on purpose, so exactly one of
+    // these agents is an 'error'. Rendering only that one would drop five
+    // sixths of what the database observed.
+    expect(agents.filter((agent) => agent.status === 'error')).toHaveLength(1);
+    const rows = await outcomeRows(agents);
+    expect(rows).toHaveLength(6);
+    // The commonest cause in the corpus (19 of 33), on an agent that is not an
+    // error and never was - the spawn was refused, so it never ran.
+    expect(rows).toContain('Plan c0ffee01 - concurrency_limit');
+  });
+
+  it('L5: an agent with no observed outcome gets no row, and never reads as "ok"', async () => {
+    const rows = await outcomeRows(outcomeCauseAgents());
+    const rowText = rows.join(' ');
+    // NULL means no outcome was observed. It is NOT a claim that the agent
+    // succeeded, so it renders as nothing at all - not "ok", not "succeeded",
+    // and not a dash a reader could take for a zero.
+    expect(rowText).not.toContain('c0ffee05');
+    expect(rowText).not.toMatch(/\bok\b/i);
+    expect(rowText).not.toMatch(/succe/i);
+    expect(rowText).not.toMatch(/\bnone\b/i);
+    const title = screen.getByTestId('tree-node-c0ffee05').querySelector('title');
+    expect(title?.textContent).toContain('Explore c0ffee05');
+    expect(title?.textContent).not.toContain('outcome');
+  });
+
+  it('L5: the whole block is absent when no agent carries an outcome', async () => {
+    routeFetch();
+    renderView();
+    await screen.findByRole('list', { name: 'session list' });
+    fireEvent.click(screen.getByRole('button', { name: /agenthropic/ }));
+    const svg = await screen.findByRole('img', { name: /agent tree for session/ });
+
+    expect(screen.queryByTestId('tree-outcomes')).toBeNull();
+    // Same rule as DG-3: an idref that resolves to nothing describes nothing,
+    // and reads to an auditor as though the fact had been given.
+    const described = describedBy(svg);
+    expect(described.ids.some((id) => id.startsWith('tree-outcomes-'))).toBe(false);
+    for (const id of described.ids) expect(document.getElementById(id)).not.toBeNull();
+  });
+
+  it('L5: shows a cause word this build does not know, with its raw value', async () => {
+    // A server one version ahead. The word is never folded into a known cause
+    // and never dropped; `unrecognised` is the word status.ts already owns for
+    // exactly this condition, so the UI has one vocabulary and not two.
+    // AMENDED 2026-09-23 (lane-P). RE-AIMED: the raw cause still reaches the
+    // reader unparaphrased, now delimited, so that a cause of `''` is legible
+    // as the empty string the server sent rather than as a hole in the page.
+    const rows = await outcomeRows([
+      agentNode({ id: 'agent-main', outcomeCause: 'quota_exhausted' as OutcomeCause }),
+    ]);
+    expect(rows).toEqual(['main agent-main - unrecognised ("quota_exhausted")']);
+    expect(rows[0]).toContain('quota_exhausted');
+  });
+
+  it('L5: says the cause field did not arrive rather than printing "undefined"', async () => {
+    // `dto-guards.ts` checks containers and load-bearing numbers, never
+    // strings, so a server that stops sending the field reaches the renderer
+    // intact - and "no cause word sent" is a different fact from "no outcome
+    // was observed", which is why it is not spelled as nothing.
+    const rows = await outcomeRows([agentNode({ id: 'agent-main', outcomeCause: undefined })]);
+    expect(rows).toEqual(['main agent-main - unrecognised (no cause word sent)']);
+    expect(rows.join(' ')).not.toContain('undefined');
+  });
+
+  it('L5: puts the outcomes in the chart description and on the hover title', async () => {
+    await outcomeRows(outcomeCauseAgents());
+    const svg = screen.getByRole('img', { name: /agent tree for session/ });
+    const described = describedBy(svg);
+    // role="img" hides the SVG subtree, <title> elements included, so a cause
+    // that lived only on hover would be a fact the picture knows and this
+    // reader is never told.
+    expect(described.text).toContain('terminated_early');
+    expect(described.text).toContain('concurrency_limit');
+    for (const id of described.ids) expect(document.getElementById(id)).not.toBeNull();
+    // The framing says what a cause is and is not, so a reader meeting
+    // `concurrency_limit` is not left to read it as a failure.
+    expect(described.text).toContain('the spawn was refused');
+    expect(described.text).toContain('not a claim that it succeeded');
+    // Hover parity for the sighted reader who points at a node.
+    const title = screen.getByTestId('tree-node-fa11ed01').querySelector('title');
+    expect(title?.textContent).toContain('- outcome terminated_early');
+  });
+
+  it('L5 (agent-outcome-errors shape): two causes do not collapse into one bucket', async () => {
+    // The property the ingest-side fixture exists to prove, asked of the UI:
+    // `terminated_early` resolves to status 'error' and `user_interrupt`
+    // deliberately does not, and both keep their own words on screen.
+    const rows = await outcomeRows(outcomeCauseAgents().slice(0, 2));
+    expect(rows).toEqual([
+      'Explore fa11ed01 - terminated_early',
+      'general-purpose de1e7ed2 - user_interrupt',
+    ]);
+    expect(screen.getByTestId('tree-node-fa11ed01').getAttribute('class')).toBe('status-error');
+    expect(screen.getByTestId('tree-node-de1e7ed2').getAttribute('class')).toBe('status-completed');
+  });
+});
+
+/**
+ * A2 / A3 (2026-09-23), from the Lane A behavioural audit. The list scope and
+ * the two unpriced clauses on this pane were each gated on a test that a
+ * non-finite served number fails in the same silent way a benign value does.
+ * The failure is never a visible error - it is the disappearance of the
+ * sentence that qualifies what is on screen, which leaves the confident
+ * reading in sole possession of the page.
+ */
+describe('SessionsView scope and coverage the pane used to overstate (A2, A3)', () => {
+  it('admits an unreadable session count instead of implying the rows are the corpus', async () => {
+    routeFetch({
+      list: jsonResponse(200, sessionList([sessionSummary()], { total: Number.NaN })),
+    });
+    renderView();
+    await screen.findByRole('list', { name: 'session list' });
+
+    expect(screen.getByTestId('list-truncation-unknown').textContent).toContain(
+      'came back unreadable',
+    );
+    // The SV-1 line is about a KNOWN remainder and must not be borrowed here.
+    expect(screen.queryByTestId('list-truncation')).toBeNull();
+  });
+
+  it('says the served rows and the served count disagree when rows outnumber the total', async () => {
+    routeFetch({
+      list: jsonResponse(
+        200,
+        sessionList(
+          [sessionSummary(), sessionSummary({ id: 'bbbbbbbb-1111-2222-3333-444444444444' })],
+          {
+            total: 1,
+          },
+        ),
+      ),
+    });
+    renderView();
+    await screen.findByRole('list', { name: 'session list' });
+
+    const line = screen.getByTestId('list-count-disagreement');
+    expect(line.textContent).toContain(
+      'These 2 rows outnumber the 1 sessions the same read counts',
+    );
+    expect(line.textContent).toContain('neither figure describes this list on its own');
+  });
+
+  it('keeps the unattributed unpriced clause when the count is unreadable (A3)', async () => {
+    routeFetch({
+      tree: jsonResponse(
+        200,
+        sessionTree({
+          unattributed: { totalTokens: 900, costUsd: 0.12, unpricedTokens: Number.NaN },
+        }),
+      ),
+    });
+    renderView();
+    await screen.findByRole('list', { name: 'session list' });
+    fireEvent.click(screen.getByRole('button', { name: /agenthropic/ }));
+
+    const unattributed = await screen.findByTestId('unattributed');
+    expect(unattributed.textContent).toContain('900 tokens · $0.12');
+    // The dollar figure is real; what it may not do is stand alone, because a
+    // bucket with no unpriced clause beside it reads as fully priced.
+    expect(unattributed.textContent).toContain('unpriced: tokens unreadable');
+  });
+
+  it('keeps the unpriced clause on a session row whose count is unreadable (A3)', async () => {
+    routeFetch({
+      list: jsonResponse(200, sessionList([sessionSummary({ unpricedTokens: Number.NaN })])),
+    });
+    renderView();
+    await screen.findByRole('list', { name: 'session list' });
+
+    const row = screen.getByRole('button', { name: /agenthropic/ });
+    expect(row.textContent).toContain('unpriced: tokens unreadable');
+  });
+
+  it('keeps the unpriced clause in a tree node hover title (A3)', async () => {
+    routeFetch({
+      tree: jsonResponse(
+        200,
+        sessionTree({ agents: [agentNode({ unpricedTokens: Number.NaN })], edges: [] }),
+      ),
+    });
+    renderView();
+    await screen.findByRole('list', { name: 'session list' });
+    fireEvent.click(screen.getByRole('button', { name: /agenthropic/ }));
+
+    const title = (await screen.findByTestId('tree-node-agent-main')).querySelector('title');
+    expect(title?.textContent).toContain(', unpriced: tokens unreadable');
+  });
+});
+
+/**
+ * The vanished subject (2026-09-23, lane-P). The outcome row exists to name
+ * the cause the parent observed. `dto-guards.ts` checks containers and
+ * load-bearing numbers and deliberately NOT strings, so the cause can arrive
+ * as the empty string - and then the row renders a sentence whose only
+ * informative part is missing.
+ */
+describe('SessionsView - an outcome cause with nothing in it (lane-P)', () => {
+  type OutcomeCause = NonNullable<AgentNodeDto['outcomeCause']>;
+
+  async function outcomeRows(agents: readonly AgentNodeDto[]): Promise<string[]> {
+    routeFetch({ tree: jsonResponse(200, sessionTree({ agents: [...agents], edges: [] })) });
+    renderView();
+    await screen.findByRole('list', { name: 'session list' });
+    fireEvent.click(screen.getByRole('button', { name: /agenthropic/ }));
+    const list = await screen.findByRole('list', { name: 'observed agent outcomes' });
+    return Array.from(list.querySelectorAll('li')).map((row) => row.textContent ?? '');
+  }
+
+  it('quotes a blank cause instead of printing an empty parenthesis', async () => {
+    // `unrecognised ()` reads as a rendering fault. The reader cannot tell
+    // whether the server sent an empty cause or whether this page lost it -
+    // and a row that shows no cause at all is worse than no row, because the
+    // list is titled "observed agent outcomes".
+    const rows = await outcomeRows([
+      agentNode({ id: 'agent-main', outcomeCause: '' as OutcomeCause }),
+    ]);
+    expect(rows).toEqual(['main agent-main - unrecognised ("")']);
+  });
+
+  it('makes a whitespace-only cause visible', async () => {
+    const rows = await outcomeRows([
+      agentNode({ id: 'agent-main', outcomeCause: '  ' as OutcomeCause }),
+    ]);
+    expect(rows).toEqual(['main agent-main - unrecognised ("  ")']);
+  });
+});
+
+/**
+ * Lane-EP (2026-09-23). The tree's strokes are the reader's only account of how
+ * the server knows one agent spawned another, and they had two settings for
+ * three facts: `tool_use` drew the solid observed line and EVERYTHING ELSE drew
+ * the dashed inferred one. `inferred` is a positive claim - that the server
+ * derived the link - made here on the sole evidence that the word was not
+ * `tool_use`. A source word this build has not learned could equally be a new
+ * OBSERVATION, in which case the same dash understates the graph. The claim was
+ * the client's either way, which is the one thing this channel exists to
+ * prevent, so an unreadable word now gets its own dotted stroke and its raw
+ * value in quotes - and both views ask the same function for the answer.
+ */
+describe('SessionsView edge provenance (lane-EP)', () => {
+  it('draws a source word it has not learned as unrecognised, not as inferred', async () => {
+    routeFetch({
+      tree: jsonResponse(
+        200,
+        sessionTree({
+          edges: [orchestrationEdge({ source: 'mcp_spawn' as OrchestrationEdgeSource })],
+        }),
+      ),
+    });
+    const { container } = renderView();
+    await screen.findByRole('list', { name: 'session list' });
+
+    fireEvent.click(screen.getByRole('button', { name: /agenthropic/ }));
+    await screen.findByRole('img', { name: /agent tree for session/ });
+
+    const line = container.querySelector('line.edge-unrecognised');
+    expect(line).not.toBeNull();
+    expect(line?.querySelector('title')?.textContent).toBe('unrecognised ("mcp_spawn")');
+    expect(container.querySelectorAll('line.edge-inferred')).toHaveLength(0);
+    // Never a symbol the legend does not explain.
+    expect(screen.getByLabelText('edge provenance legend').textContent).toContain('unrecognised');
+  });
+
+  it('says no source word arrived rather than stringifying the absence', async () => {
+    // `dto-guards.ts` checks containers and load-bearing numbers and
+    // deliberately not strings, so a server that drops or renames `source`
+    // reaches the renderer with `undefined`. The old dash was titled
+    // `inferred (undefined)` - the same sentence SV-3 removed from `statusMeta`,
+    // which told the reader their server had sent the word "undefined" when it
+    // had sent no word at all.
+    const edge = orchestrationEdge();
+    const sourceless = Object.fromEntries(
+      Object.entries(edge).filter(([key]) => key !== 'source'),
+    ) as unknown as typeof edge;
+    routeFetch({ tree: jsonResponse(200, sessionTree({ edges: [sourceless] })) });
+    const { container } = renderView();
+    await screen.findByRole('list', { name: 'session list' });
+
+    fireEvent.click(screen.getByRole('button', { name: /agenthropic/ }));
+    await screen.findByRole('img', { name: /agent tree for session/ });
+
+    expect(container.querySelector('line.edge-unrecognised title')?.textContent).toBe(
+      'unrecognised (no source word sent)',
+    );
   });
 });

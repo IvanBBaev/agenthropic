@@ -5,7 +5,7 @@
  * hidden, never rendered as $0. fetch is mocked - no real server.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { CostView, COST_TOP_N, TOP_BURNERS_N, TOP_BURNERS_NODE_LIMIT } from '../src/views/CostView';
 // M-10: the windows ride the app's shared clock, so the rollover test advances it.
 import { CLOCK_INTERVAL_MS } from '../src/clock';
@@ -21,6 +21,8 @@ import {
   jsonResponse,
 } from './fixtures';
 import { MockEventSource } from './mock-event-source';
+// L-O1: the row marker reuses the shared gap vocabulary rather than a new glyph.
+import { NO_FIGURE_META } from '../src/views/status';
 
 const fetchMock = vi.fn();
 let sse: SseClient;
@@ -79,9 +81,22 @@ function renderView() {
   return render(<CostView token="secret-token" sse={sse} onAuthRejected={onAuthRejected} />);
 }
 
-/** A summary with priced flow, a zero-cost model, and unpriced gaps. */
+/**
+ * A summary with priced flow, a zero-cost model, and unpriced gaps.
+ *
+ * AMENDED 2026-09-09 (CV-5). `sessionCount` is now stated rather than left to
+ * the fixture's default. The default would have made it 2 - the length of the
+ * slice - and 2 sessions holding $1.05 of a $1.25 total is a payload no server
+ * can produce, since `totals` and the per-session buckets are accumulated in
+ * one loop. That inconsistency used to be invisible; with the scope paragraph
+ * reading `hasMore` it would have turned the DEFAULT fixture of this suite
+ * into a server-contradicts-itself case and put a discrepancy notice under
+ * fifty unrelated tests. Seven sessions with five unlisted is what the dollars
+ * here have always described.
+ */
 function richSummary() {
   return costSummary({
+    sessionCount: 7,
     totals: { tokens: 50000, costUsd: 1.25, unpricedTokens: 4000 },
     perModel: [
       { model: 'claude-opus-4', tokens: 30000, costUsd: 1.0, unpricedTokens: 0 },
@@ -1093,7 +1108,12 @@ describe('CostView', () => {
         name: 'sessions excluded from the delegation estimate',
       });
       const reasonCell = table.querySelectorAll('tbody td')[1];
-      expect(reasonCell?.textContent).toBe('unrecognised reason: transcript-missing');
+      // AMENDED 2026-09-23 (lane-P). RE-AIMED: the cell still names the raw
+      // reason rather than leaving itself blank - the point of this test - and
+      // the word is now quoted so that a reason of `''` cannot render as a
+      // sentence stopped at its colon.
+      expect(reasonCell?.textContent).toBe('unrecognised reason: "transcript-missing"');
+      expect(reasonCell?.textContent).toContain('transcript-missing');
     });
 
     it('still prints the wording for a reason this build does know', async () => {
@@ -1432,6 +1452,45 @@ describe('CostView', () => {
       expect(titles).toContain('claude-a: $1.00');
     });
 
+    it('names a negative node count on hover instead of hovering as if priced (KK6)', async () => {
+      routeFetch({
+        summary: jsonResponse(
+          200,
+          costSummary({
+            totals: { tokens: 4000, costUsd: 1, unpricedTokens: -50 },
+            perModel: [{ model: 'claude-a', tokens: 4000, costUsd: 1, unpricedTokens: -50 }],
+          }),
+        ),
+      });
+      const { container } = renderView();
+
+      const titles = await nodeTitles(container);
+      expect(titles).toContain('claude-a: $1.00 (+ unpriced: -50, a count that cannot be right)');
+      expect(titles).toContain('all cost: $1.00 (+ unpriced: -50, a count that cannot be right)');
+    });
+
+    it('hovers +100 and -100 on their own nodes rather than letting them cancel (KK6)', async () => {
+      routeFetch({
+        summary: jsonResponse(
+          200,
+          costSummary({
+            totals: { tokens: 4000, costUsd: 1, unpricedTokens: 0 },
+            perModel: [
+              { model: 'claude-a', tokens: 2000, costUsd: 0.5, unpricedTokens: 100 },
+              { model: 'claude-b', tokens: 2000, costUsd: 0.5, unpricedTokens: -100 },
+              { model: 'claude-c', tokens: 2000, costUsd: 0.25, unpricedTokens: Infinity },
+            ],
+          }),
+        ),
+      });
+      const { container } = renderView();
+
+      const titles = await nodeTitles(container);
+      expect(titles).toContain('claude-a: $0.50 (+ ~100 unpriced tokens)');
+      expect(titles).toContain('claude-b: $0.50 (+ unpriced: -100, a count that cannot be right)');
+      expect(titles).toContain('claude-c: $0.25 (+ unpriced: tokens unreadable)');
+    });
+
     it('refuses to present the total as complete when the unpriced count is unreadable (CV-4)', async () => {
       routeFetch({ summary: jsonResponse(200, unreadableUnpriced()) });
       renderView();
@@ -1457,12 +1516,21 @@ describe('CostView', () => {
     });
 
     it('names the top-sessions table as a slice and prices what it leaves out (CV-5)', async () => {
+      // AMENDED 2026-09-09 (CV-5). The premise this test was written on - that
+      // the payload could not say how many sessions the corpus holds - is gone:
+      // `sessionCount` carries the population and `hasMore` says the table is
+      // cut from it. The durable guarantee is unchanged and is what the
+      // assertions now pin: a truncated table names its own scope and prices
+      // what it leaves out. The hedge it used to accept ("a slice unless the
+      // corpus holds exactly that many") is now a wrong answer, and the
+      // remainder is attributed to a COUNTED set of unlisted sessions.
       routeFetch({
         summary: jsonResponse(
           200,
           costSummary({
             totals: { tokens: 20000, costUsd: 10, unpricedTokens: 0 },
             perModel: [{ model: 'claude-a', tokens: 20000, costUsd: 10, unpricedTokens: 0 }],
+            sessionCount: 51,
             topSessions: [
               sessionRow(1, 2),
               sessionRow(2, 1.5),
@@ -1476,20 +1544,28 @@ describe('CostView', () => {
       renderView();
 
       const scope = (await screen.findByTestId('top-sessions-scope')).textContent ?? '';
-      expect(scope).toContain('The 5 costliest sessions');
-      expect(scope).toContain('the server returned 5');
-      expect(scope).toContain('a slice unless the corpus holds exactly that many');
-      expect(scope).toContain('They account for $6.00 of the $10.00 all-time total.');
-      expect(scope).toContain('The other $4.00 was spent in sessions this table does not list.');
+      expect(scope).toContain('The 5 costliest of 51 sessions with recorded usage.');
+      expect(scope).toContain('The rows account for $6.00 of the $10.00 all-time total.');
+      expect(scope).toContain(
+        'The other $4.00 was spent in the 46 sessions this table does not list.',
+      );
+      // The hedge is gone, not softened.
+      expect(scope).not.toContain('unless the corpus holds exactly that many');
+      expect(scope).not.toContain('nothing in this payload says which');
     });
 
     it('claims no unlisted spend when the shown rows account for the whole total (CV-5)', async () => {
+      // AMENDED 2026-09-09 (CV-5). Same case, now with the population stated:
+      // five rows of fifty-one sessions that happen to hold every priced
+      // dollar. The scope is asserted rather than hedged; the remainder
+      // sentence still stays away, because no remainder exists to describe.
       routeFetch({
         summary: jsonResponse(
           200,
           costSummary({
             totals: { tokens: 20000, costUsd: 10, unpricedTokens: 0 },
             perModel: [{ model: 'claude-a', tokens: 20000, costUsd: 10, unpricedTokens: 0 }],
+            sessionCount: 51,
             topSessions: [
               sessionRow(1, 2),
               sessionRow(2, 2),
@@ -1503,21 +1579,934 @@ describe('CostView', () => {
       renderView();
 
       const scope = (await screen.findByTestId('top-sessions-scope')).textContent ?? '';
-      // Still a slice - a full page of rows is exactly when it might be one -
-      // but no remainder is invented to go with it.
-      expect(scope).toContain('a slice unless the corpus holds exactly that many');
-      expect(scope).toContain('They account for $10.00 of the $10.00 all-time total.');
+      expect(scope).toContain('The 5 costliest of 51 sessions with recorded usage.');
+      expect(scope).toContain('The rows account for $10.00 of the $10.00 all-time total.');
       expect(scope).not.toContain('does not list');
+      expect(scope).not.toContain('unaccounted for');
     });
 
     it('stays silent about the slice when the server returned fewer than it asked for (CV-5)', async () => {
+      // AMENDED 2026-09-09 (CV-5). The name records what this test used to
+      // demand, and the demand was wrong once the payload could tell a short
+      // table from a complete one. Silence was the honest option only while
+      // "two rows" and "two sessions" were indistinguishable; with
+      // `sessionCount` the view knows which, so a two-row table out of seven
+      // sessions states its scope exactly like a five-row one does. The
+      // durable guarantee - never claim a scope the payload does not support -
+      // is what the assertions still pin.
       routeFetch();
       renderView();
       await screen.findByRole('table', { name: 'top sessions by cost' });
 
-      // Two rows for a request of five: this IS every session the server has,
-      // and a "may be a slice" hedge over a complete table is noise.
+      const scope = screen.getByTestId('top-sessions-scope').textContent ?? '';
+      expect(scope).toContain('The 2 costliest of 7 sessions with recorded usage.');
+      expect(scope).toContain('The rows account for $1.05 of the $1.25 all-time total.');
+      expect(scope).toContain(
+        'The other $0.20 was spent in the 5 sessions this table does not list.',
+      );
+    });
+
+    it('states that the table is whole when the payload says nothing is missing (CV-5)', async () => {
+      routeFetch({
+        summary: jsonResponse(
+          200,
+          costSummary({
+            totals: { tokens: 12000, costUsd: 6, unpricedTokens: 0 },
+            perModel: [{ model: 'claude-a', tokens: 12000, costUsd: 6, unpricedTokens: 0 }],
+            // Three rows, three sessions: `hasMore` is false, so this table is
+            // the corpus and the view may say so outright.
+            topSessions: [sessionRow(1, 3), sessionRow(2, 2), sessionRow(3, 1)],
+          }),
+        ),
+      });
+      renderView();
+
+      const scope = (await screen.findByTestId('top-sessions-scope')).textContent ?? '';
+      expect(scope).toBe(
+        'Every session with recorded usage is listed here - all 3 sessions. The rows account for $6.00 of the $6.00 all-time total.',
+      );
+    });
+
+    it('reports a discrepancy rather than inventing unlisted sessions to hold it (CV-5)', async () => {
+      routeFetch({
+        summary: jsonResponse(
+          200,
+          costSummary({
+            totals: { tokens: 12000, costUsd: 1.5, unpricedTokens: 0 },
+            perModel: [{ model: 'claude-a', tokens: 12000, costUsd: 1.5, unpricedTokens: 0 }],
+            // Two rows, two sessions ($1.00), a $1.50 total: the payload says
+            // every session is listed AND that half a dollar was spent
+            // somewhere else. A server accumulating both in one row loop cannot
+            // send this, so the page must not narrate it as ordinary.
+            topSessions: [sessionRow(1, 0.6), sessionRow(2, 0.4)],
+          }),
+        ),
+      });
+      renderView();
+
+      const scope = (await screen.findByTestId('top-sessions-scope')).textContent ?? '';
+      expect(scope).toContain('Every session with recorded usage is listed here - all 2 sessions.');
+      expect(scope).toContain('The rows account for $1.00 of the $1.50 all-time total.');
+      expect(scope).toContain(
+        'The remaining $0.50 is unaccounted for: this payload lists every session with recorded usage, so there is no unlisted session to attribute it to - the served total and the served rows disagree.',
+      );
+      // The money is NOT handed to sessions the payload denies exist.
+      expect(scope).not.toContain('does not list');
+    });
+
+    it('keeps "No sessions recorded yet." for a corpus that really is empty (CV-5)', async () => {
+      routeFetch({ summary: jsonResponse(200, costSummary()) });
+      renderView();
+      await screen.findByLabelText('totals');
+
+      expect(screen.getByTestId('top-sessions-empty').textContent).toBe(
+        'No sessions recorded yet.',
+      );
+      // Nothing to scope: a population of zero has no slice to describe.
       expect(screen.queryByTestId('top-sessions-scope')).toBeNull();
     });
+
+    it('does not call a corpus empty when the rows are the missing part (CV-5)', async () => {
+      routeFetch({
+        summary: jsonResponse(
+          200,
+          costSummary({
+            totals: { tokens: 8000, costUsd: 2, unpricedTokens: 0 },
+            perModel: [{ model: 'claude-a', tokens: 8000, costUsd: 2, unpricedTokens: 0 }],
+            // Four sessions counted, none served: the table is empty for a
+            // reason that has nothing to do with an empty database.
+            sessionCount: 4,
+            topSessions: [],
+          }),
+        ),
+      });
+      renderView();
+
+      expect((await screen.findByTestId('top-sessions-empty')).textContent).toBe(
+        'No session rows were served for this table.',
+      );
+      expect(screen.queryByText('No sessions recorded yet.')).toBeNull();
+      const scope = screen.getByTestId('top-sessions-scope').textContent ?? '';
+      expect(scope).toContain('None of the 4 sessions with recorded usage reached this table.');
+      expect(scope).toContain('The rows account for $0.00 of the $2.00 all-time total.');
+      expect(scope).toContain(
+        'The other $2.00 was spent in the 4 sessions this table does not list.',
+      );
+    });
+
+    /*
+      The three cases below are all payloads a consistent server cannot send:
+      `sessionCount` is the count of sessions carrying any priced or unpriced
+      usage, so nought sessions and non-zero totals cannot both be true. The
+      client cannot know the server is consistent, and until this pass it
+      answered the contradiction by printing one half of it - "No sessions
+      recorded yet." underneath KPIs that were rendering the other half. Three
+      separate tests because three separate fields can carry the usage, and a
+      guard that only asks about dollars would keep silent for a corpus whose
+      whole cost is unpriced - the case this project cares most about getting
+      right.
+    */
+    it('refuses to call the corpus empty while the totals report tokens (CV-5)', async () => {
+      routeFetch({
+        summary: jsonResponse(
+          200,
+          costSummary({ totals: { tokens: 8000, costUsd: 2, unpricedTokens: 0 } }),
+        ),
+      });
+      renderView();
+
+      expect((await screen.findByTestId('top-sessions-empty')).textContent).toBe(
+        'No session carries recorded usage, yet the totals above report 8,000 tokens and $2.00: the served totals and the served session count disagree.',
+      );
+      expect(screen.queryByText('No sessions recorded yet.')).toBeNull();
+      // Still nothing to scope: the disagreement is about the totals, and a
+      // population of nought has no slice to describe either way.
+      expect(screen.queryByTestId('top-sessions-scope')).toBeNull();
+    });
+
+    it('refuses to call the corpus empty when the usage is entirely unpriced (CV-5)', async () => {
+      routeFetch({
+        summary: jsonResponse(
+          200,
+          costSummary({ totals: { tokens: 0, costUsd: 0, unpricedTokens: 4000 } }),
+        ),
+      });
+      renderView();
+
+      // Both figures are quoted even though both read as nothing: the sentence
+      // says what was SERVED, and a reader who cannot see the unpriced count
+      // here can see it in the KPIs above.
+      expect((await screen.findByTestId('top-sessions-empty')).textContent).toBe(
+        'No session carries recorded usage, yet the totals above report 0 tokens and $0.00: the served totals and the served session count disagree.',
+      );
+    });
+
+    it('refuses to call the corpus empty while the totals report spend (CV-5)', async () => {
+      routeFetch({
+        summary: jsonResponse(
+          200,
+          costSummary({ totals: { tokens: 0, costUsd: 0.5, unpricedTokens: 0 } }),
+        ),
+      });
+      renderView();
+
+      expect((await screen.findByTestId('top-sessions-empty')).textContent).toBe(
+        'No session carries recorded usage, yet the totals above report 0 tokens and $0.50: the served totals and the served session count disagree.',
+      );
+    });
+  });
+
+  /**
+   * A1 (2026-09-23), from the Lane A behavioural audit. The window tiles and
+   * the basis paragraph each carried a disclosure behind a `> 0` test, and
+   * `computeCostWindows` sums `perDay` with plain `+` - so ONE row whose
+   * count arrived non-finite (shape is all `dto-guards.ts` promises) makes the
+   * bucket NaN, the test silently false, and the sentence vanish. Every test
+   * below renders a figure whose gap the page used to keep to itself, and
+   * asserts the page now says it out loud.
+   *
+   * AMENDED 2026-09-23 (lane-M). The defeating inputs below are unchanged and
+   * still defeating; what they produce is not. A1 caught the disclosures going
+   * quiet and rebuilt each one around the NaN that silenced it - which pinned
+   * the SYMPTOM, a poisoned total, as if it were the guarantee. M1 removed the
+   * poisoning instead: the sums skip the figures they cannot read and count the
+   * rows they came from, so a single bad row no longer erases a whole window
+   * and no total can arrive non-finite. The old assertions therefore pinned
+   * copy that can never be reached again, and an unreachable branch is a
+   * coverage failure as well as a lie about what the page does.
+   *
+   * So each test keeps its input and is re-aimed at the durable guarantee: a
+   * window that could not read every row it was handed says so, on the tile,
+   * beside the figure. That is strictly more than A1 asked for - the note now
+   * qualifies the dollar value and the token count too, not only the unpriced
+   * line - and it is the same doctrine underneath: the number and the statement
+   * of what it omits travel together.
+   */
+  describe('window disclosures that a NaN row used to switch off (A1)', () => {
+    it('says the unpriced count is unreadable instead of dropping the note', async () => {
+      vi.spyOn(Date, 'now').mockReturnValue(Date.UTC(2026, 7, 15, 12, 0, 0));
+      routeFetch({
+        summary: jsonResponse(
+          200,
+          costSummary({
+            totals: { tokens: 1000, costUsd: 0.1, unpricedTokens: 0 },
+            perDay: [
+              // Inside both windows, and its unpriced count is not a number.
+              { day: '2026-08-15', tokens: 1000, costUsd: 0.1, unpricedTokens: Number.NaN },
+            ],
+          }),
+        ),
+      });
+      renderView();
+      await screen.findByLabelText('recent windows');
+
+      const today = screen.getByTestId('kpi-today');
+      // The dollar figure stays - it is real. What changes is that it no
+      // longer stands alone, which on this board reads as "fully priced".
+      expect(today.textContent).toContain('$0.10');
+      expect(screen.getByTestId('kpi-today-coverage').textContent).toContain(
+        '1 day of 1 in this window could not be read',
+      );
+      expect(screen.getByTestId('kpi-week-coverage').textContent).toContain(
+        'every figure on this tile is a lower bound',
+      );
+      // And no `~ n unpriced` marker anywhere: the count was never read, so
+      // quoting one would be inventing it.
+      expect(today.textContent).not.toContain('~');
+      expect(screen.getByTestId('kpi-week').textContent).not.toContain('~');
+    });
+
+    it('keeps the unpriced gap visible on a window that is also stale (F-1)', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(Date.UTC(2026, 7, 15, 23, 59, 50));
+      routeFetch({
+        summary: jsonResponse(
+          200,
+          costSummary({
+            totals: { tokens: 7000, costUsd: 0.7, unpricedTokens: 0 },
+            perDay: [
+              // Dated a day ahead of the read, so after the rollover it is the
+              // whole of "today" - a non-empty bucket under a stale snapshot,
+              // which is the one arm the note did not reach.
+              { day: '2026-08-16', tokens: 7000, costUsd: 0.7, unpricedTokens: Number.NaN },
+            ],
+          }),
+        ),
+      });
+      renderView();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CLOCK_INTERVAL_MS);
+      });
+
+      // Two different gaps, and the reader is owed both: the staleness note is
+      // about time, the unpriced note is about coverage.
+      expect(screen.getByTestId('kpi-today-partial').textContent).toContain('read on 2026-08-15');
+      expect(screen.getByTestId('kpi-today-partial-coverage').textContent).toContain(
+        '1 day of 1 in this window could not be read',
+      );
+    });
+
+    it('says so when the undated bucket itself cannot be read', async () => {
+      vi.spyOn(Date, 'now').mockReturnValue(Date.UTC(2026, 7, 15, 12, 0, 0));
+      routeFetch({
+        summary: jsonResponse(
+          200,
+          costSummary({
+            totals: { tokens: 1000, costUsd: 0.1, unpricedTokens: 0 },
+            perDay: [
+              { day: '2026-08-15', tokens: 1000, costUsd: 0.1, unpricedTokens: 0 },
+              { day: 'unknown', tokens: Number.NaN, costUsd: 0, unpricedTokens: 0 },
+            ],
+          }),
+        ),
+      });
+      renderView();
+      await screen.findByLabelText('recent windows');
+
+      const basis = screen.getByTestId('windows-basis').textContent;
+      // The sentence appears at all - which is the A1 guarantee - and the zero
+      // in it is qualified rather than quoted as a measurement, which is the
+      // M1 one. Silence here would assert that every recorded token fell
+      // inside a window, and a bare "0 tokens" would assert that nothing was
+      // lost; the row count says the rows exist and could not be added.
+      expect(basis).toContain('tokens carry no timestamp and sit outside every window');
+      expect(basis).toContain('1 row of those could not be read, so that count is a lower bound.');
+    });
+
+    it('says so when the future-dated bucket itself cannot be read (CA-5)', async () => {
+      vi.spyOn(Date, 'now').mockReturnValue(Date.UTC(2026, 7, 15, 12, 0, 0));
+      routeFetch({
+        summary: jsonResponse(
+          200,
+          costSummary({
+            totals: { tokens: 1000, costUsd: 0.35, unpricedTokens: 0 },
+            perDay: [
+              { day: '2026-08-15', tokens: 1000, costUsd: 0.1, unpricedTokens: 0 },
+              { day: '2026-08-16', tokens: Number.NaN, costUsd: 0.25, unpricedTokens: 0 },
+            ],
+          }),
+        ),
+      });
+      renderView();
+      await screen.findByLabelText('recent windows');
+
+      const basis = screen.getByTestId('windows-basis').textContent;
+      // The readable half of the row survives the unreadable half: $0.25 is
+      // still quoted, where the old sum turned the pair into NaN and the copy
+      // could only say that everything about the bucket was unknown.
+      expect(basis).toContain('$0.25 across 0 tokens is dated after 2026-08-15');
+      expect(basis).toContain('disagree about what day it is');
+      expect(basis).toContain('1 row of those could not be read, so that figure is a lower bound.');
+    });
+  });
+
+  /**
+   * M1 (2026-09-23, lane-M) at the page. `computeCostWindows` now files a row
+   * whose `day` is not a UTC date into a bucket of its own instead of letting
+   * string ordering scatter it; these two tests are the reason that matters -
+   * they are what the reader sees. Both inputs are rows the page previously
+   * held and did not mention.
+   */
+  describe('rows the windows could not read (M1)', () => {
+    it('names the spend whose day it cannot read instead of dropping it', async () => {
+      vi.spyOn(Date, 'now').mockReturnValue(Date.UTC(2026, 7, 15, 12, 0, 0));
+      routeFetch({
+        summary: jsonResponse(
+          200,
+          costSummary({
+            totals: { tokens: 1500, costUsd: 0.15, unpricedTokens: 40 },
+            perDay: [
+              { day: '2026-08-15', tokens: 1000, costUsd: 0.1, unpricedTokens: 0 },
+              // The defeating row: sorts below every boundary, so it used to
+              // land in no bucket and no sentence - 500 tokens and $0.05 gone
+              // from a page still showing four totals that look complete.
+              { day: '', tokens: 500, costUsd: 0.05, unpricedTokens: 40 },
+            ],
+          }),
+        ),
+      });
+      renderView();
+      await screen.findByLabelText('recent windows');
+
+      const basis = screen.getByTestId('windows-basis').textContent;
+      expect(basis).toContain('1 row carries a date this page cannot read');
+      expect(basis).toContain('$0.05 across 500 tokens sits in no window at all');
+      // And it is NOT reported as clock skew: that sentence is about dates
+      // later than this machine's, and an unreadable string is not a date.
+      expect(basis).not.toContain('disagree about what day it is');
+    });
+
+    it('refuses to read an unpadded past date as a disagreement about the calendar', async () => {
+      vi.spyOn(Date, 'now').mockReturnValue(Date.UTC(2026, 7, 15, 12, 0, 0));
+      routeFetch({
+        summary: jsonResponse(
+          200,
+          costSummary({
+            totals: { tokens: 900, costUsd: 0.1, unpricedTokens: 0 },
+            // '2026-8-5' > '2026-08-15' as a string, which is how a date ten
+            // days in the PAST had the page announcing clock skew. The second
+            // row is there for the plural arm of the sentence: a caveat with a
+            // count and the wrong verb reads as a template nobody checked.
+            perDay: [
+              { day: '2026-8-5', tokens: 700, costUsd: 0.07, unpricedTokens: 0 },
+              { day: 'day one', tokens: 200, costUsd: 0.03, unpricedTokens: 0 },
+            ],
+          }),
+        ),
+      });
+      renderView();
+      await screen.findByLabelText('recent windows');
+
+      const basis = screen.getByTestId('windows-basis').textContent;
+      expect(basis).not.toContain('disagree about what day it is');
+      expect(basis).toContain('2 rows carry a date this page cannot read');
+      expect(basis).toContain('$0.10 across 900 tokens sits in no window at all');
+    });
+
+    it('will not call today empty over a row it is holding but could not read', async () => {
+      // The stale-snapshot arm, where the page's strongest window claim lives:
+      // "no usage was dated today". Every figure on this row is unreadable, so
+      // the today bucket sums to zero exactly as an idle day does - and the
+      // page must not mistake the one for the other. It was measured; it could
+      // not be read; those are different sentences.
+      vi.useFakeTimers();
+      vi.setSystemTime(Date.UTC(2026, 7, 15, 23, 59, 50));
+      routeFetch({
+        summary: jsonResponse(
+          200,
+          costSummary({
+            totals: { tokens: 0, costUsd: 0, unpricedTokens: 0 },
+            perDay: [
+              {
+                day: '2026-08-16',
+                tokens: Number.NaN,
+                costUsd: Number.NaN,
+                unpricedTokens: Number.NaN,
+              },
+            ],
+          }),
+        ),
+      });
+      renderView();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CLOCK_INTERVAL_MS);
+      });
+
+      expect(screen.queryByTestId('kpi-today-unread')).toBeNull();
+      expect(screen.getByTestId('kpi-today-partial-coverage').textContent).toContain(
+        '1 day of 1 in this window could not be read',
+      );
+    });
+  });
+  /**
+   * L-O1 (2026-09-23, lane-O). Lane M gave the PAGE a sentence for rows whose
+   * `day` is neither 'unknown' nor a UTC calendar date; this block is about the
+   * ROWS. The aggregate paragraph says how many such rows exist, and a reader
+   * scanning the table still could not tell WHICH ones they were: a `day` of
+   * `''` printed an empty cell beside real tokens and real dollars, and
+   * `'2026-8-5'` printed exactly like a date the page could place in a window.
+   * A qualification that lives somewhere other than with the claim it
+   * qualifies has not been published to the reader who meets the claim.
+   */
+  describe('a per-day row whose day the page cannot read (L-O1)', () => {
+    /** The first cell of every body row - the day column. */
+    function dayCells() {
+      const table = screen.getByRole('table', { name: 'cost per day' });
+      return [...table.querySelectorAll('tbody tr')].map((row) => row.querySelector('td'));
+    }
+
+    it('marks an empty day instead of printing a blank cell beside real money', async () => {
+      routeFetch({
+        summary: jsonResponse(
+          200,
+          costSummary({
+            totals: { tokens: 1500, costUsd: 0.15, unpricedTokens: 40 },
+            perDay: [
+              { day: '2026-07-28', tokens: 1000, costUsd: 0.1, unpricedTokens: 0 },
+              // The wire type is `Type.String()` and the client guards check
+              // strings for being strings, so this row is contract-valid and
+              // reaches the table as it is.
+              { day: '', tokens: 500, costUsd: 0.05, unpricedTokens: 40 },
+            ],
+          }),
+        ),
+      });
+      renderView();
+      await screen.findByRole('table', { name: 'cost per day' });
+
+      const [readable, unreadable] = dayCells();
+      // A day the page CAN read is printed exactly as served - the marking
+      // must cost the ordinary row nothing. Exactly one row is marked, so the
+      // reader can match the paragraph's count to the rows it is counting.
+      expect(readable?.textContent).toBe('2026-07-28');
+      expect(screen.getAllByTestId('perday-unreadable-day')).toHaveLength(1);
+      // BEFORE: '' - an empty cell next to 500 tokens and $0.05, telling the
+      // reader nothing at all about why the day is missing.
+      expect(unreadable?.textContent).toContain('unreadable day ("")');
+
+      const glyph = unreadable?.querySelector(`.${NO_FIGURE_META.className}`);
+      expect(glyph?.textContent).toBe(NO_FIGURE_META.symbol);
+      // The glyph is decoration and says so; the MEANING is in the words, so
+      // the disclosure survives being read aloud with the glyph removed.
+      expect(glyph?.getAttribute('aria-hidden')).toBe('true');
+      glyph?.remove();
+      expect(unreadable?.textContent?.trim()).toBe('unreadable day ("")');
+    });
+
+    it('marks an unpadded date rather than letting it pass as a placeable day', async () => {
+      routeFetch({
+        summary: jsonResponse(
+          200,
+          costSummary({
+            totals: { tokens: 900, costUsd: 0.1, unpricedTokens: 0 },
+            perDay: [
+              // Sorts ABOVE '2026-08-15' as a string, which is why lane M
+              // stopped ordering it against the window boundaries. The table
+              // printed it as '2026-8-5' regardless - a row the windows cannot
+              // place, wearing the costume of one they can.
+              { day: '2026-8-5', tokens: 700, costUsd: 0.07, unpricedTokens: 0 },
+              { day: '2026-02-30', tokens: 200, costUsd: 0.03, unpricedTokens: 0 },
+            ],
+          }),
+        ),
+      });
+      renderView();
+      await screen.findByRole('table', { name: 'cost per day' });
+
+      const [unpadded, overflowed] = dayCells();
+      // BEFORE: '2026-8-5' - indistinguishable from a day in a window.
+      expect(unpadded?.textContent).toContain('unreadable day ("2026-8-5")');
+      // And the raw value is reproduced, never paraphrased away: a reader who
+      // has to go and ask the server needs to quote what it actually sent.
+      expect(unpadded?.textContent).toContain('2026-8-5');
+      // `Date.parse` is lenient enough to turn this into March 2nd, which is
+      // precisely why the round-trip - not the parse - is the test.
+      expect(overflowed?.textContent).toContain('unreadable day ("2026-02-30")');
+    });
+
+    it('leaves the server\'s own "unknown" unmarked - a value it chose, not one this page failed to read', async () => {
+      routeFetch();
+      renderView();
+      await screen.findByRole('table', { name: 'cost per day' });
+
+      const unknownCell = dayCells().find((cell) => cell?.textContent === 'unknown');
+      // Same muted cell it has always been: 'unknown' means "these rows carry
+      // no timestamp", which the server determined. An unreadable day means
+      // the column is not what the contract says it is. Two facts, two
+      // presentations - so the gap marker must NOT appear here.
+      expect(unknownCell?.getAttribute('class')).toBe('muted');
+      expect(unknownCell?.querySelector(`.${NO_FIGURE_META.className}`)).toBeNull();
+      expect(screen.queryByTestId('perday-unreadable-day')).toBeNull();
+      expect(screen.getByRole('table', { name: 'cost per day' }).textContent).not.toContain(
+        'unreadable day',
+      );
+    });
+
+    it('names an unreadable day in the undrawable-bar notice instead of a blank', async () => {
+      routeFetch({
+        summary: jsonResponse(
+          200,
+          costSummary({
+            totals: { tokens: 500, costUsd: 0, unpricedTokens: 0 },
+            perDay: [{ day: '', tokens: 500, costUsd: Number.NaN, unpricedTokens: 0 }],
+          }),
+        ),
+      });
+      renderView();
+
+      // BEFORE: 'Not drawable as a bar:  (cost unreadable).' - the notice
+      // whose whole job is to NAME what it could not draw, naming nothing.
+      const notice = await screen.findByTestId('perday-undrawable');
+      expect(notice.textContent).toContain('unreadable day ("") (cost unreadable)');
+    });
+  });
+});
+
+/**
+ * The vanished subject (2026-09-23, lane-P). The sibling of L-O1 on the model
+ * axis. `perModel[].model` is `Type.String()` on the wire and the client
+ * guards check strings only for being strings, so a blank name is
+ * contract-valid - and every surface that names a model (the table cell, the
+ * legend entry beside a colour swatch, the zero-cost notice, the undrawable
+ * notice) then shows real tokens and real dollars attached to nothing.
+ */
+describe('CostView - a model the server did not name (lane-P)', () => {
+  /** The first cell of every body row of the per-model table. */
+  function modelCells() {
+    const table = screen.getByRole('table', { name: 'cost per model' });
+    return [...table.querySelectorAll('tbody tr')].map((row) => row.querySelector('td'));
+  }
+
+  it('marks a blank model name instead of a blank cell beside real money', async () => {
+    routeFetch({
+      summary: jsonResponse(
+        200,
+        costSummary({
+          totals: { tokens: 1500, costUsd: 0.15, unpricedTokens: 0 },
+          perModel: [
+            { model: 'claude-opus-4', tokens: 1000, costUsd: 0.1, unpricedTokens: 0 },
+            { model: '', tokens: 500, costUsd: 0.05, unpricedTokens: 0 },
+          ],
+        }),
+      ),
+    });
+    renderView();
+    await screen.findByRole('table', { name: 'cost per model' });
+
+    const [named, blank] = modelCells();
+    // A model the server DID name is printed exactly as served - the marking
+    // must cost the ordinary row nothing.
+    expect(named?.textContent).toBe('claude-opus-4');
+    // BEFORE: '' - an empty cell next to 500 tokens and $0.05.
+    expect(blank?.textContent).toContain('blank model name ("")');
+    const glyph = blank?.querySelector(`.${NO_FIGURE_META.className}`);
+    // Same shared gap vocabulary as the per-day cell, not a second glyph: the
+    // shell legend is generated from status.ts and explains this one already.
+    expect(glyph?.textContent).toBe(NO_FIGURE_META.symbol);
+    expect(glyph?.getAttribute('aria-hidden')).toBe('true');
+    glyph?.remove();
+    expect(blank?.textContent?.trim()).toBe('blank model name ("")');
+  });
+
+  it('names a blank model in the legend beside its colour swatch', async () => {
+    routeFetch({
+      summary: jsonResponse(
+        200,
+        costSummary({
+          sessionCount: 1,
+          totals: { tokens: 1000, costUsd: 1, unpricedTokens: 0 },
+          perModel: [{ model: '', tokens: 1000, costUsd: 1, unpricedTokens: 0 }],
+          topSessions: [
+            {
+              sessionId: 'aaaaaaaa-1111-2222-3333-444444444444',
+              projectSlug: 'agenthropic',
+              tokens: 1000,
+              costUsd: 1,
+              unpricedTokens: 0,
+            },
+          ],
+        }),
+      ),
+    });
+    renderView();
+
+    const legend = await screen.findByRole('list', { name: 'model legend' });
+    // BEFORE: a coloured square with nothing beside it - a key entry keying
+    // nothing, in the one element whose entire job is to say what a colour is.
+    expect(legend.textContent).toContain('blank model name ("")');
+  });
+
+  it('names a blank model in the zero-cost notice', async () => {
+    routeFetch({
+      summary: jsonResponse(
+        200,
+        costSummary({
+          totals: { tokens: 500, costUsd: 0, unpricedTokens: 500 },
+          perModel: [{ model: '', tokens: 500, costUsd: 0, unpricedTokens: 500 }],
+        }),
+      ),
+    });
+    renderView();
+
+    // BEFORE: 'Not in the flow (usage but $0 priced): .' - a list of one
+    // nothing, which reads as a page fault rather than a fact about the data.
+    const notice = await screen.findByTestId('zero-cost-models');
+    expect(notice.textContent).toContain('blank model name ("")');
+  });
+
+  it('names a blank model in the undrawable notice', async () => {
+    routeFetch({
+      summary: jsonResponse(
+        200,
+        costSummary({
+          totals: { tokens: 500, costUsd: 0, unpricedTokens: 0 },
+          perModel: [{ model: '', tokens: 500, costUsd: -1, unpricedTokens: 0 }],
+        }),
+      ),
+    });
+    renderView();
+
+    // BEFORE: 'model  -$1.00' - the notice that exists to NAME what it could
+    // not draw, naming nothing.
+    const notice = await screen.findByTestId('flow-undrawable');
+    expect(notice.textContent).toContain('blank model name ("")');
+  });
+});
+
+/**
+ * The vanished subject (2026-09-23, lane-P), excluded-sessions half. The
+ * "Reason" column's whole job is to say why a session was left out of the
+ * estimate; a reason word that is present but blank produced a cell reading
+ * `unrecognised reason: ` - a sentence with its subject removed.
+ */
+describe('CostView - an excluded session whose reason word is blank (lane-P)', () => {
+  it('quotes a blank reason instead of trailing off after the colon', async () => {
+    routeFetch({
+      savings: jsonResponse(
+        200,
+        aggregateSavings({
+          skippedSessionCount: 1,
+          skippedSessions: [
+            {
+              sessionId: 'cccccccc-9999-0000-1111-222222222222',
+              reason: '' as 'unpriceable',
+              detail: 'no transcript on disk',
+            },
+          ],
+        }),
+      ),
+    });
+    renderView();
+
+    const table = await screen.findByRole('table', {
+      name: 'sessions excluded from the delegation estimate',
+    });
+    const reasonCell = table.querySelectorAll('tbody td')[1];
+    expect(reasonCell?.textContent).toBe('unrecognised reason: ""');
+  });
+});
+
+/**
+ * KK2 (2026-09-25). The burners panel qualified its ranking only when the
+ * server SAID it truncated. The DAG view already refuses the other shape of
+ * the same gap (A4): fewer nodes drawn than the same read counts, with the flag
+ * left false. The ranking is built from those nodes, so "All N agents" is the
+ * same overclaim there.
+ */
+describe('CostView burners - counts disagree without a truncation flag (KK2)', () => {
+  const disagreeing = (nodes: ReturnType<typeof agentNode>[]) =>
+    jsonResponse(
+      200,
+      globalDag({
+        nodes,
+        counts: { totalAgents: 1200, returnedAgents: nodes.length, truncated: false },
+      }),
+    );
+
+  it('does not claim "All N agents" over a slice the payload admits is partial', async () => {
+    const nodes = Array.from({ length: 5 }, (_, index) =>
+      agentNode({ id: `agent-${String(index)}`, totalTokens: 100 + index }),
+    );
+    routeFetch({ dag: disagreeing(nodes) });
+    renderView();
+
+    const notice = await screen.findByTestId('burners-count-disagreement');
+    expect(notice.textContent).toContain('5 of the 1200 agents this same read counts');
+    expect(notice.textContent).toContain('was not marked truncated');
+    expect(notice.textContent).toContain('slice of unknown size');
+    expect(screen.queryByTestId('burners-truncation')).toBeNull();
+    const scope = screen.getByTestId('burners-scope').textContent;
+    expect(scope).not.toContain('All 5 agents with recorded usage.');
+    expect(scope).toContain('5 agents with recorded usage in the returned slice.');
+  });
+
+  it('scopes the empty state to the slice when nothing in it carries tokens', async () => {
+    routeFetch({ dag: disagreeing([agentNode({ totalTokens: 0, costUsd: 0 })]) });
+    renderView();
+
+    await screen.findByTestId('burners-count-disagreement');
+    const empty = screen.getByTestId('burners-empty').textContent;
+    expect(empty).toContain('No agent in the returned slice has a recorded token count.');
+    expect(empty).not.toContain('yet');
+  });
+
+  it('scopes a top-N cut to the slice too', async () => {
+    const nodes = Array.from({ length: TOP_BURNERS_N + 1 }, (_, index) =>
+      agentNode({ id: `agent-${String(index).padStart(2, '0')}`, totalTokens: 1000 + index }),
+    );
+    routeFetch({ dag: disagreeing(nodes) });
+    renderView();
+
+    await screen.findByTestId('burners-count-disagreement');
+    expect(screen.getByTestId('burners-scope').textContent).toContain(
+      `Top ${String(TOP_BURNERS_N)} of ${String(TOP_BURNERS_N + 1)} agents with recorded usage in the returned slice.`,
+    );
+  });
+
+  it('stays quiet when the nodes and the count agree', async () => {
+    routeFetch({ dag: jsonResponse(200, globalDag({ nodes: [agentNode({ totalTokens: 9 })] })) });
+    renderView();
+    await screen.findByTestId('burners-scope');
+    expect(screen.queryByTestId('burners-count-disagreement')).toBeNull();
+  });
+});
+
+/**
+ * KK3 (2026-09-25). The page reads three endpoints once and then keeps
+ * painting, so every figure on it is a snapshot with an age - the same
+ * disclosure the DAG and sessions views carry (snapshot.ts), and the same
+ * explicit control to re-read. No SSE-driven refresh: that is an owner call.
+ */
+describe('CostView provenance, refresh and retry (KK3)', () => {
+  const AGED_MS = 2 * 60 * 1000;
+
+  it('ages the read on screen and escalates the caveat once it is stale', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.UTC(2026, 7, 15, 12, 0, 0));
+    routeFetch();
+    renderView();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    const fresh = screen.getByTestId('cost-provenance');
+    expect(fresh.textContent).toContain('Read just now.');
+    expect(fresh.getAttribute('class')).toBe('muted card-provenance');
+    const callsAfterMount = fetchMock.mock.calls.length;
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(AGED_MS);
+    });
+
+    const aged = screen.getByTestId('cost-provenance');
+    expect(aged.textContent).toContain('Read 2m ago');
+    expect(aged.textContent).toContain('usage recorded since is in none of them');
+    expect(aged.getAttribute('class')).toBe('truncation-banner');
+    // Ageing is arithmetic on a stamp, not a reason to hit the API.
+    expect(fetchMock.mock.calls).toHaveLength(callsAfterMount);
+  });
+
+  it('re-reads all three endpoints and re-stamps when Refresh is used', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.UTC(2026, 7, 15, 12, 0, 0));
+    routeFetch();
+    renderView();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(AGED_MS);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh costs' }));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(6);
+    const urls = fetchMock.mock.calls.slice(3).map((call) => String(call[0]));
+    expect(urls.some((url) => url.startsWith('/api/cost/summary'))).toBe(true);
+    expect(urls.some((url) => url.includes('/api/dag/global'))).toBe(true);
+    expect(urls.some((url) => url.includes('/api/cost/delegation-savings'))).toBe(true);
+    const refreshed = screen.getByTestId('cost-provenance');
+    expect(refreshed.textContent).toContain('Read just now.');
+    expect(refreshed.getAttribute('class')).toBe('muted card-provenance');
+  });
+
+  it('aborts the superseded reads when Refresh is used mid-flight', async () => {
+    routeFetch();
+    renderView();
+    await screen.findByTestId('cost-provenance');
+    const pending = deferred<Response>();
+    const signals: AbortSignal[] = [];
+    fetchMock.mockImplementation((_url: string, init: RequestInit) => {
+      signals.push(init.signal as AbortSignal);
+      return pending.promise;
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh costs' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh costs' }));
+
+    // The first refresh's three reads are cancelled by the second.
+    expect(signals).toHaveLength(6);
+    expect(signals.slice(0, 3).every((signal) => signal.aborted)).toBe(true);
+    expect(signals.slice(3).some((signal) => signal.aborted)).toBe(false);
+  });
+
+  it('points the "not measured" tile at the Refresh control, not a page reload', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.UTC(2026, 7, 15, 23, 59, 50));
+    routeFetch({
+      summary: jsonResponse(
+        200,
+        costSummary({
+          totals: { tokens: 1000, costUsd: 0.1, unpricedTokens: 0 },
+          perDay: [{ day: '2026-08-15', tokens: 1000, costUsd: 0.1, unpricedTokens: 0 }],
+        }),
+      ),
+    });
+    renderView();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(CLOCK_INTERVAL_MS);
+    });
+
+    const today = screen.getByTestId('kpi-today').textContent;
+    expect(screen.getByTestId('kpi-today-unread').textContent).toBe('not measured');
+    expect(today).toContain('use Refresh costs to measure it');
+    expect(today).not.toContain('reload');
+  });
+
+  it('offers a retry that actually re-reads after a failed summary fetch', async () => {
+    let summaryCalls = 0;
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes('/api/dag/global')) return Promise.resolve(jsonResponse(200, globalDag()));
+      if (url.includes('/api/cost/delegation-savings')) {
+        return Promise.resolve(jsonResponse(200, aggregateSavings()));
+      }
+      summaryCalls += 1;
+      return Promise.resolve(
+        summaryCalls === 1
+          ? jsonResponse(500, { error: 'Internal server error.' })
+          : jsonResponse(200, richSummary()),
+      );
+    });
+    renderView();
+
+    await screen.findByText(/Could not load cost summary: Internal server error\./);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    await screen.findByLabelText('totals');
+    expect(summaryCalls).toBe(2);
+  });
+});
+
+/**
+ * KK4 (2026-09-25). The shared clock ticks every CLOCK_INTERVAL_MS, so a fetch
+ * that lands just after UTC midnight can be cut against a tick from just
+ * before it. The rows are the new day's; the page must not call them future.
+ */
+describe('CostView across a fetch that lands just after UTC midnight (KK4)', () => {
+  it('files the new day as today, not as a clock disagreement', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.UTC(2026, 7, 15, 23, 59, 50));
+    const summary = deferred<Response>();
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes('/api/dag/global')) return Promise.resolve(jsonResponse(200, globalDag()));
+      if (url.includes('/api/cost/delegation-savings')) {
+        return Promise.resolve(jsonResponse(200, aggregateSavings()));
+      }
+      return summary.promise;
+    });
+    renderView();
+
+    // The response lands twenty seconds later, before the next clock tick.
+    vi.setSystemTime(Date.UTC(2026, 7, 16, 0, 0, 10));
+    await act(async () => {
+      summary.resolve(
+        jsonResponse(
+          200,
+          costSummary({
+            totals: { tokens: 700, costUsd: 0.07, unpricedTokens: 0 },
+            perDay: [{ day: '2026-08-16', tokens: 700, costUsd: 0.07, unpricedTokens: 0 }],
+          }),
+        ),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    const today = screen.getByTestId('kpi-today').textContent;
+    expect(today).toContain('2026-08-16 · 700 tokens');
+    expect(today).toContain('$0.07');
+    expect(screen.getByTestId('windows-basis').textContent).not.toContain('disagree');
   });
 });

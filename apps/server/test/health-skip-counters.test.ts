@@ -35,9 +35,9 @@ describe('createSkipReporter (review H-2)', () => {
 
     // Two files sharing a reason are two distinct facts - both log.
     expect(lines).toEqual([
-      "corpus ingest: skipped slug/aaaa.jsonl (oversize) - this session's records are NOT in the dashboard totals.",
-      "corpus ingest: skipped slug/bbbb.jsonl (oversize) - this session's records are NOT in the dashboard totals.",
-      "corpus ingest: skipped slug/cccc.jsonl (unreadable, EACCES) - this session's records are NOT in the dashboard totals.",
+      "corpus ingest: skipped slug/aaaa.jsonl (oversize) - this file's records are NOT in the dashboard totals (the session's other files, if any, still are).",
+      "corpus ingest: skipped slug/bbbb.jsonl (oversize) - this file's records are NOT in the dashboard totals (the session's other files, if any, still are).",
+      "corpus ingest: skipped slug/cccc.jsonl (unreadable, EACCES) - this file's records are NOT in the dashboard totals (the session's other files, if any, still are).",
     ]);
     expect(reporter.counters()).toEqual({ oversize: 2, unreadable: 1 });
   });
@@ -188,7 +188,7 @@ describe('skip visibility through start() (review H-2)', () => {
         vi.advanceTimersByTime(1000);
         expect(error.mock.calls.map((call) => String(call[0]))).toEqual([
           `corpus ingest: skipped ${SESSION_B}.jsonl (empty-main) - ` +
-            `this session's records are NOT in the dashboard totals.`,
+            `this file's records are NOT in the dashboard totals (the session's other files, if any, still are).`,
           'corpus watcher: 1 file(s) skipped this pass; skips since boot: empty-main=2.',
         ]);
         expect(server.skipCounters()).toEqual({ 'empty-main': 2 });

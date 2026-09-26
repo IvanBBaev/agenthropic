@@ -250,7 +250,10 @@ describe('reconcilePendingSubagentStops (M-13 hook-before-row replay)', () => {
     expect(statusOf('agents', SUB_ID)).toBe('completed');
   });
 
-  it('mirrors the session row when a stored stop targets the MAIN agent (live-path parity)', () => {
+  it('never replays a stored stop that names the MAIN agent (live-path parity)', () => {
+    // SubagentStop speaks for a subagent; the main agent's id IS the session
+    // uuid. Replaying this onto a freshly inserted main row would stamp a
+    // sticky 'completed' on a session nobody saw end.
     appendHook('stop-main-target', 'SubagentStop', {
       hook_event_name: 'SubagentStop',
       session_id: SESSION_ID,
@@ -259,11 +262,9 @@ describe('reconcilePendingSubagentStops (M-13 hook-before-row replay)', () => {
 
     const counts = projectSession(temp.db, normalizedWith([MAIN_AGENT]), NOW);
 
-    expect(counts.statusReconciliations).toHaveLength(1);
-    expect(statusOf('agents', SESSION_ID)).toBe('completed');
-    // Same rule as applyHookLiveness: a main-agent terminal mirrors onto the
-    // session so the two can never drift.
-    expect(statusOf('sessions', SESSION_ID)).toBe('completed');
+    expect(counts.statusReconciliations).toEqual([]);
+    expect(statusOf('agents', SESSION_ID)).toBe('working');
+    expect(statusOf('sessions', SESSION_ID)).toBe('active');
   });
 
   describe('direct calls', () => {

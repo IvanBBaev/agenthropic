@@ -8,7 +8,7 @@ file supersedes nothing — it navigates.
 
 **As of:** 2026-07-06, end of the roadmap session (the third working session that day,
 after audit/red-team and cleanup/reorganization). **First action for any future
-session: check today's date against the KC calendar** (top of [`TODO.md`](../../TODO.md);
+session: check today's date against the KC calendar** (top of [`TODO.md`](https://github.com/IvanBBaev/agenthropic/blob/main/TODO.md);
 source: [`roadmap-v1-v2-2026-07-06.md`](roadmap-v1-v2-2026-07-06.md) §4) — the correct
 behavior depends on which checkpoint window you are in, and a passed-unfulfilled
 checkpoint has its own playbook in §6 below. If you are reading this much later, also
@@ -52,8 +52,8 @@ snapshot in §4–§5.
 > Still true and still binding: the security invariants (§ everywhere), the analysis
 > freeze (9 of 9 — decline #10), the **immovable KC-4 date of 2026-12-01**, and the rule
 > that at a failed checkpoint you report and stop rather than archiving anything
-> yourself. **Newest truth lives in [`../../DONE.md`](../../DONE.md) Milestone 1,
-> [`../../TODO.md`](../../TODO.md) and `WORKLOG.md`** — prefer them over §4–§5 below.
+> yourself. **Newest truth lives in [`../../DONE.md`](https://github.com/IvanBBaev/agenthropic/blob/main/DONE.md) Milestone 1,
+> [`../../TODO.md`](https://github.com/IvanBBaev/agenthropic/blob/main/TODO.md) and `WORKLOG.md`** — prefer them over §4–§5 below.
 
 > **⚠️ Update — 2026-08-15 (the current-truth snapshot; supersedes the 07-30 numbers).**
 >
@@ -118,6 +118,62 @@ snapshot in §4–§5.
 > the PROVISIONAL status of all unratified numbers, and the rules that nothing is
 > committed, pushed, archived or deleted without an explicit owner instruction.
 
+> **⚠️ Update — 2026-09-18 (the current-truth snapshot; supersedes the 08-15 numbers).**
+>
+> 1. **The schedule of record is now the closing plan**,
+>    [`closing-plan-2026-09-08.md`](closing-plan-2026-09-08.md) (schedule record #3, written
+>    inside the analysis freeze as a schedule, not an analysis). It defines "100%" as
+>    `v1.0.0` tagged by KC-4 with every `RELEASE.md` box ticked, and lays the remaining work
+>    out as Waves 0–5 on the `TODO.md` closing board. Its eight-decision batch **D1–D8 was
+>    taken by Ivan on 2026-09-09** (every recommended default, in chat), and D1 was consumed
+>    by commit `39e565a` the same day — the eleventh and newest commit on `main`, CI `success`.
+>    Everything since (the 2026-09-10 Wave 2 close with migration 18, the 2026-09-18 truth
+>    pass) sits in the working tree — 84 modified and 12 new files on this date; committing
+>    it needs a new explicit ask, as always.
+> 2. **KC-2 (2026-09-14) is MET, ticked on 2026-09-18 — four days after its date.** The
+>    session that owns the tick was inactive 2026-09-10 → 09-18; the tree did not change in
+>    between, the Phase 1 and Phase 2 exit gates were re-verified green on the date's
+>    tree, and zero velocity rebases were used. Record it as a late tick of a met
+>    condition, not as a failed checkpoint. The KC-0/KC-1 record above is unchanged. The
+>    next checkpoint is **KC-3, 2026-10-12**: its preconditions already hold (`main`
+>    requires the `ci` check; the P0 proofs are green) and need ticking on the date, not
+>    work. **KC-4 (2026-12-01) is unchanged and immovable.**
+> 3. **Schema 18.** Migrations 14–18 canonicalize the two timestamp operands of the
+>    dated-rate comparison, install the `token_usage_rollup` the cost summary reads, add
+>    `agents.outcome_cause`, and seed the ten `model_pricing` rows (two model ids × five
+>    buckets) the real corpus exposed
+>    as missing (ADR-0006's 2026-09-18 update). The pricing halt gate is real and was
+>    exercised: the first boot over the owner's real corpus (2026-09-09, schema 17) refused
+>    52 of 60 sessions on `unknown model id`; migration 18 cured it by adding rows, never by
+>    relaxing the gate, and the 2026-09-18 rerun at schema 18 admitted **54 of 54**
+>    (`docs/measurement/time-to-understand-log.md` §0.4–§0.5). It happened a second time on
+>    2026-09-26: the corpus had moved to `claude-opus-5-5`, a boot at schema 18 refused 27 of
+>    61 (§0.6), and migration 19 adds that id's five rows, so the schema is now **19**.
+>    Dollars stay **PROVISIONAL**
+>    until LABEL-ME; the Sonnet 5 rate question (D10) is open and Ivan's.
+> 4. **Measured on the 2026-09-18 working tree, not estimated:** the eight local gates —
+>    `gate:node`, `gate:spawner`, typecheck, lint, prettier, the web production build,
+>    `test`, `gate:licenses` — all green; **131 test files / 2428 tests, 100% statements,
+>    branches, functions and lines in all five packages**; the spawner allowlist holds the
+>    policy file only; 412 packages under the license gate with one documented exception.
+>    The scriptable half of `RELEASE.md` (§1–§3, §5 automated proof, §6 dollar trace and
+>    Pages) was **rehearsed end to end the same day with every exit code 0 and no box
+>    ticked** — Wave 4 R1; the record is on the `TODO.md` Wave 4 row and the boxes are
+>    ticked on the release commit only.
+> 5. **What remains is Ivan's, not code.** Wave 3 (from 2026-10-13): the 60 LABEL-ME claims,
+>    the stopwatch run, the 14-day friction log (also the KC-5 evidence), one rival
+>    dashboard. Then the `[HUMAN]` release boxes, the §5 live backup→restore drill on the
+>    real database, the L8 BENCH-SHAPE ratification tick, the open decisions D9/D10 on the
+>    board, and the release commit + `v1.0.0` tag by 2026-12-01. Every `package.json` reads
+>    `0.3.0`; the `0.3.0 → 1.0.0` bump, the `CHANGELOG` `[1.0.0]` section and the `DONE.md`
+>    v1.0 entry are acts of the release commit. Agents take only defects the friction log
+>    raises — no new features in Wave 3.
+>
+> Unchanged and still binding: every security invariant, the analysis freeze (9 of 9 —
+> the closing plan is a schedule, and a tenth analysis is still declined), the PROVISIONAL
+> label on every unratified number, and the rules that nothing is committed, pushed,
+> archived or deleted without an explicit owner instruction.
+
 ---
 
 ## 1. What this project is
@@ -130,12 +186,13 @@ of Ivan's `kiko` project), decided over forking any of six audited rival dashboa
 
 **Facts about the repository as it stood on 2026-07-06, kept as the baseline this
 document was written against.** Three of the four are superseded — read them as the
-starting state, not as today's, and see the 2026-08-15 banner above for what is true now:
+starting state, not as today's, and see the 2026-09-18 banner above for what is true now:
 
 - ~~**Zero application code. Zero git commits**~~ (`main` had no commits; everything was
   untracked working-tree files). 77 markdown files, ~144k words (re-measured
-  2026-07-06 — roadmap §1). **Superseded:** four feature commits are pushed, the
-  application is code-complete, and the no-spawner gate scans 235 source files.
+  2026-07-06 — roadmap §1). **Superseded:** eleven commits are pushed (the newest is
+  `39e565a`), the application is code-complete, and the no-spawner gate scans 272 source
+  files (2026-09-23).
 - The **schedule of record** is [`roadmap-v1-v2-2026-07-06.md`](roadmap-v1-v2-2026-07-06.md):
   kill checkpoints **KC-0…KC-5 with default-death** — Gate A signs by **2026-07-13**
   (KC-0) or the project archives; WP-S7 verdict due **2026-07-27** (KC-1); **v1.0 hard
@@ -143,7 +200,7 @@ starting state, not as today's, and see the 2026-08-15 banner above for what is 
   real daily use). **Analysis is frozen** (roadmap §8 — 9 analyses of 9; a request for
   #10 is declined and answered with the KC table). **Still binding**, with the caveat in
   the banner: KC-0 and KC-1 both passed unmet and work continued only under the owner
-  overrides recorded verbatim in [`TODO.md`](../../TODO.md).
+  overrides recorded verbatim in [`TODO.md`](https://github.com/IvanBBaev/agenthropic/blob/main/TODO.md).
 - ~~No production code may be written until **Gate A** is signed and the Phase-0 spike
   returns **GO** (`WP-S7`)~~ — decision CD-8. **Superseded 2026-07-11 by an explicit
   owner override**, recorded in `TODO.md`. The override moved the build; it did not
@@ -154,7 +211,7 @@ starting state, not as today's, and see the 2026-08-15 banner above for what is 
 
 ## 2. Complete timeline (what happened, in order)
 
-Every entry below has a fuller record in [`DONE.md`](../../DONE.md) and `WORKLOG.md`.
+Every entry below has a fuller record in [`DONE.md`](https://github.com/IvanBBaev/agenthropic/blob/main/DONE.md) and `WORKLOG.md`.
 
 | Date | Milestone | Primary artifact |
 |---|---|---|
@@ -168,7 +225,7 @@ Every entry below has a fuller record in [`DONE.md`](../../DONE.md) and `WORKLOG
 | 07-04 | Public docs site authored: **44 pages, 13 ADRs**, 603 internal links, 0 broken *(the `DONE.md` gap — finding PROC-3 — was backfilled 2026-07-06)* | [`../site/`](../site/), [`../DOCS-PLAN.md`](../DOCS-PLAN.md) |
 | 07-06 | **Propagation workflow** (parallel session, 50 agents): the four probe corrections carried corpus-wide (spawn tool `Agent`/`Workflow` not `Task`; layout by directory shape; outbox → YAGNI; CD-1 verdict), zero residuals | `DONE.md` entry |
 | 07-06 | **Full-corpus audit** (six-part analysis persisted, self-contained) + **red-team counter-analysis** (deliberately merciless) | [`corpus-audit-2026-07-06.md`](corpus-audit-2026-07-06.md), [`red-team-audit-2026-07-06.md`](red-team-audit-2026-07-06.md) |
-| 07-06 | **Corpus cleanup & reorganization** — AMEND-1…6 applied to the plan (dev-plan §2b) · supersession banners (v1 analysis/plan, due-diligence recommendation) · `README.md`/`CLAUDE.md` refreshed (PROC-1/2) · docs/site C-fixes · coverage bar normalized to **>90%** (OPEN-8 closed) · **`TODO.md` rebuilt as the parallel-agent assignment board** with disjoint lane ownership | [`../../TODO.md`](../../TODO.md), `DONE.md` entry |
+| 07-06 | **Corpus cleanup & reorganization** — AMEND-1…6 applied to the plan (dev-plan §2b) · supersession banners (v1 analysis/plan, due-diligence recommendation) · `README.md`/`CLAUDE.md` refreshed (PROC-1/2) · docs/site C-fixes · coverage bar normalized to **>90%** (OPEN-8 closed) · **`TODO.md` rebuilt as the parallel-agent assignment board** with disjoint lane ownership | [`../../TODO.md`](https://github.com/IvanBBaev/agenthropic/blob/main/TODO.md), `DONE.md` entry |
 | 07-06 | **v1/v2 roadmap — the last analysis (#9 of 9)**, authored on explicit owner instruction overriding red-team §11: kill checkpoints **KC-0…KC-5 with default-death** (Gate A sign-or-archive by **2026-07-13**; v1.0 hard date **2026-12-01**), phase-by-phase v1.0 schedule (Exit B absorbed into Phase 0 inside CD-8), earned-not-scheduled v2.0 alerts track, and the **analysis freeze** | [`roadmap-v1-v2-2026-07-06.md`](roadmap-v1-v2-2026-07-06.md) |
 | 07-07 | **Analysis freeze exercised** (request for #10 declined per playbook, answered with the KC table + existing-findings digest); state check: repo unchanged, Step 0 unsigned, 6 days to KC-0 | `WORKLOG.md` 2026-07-07 entry |
 
@@ -184,7 +241,7 @@ Every entry below has a fuller record in [`DONE.md`](../../DONE.md) and `WORKLOG
    §6 (see development-plan §2b). If an un-updated copy elsewhere still conflicts, §6 wins.
 3. [`concept-analysis-v2.md`](concept-analysis-v2.md) — CD-1…CD-10 + LB1/LB2.
 4. [`development-plan.md`](development-plan.md) — the 75-WP decomposition.
-5. [`TODO.md`](../../TODO.md) — live tracker.
+5. [`TODO.md`](https://github.com/IvanBBaev/agenthropic/blob/main/TODO.md) — live tracker.
 
 **Role of everything else:** `docs/ai/DESIGN.md` = design basis (amended 07-06, now
 consistent); [`README.md`](README.md) here = index of the analysis chain;
@@ -222,8 +279,12 @@ them**.
 - [`parser-spec.md`](parser-spec.md) — the normative parser contract distilled from the
   verdict (the **14-item gate**, four structural join paths, token→cost rules). For any
   parser/ingest question this is now the most-current authority; it supersedes the
-  11-item framing embedded in older docs. Design only — CD-8 still gates code.
+  11-item framing embedded in older docs. Implemented since 2026-08-15 — see its §3
+  (14 of 14 implemented, 11 exercised by the real corpus).
 
+- [`impl-review-2026-08-09.md`](impl-review-2026-08-09.md) — owner-ordered review of the
+  shipped implementation at `2f8d103` (2026-08-09): ten dimensions, CONFIRMED / PLAUSIBLE /
+  UNVERIFIED-LOW verdicts; a review record, not design-analysis #10.
 - [`closing-plan-2026-09-08.md`](closing-plan-2026-09-08.md) — **the closing plan**
   (2026-09-08): what "100%" means (`v1.0.0` tagged by KC-4, every `RELEASE.md` box
   ticked), where the last 15% sits, the decision batch D1…D8 for Ivan, and five dated
@@ -280,7 +341,7 @@ PROC-1), `docs/due-diligence/recommendation.md` (supersession banner — PROC-7)
 Nothing below can be decided by an agent. As of 2026-07-06 Ivan owes the project exactly
 one choice; until he makes it, the correct agent behavior is §6.
 
-- **Gate A** ([`TODO.md`](../../TODO.md) top): sign CD-1…CD-10 + LB1/LB2, or defer with a
+- **Gate A** ([`TODO.md`](https://github.com/IvanBBaev/agenthropic/blob/main/TODO.md) top): sign CD-1…CD-10 + LB1/LB2, or defer with a
   dated note. Unsigned since 07-04 while 13 site ADRs already say "accepted" — the
   governance gap the red-team calls fiction. **The roadmap sets a deadline: sign by
   2026-07-13 (KC-0) or archive by default.**
@@ -309,7 +370,7 @@ one choice; until he makes it, the correct agent behavior is §6.
 - **"Apply best-path §6" / "fix AMEND-1…6"** → **already done 2026-07-06** (development-plan
   §2b · concept-analysis-v2 CD-9 · TODO.md · DOCS-PLAN §5); nothing left to apply.
 - **"Dispatch parallel agents" / any multi-agent work** → follow the coordination protocol
-  at the top of [`TODO.md`](../../TODO.md): one lane = one agent = the listed path
+  at the top of [`TODO.md`](https://github.com/IvanBBaev/agenthropic/blob/main/TODO.md): one lane = one agent = the listed path
   ownership; lanes in a wave are disjoint by construction; `TODO.md`, `DONE.md`,
   `WORKLOG.md`, this file and `CLAUDE.md` are **orchestrator-only** — lane agents return
   reports, the orchestrator writes the trackers.
@@ -336,8 +397,9 @@ one choice; until he makes it, the correct agent behavior is §6.
   the roadmap's §4 kill-checkpoint table. The repo has a decision problem, not an
   information problem. Only Ivan's explicit chat instruction can override the freeze
   (as it did, exactly once, to create the roadmap itself).
-- **Any request to scaffold `package.json`/`src/`** → refuse until Gate A + WP-S7 GO
-  (or an explicit Exit-B order, which produces throwaway-only code).
+- **Any request to scaffold `package.json`/`src/`** → moot since 2026-07-11: the owner's
+  CD-8 override created the monorepo (six `package.json` at `0.3.0`, `apps/*/src`,
+  `packages/*/src`); route such requests to the Closing board in `TODO.md`.
 
 **Session rules that bind you regardless of the ask:** chat with Ivan in **Bulgarian**;
 everything in the repo in **English**; never commit/push unasked; git-excluded files stay

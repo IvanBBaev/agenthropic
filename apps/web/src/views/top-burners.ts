@@ -12,8 +12,9 @@
  * entry for display.
  *
  * Ties break by costUsd (desc), then id (asc), so the order is deterministic
- * across refetches - a ranking that reshuffles equal rows on every SSE-driven
- * reload would read as data movement that never happened.
+ * across refetches - a ranking that reshuffles equal rows on every refetch
+ * (CostView fetches the DAG once per mount, not on SSE events) would read as
+ * data movement that never happened.
  *
  * Agents with zero recorded tokens are excluded from the ranking (a burner
  * list of non-burners is noise), but their COUNT is returned so the view can

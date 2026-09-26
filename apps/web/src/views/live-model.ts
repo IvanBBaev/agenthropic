@@ -54,7 +54,7 @@ export function isAgentStatusChangedEvent(data: unknown): data is AgentStatusCha
  * A board row: the server's summary plus what has happened to it SINCE it was
  * fetched.
  *
- * The patch below writes two of a summary's fields and carries the other seven
+ * The patch below writes two of a summary's fields and carries the other eight
  * across untouched, so a patched row is a mixture of two ages. That was
  * invisible, and the invisible half was the dangerous half: the patch advances
  * `lastActivityAt`, which is the only freshness cue the card has, so thirty

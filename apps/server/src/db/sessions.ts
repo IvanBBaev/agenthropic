@@ -4,7 +4,8 @@
  * A session is keyed on its session-uuid (parser-spec 6.2), never the project
  * slug. Idempotent: re-applying the same id refreshes the row in place via
  * ON CONFLICT(id) DO UPDATE, so re-parsing a transcript never duplicates a
- * root. Uses a named-parameter prepared statement.
+ * root. Uses a named-parameter prepared statement. `last_activity_at` never
+ * moves backwards and `status` follows the CASE below — see {@link upsertSession}.
  */
 import type { AgentStatus } from '@agenthropic/shared';
 import type { SqliteDatabase } from './connection';
@@ -38,9 +39,28 @@ export function upsertSession(db: SqliteDatabase, row: SessionUpsert): void {
      VALUES (@id, @projectSlug, @startedAt, @lastActivityAt, @status)
      ON CONFLICT(id) DO UPDATE SET
        project_slug     = excluded.project_slug,
-       started_at       = excluded.started_at,
-       last_activity_at = excluded.last_activity_at,
-       status           = ${SESSION_STATUS_CASE}`,
+       -- Monotonic non-increasing, the mirror of last_activity_at below: a
+       -- pass whose earliest agent starts LATER (compaction evicted the head,
+       -- a skipped file, duplicate-slug dedupe picking a copy that starts
+       -- later) must not move the session start forward. A NULL is absence
+       -- of evidence, so the COALESCE tail keeps whichever side is known.
+       started_at       = COALESCE(MIN(excluded.started_at, sessions.started_at),
+                                   excluded.started_at, sessions.started_at),
+       -- Monotonic non-decreasing, never overwrite: the anchor is the MAX
+       -- endedAt over the agents a pass emitted, so a pass that reads LESS (a
+       -- skipped subagent transcript, or duplicate-slug dedupe picking a
+       -- shorter copy) would move it backwards. A regressed anchor misorders
+       -- the session lists and breaks the status CASE's "strictly advance"
+       -- rule: the next unchanged replay would read as new activity. Scalar
+       -- MAX() returns NULL if either side is NULL, so the COALESCE tail keeps
+       -- whichever side is known (a NULL is absence of evidence). Every SET
+       -- expression sees the PRE-update row, so the status CASE below still
+       -- compares against the stored anchor even though this column is
+       -- assigned first. An identical replay writes an identical value, which
+       -- keeps the P0 byte-identical double-replay proof intact.
+       last_activity_at = COALESCE(MAX(excluded.last_activity_at, sessions.last_activity_at),
+                                   excluded.last_activity_at, sessions.last_activity_at),
+       status          = ${SESSION_STATUS_CASE}`,
   ).run(row);
 }
 

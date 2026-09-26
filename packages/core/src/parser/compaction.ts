@@ -6,7 +6,8 @@
  *
  * PARSER GAP (deliberately filled here, not in `parse-session`): the
  * {@link parseSession} reconstruction does not surface `compact_boundary`
- * records — `ParsedSession` carries agents/edges/usage only. This module is a
+ * records — `ParsedSession` carries agents/edges/usage/outcomes only. This
+ * module is a
  * NEW pure extractor over the same raw {@link SessionSubstrate} so the WP-C4
  * cost engine can segment usage at context resets without restructuring the
  * verified join model. Pure data-in/data-out; no I/O.

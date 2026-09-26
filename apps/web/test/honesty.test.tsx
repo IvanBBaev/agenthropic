@@ -490,7 +490,11 @@ describe('the chart text alternatives', () => {
     expect(text).toContain('1 working');
     expect(text).toContain('1 unknown');
     expect(text).toContain(`1 ${NULL_STATUS_META.label}`);
-    expect(text).toContain('unrecognised (zombie)');
+    // AMENDED 2026-09-23 (lane-P). RE-AIMED at the durable guarantee: the
+    // chart's text alternative names the unrecognised status with the server's
+    // own word. The word is now quoted so that a blank one is still visible.
+    expect(text).toContain('unrecognised ("zombie")');
+    expect(text).toContain('zombie');
     expect(text).toContain('1 observed (tool_use)');
     expect(text).toContain('2 inferred (directory, task_notification)');
     expect(text).toContain('3,000');
@@ -953,6 +957,19 @@ describe('the agent-graph summary carries its own qualification (CS-4)', () => {
     // Without this the sentence "Agents by status: 1 working" is a claim about
     // a 1200-agent corpus, and it is the only channel a screen reader has.
     expect(text).toContain('This counts the returned slice only: 1 of 1200 agents.');
+  });
+
+  it('RR1: a tally larger than the served count is a disagreement, not a slice', () => {
+    const text = describeAgentGraph([agentNode({ status: 'working' })], [], {
+      sliceOf: { returnedAgents: 3, totalAgents: 2 },
+    });
+    // "3 of 2" is not a slice of anything; the clause names the direction and
+    // declines to say which number is right.
+    expect(text).toContain(
+      'This counts 3 agents while the same read counts only 2 - the returned graph and the' +
+        ' served count disagree, and this page cannot say which is right.',
+    );
+    expect(text).not.toContain('returned slice only');
   });
 
   it('CS-4: states the scope of the count before its age, as the page does', () => {

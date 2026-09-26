@@ -201,4 +201,4 @@ _Read-only probe; no files under `~/.claude` modified. 8 agents, 0 errors, ~326k
 (`Agent`≠`Task`; 85% nested) independently re-verified by hand. Companion strategic memo:
 [`best-path-decision.md`](best-path-decision.md). Decisions refined:
 [`concept-analysis-v2.md`](concept-analysis-v2.md) CD-1…CD-3. Build items:
-[`development-plan.md`](development-plan.md) Track S · Open work: [`../../TODO.md`](../../TODO.md)._
+[`development-plan.md`](development-plan.md) Track S · Open work: [`../../TODO.md`](https://github.com/IvanBBaev/agenthropic/blob/main/TODO.md)._

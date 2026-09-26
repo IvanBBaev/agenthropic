@@ -471,7 +471,7 @@ sequencing** (empirical Phase-0, security in Phase 1) + **EXPANDED's formal appa
 (FR/NFR/ADR/traceability, `events_raw`+`events`) + **the eleven internal-only items**. Quarantine
 EXPANDED's generation defects. The consolidated decisions **CD-1 … CD-10** are the input to the
 work-package decomposition in [`development-plan.md`](development-plan.md); open work is tracked
-in [`../../TODO.md`](../../TODO.md), completed milestones in [`../../DONE.md`](../../DONE.md).
+in [`../../TODO.md`](https://github.com/IvanBBaev/agenthropic/blob/main/TODO.md), completed milestones in [`../../DONE.md`](https://github.com/IvanBBaev/agenthropic/blob/main/DONE.md).
 
 ---
 _Six-lens re-analysis (Architect · Developer · QA · BA · Gap · Holistic), Opus / high effort,

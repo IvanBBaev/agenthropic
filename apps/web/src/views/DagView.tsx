@@ -6,6 +6,15 @@
  * never pretending the visible slice is the whole story. Solid edges are
  * observed (`tool_use`); dashed edges are inferred.
  *
+ * AMENDED 2026-09-23 (lane-EP): "dashed edges are inferred" described a binary
+ * this view no longer draws. It asked `source === 'tool_use'` and dashed
+ * everything else, so a source outside the served union - a newer server, a
+ * renamed literal, a field that stopped arriving - was drawn as a derived join
+ * and titled with a derivation this build had not read. There is a third
+ * stroke now, dotted, for a source this build cannot place; see
+ * `views/provenance.ts` for why `inferred` was the wrong answer rather than an
+ * imprecise one.
+ *
  * AMENDED 2026-09-02 (F-4): "surfaced honestly" was believed to settle the
  * truncation disclosure. It did not, for two compounding reasons. The view
  * fetched once, on mount, and nothing could re-run it - so every node status,
@@ -33,10 +42,12 @@ import { readNowMs, useNowMs } from '../clock';
 import type { GlobalDagDto } from '../dto';
 import { agentTypeLabel, formatTokens, formatUsd, shortId } from '../format';
 import { describeAgentGraph } from './chart-summary';
-import { computeLayeredLayout } from './layout/layered';
+import { computeLayeredLayout, fallbackLayerNotice } from './layout/layered';
+import { edgeProvenance, EDGE_PROVENANCE_LEGEND } from './provenance';
 import { snapshotAge } from './snapshot';
 import { statusMeta } from './status';
 import type { ViewProps } from './types';
+import { unpricedTitleSuffix } from './unpriced';
 
 /** Node cap requested from the server (its own max is higher). */
 export const DAG_NODE_LIMIT = 1000;
@@ -202,9 +213,40 @@ export function DagView({ token, onAuthRejected }: ViewProps) {
   // each clause applies - truncation is a fact of this payload and the age is
   // a fact of this view's clock; the summary module is told, never left to
   // guess.
+  // AMENDED 2026-09-23 (A4). The scope clause was published only when the
+  // server SAID it truncated. A payload that draws fewer agents than it counts
+  // while leaving `truncated` false is a slice all the same, and the reader who
+  // has only this paragraph was the one told nothing about it.
+  const countsDisagree = dag.nodes.length !== dag.counts.totalAgents;
+  // RR1 (2026-09-26). The check above is an inequality, but the sentence it
+  // gated described one direction only: fewer drawn than counted, "a slice".
+  // More drawn than counted passes the same shape guard, and "3 of the 2
+  // agents ... are drawn ... so this picture is a slice" is a false claim. The
+  // direction picks the sentence; the disagreement is reported either way.
+  const drawnOverCount = dag.nodes.length > dag.counts.totalAgents;
+  // SA-Z4 (2026-09-23). A second disagreement, on the other axis, that
+  // `countsDisagree` cannot see: `totalEdges` counts the whole edge table while
+  // `edges` carries only the edges whose endpoints are among the returned
+  // agents, and the table has no foreign key to agents - so an edge naming an
+  // agent id with no stored row is counted forever and returned never. That
+  // produces returnedEdges 0 against totalEdges 1 with `truncated` false, which
+  // is none of the three states the caption below distinguished: it fell to the
+  // untruncated arm and printed the corpus count as the number of edges drawn.
+  // The node limit cannot be the explanation when the answer is not marked
+  // truncated, and what IS the explanation is a fact about the server's join
+  // that this view does not hold. So it reports the gap and declines to name a
+  // cause.
+  const edgeCountsDisagree = dag.counts.returnedEdges !== dag.counts.totalEdges;
+  // RR1: same split for edges - the banner below subtracts the two counts, and
+  // that is a count of missing edges only when returned <= total.
+  const edgesOverCount = dag.counts.returnedEdges > dag.counts.totalEdges;
   const summary = describeAgentGraph(dag.nodes, dag.edges, {
-    sliceOf: dag.counts.truncated
-      ? { returnedAgents: dag.counts.returnedAgents, totalAgents: dag.counts.totalAgents }
+    sliceOf:
+      dag.counts.truncated || countsDisagree
+        ? { returnedAgents: dag.counts.returnedAgents, totalAgents: dag.counts.totalAgents }
+        : undefined,
+    unreturnedEdges: edgeCountsDisagree
+      ? { returnedEdges: dag.counts.returnedEdges, totalEdges: dag.counts.totalEdges }
       : undefined,
     asOf: age.aged ? age.label : undefined,
   });
@@ -226,13 +268,69 @@ export function DagView({ token, onAuthRejected }: ViewProps) {
 
   return (
     <section aria-label="global dag">
+      {/*
+        A4 (2026-09-23). The else arm below prints the CORPUS counts with no
+        qualifier, and it was reached whenever `truncated` was false - so a
+        payload that returned five nodes while counting 1200 agents, without
+        setting the flag, captioned a five-node picture "1200 agents across 30
+        sessions". DG-2 already refuses exactly this contradiction one row
+        over, in the zero-node branch ("a gap in the answer, not an empty
+        database"); the same read with one node left it unsaid. The flag is a
+        claim about the answer and the node array is the answer, so when they
+        disagree the view reports the disagreement instead of choosing.
+      */}
       {dag.counts.truncated ? (
         truncationBanner
+      ) : countsDisagree ? (
+        <p className="truncation-banner" data-testid="dag-count-disagreement">
+          {drawnOverCount ? (
+            <>
+              {dag.nodes.length} agents are drawn, but this same read counts only{' '}
+              {dag.counts.totalAgents} - the drawn graph and the served count disagree, and this
+              page cannot say which is right.
+            </>
+          ) : (
+            <>
+              {dag.nodes.length} of the {dag.counts.totalAgents} agents this same read counts are
+              drawn, and the answer was not marked truncated - the drawn graph and the served count
+              disagree, so this picture is a slice of unknown size.
+            </>
+          )}
+        </p>
       ) : (
         <p className="muted">
           {dag.counts.totalAgents} agent{dag.counts.totalAgents === 1 ? '' : 's'} across{' '}
           {dag.counts.totalSessions} session{dag.counts.totalSessions === 1 ? '' : 's'},{' '}
-          {dag.counts.totalEdges} edge{dag.counts.totalEdges === 1 ? '' : 's'}.
+          {/* SA-Z4: the bare corpus count reads as the number of edges in the
+              picture, because every other figure in this sentence is. When the
+              answer returned fewer than it counted, both numbers go in. */}
+          {edgesOverCount
+            ? `${dag.counts.returnedEdges} edges returned against ${dag.counts.totalEdges} counted`
+            : edgeCountsDisagree
+              ? `${dag.counts.returnedEdges} of ${dag.counts.totalEdges} edges`
+              : `${dag.counts.totalEdges} edge${dag.counts.totalEdges === 1 ? '' : 's'}`}
+          .
+        </p>
+      )}
+      {/* Only when the server did NOT claim truncation: the truncation banner
+          already prints both edge counts, and a second paragraph saying the
+          same numbers over again buys nothing. */}
+      {edgeCountsDisagree && !dag.counts.truncated && (
+        <p className="truncation-banner" data-testid="dag-edge-count-disagreement">
+          {edgesOverCount ? (
+            <>
+              {dag.counts.returnedEdges} edges came back with this read, but the same read counts
+              only {dag.counts.totalEdges} - the answer and its own count disagree, and this page
+              cannot say which is right.
+            </>
+          ) : (
+            <>
+              {dag.counts.totalEdges - dag.counts.returnedEdges} of the {dag.counts.totalEdges}{' '}
+              edges this read counts were not returned with it, and the answer was not marked
+              truncated - so the node limit is not the reason and this page cannot say what is. They
+              are not in the picture below.
+            </>
+          )}
         </p>
       )}
       {provenance}
@@ -250,8 +348,7 @@ export function DagView({ token, onAuthRejected }: ViewProps) {
           than none: it reads as if the caveat had been given. */}
       {layout.cyclicNodes > 0 && (
         <p className="muted" id={DAG_CYCLE_ID}>
-          {layout.cyclicNodes} agent{layout.cyclicNodes === 1 ? '' : 's'} sit in a cycle and are
-          placed on a fallback layer.
+          {fallbackLayerNotice(layout.cyclicNodes, layout.belowCycleNodes)}
         </p>
       )}
       <div className="chart-scroll">
@@ -263,31 +360,28 @@ export function DagView({ token, onAuthRejected }: ViewProps) {
           height={layout.height}
           viewBox={`0 0 ${String(layout.width)} ${String(layout.height)}`}
         >
-          {layout.edges.map((edge) => (
-            <line
-              key={edge.payload.id}
-              className={
-                edge.payload.source === 'tool_use' ? 'edge edge-observed' : 'edge edge-inferred'
-              }
-              x1={edge.x1}
-              y1={edge.y1}
-              x2={edge.x2}
-              y2={edge.y2}
-            >
-              <title>
-                {edge.payload.source === 'tool_use'
-                  ? 'observed (tool_use)'
-                  : `inferred (${edge.payload.source})`}
-              </title>
-            </line>
-          ))}
+          {layout.edges.map((edge) => {
+            const sourceProvenance = edgeProvenance(edge.payload.source);
+            return (
+              <line
+                key={edge.payload.id}
+                className={sourceProvenance.className}
+                x1={edge.x1}
+                y1={edge.y1}
+                x2={edge.x2}
+                y2={edge.y2}
+              >
+                <title>{sourceProvenance.title}</title>
+              </line>
+            );
+          })}
           {layout.nodes.map((placed) => {
             const agent = placed.node;
             const meta = statusMeta(agent.status);
             return (
               <g key={agent.id} className={meta.className} data-testid={`dag-node-${agent.id}`}>
                 <title>
-                  {`${agentTypeLabel(agent.subagentType, agent.type)} ${shortId(agent.id)} - session ${shortId(agent.sessionId)} - ${meta.label} - ${formatTokens(agent.totalTokens)} tokens, ${formatUsd(agent.costUsd)}${agent.unpricedTokens > 0 ? `, ~${formatTokens(agent.unpricedTokens)} unpriced` : ''}${asOf}`}
+                  {`${agentTypeLabel(agent.subagentType, agent.type)} ${shortId(agent.id)} - session ${shortId(agent.sessionId)} - ${meta.label} - ${formatTokens(agent.totalTokens)} tokens, ${formatUsd(agent.costUsd)}${unpricedTitleSuffix(agent.unpricedTokens)}${asOf}`}
                 </title>
                 <circle cx={placed.x} cy={placed.y} r={7} fill="currentColor" />
                 <text className="node-symbol" x={placed.x} y={placed.y + 3.5} textAnchor="middle">
@@ -305,8 +399,7 @@ export function DagView({ token, onAuthRejected }: ViewProps) {
         {summary}
       </p>
       <p className="legend-inline muted" aria-label="edge provenance legend">
-        — observed (tool_use) ┄ inferred (directory, task_notification, queue_operation,
-        legacy_explore)
+        {EDGE_PROVENANCE_LEGEND}
       </p>
     </section>
   );

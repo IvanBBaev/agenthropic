@@ -27,6 +27,20 @@
  * format that IS chronological order, so no Date parsing (and no timezone
  * re-interpretation) happens here.
  *
+ * AMENDED 2026-09-23 (lane-M): "for the fixed format" was doing unpaid work in
+ * that sentence. `day` is `Type.String()` on the wire, and the client's guards
+ * check that a field is a string, not that it is a date - so a row whose day is
+ * `''` or `'2026-8-5'` reached this loop and was routed by string comparison
+ * anyway. `''` sorts below every boundary and landed in no bucket at all: real
+ * tokens and real dollars left the page while four totals that looked like a
+ * partition stayed put. `'2026-8-5'` - an August date written without padding -
+ * sorts ABOVE `'2026-08-15'` and was filed as future-dated, which had the view
+ * telling the reader that the two machines disagree about the calendar on the
+ * evidence of a row ten days old. So a day is now READ before it is compared
+ * (`isReadableDay`), and anything that is not a UTC date it round-trips lands
+ * in `unreadableDay`. Lexicographic ordering is still the whole comparison -
+ * it is simply no longer asked to adjudicate strings it cannot order.
+ *
  * WHAT THE WINDOWS CANNOT SEE (F-1). The rows are a snapshot, taken when the
  * summary was fetched; the windows are cut against a clock that keeps ticking
  * afterwards. Those are two different times. Once the clock crosses UTC
@@ -40,14 +54,43 @@
  * could cover. Callers must render the difference: a structural zero printed
  * as a measured $0.00 is precisely the class of claim this project exists not
  * to make.
+ *
+ * WHAT A TOTAL OWES (also lane-M, 2026-09-23). Every sum here is now guarded
+ * per figure and carries `rows` / `unreadableRows` beside it, because the two
+ * ways of dealing with a figure this module cannot read were both dishonest.
+ * Summing it with bare `+` let ONE non-finite value turn a whole window into
+ * `NaN` - six readable days destroyed by the seventh, and the tile printing
+ * "cost unreadable" over money that was never in doubt. Skipping it quietly
+ * would be the older defect wearing a better coat: a total that omits rows and
+ * does not say how many. The server settled this shape already - `/api/cost/
+ * summary` attaches `coverage.sessionsExcluded` so the number and the statement
+ * of what it leaves out travel together - and these buckets follow it. A sum
+ * with `unreadableRows > 0` is a LOWER BOUND, and the caller is expected to
+ * render it as one.
  */
 import type { DailyCostDto } from '../dto';
 
-/** One window's summed usage - same three-field shape as the server totals. */
+/**
+ * One window's summed usage - the three server-shaped figures, plus the two
+ * counts that say how much of the window the figures actually cover.
+ */
 export interface WindowTotals {
   readonly tokens: number;
   readonly costUsd: number;
   readonly unpricedTokens: number;
+  /** How many `perDay` rows were filed into this bucket. */
+  readonly rows: number;
+  /**
+   * How many of those rows carried at least one figure that was not a finite
+   * number, and so contributed nothing to the sums above.
+   *
+   * Non-zero makes every figure in this bucket a lower bound. It is the count,
+   * not a flag, because "some usage is missing" and "one day of seven is
+   * missing" ask the reader for different amounts of doubt - and because a
+   * bucket cannot know which figure the reader cares about, it is incremented
+   * once per row that was not wholly readable rather than once per bad field.
+   */
+  readonly unreadableRows: number;
 }
 
 export interface CostWindows {
@@ -85,6 +128,17 @@ export interface CostWindows {
    * calendar the data does not share.
    */
   readonly futureDated: WindowTotals;
+  /**
+   * Usage whose `day` is neither 'unknown' nor a UTC calendar date this module
+   * can read - outside every window, and disclosed rather than dropped.
+   *
+   * It is deliberately NOT merged into `unknownDay`. 'unknown' is a value the
+   * server chose, and means "these lines carry no timestamp"; a day that does
+   * not parse means the day column itself is not what the contract says it is,
+   * which is a different fact about a different part of the pipeline and is
+   * worth reading as one.
+   */
+  readonly unreadableDay: WindowTotals;
 }
 
 const DAY_MS = 86_400_000;
@@ -92,18 +146,59 @@ const DAY_MS = 86_400_000;
 /** The number of UTC days in the "recent" window, today inclusive. PROVISIONAL. */
 export const WEEK_WINDOW_DAYS = 7;
 
-const ZERO: WindowTotals = { tokens: 0, costUsd: 0, unpricedTokens: 0 };
+const ZERO: WindowTotals = { tokens: 0, costUsd: 0, unpricedTokens: 0, rows: 0, unreadableRows: 0 };
 
 /** `toISOString` is UTC by definition, so this is the server's day basis. */
 function utcDay(ms: number): string {
   return new Date(ms).toISOString().slice(0, 10);
 }
 
+/**
+ * Can this `day` be ordered against the window boundaries at all?
+ *
+ * The round-trip is the test, and it is stricter than parsing on purpose.
+ * `Date.parse` is lenient - `'2026-02-30'` yields a real timestamp two days
+ * into March - so "it parsed" would file a row under a date the server never
+ * wrote. Re-deriving the UTC date from the parsed instant and demanding the
+ * original string back admits exactly the zero-padded `YYYY-MM-DD` the server
+ * emits, and nothing that merely resembles it.
+ *
+ * AMENDED 2026-09-23 (lane-O): exported, unchanged. The question above is
+ * asked in a second place now - the per-day TABLE, which has to decide whether
+ * to print a served day as a day or to mark it as one this page cannot read.
+ * That decision must be the same decision the windows made, or the table will
+ * print a row as placeable that the windows filed under `unreadableDay` and
+ * the page's own paragraph counted as unplaceable. Two copies of this
+ * predicate would be two answers waiting to diverge, so there is one.
+ */
+export function isReadableDay(day: string): boolean {
+  const ms = Date.parse(`${day}T00:00:00.000Z`);
+  return Number.isFinite(ms) && utcDay(ms) === day;
+}
+
+/** Add `value` to a running total, or leave the total alone if it is unreadable. */
+function addFigure(total: number, value: number): number {
+  return Number.isFinite(value) ? total + value : total;
+}
+
+/** True when all three figures on the row are finite and so all three counted. */
+function isRowReadable(row: DailyCostDto): boolean {
+  return (
+    Number.isFinite(row.tokens) &&
+    Number.isFinite(row.costUsd) &&
+    Number.isFinite(row.unpricedTokens)
+  );
+}
+
 function add(totals: WindowTotals, row: DailyCostDto): WindowTotals {
   return {
-    tokens: totals.tokens + row.tokens,
-    costUsd: totals.costUsd + row.costUsd,
-    unpricedTokens: totals.unpricedTokens + row.unpricedTokens,
+    tokens: addFigure(totals.tokens, row.tokens),
+    costUsd: addFigure(totals.costUsd, row.costUsd),
+    unpricedTokens: addFigure(totals.unpricedTokens, row.unpricedTokens),
+    rows: totals.rows + 1,
+    // Per row, not per field: one row with two bad figures is one day of this
+    // window missing, and that is what the reader is being told.
+    unreadableRows: isRowReadable(row) ? totals.unreadableRows : totals.unreadableRows + 1,
   };
 }
 
@@ -112,18 +207,33 @@ export function computeCostWindows(
   nowMs: number,
   observedAtMs: number,
 ): CostWindows {
-  const todayUtc = utcDay(nowMs);
-  const weekStartUtc = utcDay(nowMs - (WEEK_WINDOW_DAYS - 1) * DAY_MS);
+  // KK4 (2026-09-25). `nowMs` is the shared clock's tick, which can trail the
+  // fetch stamp by up to CLOCK_INTERVAL_MS. Cut from the tick alone, a fetch
+  // landing just after UTC midnight had its new-day rows filed as future-dated
+  // and the page reporting a clock disagreement that was only the tick's lag.
+  // The later of the two readings is the better estimate of now.
+  const referenceMs = Math.max(nowMs, observedAtMs);
+  const todayUtc = utcDay(referenceMs);
+  const weekStartUtc = utcDay(referenceMs - (WEEK_WINDOW_DAYS - 1) * DAY_MS);
   const observedUtc = utcDay(observedAtMs);
   let today = ZERO;
   let last7Days = ZERO;
   let unknownDay = ZERO;
   let futureDated = ZERO;
+  let unreadableDay = ZERO;
   for (const row of perDay) {
     // 'unknown' must be routed before any comparison: lexicographically it
     // sorts after every date ('u' > '9'), so a comparison would misfile it.
     if (row.day === 'unknown') {
       unknownDay = add(unknownDay, row);
+      continue;
+    }
+    // Before every comparison, for the same reason one step further: a string
+    // that is not a date has no place in an ordering of dates, and letting it
+    // take part produced both halves of the M1 defect - the row that fell out
+    // of all four buckets and the past date reported as being from the future.
+    if (!isReadableDay(row.day)) {
+      unreadableDay = add(unreadableDay, row);
       continue;
     }
     // Routed before the window tests for the same reason: a date that has not
@@ -150,5 +260,6 @@ export function computeCostWindows(
     last7Days,
     unknownDay,
     futureDated,
+    unreadableDay,
   };
 }

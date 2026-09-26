@@ -37,18 +37,36 @@ describe('createSseClient', () => {
     expect(seen).toEqual(['connecting']);
   });
 
+  /**
+   * AMENDED 2026-09-09 (L3, D6): the second `fail()` was pinned here as "no
+   * extra notification", and that is no longer true - it notifies, carrying
+   * `attempt 2`. The premise the assertion rested on (the state WORD had not
+   * changed, so nothing had) is exactly what D6 removed.
+   *
+   * The durable guarantee the test was defending survives and is what it now
+   * asserts: the machine walks connecting -> open -> reconnecting -> open and
+   * a duplicate error invents no state that did not happen. The name is kept -
+   * a notification still marks a change - and the count that makes the
+   * duplicate worth announcing is pinned beside it.
+   */
   it('walks connecting -> open -> reconnecting -> open and notifies once per change', () => {
     const client = createSseClient('t');
-    const seen: SseConnectionState[] = [];
-    client.onStateChange((state) => seen.push(state));
+    const seen: [SseConnectionState, number][] = [];
+    client.onStateChange((state, attempts) => seen.push([state, attempts]));
     const source = MockEventSource.latest();
 
     source.open();
     source.fail();
-    source.fail(); // duplicate error while already reconnecting: no extra notification
+    source.fail(); // duplicate error: the same state word, a new attempt number
     source.open();
 
-    expect(seen).toEqual(['connecting', 'open', 'reconnecting', 'open']);
+    expect(seen).toEqual([
+      ['connecting', 0],
+      ['open', 0],
+      ['reconnecting', 1],
+      ['reconnecting', 2],
+      ['open', 0],
+    ]);
     expect(client.state).toBe('open');
   });
 
@@ -276,9 +294,15 @@ describe('createSseClient', () => {
  * apps/server/src/realtime/hub.ts writes `id: <n>` on every frame from a
  * monotonic counter and keeps NO replay buffer. That number is therefore the
  * only evidence a tab can have that frames were published while it was not
- * listening - and it matters most for `ingest-failed`, because a quarantined
- * session never reaches the read API, so no refetch can recover a failure
- * notice lost in a gap: it is gone for the life of the tab.
+ * listening - and it matters most for `ingest-failed`, because no refetch can
+ * recover a failure notice lost in a gap: it is gone for the life of the tab.
+ *
+ * AMENDED 2026-09-23 (coverage-claim): the clause "because a quarantined
+ * session never reaches the read API" was carrying that argument and was not
+ * true. Such a session does reach it when it ingested before it began failing,
+ * at the extent of its last good pass and unmarked. The conclusion stands and
+ * is stronger: the refetch does not merely omit the failure, it shows a
+ * session that looks current.
  *
  * The gap channel counts what the sequence proves was missed. It does not, and
  * cannot, recover the frames themselves.
@@ -430,5 +454,195 @@ describe('createSseClient subscriber failure (LV-5)', () => {
       total: 1,
     });
     expect(client.droppedFrames).toBe(1);
+  });
+
+  it('counts a frame once however many of its handlers throw', () => {
+    // One frame, two failing handlers: the frame was still ONE frame, and a
+    // tally of two would report a loss that never happened.
+    const client = createSseClient('t');
+    const drops = vi.fn();
+    const later = vi.fn();
+    client.onFrameDropped(drops);
+    client.subscribe('message', () => {
+      throw new Error('typed subscriber exploded');
+    });
+    client.subscribe('message', later);
+    client.onAnyEvent(() => {
+      throw new Error('observer exploded');
+    });
+
+    MockEventSource.latest().emit('message', { a: 1 });
+
+    expect(later).toHaveBeenCalledWith({ type: 'message', data: { a: 1 } });
+    expect(drops).toHaveBeenCalledTimes(1);
+    expect(drops).toHaveBeenCalledWith({ type: 'message', reason: 'handler-failed', total: 1 });
+    expect(client.droppedFrames).toBe(1);
+  });
+
+  /**
+   * K3 (2026-09-23): the same defect class as LV-5, one layer further out.
+   * `deliver` isolated the EVENT fan-out, but the three NOTIFICATION fan-outs
+   * around it - state, dropped-frame and gap - were bare loops. The gap loop is
+   * the expensive one: `noteFrameId` runs before `dispatch` on every frame, so
+   * a throwing `onFrameGap` subscriber propagated out of the listener and
+   * `dispatch` never ran at all. The frame reached nobody, and nothing recorded
+   * that it had not.
+   */
+  it('still delivers the frame when a gap subscriber throws', () => {
+    const client = createSseClient('t');
+    const events = vi.fn();
+    client.onFrameGap(() => {
+      throw new Error('gap subscriber exploded');
+    });
+    client.subscribe('message', events);
+
+    MockEventSource.latest().emit('message', { n: 1 }, { id: '1' });
+    MockEventSource.latest().emit('message', { n: 5 }, { id: '5' });
+
+    // The frame that PROVED the gap is itself data. Losing it to the report of
+    // the loss costs more than the report is worth.
+    expect(events).toHaveBeenCalledTimes(2);
+    expect(events).toHaveBeenLastCalledWith({ type: 'message', data: { n: 5 } });
+    // The ledger is written before the notice, so the count is right either way.
+    expect(client.missedFrames).toBe(3);
+    // Nothing was lost here, so nothing may be counted as lost.
+    expect(client.droppedFrames).toBe(0);
+  });
+
+  it('gives the gap notice to the subscriber behind one that throws', () => {
+    const client = createSseClient('t');
+    const later = vi.fn();
+    client.onFrameGap(() => {
+      throw new Error('gap subscriber exploded');
+    });
+    client.onFrameGap(later);
+
+    MockEventSource.latest().emit('message', {}, { id: '1' });
+    MockEventSource.latest().emit('message', {}, { id: '4' });
+
+    expect(later).toHaveBeenCalledWith({ from: 2, to: 3, missed: 2, total: 2 });
+  });
+
+  it('gives the dropped-frame notice to the subscriber behind one that throws', () => {
+    const client = createSseClient('t');
+    const later = vi.fn();
+    client.onFrameDropped(() => {
+      throw new Error('drop subscriber exploded');
+    });
+    client.onFrameDropped(later);
+
+    MockEventSource.latest().emit('message', 'truncated {');
+
+    expect(later).toHaveBeenCalledWith({
+      type: 'message',
+      reason: 'unparseable',
+      total: 1,
+    });
+    expect(client.droppedFrames).toBe(1);
+  });
+
+  it('gives the state notice to the subscriber behind one that throws', () => {
+    const client = createSseClient('t');
+    const later = vi.fn();
+    // The very first call arrives synchronously on subscribe and is
+    // deliberately NOT isolated - it throws into the caller's own stack, where
+    // it is loud. This subscriber survives that one and fails on every notice
+    // after it, which is the fan-out under test.
+    let subscribed = false;
+    client.onStateChange(() => {
+      if (!subscribed) {
+        subscribed = true;
+        return;
+      }
+      throw new Error('state subscriber exploded');
+    });
+    client.onStateChange(later);
+    later.mockClear();
+
+    MockEventSource.latest().open();
+
+    expect(later).toHaveBeenCalledWith('open', 0);
+    expect(client.state).toBe('open');
+  });
+});
+
+/**
+ * D6 (2026-09-09, L3). EventSource retries on its own schedule and tells a
+ * client nothing about how many times it has tried. The wrapper forwarded only
+ * the state word, so `reconnecting` was the entire answer whether the browser
+ * had failed once or forty times - and the two are not the same news. One is a
+ * blip; forty is a stream that is not coming back, and a reader who is told the
+ * same three letters for both has to guess which one they are living in.
+ *
+ * The ledger counts CONSECUTIVE failures and resets on a real open. It proves
+ * what happened; it predicts nothing about the next attempt.
+ */
+describe('createSseClient failed-attempt ledger (D6)', () => {
+  it('starts at zero, because nothing has failed yet', () => {
+    const client = createSseClient('t');
+    expect(client.failedAttempts).toBe(0);
+  });
+
+  it('counts consecutive failures so attempt 1 and attempt 40 are different facts', () => {
+    const client = createSseClient('t');
+    const source = MockEventSource.latest();
+
+    source.fail();
+    expect(client.failedAttempts).toBe(1);
+
+    for (let attempt = 2; attempt <= 40; attempt += 1) source.fail();
+
+    expect(client.failedAttempts).toBe(40);
+    // Forty failures and the state word has not moved once - which is exactly
+    // why the word alone could never have told these apart.
+    expect(client.state).toBe('reconnecting');
+  });
+
+  it('resets the count when the stream actually opens', () => {
+    const client = createSseClient('t');
+    const source = MockEventSource.latest();
+
+    source.fail();
+    source.fail();
+    source.fail();
+    source.open();
+    expect(client.failedAttempts).toBe(0);
+
+    // A stream that opened, dropped and is retrying once is at 1, not at 4.
+    source.fail();
+    expect(client.failedAttempts).toBe(1);
+  });
+
+  it('reports the count to a state subscriber, immediately and on every change', () => {
+    const client = createSseClient('t');
+    const source = MockEventSource.latest();
+    source.fail();
+    source.fail();
+
+    const seen: [SseConnectionState, number][] = [];
+    client.onStateChange((state, attempts) => seen.push([state, attempts]));
+    expect(seen).toEqual([['reconnecting', 2]]);
+
+    source.fail();
+    expect(seen).toEqual([
+      ['reconnecting', 2],
+      ['reconnecting', 3],
+    ]);
+  });
+
+  it('counts a fatal error as the attempt it was, while close() adds none', () => {
+    const client = createSseClient('t');
+    const source = MockEventSource.latest();
+
+    source.fail();
+    source.fail({ fatal: true });
+    // The attempt failed; that it was the last one does not unmake it. The
+    // chip does not print a retry number over `closed` - nothing is retrying -
+    // but the ledger records what happened rather than editing it.
+    expect(client.state).toBe('closed');
+    expect(client.failedAttempts).toBe(2);
+
+    client.close();
+    expect(client.failedAttempts).toBe(2);
   });
 });

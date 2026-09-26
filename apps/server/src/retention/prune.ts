@@ -2,12 +2,12 @@
  * WP-D10 - the retention prune: bounded, transactional, dry-runnable deletion
  * of EXPIRED PROJECTION rows, with a durable receipt for every dollar removed.
  *
- * POLICY STATUS. The mechanism is implemented; the POLICY is not set and is
- * not an agent's to set. Retention numbers await Ivan's ratification of OPEN-1
- * (retention TTL vs `events_raw` immutability) and the surrounding OPEN-2 /
- * OPEN-3 reads - `docs/analysis/open-decisions.md`. WP-D10 is NOT done: with
- * the default {@link NO_RETENTION} policy this module deletes nothing and the
- * database is byte-identical to a build without it.
+ * POLICY STATUS. The v1.0 policy is signed (D3, 2026-09-08): `events` rows
+ * older than 90 days, `token_usage` never. The daily backup timer in
+ * `index.ts` runs this module after each successful backup (L9). Under the
+ * {@link NO_RETENTION} policy (or with `DASHBOARD_RETENTION_EVENTS_DAYS=0`)
+ * this module deletes nothing and the database is byte-identical to a build
+ * without it.
  *
  * SAFETY PROPERTIES, in the order they matter:
  *
@@ -36,7 +36,7 @@
  *     dollar impact, and deletes nothing.
  *
  * RETENTION vs REPLAY CHECKPOINTS (facts the operator must know; the
- * interplay is undecided and awaits Ivan's OPEN-1 ratification).
+ * interplay is undecided - D3 signed the windows, not this).
  * `token_usage` is re-derived from the JSONL corpus, but a restart does NOT
  * re-read unchanged transcripts: a replay checkpoint (WP-IN10,
  * `db/replay-checkpoints.ts`) is honored while the session's `sessions` row
@@ -54,8 +54,10 @@
  *    off the books for such sessions.
  *
  * Which side yields - invalidating affected checkpoints inside the prune
- * transaction, or excluding pruned windows on re-ingest - is the OPEN-1
+ * transaction, or excluding pruned windows on re-ingest - is still an open
  * decision; until it is made, both behaviors above are the shipped truth.
+ * Under the signed v1.0 policy only `events` is pruned, so the resurrection
+ * above concerns rows, not dollars: `token_usage` is never in a window.
  */
 import type { SqliteDatabase } from '../db/connection';
 import {
@@ -148,7 +150,8 @@ export function prune(
   const dryRun = options.dryRun ?? false;
 
   if (policy.events === null && policy.tokenUsage === null) {
-    // No row rule configured: the no-op default. Nothing is read, nothing is
+    // No row rule configured (NO_RETENTION, or the signed events window
+    // at 0). Nothing is read, nothing is
     // written, no journal path is even resolved.
     return {
       ranAt,

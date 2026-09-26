@@ -2,7 +2,8 @@
  * In-memory {@link CorpusFs} fake + a real-fs `materializeTree` helper for the
  * WP-IN5 corpus tests. The fake models the exact hazard surface the disk
  * adapter must survive (symlinks, non-regular entries, oversize files, EACCES,
- * a directory whose `readdir` throws mid-walk, a crafted traversal name) WITHOUT
+ * a directory whose `readdir` throws mid-walk, an entry whose `lstat` throws,
+ * a crafted traversal name) WITHOUT
  * ever touching the real `~/.claude/projects`. Node kinds map to `lstat` bits
  * and to `readFileConfined`'s `O_NOFOLLOW` semantics:
  *
@@ -25,12 +26,20 @@ export interface FileSpec {
   readonly size?: number;
   /** `lstat().mtimeMs` for this file (defaults to 0), for tail-follow fingerprint tests. */
   readonly mtimeMs?: number;
+  /**
+   * When set, `lstat` on this node throws a coded fs error (e.g. `EACCES`,
+   * `EIO`) — the probe fails, independently of whether a read would. Models a
+   * parent directory without search permission, or a bad inode.
+   */
+  readonly throwLstat?: string;
 }
 export interface DirSpec {
   readonly type: 'dir';
   readonly children: TreeSpec;
   /** When set, `readDirNames` on this directory throws a coded fs error. */
   readonly throwReaddir?: string;
+  /** When set, `lstat` on this directory throws a coded fs error (see {@link FileSpec.throwLstat}). */
+  readonly throwLstat?: string;
   /**
    * Names `readDirNames` reports but that resolve to nothing — models a TOCTOU
    * vanish (an entry listed by `readdir` whose subsequent `lstat` throws ENOENT).
@@ -51,13 +60,13 @@ export interface TreeSpec {
 
 export function file(
   content: string,
-  opts: { throwCode?: string; size?: number; mtimeMs?: number } = {},
+  opts: { throwCode?: string; size?: number; mtimeMs?: number; throwLstat?: string } = {},
 ): FileSpec {
   return { type: 'file', content, ...opts };
 }
 export function dir(
   children: TreeSpec,
-  opts: { throwReaddir?: string; phantoms?: readonly string[] } = {},
+  opts: { throwReaddir?: string; phantoms?: readonly string[]; throwLstat?: string } = {},
 ): DirSpec {
   return { type: 'dir', children, ...opts };
 }
@@ -140,6 +149,9 @@ export function makeFakeCorpusFs(
 
     lstat(absPath: string): LstatInfo {
       const node = resolve(absPath);
+      if ((node.type === 'file' || node.type === 'dir') && node.throwLstat !== undefined) {
+        throw codedError(node.throwLstat, `lstat failed: ${absPath}`);
+      }
       const isFile = node.type === 'file';
       return {
         isFile,

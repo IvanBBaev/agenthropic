@@ -115,7 +115,9 @@ export type SkipReason =
   | 'empty-agent'
   | 'empty-main'
   | 'non-artifact'
-  | 'duplicate-session';
+  | 'duplicate-session'
+  /** A real directory past `ReadLimits.maxDepth`: the walk did not enter it, so nothing beneath it was read. */
+  | 'too-deep';
 
 /** One discovered-but-not-ingested file, with the reason (and fs code, if any). */
 export interface SkippedFile {
@@ -141,10 +143,23 @@ export interface EnumeratedSessions {
   readonly kind: 'sessions';
   readonly refs: readonly SessionRef[];
   /**
-   * Files discovered but excluded AT ENUMERATION — today only
-   * `duplicate-session` (review M-14): a session uuid found under more than one
-   * slug directory keeps exactly one deterministic ref, and every other copy is
-   * recorded here. Per-file build hazards are NOT this list — they surface from
+   * Entries discovered but excluded AT ENUMERATION, each with a corpus-root-
+   * relative POSIX path. Two reasons occur here:
+   *
+   * - `duplicate-session` (review M-14) — a session uuid found under more
+   *   than one slug directory keeps exactly one deterministic ref, and every
+   *   other copy is recorded here (`<slug>/<uuid>.jsonl`).
+   * - `unreadable` — a probe or listing that failed for any reason OTHER than
+   *   absence (`ENOENT` / `ENOTDIR` are a vanish, skipped silently). Three
+   *   sites record it: a slug directory whose `lstat` probe failed and a slug
+   *   directory whose `readdir` failed both carry the bare slug as the path
+   *   (no `/`) and hide EVERY session under it; a main transcript whose
+   *   `lstat` probe failed carries `<slug>/<uuid>.jsonl` and hides exactly the
+   *   session it is named after. Readers must not fold this list into "empty":
+   *   an id absent from `refs` while an `unreadable` entry is present may
+   *   still exist.
+   *
+   * Per-file build hazards are NOT this list — they surface from
    * {@link ./disk-substrate.buildSessionSubstrate}.
    */
   readonly skipped: readonly SkippedFile[];

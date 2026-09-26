@@ -24,6 +24,7 @@ export type {
   DailyCostDto,
   DelegationSavingsDto,
   GlobalDagDto,
+  IngestFailedEvent,
   ModelCostDto,
   OrchestrationEdgeDto,
   OrchestrationEdgeSource,

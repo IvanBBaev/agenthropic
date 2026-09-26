@@ -106,6 +106,36 @@ export function describeFailure(error: unknown): string {
   }
 }
 
+/**
+ * What the panel says about WHY it is showing (PP6). Supplied by the call site
+ * because only the call site knows: a per-view boundary sits around code whose
+ * only input is server data, so a crash there is very likely this build
+ * failing to read a newer server; the root boundary in `main.tsx` also guards
+ * the token screen, the router and the header, where a crash may have nothing
+ * to do with server data - and a panel that names a cause it does not know
+ * sends the reader after the wrong one.
+ */
+export interface FailureCause {
+  /** The sentence that opens the panel, before `stillWorks`. */
+  readonly summary: string;
+  /** What a retry can and cannot do, given that cause. */
+  readonly retryAdvice: string;
+}
+
+/** For a boundary around a view that renders server data. */
+export const SERVER_DATA_CAUSE: FailureCause = {
+  summary: 'This build could not render what the server returned.',
+  retryAdvice:
+    'A retry re-fetches and re-renders. If it fails the same way, this build and the server disagree about the shape of the data - reloading will not help, and the server is very likely newer than this page.',
+};
+
+/** For a boundary whose subtree can fail for reasons it cannot name. */
+export const UNATTRIBUTED_CAUSE: FailureCause = {
+  summary: 'Something in this page failed while rendering; the cause is not known here.',
+  retryAdvice:
+    'A retry re-renders the page. If it fails the same way, the message above and the browser console are the best clues to what broke.',
+};
+
 interface ErrorBoundaryProps {
   /** What stopped rendering, named the way the reader sees it on screen. */
   readonly subject: string;
@@ -115,6 +145,8 @@ interface ErrorBoundaryProps {
    * leaves the nav usable, a crashed root leaves nothing.
    */
   readonly stillWorks: string;
+  /** Why the panel thinks this happened - see `FailureCause`. */
+  readonly cause: FailureCause;
   readonly children: ReactNode;
 }
 
@@ -168,7 +200,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       <div className="view-error" role="alert" data-testid="error-boundary">
         <h2>{this.props.subject} stopped rendering</h2>
         <p className="empty-state">
-          This build could not render what the server returned. {this.props.stillWorks}
+          {this.props.cause.summary} {this.props.stillWorks}
         </p>
         <p className="muted" data-testid="error-boundary-message">
           {failure}
@@ -180,11 +212,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
             way, and a reader who is not told that will read a second crash as
             a second unrelated bug. A boundary cannot repair a shape mismatch;
             it can only stop one from taking the page. */}
-        <p className="muted">
-          A retry re-fetches and re-renders. If it fails the same way, this build and the server
-          disagree about the shape of the data - reloading will not help, and the server is very
-          likely newer than this page.
-        </p>
+        <p className="muted">{this.props.cause.retryAdvice}</p>
         {/* EB-3. Without this the panel after a retry is byte-identical to the
             panel before it, so nothing on screen says the retry was already
             answered - and for a screen-reader user the re-announcement of the

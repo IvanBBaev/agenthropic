@@ -200,6 +200,33 @@ updates in place.
 > observed. See
 > [the status lifecycle](../architecture/ingest-reconciliation.md#81-the-status-lifecycle-as-built).
 
+**AMENDED 2026-09-23 (J-4).** The sentence above - "the row shows `~ n unpriced`" - described a
+two-way rendering, and that was what the code did when it was written: the clause was gated on
+`unpricedTokens > 0`, so a count that arrived non-finite (`NaN`, `Infinity`) failed that test in
+exactly the same way a measured zero does, and the row printed its dollar figure with nothing
+beside it. Five sites shared that gate. They now share one module instead
+(`apps/web/src/views/unpriced.tsx`), used by `LiveView`, `SessionsView` and `DagView`, and the
+rendering is three-way:
+
+| The served `unpricedTokens` | What the row shows |
+| --- | --- |
+| a positive number | `~ n unpriced` beside the dollar figure - unchanged |
+| exactly `0` | nothing; a measured zero is the one value with nothing to disclose |
+| non-finite (`NaN`, `Infinity`) | an explicit `unpriced: tokens unreadable` |
+
+The third row is the one that did not exist before. `dto-guards.ts` validates a DTO's *shape*,
+not the sanity of its numbers - its own docblock says so - so a non-finite count reaches the
+view intact; under the old test the dollar amount beside it looked complete precisely when
+nobody could say whether it was. The same module supplies the hover text on tree and DAG nodes
+(`unpricedTitleSuffix`), so the four remaining sites cannot drift apart from each other again.
+
+A second reading is affected the same way. `formatRelativeTime` used to return `null` for a
+timestamp it could not parse, which is what it also returns for a timestamp that was never
+recorded - so an unparseable value rendered as an absence the server had not claimed. It now
+returns `timestamp unreadable` (`UNREADABLE_TIMESTAMP` in `apps/web/src/format.ts`, alongside
+`UNREADABLE_TOKENS` and `UNREADABLE_USD`), leaving `null` meaning exactly one thing: nothing
+was recorded.
+
 ## (b) Session-scoped subagent tree
 
 **Answers:** Q1 (the tree shape of "what is the subagent tree of this session").
@@ -262,6 +289,33 @@ moat itself (the moat is §3, next).
 >   node that isn't there and never silently dropped.
 > - Cyclic nodes are likewise declared rather than laid out as if acyclic, and the
 >   `unattributed` bucket is always rendered — including when it is empty.
+
+Two further things the view renders that the text above never described, because neither
+existed when it was written:
+
+- **Each agent's observed outcome cause is listed as text, beside the picture rather than
+  inside it.** `SessionsView` builds an "observed agent outcomes" list from `tree.agents` (the
+  payload as served, not the layout, so an agent the layout could not place still has its
+  outcome said) and names one row per agent whose `outcomeCause` is non-null. The list is read
+  from the same field the node's hover `<title>` carries, which matters because the SVG is
+  `role="img"`: a cause that lived only in a `<title>` would be a fact the picture knows and a
+  screen-reader user is never told. Four renderings are kept apart deliberately
+  (`outcomeCauseText`, `apps/web/src/views/SessionsView.tsx`): `null` renders **nothing at
+  all** - never "ok", never "succeeded", never a dash a reader could take for a zero, because
+  no observed outcome is not a claim of success; a known cause renders **verbatim**, because a
+  friendlier paraphrase would have to decide whether a refused spawn is a failure and it is
+  not; a cause word this build does not know renders as `unrecognised (<raw value>)`; and a
+  field that is not a string at all renders as `unrecognised (<absent>)`, since "no cause word
+  was sent" and "no outcome was observed" are different facts and must not be spelled the same
+  way. The cause is shown for **any** agent that carries one, not only for `status: error` -
+  on the measured corpus most observed causes are `concurrency_limit` (a spawn that was
+  refused, so the agent never ran) or `user_interrupt` (a person stopped it), and filtering to
+  `error` would have hidden them while promoting them would have invented failures.
+- **The unattributed line carries its own unpriced figure.** It is the page's only statement
+  about usage no agent claimed, so it follows the same three-way rule as §1's rows (see the
+  amendment there): `~ n unpriced` when positive, silence at a measured zero, and
+  `unpriced: tokens unreadable` when the count arrives non-finite. A withdrawn clause here
+  would say the unattributed dollars are the whole of it.
 
 ## (c) Global, persistent, per-instance orchestration DAG
 
@@ -387,6 +441,43 @@ rendering idea itself is fair game for this cost view.
 >   unratified** (`apps/server/src/db/migrations.ts`), so treat the dollar amounts as
 >   correctly-computed from numbers that have not yet been signed off.
 
+**AMENDED 2026-09-23 (J-4).** The first bullet above says the `Unpriced` column "renders `~ n`
+or a plain `0` - never a blank cell, which a reader could mistake for 'none.'" That is still
+what the column does, and a non-finite count renders there as `~ tokens unreadable` rather
+than as a number. The **tiles** around it did not hold to the same rule, and now do:
+
+| Where | Old rendering | Now |
+| --- | --- | --- |
+| **Total cost** tile | the `priced tokens only` caption was gated on `unpricedTokens > 0`, so an unreadable count silently removed it while the `Unpriced tokens` tile two columns over printed `tokens unreadable` about the same field | an unreadable count gets its own caption, "the unpriced-token count came back unreadable - what this leaves out is unknown" (`kpi-total-unpriced-unknown`) |
+| **Today (UTC)** and **Last 7 days (UTC)** tiles | the same `> 0` gate, and a second way to fail it: `computeCostWindows` sums whole `perDay` rows with `+`, so one row whose `unpricedTokens` arrived non-finite makes the whole window sum `NaN`, and `NaN > 0` is false | the note is three-way (`UnpricedWindowNote`) - `~ n unpriced` when positive, silence at a measured zero, and an explicit unreadable caption otherwise (`kpi-today-unpriced-unknown`, `kpi-today-partial-unpriced-unknown`, `kpi-week-unpriced-unknown`) |
+
+The total itself is untouched in each case: it is a real sum of real priced tokens. What
+changed is that nothing beside it now claims to know what it leaves out. The stale-tab arm of
+the Today tile gained the same note for its own reason - it printed cost and tokens with only
+a staleness caveat, and a reader told about one gap reasonably assumes there is no other.
+
+**AMENDED 2026-09-23 (J-4).** The second bullet's "the same applies to the 'other sessions'
+remainder outside the top-N" now has a fuller answer above the table, because the endpoint
+serves two facts the view did not previously have: `sessionCount` (how many sessions carry any
+usage at all - the population the slice was cut from) and `hasMore` (whether the slice is
+truncated). They are separate facts and the scope line uses them separately:
+
+- With `hasMore` **true**, the line reads "the *n* costliest of *N* sessions with recorded
+  usage", and a remainder is attributed to the sessions the table does not list.
+- With `hasMore` **false**, it reads "every session with recorded usage is listed here - all
+  *N*", and a remainder above `USD_EPSILON` is reported as **unaccounted for**, in those words:
+  there is no unlisted session to attribute it to, so the served total and the served rows
+  disagree and the page says so rather than inventing a bucket.
+- With rows served but `listedSessionCount === 0`, it says none of the *N* sessions reached
+  the table.
+
+The empty state is split along the same seam rather than being one sentence. "No sessions
+recorded yet" is now only said when `sessionCount` is `0` **and** the totals report no usage;
+when the totals do report usage over a zero session count, the empty state names the
+contradiction and both served figures instead of denying the usage the KPIs above it are
+rendering. That is the same disagreement the remainder sentence handles at the other end of
+the table, and it gets the same treatment: state it, name both figures, attribute nothing.
+
 ### The two recent-window KPIs, and the timezone they mean
 
 Q4 asks what *today* and *this week* cost, and the view answers with two tiles above the
@@ -403,7 +494,9 @@ The seven-day width is a **PROVISIONAL** constant (`WEEK_WINDOW_DAYS`), and the 
 inclusive of today, so it spans `today − 6 … today`. Two edges are handled deliberately
 rather than swept up: usage dated *after* today is excluded from both windows, because a
 future date means two machines disagree about the clock and folding it in would inflate a
-window it does not belong to; and usage carrying **no timestamp at all** lands in the
+window it does not belong to (the "today" boundary is the later of the page's clock tick
+and the moment the snapshot was read, so a read landing just after UTC midnight does not
+file the new day's rows as future-dated while the tick lags); and usage carrying **no timestamp at all** lands in the
 per-day table's literal `unknown` row, sits outside every window, and is disclosed in
 that same note when it is non-zero. Neither is dropped, and neither is folded into a
 window to make the tiles add up.
@@ -411,6 +504,29 @@ window to make the tiles add up.
 One staleness caveat, on record as review item M-10: the view has no clock tick and no
 SSE-driven refetch, so on a tab left open across UTC midnight the "today" boundary is
 only as fresh as the last render.
+
+*Amended 2026-09-25 (KK3):* the clock does tick now, and the page states its own age: a
+"Read … ago" line above the tiles says every figure is as of that read, and a **Refresh
+costs** button re-reads the summary, the burners and the savings together (the summary's
+error state has a Retry). There is still no SSE-driven refetch - the page never refreshes
+itself.
+
+The rest of this section predates the ticking clock and still holds: the tile does not leave the
+reader to work out the consequence. When the page's UTC day has moved past the day the snapshot
+was read on, the Today tile takes one of two arms instead of printing its usual figure:
+
+- the snapshot holds **nothing** dated the new today, so the sum is zero by construction: the
+  tile prints `not measured`, names the date it was read on and points at the Refresh costs control. `$0.00` would
+  be the worse outcome of the two - a number nobody measured, in the format reserved for
+  numbers somebody did;
+- the snapshot holds **something** dated today (a writer whose clock ran ahead dated rows in
+  before the read): the figure is real, so it is printed, with a caveat that it is a lower
+  bound and anything since the read is unread. Blanking a real figure would destroy
+  information.
+
+The Last 7 days tile is deliberately weaker in the same situation: six of its days are measured
+whatever happened to the seventh, so it prints its figure with a note rather than withholding
+it.
 
 ### Top agent burners — ranked by tokens, not by dollars
 
@@ -442,7 +558,10 @@ Three scope facts are printed above the table rather than left for the reader to
 And when the DAG endpoint truncates, the table says what that does to the ranking: the
 server slices by **recency**, not by burn, so a truncated slice may not contain the
 biggest burner at all. The banner states that in words instead of presenting a partial
-ranking as a global one.
+ranking as a global one. The same holds when the answer is *not* marked truncated but the
+number of agents returned disagrees with the count the same read serves: a separate banner
+says the ranking covers a slice of unknown size. Whenever the list is partial, the scope
+line drops "All" and says "in the returned slice".
 
 ### The per-session cost analysis panel
 
@@ -537,7 +656,7 @@ Two things follow directly from "no token → no data/stream":
 
 The full endpoint and stream reference — routes, payload shapes field by field, the
 health payload, and the reconnection semantics — lives on
-[the API reference](api.md), which documents the ten routes the server actually
+[the API reference](api.md), which documents the twelve routes the server actually
 registers. When this page was first written that reference was still an unwritten Phase 4
 deliverable, which is why several paragraphs above hedge about "illustrative naming";
 it is written now, and it is the authority wherever the two pages differ.
@@ -598,7 +717,7 @@ resolution inline.)*
   dashboard is the read side of.
 - [The moat](../guide/the-moat.md) — why the global DAG is the one feature no audited
   rival ships, and how it relates to the other four moat items.
-- [API reference](api.md) — the endpoint/stream reference this page defers to: the ten
+- [API reference](api.md) — the endpoint/stream reference this page defers to: the twelve
   real routes, their response fields, and the health payload.
 - [Security model](../security/model.md) — the full loopback/token/same-origin
   catalogue every view and endpoint above inherits.

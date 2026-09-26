@@ -505,4 +505,81 @@ describe('POST /api/hooks/event against the real SQLite store (WP-IN3/WP-IN2)', 
     }[];
     expect(payloads.every((row) => !row.payload.includes('turn-'))).toBe(true);
   });
+  it('refuses a delivery that carried no body at all, rather than reporting stored:false', async () => {
+    // A POST with no body and no content-type reaches the handler with
+    // `request.body === undefined`. The envelope then carries `payload:
+    // undefined`, `JSON.stringify` yields no text for it, and `INSERT OR
+    // IGNORE` swallows the `payload TEXT NOT NULL` violation - so the store
+    // answers `inserted: false`, the SAME answer it gives for a genuine
+    // duplicate. The route forwards that as `stored: false`, whose documented
+    // meaning (module header) is "we already hold this delivery". Nothing was
+    // held and nothing ever will be.
+    const response = await app.inject({ method: 'POST', url: HOOK_EVENT_PATH, headers: AUTH });
+
+    expect(response.statusCode).toBe(400);
+    const count = temp.db.prepare('SELECT COUNT(*) AS n FROM events_raw').get() as { n: number };
+    expect(count.n).toBe(0);
+  });
+});
+
+describe('the proto-poisoning boundary the redactor relies on', () => {
+  it('rejects a body carrying a __proto__ field instead of storing it', async () => {
+    // redact.ts documents that this 400 is the only reason its (now closed)
+    // __proto__ hole was never reachable over HTTP. The guard is Fastify's
+    // `onProtoPoisoning: 'error'` DEFAULT, which buildServer inherits rather
+    // than sets - so it is asserted here, not assumed.
+    const store = new InMemoryEventStore();
+    const server = buildServer({ token: TEST_TOKEN, schemaVersion: 1 });
+    await registerHookRoutes(server, { eventStore: store, now: () => FIXED_NOW });
+    await server.ready();
+
+    const response = await server.inject({
+      method: 'POST',
+      url: HOOK_EVENT_PATH,
+      headers: { ...AUTH, 'content-type': 'application/json' },
+      body: '{"__proto__":{"hook_event_name":"SubagentStop"},"cwd":"/tmp"}',
+    });
+    await server.close();
+
+    expect(response.statusCode).toBe(400);
+    expect(store.readAll()).toHaveLength(0);
+  });
+});
+
+describe('the delivery id over the transport that actually exists', () => {
+  it('treats a delivery id fused from a duplicated header as ABSENT', async () => {
+    // readDeliveryId's doc promises that "a header sent twice arrives as an
+    // array: an ambiguous delivery id is treated as ABSENT". Node never hands
+    // an array to a Fastify handler for this header - it JOINS the two values
+    // with a comma - so over HTTP the ambiguous pair is fused into a third,
+    // synthetic id and hashed as if the sender had named one firing. The
+    // documented collapse must hold for the real transport, which is provable
+    // as key equality with the same body sent carrying no id at all.
+    const keys: string[] = [];
+    const capture: EventStorePort = {
+      append: (envelope) => {
+        keys.push(envelope.idempotencyKey);
+        return { inserted: true };
+      },
+      readAll: () => [],
+    };
+    const server = buildServer({ token: TEST_TOKEN, schemaVersion: 1 });
+    await registerHookRoutes(server, { eventStore: capture, now: () => FIXED_NOW });
+    await server.ready();
+    await server.inject({
+      method: 'POST',
+      url: HOOK_EVENT_PATH,
+      payload: HOOK_BODY,
+      headers: { ...AUTH, [HOOK_DELIVERY_ID_HEADER]: ['a-one', 'b-two'] },
+    });
+    await server.inject({
+      method: 'POST',
+      url: HOOK_EVENT_PATH,
+      payload: HOOK_BODY,
+      headers: AUTH,
+    });
+    await server.close();
+
+    expect(keys[0]).toBe(keys[1]);
+  });
 });

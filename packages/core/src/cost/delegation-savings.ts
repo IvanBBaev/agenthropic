@@ -12,6 +12,12 @@
  *   is "spawn a subagent (often on a cheaper model) instead of doing the work
  *   in the parent's own top-tier context".
  *
+ * Because the clamp is per subagent, the returned `savingsUsd` is NOT
+ * `hypotheticalUsd - actualUsd` of the summed totals: a subagent that would
+ * have been cheaper on the top-tier model adds 0 savings but still enters both
+ * totals (A: actual 10 / hyp 2, B: actual 1 / hyp 5 -> actual 11, hyp 7,
+ * savings 4).
+ *
  * HONEST-UNCERTAINTY LABEL (`isEstimate: true`, a literal type): the
  * hypothetical carries the subagent's actual cache-read/cache-write profile
  * over unchanged. Had the work truly run inline, the parent's cache lineage

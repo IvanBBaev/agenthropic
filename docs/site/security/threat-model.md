@@ -17,7 +17,7 @@ the source and decided never to repeat.
 > phase, when every mitigation below was a locked design invariant and nothing more.
 > Implementation began 2026-07-11, and the mitigations are now **shipped and
 > test-proven**: loopback-or-fail bind, mandatory-token-or-fail-startup with a
-> timing-safe compare on every route, same-origin-before-auth SSE, the
+> timing-safe compare on every `/api/*` route, same-origin-before-auth SSE, the
 > no-spawner/no-wide-bind/no-eval static gate running in CI, and hook-payload
 > redaction at the ingest boundary. The SSRF mitigation is currently satisfied by
 > absence — no outbound-dialing code exists at all (the webhook sink is post-1.0).
@@ -158,13 +158,14 @@ different acts — agenthropic does the first, never the second.
   > **As built:** the ingest-boundary redaction (`WP-IN14`) is implemented — hook
   > payloads are redacted *before* the idempotency key is computed, so unredacted
   > secrets never reach the stored envelope or its hash — with the final field-list
-  > sign-off (OPEN-3) still pending. The retention TTL (`WP-D10`) has since split
-  > into three claims with different truth values: the sweeper **mechanism** is
-  > built and tested, its **policy is blank by design** (no table has a configured
-  > window, and an empty policy is a byte-identical no-op rather than a silent
-  > default), and the runner is **wired into nothing** — no production path calls
-  > it. So redaction, not retention, is what currently keeps stored payloads small;
-  > see [backup & restore §4](../operations/backup-restore.md#4-retention-policy).
+  > sign-off (OPEN-3) still pending. The retention TTL (`WP-D10`) is signed and
+  > running (D3, 2026-09-08): the composition root runs the retention pass after each
+  > successful daily backup — `events` rows older than `DASHBOARD_RETENTION_EVENTS_DAYS`
+  > (default 90) are pruned in bounded runs, backup files older than
+  > `DASHBOARD_RETENTION_BACKUP_DAYS` (default 30) expire behind a keep-minimum of 7,
+  > and `token_usage` and `events_raw` are never pruned. Redaction bounds what is
+  > stored; retention bounds how long the `events` projection keeps it; see
+  > [backup & restore §4](../operations/backup-restore.md#4-retention-policy).
   > Note also a structural narrowing that helps here: JSONL transcripts are parsed
   > into projections (sessions, agents, edges, token counts) — raw transcript
   > payloads are **not** stored in the database at all; `events_raw` holds redacted
@@ -195,7 +196,9 @@ attempt is needed to exfiltrate session contents, tool payloads, or cost data; a
   single dependency-free middleware, constant-time comparison, mounted ahead of
   routing — is worth keeping. Illustrative pseudocode of that shape, kept as the
   design record (the real gate is now built — a single global `onRequest` hook in
-  `apps/server/src/server.ts` covering every route, reads included, with the token
+  `apps/server/src/server.ts` covering every `/api/*` route, reads included (only the
+  built SPA shell and its static assets, which hold no secret, sit outside it), with
+  the token
   compare hashing both sides to fixed length before `timingSafeEqual`; see
   [security model](model.md) rule 2's as-built note):
 
@@ -497,14 +500,16 @@ undecided rather than gloss over it:
   promised to be.
 - **The redaction rule for stored tool payloads** (the corrective to simple10's
   full-payload storage) is decided at the requirement level — a retention TTL plus
-  ingest-boundary redaction, owned by `WP-D10`/`WP-IN14` — but the exact retention
-  window, redacted field list, and "huge payload" reject-vs-truncate threshold remain
-  open Phase-0 policy inputs; see [backup & restore](../operations/backup-restore.md)
-  §6 for the full decided-vs-open tally. *(Partially resolved: `WP-IN14`'s
-  redaction-before-keying is built. The OPEN-3 field-list sign-off is still open.
-  `WP-D10` is now three separate facts — the sweeper mechanism is built, its policy
-  is deliberately unset, and the runner is called from tests only — so no row is
-  currently being pruned from the database by anything.)*
+  ingest-boundary redaction, owned by `WP-D10`/`WP-IN14` — but the redacted field
+  list and "huge payload" reject-vs-truncate threshold remain open policy inputs; see
+  [backup & restore](../operations/backup-restore.md) §6 for the full decided-vs-open
+  tally. *(Partially resolved: `WP-IN14`'s redaction-before-keying is built. The
+  OPEN-3 field-list sign-off is still open. The retention window is no longer open:
+  `WP-D10` is signed (D3, 2026-09-08) and runs after each successful daily backup —
+  `events` rows older than 90 days are pruned, backup files older than 30 days expire
+  behind a floor of 7, `token_usage` is never pruned (an env override for it refuses
+  startup), and `events_raw` stays append-only pending OPEN-1's `archive-segments`
+  branch, which is declared but unbuilt.)*
 - **The corpus reader's limits are built but unratified.** The 64 MiB per-file cap and
   the depth-4 walk limit in
   [section 5](#5-the-corpus-read-surface--agenthropics-own-untrusted-input) are enforced

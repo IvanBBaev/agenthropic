@@ -15,10 +15,12 @@
 > _(planned shape — exact path undecided)_ marking below are out of date. What actually
 > ships in `apps/server/src`:
 >
-> - **Ten routes, all under `/api/`, all behind the one auth gate.** Nine `GET`
+> - **Twelve routes, all under `/api/`, all behind the one auth gate** (re-counted
+>   2026-09-19). Eleven `GET`
 >   (`/api/health`, `/api/stream`, `/api/sessions`, `/api/sessions/:id`,
 >   `/api/sessions/:id/tree`, `/api/sessions/:id/events`,
->   `/api/sessions/:id/cost-analysis`, `/api/cost/summary`, `/api/dag/global`) and one
+>   `/api/sessions/:id/cost-analysis`, `/api/cost/summary`,
+>   `/api/cost/delegation-savings`, `/api/dag/global`, `/api/changes`) and one
 >   `POST` (`/api/hooks/event`, the hook liveness receiver). Note the `/api` prefix — the
 >   design-era table below writes the tree route as `GET /sessions/:id/tree`; the real
 >   path is `/api/sessions/:id/tree`.
@@ -104,21 +106,23 @@ running server.
 
 `/api/health` is auth-gated like everything else — there is no unauthenticated probe
 path — and it answers `200` with a payload whose schema declares two required fields and
-four optional ones:
+six optional ones:
 
 | Field | Type | Always present? | Meaning |
 |---|---|---|---|
 | `status` | the literal `"ok"` | yes | The process is serving. It stays `"ok"` even while ingest is still replaying: a warming server is healthy, just not yet current. |
 | `schemaVersion` | integer | yes | The migration version the open database is at. |
-| `ingestSkips` | object of `{ reason: count }` | no | Cumulative count per skip reason since boot. |
-| `ingest` | `"replaying"` or `"idle"` | no | `"replaying"` between the loopback bind and the end of the startup replay pass; `"idle"` after. |
+| `ingestSkips` | object of `{ reason: count }` | no | Cumulative count of skip events per skip reason since boot; a file declined again on a later pass counts again, so it is not a count of distinct files. |
+| `ingest` | `"replaying"` or `"idle"` | no | `"replaying"` between the loopback bind and the end of the startup replay pass; `"idle"` after, whether or not that pass could read the corpus. |
 | `lastTickDurationMs` | number | no | Wall-clock duration of the **last completed** corpus pass. |
 | `crossSessionUsageCollisions` | integer | no | Usage messages skipped since boot because another session had already claimed them. |
+| `sessionsExcluded` | integer | no | Sessions whose latest ingest attempt failed — each is either absent from every stored total or present in it only at an older extent than the corpus now holds (a session quarantined after a clean ingest keeps its last good pass), so dollar totals are a lower bound while this is non-zero. `status` stays `"ok"`: the server is surviving correctly, it is just not complete. *(Amended 2026-09-25 (OO): this used to say "counted nowhere".)* |
+| `sessionsQuarantined` | integer | no | The subset of excluded sessions that will not be retried until the session's bytes or the pricing table change — the ones that need a human, typically a missing price. |
 
 **An absent field is never a zero, and that distinction is the point of the endpoint.**
 Each optional field is backed by a seam the composition root wires in only when ingest is
-running. When the seam is absent — a server built without ingest wiring — the field is
-omitted. When the seam is present but has nothing to report yet (no corpus pass has
+running. When the seam is absent — a server built without ingest wiring, or one booted
+with `DASHBOARD_INGEST=0` — the field is omitted. When the seam is present but has nothing to report yet (no corpus pass has
 finished), the field is *also* omitted, because a `lastTickDurationMs` of `0` would read
 as "the poll is instantaneous", which is the wrong fact rather than a missing one. The
 handler's own comment states the rule: *"No pass yet" and "no seam" both OMIT the field —
@@ -141,6 +145,18 @@ complete set:
 | `empty-main` | A main transcript with no usable records. |
 | `non-artifact` | A file under a session directory that is not a transcript artifact. |
 | `duplicate-session` | The same session id was discovered under two project slugs. |
+| `too-deep` | A real directory under `<uuid>/subagents/**` sat past the walk's depth limit (`ReadLimits.maxDepth`, default 4, PROVISIONAL). The walk did not enter it, so nothing beneath it was read. |
+
+**AMENDED 2026-09-23 (J-6).** **Nine** reasons exist, not eight. `too-deep` is the ninth and
+is the last row of the table above. The count above was correct when written: the walk used to
+return at the depth limit without recording anything, so artifacts beneath a too-deep directory
+were dropped with no counter at all - precisely the invisible freeze this section says the
+health payload exists to expose. The authority is the `SkipReason` union in
+`apps/server/src/corpus/fs-port.ts`; any count in prose is a copy of it. One scope limit worth
+stating: only the substrate walk (`walkArtifacts`,
+`apps/server/src/corpus/disk-substrate.ts`) records `too-deep`. The change-detection walk in
+`apps/server/src/corpus/fingerprint.ts` still stops silently at the same depth, because its
+output is a fingerprint, not a skip list.
 
 `duplicate-session` deserves its own note. When one session id appears under two slugs the
 tiebreak keeps the **lexicographically smallest slug** — deterministic by construction, so
@@ -186,7 +202,7 @@ path is now literal — see the table's "As built" column.)*
 | Property | As built |
 |---|---|
 | Resumability | **Reconnect, not replay.** The server sends a `retry:` hint and the browser's `EventSource` auto-reconnects; there is no `Last-Event-ID` handling and no `events_raw.seq` replay. Frames emitted while a client was disconnected are **lost**. The SPA compensates by treating any stream event as a cue to refetch persisted truth, so the displayed state re-converges — but a client that needs a gapless event log must read `GET /api/sessions/:id/events`, not the stream. |
-| What it pushes | Three typed frames only — `session-ingested` (a session was persisted; refetch), `agent-status-changed` (one agent moved between status buckets, including into `unknown` via the missing-Stop watchdog), and `ingest-failed` (a session's ingest failed; rides the shared union's generic arm as `{ "type": "ingest-failed", "payload": { sessionId, reason, attempt, willRetry, occurredAt } }` with a sanitized, single-line, path-free reason — the SPA renders it as a dismissible banner on the live board, because a quarantined session never reaches the read API and would otherwise be invisible). Not a generic row-delta feed over `sessions`/`agents`/`orchestration_edges`/`token_usage`. |
+| What it pushes | Three typed frames only — `session-ingested` (a session was persisted; refetch), `agent-status-changed` (one agent moved between status buckets, including into `unknown` via the missing-Stop watchdog), and `ingest-failed` (a session's ingest failed; a typed arm of the closed shared union since 2026-09-09 — until then it rode a generic catch-all arm, now deleted — shaped `{ "type": "ingest-failed", "payload": { sessionId, reason, attempt, willRetry, occurredAt } }` with a sanitized, single-line, path-free reason, `attempt` a 1-based integer and `willRetry` false once the session is quarantined. The `payload` envelope is the documented wire shape and is deliberately kept although the other two frames carry `occurredAt` at the top level: the SPA carries no schema library and narrows this frame by hand, so the bytes are the contract. The SPA renders it as a dismissible banner on the live board, because a quarantined session never reaches the read API and would otherwise be invisible). **The union is closed (D5):** an unknown `event:` name is not a fourth kind the client should tolerate; the browser's `EventSource` never delivers a named event with no registered listener, so such a frame is never rendered, and because every frame carries the hub's `id:` sequence it still surfaces as a gap at the next frame that is heard, where the live board counts it — dropped and counted, never rendered. Not a generic row-delta feed over `sessions`/`agents`/`orchestration_edges`/`token_usage`. |
 
 **The event-push model.** `/api/stream` is a fan-out off already-committed projection
 state, not a raw firehose of `events_raw` — the same "single-writer pipeline, read-only
@@ -238,7 +254,7 @@ column names the route that actually shipped.)*
 |---|---|---|---|---|
 | `GET /sessions/:id/tree` | The session-scoped subagent tree (daily Q1/Q3/Q5) | Query over `orchestration_edges`, joined to `agents` | `WP-U3` — fixed path: "`GET /sessions/:id/tree` built from a query over `orchestration_edges` (proven, not reconstruction)" | `GET /api/sessions/:id/tree` — note the `/api` prefix |
 | Sessions & agents _(planned shape)_ | List/get sessions and their agents, including per-agent `status` (`working`/`waiting`/`completed`/`error`) | `sessions`, `agents` projection tables | `WP-U3` | `GET /api/sessions?limit&offset` (returns `{sessions,total,limit,offset}`) and `GET /api/sessions/:id`. The status enumeration gained a **fifth** value, `unknown` — see below |
-| Cost & delegation-savings _(planned shape)_ | Per-session/agent dollar cost and the Haiku/Sonnet-routing delegation-savings figure (daily Q2/Q4) | `token_usage` × `model_pricing`, via `CostEngine` (`WP-C3`), delegation-savings via `WP-C5` | `WP-U4` | Split in two: `GET /api/cost/summary?topN` (DB rollup: totals, per-model, per-day, top sessions) and `GET /api/sessions/:id/cost-analysis?topTierModel` (compaction-aware cost + delegation savings, computed from the JSONL substrate) |
+| Cost & delegation-savings _(planned shape)_ | Per-session/agent dollar cost and the Haiku/Sonnet-routing delegation-savings figure (daily Q2/Q4) | `token_usage` × `model_pricing`, via `CostEngine` (`WP-C3`), delegation-savings via `WP-C5` | `WP-U4` | Split in three: `GET /api/cost/summary?topN` (DB rollup: totals, per-model, per-day, top sessions), `GET /api/sessions/:id/cost-analysis?topTierModel` (compaction-aware cost + delegation savings, computed from the JSONL substrate) and `GET /api/cost/delegation-savings?topTierModel` (the corpus-wide delegation-savings estimate, rebuilt from stored `token_usage` / `agents` rows) |
 | Global orchestration DAG _(planned shape)_ | The cross-session, per-instance persisted DAG (the moat view) | Query over `orchestration_edges` across sessions, keyed by `instance`/`host_id` | `WP-U4`; see [the DAG moat](../architecture/dag-moat.md) | `GET /api/dag/global?limit` — returns nodes, edges and a `counts` block whose `truncated` flag the client must surface |
 | Token usage _(planned shape)_ | Fine-grained ground-truth token buckets (`speed`/`inference_geo`/`service_tier`), including PreCompact baselines | `token_usage` | `WP-U3`/`WP-U4`, backed by `WP-D8` | **No dedicated endpoint.** Token figures are served folded into the session, tree, DAG and cost responses (`totalTokens`, `costUsd`, `unpricedTokens`); there is no route that returns raw `token_usage` rows or per-bucket breakdowns |
 | Events _(planned shape)_ | Read access to normalized `events` (and, where exposed, `events_raw`) for a session/agent | `events`, `events_raw` | Implied by `WP-U2`'s Read API foundation over the projection; no dedicated WP names an events-listing endpoint explicitly | `GET /api/sessions/:id/events?limit&offset` (WP-D5). Serves the normalized `events` table only — `events_raw` is never exposed |
@@ -280,6 +296,12 @@ so a new route is gated by construction rather than by remembering.)*
 - **Pagination caps are contract, not convention:** `limit` default 50 / max 200,
   `offset` max 1000000, `topN` default 5 / max 50, DAG `limit` default 1000 / max 5000.
   Exceeding one is a `400` with the uniform `{ "error": … }` body, not a clamp.
+- **Query-string leniency (current behaviour).** Unknown query parameters are silently
+  dropped, not rejected — a misspelled `?limt=5` returns the default page with a `200`.
+  Numeric parameters are coerced with JavaScript `Number()` semantics before the range
+  check, so forms such as `limit=1e1` (10) and `limit=0x10` (16) are accepted; only a
+  value that is not a number, not an integer, or out of range is a `400`.
+  *(Amended 2026-09-25 (OO).)*
 
 ### The six answers of the cost-analysis endpoint
 
@@ -325,8 +347,10 @@ per-model array of `{ model, tokens, costUsd, unpricedTokens }`.
 
 **`GET /api/sessions/:id/tree`** → `{ sessionId, agents, edges, agentCount, edgeCount,
 unattributed }`. Each agent node carries `id`, `sessionId`, `type`, `subagentType`,
-`status`, `parentAgentId`, `firstSeenAt`, `lastSeenAt`, `totalTokens`, `costUsd`,
-`unpricedTokens`. Each edge carries `id`, `sessionId`, `parentAgentId`, `childAgentId`,
+`status`, `outcomeCause`, `parentAgentId`, `firstSeenAt`, `lastSeenAt`, `totalTokens`,
+`costUsd`, `unpricedTokens` — `outcomeCause` (nullable) names *why* a terminal status
+was assigned, so a watchdog `unknown` and a hook-reported one are distinguishable in the
+payload. Each edge carries `id`, `sessionId`, `parentAgentId`, `childAgentId`,
 `source`, `instance`, `hostId`, `createdAt`. **`unattributed` is always present** —
 `{ totalTokens, costUsd, unpricedTokens }` for usage that resolves to no materialized
 agent row. It is rendered even when it is all zeros, because the alternative is tokens
@@ -340,15 +364,75 @@ timestamp, so every row's time is when the *server received* it, and the field s
 every row instead of letting a reader assume it is when the thing happened. If a true
 event time is ever wired, the union widens and old rows stay honestly labelled.
 
-**`GET /api/cost/summary`** → `{ totals, perModel, perDay, topSessions }`. `perDay` uses
-`YYYY-MM-DD` keys, with the literal string `"unknown"` for usage rows that carry no
-timestamp — again a named bucket rather than a silent omission.
+**`GET /api/cost/summary`** → `{ totals, perModel, perDay, topSessions, sessionCount,
+hasMore, coverage? }`. `perDay` uses `YYYY-MM-DD` keys, with the literal string `"unknown"` for usage
+rows that carry no timestamp — again a named bucket rather than a silent omission.
+`topSessions` is the `topN` costliest sessions, a slice; `sessionCount` is the number of
+sessions with any usage that the slice was cut from, and `hasMore` is `true` when the
+slice is shorter than that count — so a client can print "5 of 51" instead of hedging
+that five might be the whole corpus (added 2026-09-09, closing-plan L1). `coverage` is
+`{ sessionsExcluded, sessionsQuarantined }`: sessions the ingest could not read or price
+on its latest attempt. Each is either absent from `totals` or present in it only at an
+older extent than the corpus now holds — a session that ingested cleanly and was later
+quarantined at the pricing gate keeps its last good pass in `totals` and in
+`/api/sessions` — and the route cannot say which. The gap is still one-directional:
+`totals` is a lower bound whenever these counts are non-zero. *(Amended 2026-09-25 (OO):
+this used to say excluded sessions are in "no stored total".)* It is **omitted, not zeroed**, when the
+server has no ingest seam wired (a DB-only deployment): "we did not ask" and "we asked
+and the answer is none" are different facts.
+
+**`GET /api/cost/delegation-savings?topTierModel`** → `{ actualUsd, hypotheticalUsd,
+savingsUsd, isEstimate, basis, sessionsTotal, sessionsWithSubagents, sessionsPriced,
+skippedSessionCount, skippedSessions, subagentsPriced, subagentsSkipped, untypedAgents,
+hypotheticalModels }` — the corpus-wide counterpart of the per-session
+`delegationSavings` block, summed across every session that recorded a subagent.
+`savingsUsd` is **not** `hypotheticalUsd − actualUsd`: it is the sum over subagents of
+`max(0, hypothetical − actual)`, so a subagent that would have been *cheaper* on the
+top-tier model contributes `0` savings while its costs still enter both totals. Example:
+subagent A actual 10 / hypothetical 2, subagent B actual 1 / hypothetical 5 →
+`{ actualUsd: 11, hypotheticalUsd: 7, savingsUsd: 4 }`. The same rule holds per session.
+*(Amended 2026-09-25 (OO).)*
+`isEstimate` is again the literal `true`, and `basis` is the literal
+`"stored-usage-rows"`: the sum is rebuilt from the `token_usage` / `agents` tables, not
+by re-reading transcripts, and the two agree row for row on an ingested session (proved
+by `api-aggregate-savings-equivalence.test.ts`). The scope counters are mandatory, not
+extras: every excluded session is counted in `skippedSessionCount` (with a bounded sample
+in `skippedSessions`), every subagent without a resolvable top-tier model in
+`subagentsSkipped`, and agent rows with a `NULL` type in `untypedAgents` — an aggregate
+quietly computed over a subset would be a lie.
+
+**`GET /api/changes?since&limit&offset`** → `{ since, until, interval, basis, sessions,
+totals, coverage, total, limit, offset }` — the "what changed across sessions" answer
+(`WP-U11`, daily question 5). `since` is **required**, must be an ISO-8601 instant with
+a zone designator (`Z` or `±hh:mm`) or a bare UTC date (`YYYY-MM-DD`), and has no default
+(a delta endpoint that invents its own lower bound answers a different question than the
+one asked); a malformed or non-existent instant, or a time without a zone, is a `400`.
+The accepted value is canonicalized to UTC and echoed back in `since`. One spelling is
+normalized rather than rejected: ISO 8601's end-of-day `T24:00:00` (optionally `.000`) is
+accepted and read as `00:00` of the **next** day, while `T23:59:60` (leap second) and
+`T23:60` are `400`. *(Amended 2026-09-25 (OO).)*
+The window is half-open and says so: `interval` is the literal `"(since, until]"`, so a
+client chaining `since=until` neither misses nor double-counts an instant, and `until` is
+derived from the **data**, never the wall clock, because ingest lags event time. `basis`
+is the literal `"event-time"` — the database stores no ingest timestamp, so a session
+whose activity predates `since` but was ingested afterwards is *not* in the window, a
+limitation named rather than papered over. Each session row carries `id`, `projectSlug`,
+`status`, `startedAt`, `lastActivityAt`, `changedAt`, `change` (`new` / `updated` /
+`unknown` — `unknown` is a first-class answer for a session whose start is unparseable,
+not a synonym for `updated`), `agentsAppeared`, `tokensAdded`, `costAddedUsd`,
+`unpricedTokensAdded`; `totals` spans the whole window rather than the returned page and
+includes `tokensAddedOutsideChangedSessions`, the residue that explains why the
+per-session rows may not sum to `tokensAdded`; `coverage` counts the rows no window can
+ever contain (`undatedSessions`, `undatedAgents`, `undatedUsageRows`). `limit`/`offset`
+reuse the house caps (default 50 / max 200; offset max 1000000).
 
 **`GET /api/sessions/:id/cost-analysis`** → `{ compaction, delegationSavings }`.
 `compaction` is `{ naiveUsd, repricedUsd, deltaUsd, compactionCount, segments }`; a
 materially nonzero `deltaUsd` is a mispricing signal and is served as-is rather than
 averaged away. `delegationSavings` is `{ actualUsd, hypotheticalUsd, savingsUsd,
-perAgent, skippedAgentIds, isEstimate }` where **`isEstimate` is the literal `true`** —
+perAgent, skippedAgentIds, isEstimate }` — `savingsUsd` is the sum of each `perAgent`
+entry's `max(0, hypotheticalUsd − actualUsd)`, not the difference of the two session
+totals (see the aggregate endpoint above) — where **`isEstimate` is the literal `true`** —
 not a boolean that might be false. The counterfactual cache profile is not observable, so
 the schema makes it impossible to serialize this figure without the label. `skippedAgentIds`
 lists subagents with no resolvable top-tier model: excluded from the estimate and named,
@@ -359,6 +443,19 @@ because a guess would be worse than a gap.
 Returned-versus-total is reported separately, and `truncated` flips when the node cap cut
 the response short — a client that renders the DAG without surfacing that flag is showing
 a partial graph as if it were the whole one.
+
+Each node carries the same fields as a session-tree node - `id`, `sessionId`, `type`,
+`subagentType`, `status`, `outcomeCause`, `parentAgentId`, `firstSeenAt`, `lastSeenAt`,
+`totalTokens`, `costUsd`, `unpricedTokens` - and **a node's usage is scoped to the agent's own
+session**. The query groups `token_usage` by `(agent_id, session_id)` and joins on both
+columns, exactly as the per-session tree does, so the two endpoints report the same figure for
+the same agent. This is worth stating because nothing in the schema forbids the other reading:
+no foreign key stops a usage row in session B from naming an agent id that also exists in
+session A, and such a row is session B's *unattributed* usage, not a contribution to the node.
+*(Fixed 2026-09-23: the global DAG previously grouped by `agent_id` alone, so a node could
+report one agent id's tokens summed across every session the id appeared in - a cross-session
+total presented as one agent's spend, and silently larger than the session tree's figure for
+the same node.)*
 
 ### No API-side inference — ever
 
@@ -395,6 +492,20 @@ runtime best-effort:
 >   answers `422` naming the model. The compaction and delegation-savings figures are
 >   all-or-nothing by design, and `delegationSavings` carries `isEstimate: true` in the
 >   DTO so the hypothetical can never be read as a measurement.
+
+**AMENDED 2026-09-23 (J-2).** "Rows with no resolvable rate" now covers a second case that did
+not exist when the bullets above were written: a `model_pricing` row that **is** there but whose
+`usd_per_mtok` is negative, non-finite or text-coerced. On the DB-rollup endpoints that rate
+resolves to NULL, so the tokens land in `unpricedTokens` exactly like a missing row - they are
+never priced from the bad value, and the newest row's failure is never covered up by falling
+back to an older `effective_from`. `/api/cost/summary`, which is served from
+`token_usage_rollup`, applies the same test in TypeScript (`usableRate` in
+`apps/server/src/api/queries.ts`) so the two paths agree; before this it could answer `500`.
+
+The `422` bullet is unchanged and must not be read as covering this: an **unknown model id**
+still raises `PricingError` from `packages/core/src/cost/compute-cost.ts` and halts. A bad
+stored rate degrades to unpriced; an absent price halts. Those are different endpoints and
+different answers.
 
 ### The tree is a query, not a reconstruction
 
@@ -518,7 +629,7 @@ code actually does.
 | Loopback-only bind for the whole server | **Fixed** — `WP-U0`; security model rule 1 | Holds. `HOST = '127.0.0.1'` is an exported constant with no configuration path |
 | `GET /sessions/:id/tree` reads `orchestration_edges` | **Fixed path & mechanism** — `WP-U3` Done-when | Mechanism holds; path is `/api/sessions/:id/tree` |
 | Stream is resumable | **Fixed requirement**; exact resume protocol _(planned)_ | **Not met as stated.** Browser auto-reconnect only — no `Last-Event-ID`, no replay. Frames sent while disconnected are lost |
-| Cost/delegation/global-DAG/token/events endpoint paths | _(planned shape — exact path undecided)_ — `WP-U4`/`WP-U3` name the resource, not the route | All decided: `/api/cost/summary`, `/api/sessions/:id/cost-analysis`, `/api/dag/global`, `/api/sessions/:id/events`. **No token-usage endpoint exists** — token figures are folded into the other payloads |
+| Cost/delegation/global-DAG/token/events endpoint paths | _(planned shape — exact path undecided)_ — `WP-U4`/`WP-U3` name the resource, not the route | All decided: `/api/cost/summary`, `/api/sessions/:id/cost-analysis`, `/api/cost/delegation-savings`, `/api/dag/global`, `/api/sessions/:id/events`, and — outside the design-era list — `/api/changes` (WP-U11). **No token-usage endpoint exists** — token figures are folded into the other payloads |
 | Alerts CRUD paths | _(planned shape — exact path undecided)_ — `WP-A8` names the surface, not the route | **Cut.** `WP-A8`/`WP-A9` will not be built on the v1.0 path; v2.0 requires KC-5 |
 | Underlying stack (Fastify, TypeBox) | _(leaning — unconfirmed)_ per the project's `CLAUDE.md`; treated here as the working assumption because the sources name it, not because it is locked | Confirmed and shipped: Fastify with `@fastify/type-provider-typebox`, `additionalProperties: false` on every response schema |
 

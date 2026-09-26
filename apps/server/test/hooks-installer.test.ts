@@ -3,7 +3,19 @@
  * removal) plus the file workflow (backup, dry-run, refuse-invalid-JSON) on
  * a throwaway temp directory - never the real ~/.claude.
  */
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,6 +28,7 @@ import {
   MIN_CURL_VERSION,
   buildHookCommand,
   buildHooksConfig,
+  classifyHookCommand,
   formatSettings,
   isAgenthropicHookCommand,
   mergeHooksIntoSettings,
@@ -135,6 +148,50 @@ describe('buildHookCommand (WP-X8)', () => {
     expect(() => buildHookCommand({ port: 0 })).toThrow(/Invalid port/);
     expect(() => buildHookCommand({ port: 70000 })).toThrow(/Invalid port/);
     expect(() => buildHookCommand({ port: 1.5 })).toThrow(/Invalid port/);
+  });
+});
+
+describe('curl environment isolation (GG1, GG2)', () => {
+  // The POST carries the bearer token and the prompt body. Two pieces of the
+  // user's curl environment could silently route or dump it: proxy env vars
+  // (http_proxy / ALL_PROXY) and ~/.curlrc (proxy, trace, verbose...).
+
+  it('bypasses every proxy for the loopback POST (GG1)', () => {
+    const argv = shellArgv(buildHookCommand(), {});
+    const at = argv.indexOf('--noproxy');
+    expect(at).toBeGreaterThan(-1);
+    // Single-quoted in the command so the shell never globs it.
+    expect(argv[at + 1]).toBe('*');
+    expect(buildHookCommand()).toContain("--noproxy '*'");
+  });
+
+  it('ignores ~/.curlrc: --disable is the FIRST curl argument (GG2)', () => {
+    // curl only honours --disable (-q) when it is the very first argument.
+    const argv = shellArgv(buildHookCommand({ port: 5555, tokenEnv: 'MY_TOKEN_VAR' }), {});
+    expect(argv[0]).toBe('curl');
+    expect(argv[1]).toBe('--disable');
+  });
+
+  it('upgrades the previous (pre-GG1/GG2) command in place, never duplicating it', () => {
+    // Frozen copy of the shape shipped before --disable/--noproxy were added.
+    const previous =
+      `curl --silent --show-error --fail --max-time 3 --output /dev/null ` +
+      `--request POST --header 'Content-Type: application/json' ` +
+      `--variable '%${DEFAULT_TOKEN_ENV}' ` +
+      `--expand-header 'Authorization: Bearer {{${DEFAULT_TOKEN_ENV}}}' ` +
+      `--header "X-Agenthropic-Delivery-Id: $$-$(date +%s)-$RANDOM" --data-binary @- ` +
+      `'http://127.0.0.1:4317/api/hooks/event' || true`;
+    expect(classifyHookCommand(previous)).toBe('ours');
+    expect(previous).not.toBe(buildHookCommand());
+    const stale = {
+      hooks: { Stop: [{ hooks: [{ type: 'command', command: previous, timeout: 5 }] }] },
+    };
+    const merged = mergeHooksIntoSettings(stale, buildHooksConfig());
+    const entries = eventEntries(merged, 'Stop');
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.hooks[0]?.command).toBe(buildHookCommand());
+    // And --remove still strips it.
+    expect(removeAgenthropicHooks(stale)).toEqual({});
   });
 });
 
@@ -305,6 +362,14 @@ describe('mergeHooksIntoSettings (WP-X8)', () => {
     expect(() => mergeHooksIntoSettings(malformed, buildHooksConfig())).toThrow(/not an array/);
     expect(() => mergeHooksIntoSettings('nonsense', buildHooksConfig())).toThrow(/JSON object/);
   });
+
+  it('refuses to merge over a non-object "hooks" value instead of discarding it (GG6)', () => {
+    for (const hooks of [[], 'string', 42, null]) {
+      expect(() => mergeHooksIntoSettings({ hooks }, buildHooksConfig())).toThrow(
+        /Refusing to merge: existing "hooks" is not an object/,
+      );
+    }
+  });
 });
 
 describe('removeAgenthropicHooks (WP-X8)', () => {
@@ -450,5 +515,259 @@ describe('runInstall file workflow (WP-X8)', () => {
     expect(result.settingsText).toContain(`{{${DEFAULT_TOKEN_ENV}}}`);
     expect(result.settingsText).not.toContain('${');
     expect(result.settingsText).toContain(`127.0.0.1:${DEFAULT_PORT}`);
+  });
+  // AMENDED 2026-09-23 (C-6, C-7) - two outcomes the installer reported but did
+  // not perform. C-6: `--dry-run` over an already-matching file previewed a
+  // write that the real run would not do, so the preview contradicted the run it
+  // previews - in the direction that makes a no-op look like a change. C-7:
+  // `--remove` against a path that does not exist CREATED that file (and its
+  // parent tree) holding `{}`, and reported success. Both are the same defect
+  // class as H-2, one step further out.
+
+  it('--remove against a path that does not exist creates nothing (C-7)', () => {
+    const result = runInstall({ out, remove: true, now: fixedNow });
+    expect(result.action).toBe('absent');
+    expect(result.outPath).toBe(out);
+    expect(existsSync(out)).toBe(false);
+    // The parent tree must not be materialised either: the write path used to
+    // create the directories before writing `{}`, so removing hooks from a file
+    // that never existed left a whole `.claude/` tree behind.
+    expect(existsSync(join(dir, '.claude'))).toBe(false);
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it('--dry-run --remove against a missing file reports absent, not a write (C-7)', () => {
+    const result = runInstall({ out, dryRun: true, remove: true, now: fixedNow });
+    expect(result.action).toBe('absent');
+    expect(existsSync(join(dir, '.claude'))).toBe(false);
+  });
+
+  it('--dry-run over an already-matching file reports unchanged (C-6)', () => {
+    runInstall({ out, now: fixedNow });
+    const result = runInstall({ out, dryRun: true, now: fixedNow });
+    expect(result.action).toBe('dry-run');
+    expect(result.unchanged).toBe(true);
+    // The preview must agree with the run it previews.
+    expect(runInstall({ out, now: fixedNow }).action).toBe('unchanged');
+  });
+
+  it('--dry-run over a file that would change does not report unchanged (C-6)', () => {
+    runInstall({ out, now: fixedNow });
+    writeFileSync(out, formatSettings({ theme: 'dark' }), 'utf8');
+    const result = runInstall({ out, dryRun: true, now: fixedNow });
+    expect(result.action).toBe('dry-run');
+    expect(result.unchanged).toBe(false);
+  });
+
+  // L-3 (2026-09-23). The H-2/C-6/C-7 family, one case further out: `--remove`
+  // over a file that exists and holds NONE of our hooks. `unchanged` compares
+  // bytes, so any file whose formatting is not already this installer's own
+  // two-space shape walked straight past it into the write path - backup taken,
+  // file reformatted, `Wrote ...` printed, and not one hook removed. A
+  // hand-maintained `settings.json` is exactly that file, which made the
+  // reporting wrong in precisely the case the operator would most notice.
+  const FOREIGN_ONLY_FOUR_SPACE = [
+    '{',
+    '    "model": "opus",',
+    '    "hooks": {',
+    '        "SessionStart": [',
+    '            { "hooks": [{ "type": "command", "command": "echo hi" }] }',
+    '        ]',
+    '    }',
+    '}',
+    '',
+  ].join('\n');
+
+  it('--remove over a file holding none of our hooks writes nothing and reformats nothing (L-3)', () => {
+    runInstall({ out, now: fixedNow }); // only to materialise the parent tree
+    writeFileSync(out, FOREIGN_ONLY_FOUR_SPACE, 'utf8');
+
+    const result = runInstall({ out, remove: true, now: fixedNow });
+
+    expect(result.action).toBe('nothing-to-remove');
+    expect(result.backupPath).toBeUndefined();
+    // The operator's bytes - indentation included - must survive untouched.
+    expect(readFileSync(out, 'utf8')).toBe(FOREIGN_ONLY_FOUR_SPACE);
+    // And no backup may accrue beside it on every re-run.
+    expect(readdirSync(join(dir, '.claude'))).toEqual(['settings.json']);
+  });
+
+  it('--dry-run --remove over a file holding none of ours previews no write (L-3)', () => {
+    runInstall({ out, now: fixedNow });
+    writeFileSync(out, FOREIGN_ONLY_FOUR_SPACE, 'utf8');
+
+    const result = runInstall({ out, dryRun: true, remove: true, now: fixedNow });
+
+    // Same rule C-7 established: the preview may not claim a write the real run
+    // would not perform.
+    expect(result.action).toBe('nothing-to-remove');
+    expect(readFileSync(out, 'utf8')).toBe(FOREIGN_ONLY_FOUR_SPACE);
+  });
+
+  it('--remove still writes when there IS something of ours to remove (L-3 guard-rail)', () => {
+    runInstall({ out, now: fixedNow });
+    const result = runInstall({ out, remove: true, now: fixedNow });
+    expect(result.action).toBe('written');
+    expect(result.backupPath).toBeDefined();
+  });
+
+  it('refuses a non-object "hooks" before any backup or write (GG6)', () => {
+    mkdirSync(join(dir, '.claude'));
+    const original = '{ "theme": "dark", "hooks": [] }\n';
+    writeFileSync(out, original, 'utf8');
+    expect(() => runInstall({ out, now: fixedNow })).toThrow(
+      /Refusing to merge: existing "hooks" is not an object/,
+    );
+    expect(readFileSync(out, 'utf8')).toBe(original);
+    expect(readdirSync(join(dir, '.claude'))).toEqual(['settings.json']);
+  });
+
+  it('writes through a symlinked --out: the link survives and its target is updated (GG7)', () => {
+    const realDir = join(dir, 'real');
+    mkdirSync(realDir);
+    mkdirSync(join(dir, '.claude'));
+    const target = join(realDir, 'settings.json');
+    writeFileSync(target, formatSettings({ theme: 'dark' }), 'utf8');
+    symlinkSync(target, out);
+
+    const result = runInstall({ out, now: fixedNow });
+
+    expect(result.action).toBe('written');
+    expect(lstatSync(out).isSymbolicLink()).toBe(true);
+    const written = JSON.parse(readFileSync(target, 'utf8')) as SettingsObject;
+    expect(written['theme']).toBe('dark');
+    expect(eventEntries(written, 'Stop')).toHaveLength(1);
+    // No temp sibling left next to the real file or the link.
+    expect(readdirSync(realDir)).toEqual(['settings.json']);
+    expect(readdirSync(join(dir, '.claude')).filter((name) => name.includes('.tmp-'))).toEqual([]);
+  });
+
+  it('writes through a dangling symlinked --out: the link survives and its target is created (JJ2)', () => {
+    const realDir = join(dir, 'real');
+    mkdirSync(realDir);
+    mkdirSync(join(dir, '.claude'));
+    const target = join(realDir, 'settings.json');
+    // Relative link text: resolved against the link's own directory, not the cwd.
+    symlinkSync(join('..', 'real', 'settings.json'), out);
+
+    const result = runInstall({ out, now: fixedNow });
+
+    expect(result.action).toBe('written');
+    expect(result.backupPath).toBeUndefined();
+    expect(lstatSync(out).isSymbolicLink()).toBe(true);
+    expect(
+      eventEntries(JSON.parse(readFileSync(target, 'utf8')) as SettingsObject, 'Stop'),
+    ).toHaveLength(1);
+    expect(readdirSync(realDir)).toEqual(['settings.json']);
+    expect(readdirSync(join(dir, '.claude'))).toEqual(['settings.json']);
+  });
+
+  it('follows a chain of dangling symlinks to the final target (JJ2)', () => {
+    const realDir = join(dir, 'real');
+    mkdirSync(realDir);
+    mkdirSync(join(dir, '.claude'));
+    const middle = join(dir, 'middle.json');
+    const target = join(realDir, 'settings.json');
+    symlinkSync(target, middle);
+    symlinkSync(middle, out);
+
+    runInstall({ out, now: fixedNow });
+
+    expect(lstatSync(out).isSymbolicLink()).toBe(true);
+    expect(lstatSync(middle).isSymbolicLink()).toBe(true);
+    expect(
+      eventEntries(JSON.parse(readFileSync(target, 'utf8')) as SettingsObject, 'Stop'),
+    ).toHaveLength(1);
+  });
+
+  it('refuses a dangling symlinked --out whose target directory does not exist (JJ2)', () => {
+    mkdirSync(join(dir, '.claude'));
+    const target = join(dir, 'missing', 'settings.json');
+    symlinkSync(target, out);
+
+    expect(() => runInstall({ out, now: fixedNow })).toThrow(/symlink[\s\S]*does not exist/);
+    expect(lstatSync(out).isSymbolicLink()).toBe(true);
+    expect(existsSync(join(dir, 'missing'))).toBe(false);
+  });
+
+  it('refuses a symlinked --out that loops instead of spinning (JJ2)', () => {
+    mkdirSync(join(dir, '.claude'));
+    const other = join(dir, 'other.json');
+    symlinkSync(other, out);
+    symlinkSync(out, other);
+
+    expect(() => runInstall({ out, now: fixedNow })).toThrow(/too many levels of symbolic links/);
+    expect(lstatSync(out).isSymbolicLink()).toBe(true);
+  });
+
+  it('never writes through an entry pre-planted at the temp name (JJ3)', () => {
+    mkdirSync(join(dir, '.claude'));
+    const decoy = join(dir, 'decoy.txt');
+    writeFileSync(decoy, 'decoy', 'utf8');
+    // The installer runs in this process, so its temp name is predictable here.
+    const tempPath = `${out}.tmp-${String(process.pid)}`;
+    symlinkSync(decoy, tempPath);
+
+    const result = runInstall({ out, now: fixedNow });
+
+    expect(result.action).toBe('written');
+    expect(readFileSync(decoy, 'utf8')).toBe('decoy');
+    expect(lstatSync(out).isSymbolicLink()).toBe(false);
+    expect(
+      eventEntries(JSON.parse(readFileSync(out, 'utf8')) as SettingsObject, 'Stop'),
+    ).toHaveLength(1);
+    expect(readdirSync(join(dir, '.claude'))).toEqual(['settings.json']);
+  });
+
+  it('leaves no temp file behind and keeps the file mode after a replace (GG7)', () => {
+    mkdirSync(join(dir, '.claude'));
+    writeFileSync(out, formatSettings({ theme: 'dark' }), 'utf8');
+    chmodSync(out, 0o600);
+
+    const result = runInstall({ out, now: fixedNow });
+
+    expect(result.action).toBe('written');
+    expect(statSync(out).mode & 0o777).toBe(0o600);
+    const names = readdirSync(join(dir, '.claude')).sort();
+    expect(names).toHaveLength(2);
+    expect(names[0]).toBe('settings.json');
+    expect(names[1]).toMatch(/^settings\.json\.backup-/);
+  });
+
+  it('reports the write failure and names the backup even when the temp cleanup throws (F3)', () => {
+    mkdirSync(join(dir, '.claude'));
+    const original = formatSettings({ theme: 'dark' });
+    writeFileSync(out, original, 'utf8');
+    // The installer runs in this process, so its temp name is predictable here.
+    // A DIRECTORY at that name defeats the exclusive create AND the stale-entry
+    // unlink, and a plain `rmSync(..., { force: true })` refuses a directory
+    // too - so the cleanup used to throw its own ERR_FS_EISDIR over the real
+    // failure, and the operator saw a bare Node error with no pointer to the
+    // backup. The planted directory is removed by the afterEach `rmSync` of
+    // the whole temp tree; the installer itself must never delete it.
+    const tempPath = `${out}.tmp-${String(process.pid)}`;
+    mkdirSync(tempPath);
+    const backupPath = `${out}.backup-2026-07-18T10-00-00-000Z`;
+
+    let thrown: unknown;
+    try {
+      runInstall({ out, now: fixedNow });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    const failure = thrown as Error;
+    expect(failure.message).toMatch(/^Failed to write /);
+    expect(failure.message).toContain(`a backup was taken at ${backupPath}`);
+    expect(failure.message).toContain(`${tempPath} could not be removed`);
+    // The cause is the write failure itself, never the cleanup's own error.
+    expect(failure.cause).toBeInstanceOf(Error);
+    expect((failure.cause as NodeJS.ErrnoException).code).toMatch(/^(EPERM|EISDIR)$/);
+    expect(readFileSync(out, 'utf8')).toBe(original);
+    expect(existsSync(backupPath)).toBe(true);
+    // Left behind and intact: the installer never recursively deletes a
+    // directory it did not create.
+    expect(statSync(tempPath).isDirectory()).toBe(true);
   });
 });

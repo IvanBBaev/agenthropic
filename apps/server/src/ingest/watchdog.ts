@@ -31,11 +31,16 @@ export function isTerminalAgentStatus(status: AgentStatus | null): boolean {
  * Pure staleness verdict for one candidate. Returns 'unknown' when the agent
  * must transition, `null` when it is left alone.
  *
- * The activity anchor is `lastSeenAt`, falling back to `firstSeenAt`. Honesty
- * over optimism on degenerate rows: an agent with NO parseable timestamp at
- * all cannot prove recent activity, so it is 'unknown' immediately rather
- * than 'working' forever. The threshold comparison is `>=` — an agent exactly
- * at the window boundary is already stale.
+ * The activity anchor is the first PARSEABLE stamp of `lastSeenAt`, then
+ * `firstSeenAt`. A stamp that is absent OR corrupt falls through to the next
+ * one: a corrupt `lastSeenAt` is absence of evidence, not evidence of
+ * staleness, so a parseable `firstSeenAt` is still consulted before any
+ * verdict. (Previously a corrupt `lastSeenAt` returned 'unknown' without the
+ * `firstSeenAt` ever being checked - a staleness claim nothing had computed.)
+ * Honesty over optimism on degenerate rows: an agent with NO parseable
+ * timestamp at all cannot prove recent activity, so it is 'unknown'
+ * immediately rather than 'working' forever. The threshold comparison is `>=`
+ * — an agent exactly at the window boundary is already stale.
  */
 export function decideWatchdogVerdict(
   candidate: Pick<WatchdogCandidate, 'status' | 'firstSeenAt' | 'lastSeenAt'>,
@@ -45,13 +50,11 @@ export function decideWatchdogVerdict(
   if (isTerminalAgentStatus(candidate.status)) {
     return null; // defence in depth — listWatchdogCandidates already excludes these
   }
-  const anchor = candidate.lastSeenAt ?? candidate.firstSeenAt;
-  if (anchor === null) {
-    return 'unknown';
-  }
-  const anchorMs = Date.parse(anchor);
-  if (Number.isNaN(anchorMs)) {
-    return 'unknown'; // corrupt stamp: cannot prove activity → honest 'unknown'
+  const anchorMs = [candidate.lastSeenAt, candidate.firstSeenAt]
+    .map((stamp) => (stamp === null ? Number.NaN : Date.parse(stamp)))
+    .find((ms) => !Number.isNaN(ms));
+  if (anchorMs === undefined) {
+    return 'unknown'; // no parseable stamp: cannot prove activity → honest 'unknown'
   }
   return nowEpochMs - anchorMs >= thresholdMs ? 'unknown' : null;
 }
@@ -74,7 +77,9 @@ export function runWatchdogSweep(
     // One transaction per candidate: the agent row and its session mirror must
     // never diverge across a crash between the two UPDATEs. (A stale MAIN
     // agent means a stale session; a stale subagent says nothing about its
-    // parent, and the guarded mirror UPDATE is a no-op for it.)
+    // parent, and the guarded mirror UPDATE is a no-op for it.) The id-only
+    // setAgentStatus is correct here: the id was just read from the agents
+    // table itself, not from a payload - see its doc comment in db/agents.ts.
     db.transaction(() => {
       setAgentStatus(db, candidate.id, 'unknown');
       mirrorMainAgentStatus(db, candidate.id, 'unknown');

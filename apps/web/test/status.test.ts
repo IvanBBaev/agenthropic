@@ -73,6 +73,39 @@ describe('statusMeta - absent status (SV-3)', () => {
   });
 
   it('keeps reporting an unknown status WORD with its raw value', () => {
-    expect(statusMeta('zombie').label).toBe('unrecognised (zombie)');
+    // AMENDED 2026-09-23 (lane-P). RE-AIMED, not relaxed. The durable
+    // guarantee is that the server's own word reaches the reader unparaphrased
+    // - that is what this test has always been for, and it still holds. What
+    // changed is that the word is now delimited, because a word that renders
+    // as nothing (`''`, whitespace) was indistinguishable from a rendering
+    // fault without the quotes. The raw bytes are still reproduced exactly.
+    expect(statusMeta('zombie').label).toBe('unrecognised ("zombie")');
+    expect(statusMeta('zombie').label).toContain('zombie');
+  });
+});
+
+/**
+ * The vanished subject (2026-09-23, lane-P). `unrecognisedStatusMeta` names a
+ * word this build does not know by quoting it back to the reader. The api
+ * layer's guards check containers and load-bearing numbers and deliberately
+ * NOT strings, so the "word" can be the empty string or pure whitespace - and
+ * then the only part of the sentence that carries information is the part that
+ * renders as nothing.
+ */
+describe('statusMeta - a status word with nothing in it (lane-P)', () => {
+  it('shows a blank status word as a blank status word, not as an empty gap', () => {
+    // `unrecognised ()` reads as a bug in the dashboard, not as a fact about
+    // the data: the parenthesis promises a value and then shows none, so the
+    // reader cannot tell whether the server sent '' or whether this page
+    // failed to render what it sent.
+    const meta = statusMeta('');
+    expect(meta.label).toBe('unrecognised ("")');
+    expect(meta.symbol).toBe('?');
+  });
+
+  it('makes a whitespace-only status word visible', () => {
+    // Without the quotes these two labels are the same string on screen.
+    expect(statusMeta('   ').label).toBe('unrecognised ("   ")');
+    expect(statusMeta('   ').label).not.toBe(statusMeta('').label);
   });
 });

@@ -12,7 +12,7 @@
  * frame the dashboard never sees. The contract test in
  * test/realtime-event-contract.test.ts holds the two sides equal.
  */
-import type { GenericRealtimeEvent, RealtimeEvent, ServerEventType } from '@agenthropic/shared';
+import type { IngestFailedEvent, RealtimeEvent, ServerEventType } from '@agenthropic/shared';
 import type { IngestEvent } from '../ingest/ingest-events';
 import type { IngestFailureReport } from '../ingest/corpus-watcher';
 
@@ -42,19 +42,22 @@ export function toRealtimeEvent(event: IngestEvent, occurredAt: string): Realtim
 /**
  * WP-IN5 failure visibility. A session that fails to ingest used to be dropped
  * on the floor, so the dashboard silently showed nothing while `/api/health`
- * kept answering `ok`. The failure now travels the SAME transport as every
- * other truth (CD-5: SSE is canonical), riding the shared union's generic arm
- * so no shared-schema change is needed to publish it.
+ * kept answering `ok`. The failure travels the SAME transport as every other
+ * truth (CD-5: SSE is canonical), on its own typed arm of the closed shared
+ * union since 2026-09-09 (closing-plan L4 / D5); before that it rode a generic
+ * catch-all arm, which is gone.
  *
- * The generic arm forbids top-level extras, so `occurredAt` lives inside the
- * payload rather than beside `type`. The payload carries the session id, the
- * SANITIZED reason, and the retry verdict - never the substrate: no transcript
- * content, no absolute path, no hook payload.
+ * `occurredAt` lives inside the payload rather than beside `type` - the
+ * envelope the generic arm once forced is now the documented wire shape that
+ * the dashboard narrows by hand, and it stays byte-identical on purpose (see
+ * the schema's docblock). The payload carries the session id, the SANITIZED
+ * reason, and the retry verdict - never the substrate: no transcript content,
+ * no absolute path, no hook payload.
  */
 export function toIngestFailureEvent(
   report: IngestFailureReport,
   occurredAt: string,
-): GenericRealtimeEvent {
+): IngestFailedEvent {
   return {
     type: 'ingest-failed' satisfies ServerEventType,
     payload: {

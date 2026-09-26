@@ -2,7 +2,8 @@
  * Pure read-side reconstruction parser (WP-IN8 core) — parser-spec sections
  * 3-6. Data-in / data-out: it receives already-read file contents
  * ({@link SessionSubstrate}) and returns an in-memory {@link ParsedSession} of
- * agents, spawn edges and message-deduped usage. It performs NO filesystem or
+ * agents, spawn edges, message-deduped usage and agent outcomes. It performs
+ * NO filesystem or
  * network I/O (reading `~/.claude/projects` is the WP-IN5 adapter's job) and
  * imports only the standard library and `@agenthropic/shared` — the moat IP.
  *
@@ -23,9 +24,10 @@
  *   `sessionId` contradiction across records, or a transcript with no
  *   timestamped record.
  * - Let {@link dedupeUsageByMessageId} throw `UsageConflictError` when rows
- *   sharing a `message.id` disagree on `model` or `agentId` — a colliding, not
- *   streamed, substrate (never caught here). Streamed usage partials collapse
- *   to the per-bucket maximum, they do not throw.
+ *   sharing a `message.id` disagree on `agentId`, when two distinct models tie
+ *   at the max output, or when a bucket is not a non-negative integer (never
+ *   caught here). Otherwise streamed partials collapse to the per-bucket max
+ *   and the model settles to the greatest-output row.
  * - TOLERATE records of an unknown/unrecognized `type` (stored, not crashed):
  *   the parser simply ignores record types it has no rule for.
  */
@@ -569,7 +571,9 @@ function buildIndices(transcripts: readonly Transcript[]): SpawnIndices {
   };
 }
 
-// --- Parent resolution (the four join paths, in priority order) -------------
+// --- Parent resolution (five edge sources + orphan, in resolveParent order) ---
+// Numbering below is this function's own check order; parser-spec §4.1 names
+// the same paths but does not number them.
 
 interface Resolution {
   parentAgentId: string | null;
@@ -597,17 +601,29 @@ function makeEdge(
   return { sessionId, parentAgentId, childAgentId, source, toolUseId };
 }
 
+const TASK_NOTIFICATION_OPEN = '<task-notification>';
+const TASK_NOTIFICATION_CLOSE = '</task-notification>';
+
 /**
  * Legacy child-side fallback: extracts a `<task-notification>`'s `<tool-use-id>`
  * from a child's first-record message content. On current CLI layouts the
  * task-notification is parent-side; this covers older transcripts only.
+ *
+ * Structural, never substring (parser-spec gate #5): the trimmed content must
+ * OPEN with a `<task-notification>` element that is explicitly closed, and the
+ * `<tool-use-id>` is read only from inside that element. Prose that merely
+ * mentions the tags yields nothing, so no parent is ever fabricated.
  */
 function extractTaskNotificationToolUseId(firstRecord: JsonRecord | undefined): string | undefined {
-  const content = asString(asRecord(firstRecord?.['message'])?.['content']);
-  if (content === undefined || !content.includes('<task-notification>')) {
+  const content = asString(asRecord(firstRecord?.['message'])?.['content'])?.trimStart();
+  if (content === undefined || !content.startsWith(TASK_NOTIFICATION_OPEN)) {
     return undefined;
   }
-  return TOOL_USE_ID_RE.exec(content)?.[1];
+  const closeAt = content.indexOf(TASK_NOTIFICATION_CLOSE, TASK_NOTIFICATION_OPEN.length);
+  if (closeAt === -1) {
+    return undefined;
+  }
+  return TOOL_USE_ID_RE.exec(content.slice(TASK_NOTIFICATION_OPEN.length, closeAt))?.[1];
 }
 
 function resolveParent(
@@ -616,9 +632,10 @@ function resolveParent(
   indices: SpawnIndices,
   sidecar: AgentSidecar | undefined,
 ): Resolution {
-  // Nested layout (gate #2): a `workflows/wf_<id>/` file is anchored by directory
-  // alone — workflow subagents carry no parent block id, so no tool_use anchor
-  // exists. Parent is the dispatcher when known, else the main agent.
+  // 1. directory - nested layout (gate #2): a `workflows/wf_<id>/` file is
+  //    anchored by directory alone — workflow subagents carry no parent block
+  //    id, so no tool_use anchor exists. Parent is the dispatcher when known,
+  //    else the main agent.
   if (agentFile.workflowId !== undefined) {
     const parent = indices.workflowDispatcher.get(agentFile.workflowId) ?? sessionId;
     return {
@@ -638,7 +655,7 @@ function resolveParent(
     indices.queueChildToToolUse.get(agentFile.hex);
 
   if (anchor !== undefined) {
-    // 1. tool_use: the anchor names a materialized `Agent`/`Workflow` block; its
+    // 2. tool_use: the anchor names a materialized `Agent`/`Workflow` block; its
     //    owning transcript is the parent (a depth-2 parent block lives inside a
     //    depth-1 agent transcript — gate #4).
     const owner = indices.toolUseOwner.get(anchor);
@@ -663,7 +680,7 @@ function resolveParent(
       };
     }
 
-    // 4. task_notification: the anchor is known but its parent block is gone
+    // 4a. task_notification: the anchor is known but its parent block is gone
     //    (compaction evicted it) — re-anchor the edge to the main agent.
     return {
       parentAgentId: sessionId,
@@ -673,7 +690,7 @@ function resolveParent(
     };
   }
 
-  // 4 (legacy): no sidecar/parent-side anchor, but the child's first record
+  // 4b (legacy): no sidecar/parent-side anchor, but the child's first record
   //    carries a `<task-notification>` tool-use-id — recover the edge to main.
   const recoveredToolUseId = extractTaskNotificationToolUseId(agentFile.firstRecord);
   if (recoveredToolUseId !== undefined) {
@@ -749,18 +766,31 @@ function transcriptTimespan(records: readonly unknown[], context: string): Times
 
 // --- Usage extraction -------------------------------------------------------
 
+/**
+ * A token bucket as the API wrote it. Absent and `null` mean zero (the API
+ * omits or nulls cache buckets it did not use); any other non-number becomes
+ * `NaN`, so the dedupe validator fails loudly instead of the bucket silently
+ * counting as zero tokens and $0.
+ */
+function tokenCount(value: unknown): number {
+  if (value === undefined || value === null) {
+    return 0;
+  }
+  return typeof value === 'number' ? value : Number.NaN;
+}
+
 function mapUsageBuckets(usage: JsonRecord): TokenBuckets {
   const cacheCreation = asRecord(usage['cache_creation']);
   return {
-    input: asNumber(usage['input_tokens']) ?? 0,
-    output: asNumber(usage['output_tokens']) ?? 0,
-    cacheRead: asNumber(usage['cache_read_input_tokens']) ?? 0,
+    input: tokenCount(usage['input_tokens']),
+    output: tokenCount(usage['output_tokens']),
+    cacheRead: tokenCount(usage['cache_read_input_tokens']),
     cacheWrite5m:
       cacheCreation !== undefined
-        ? (asNumber(cacheCreation['ephemeral_5m_input_tokens']) ?? 0)
-        : (asNumber(usage['cache_creation_input_tokens']) ?? 0),
+        ? tokenCount(cacheCreation['ephemeral_5m_input_tokens'])
+        : tokenCount(usage['cache_creation_input_tokens']),
     cacheWrite1h:
-      cacheCreation !== undefined ? (asNumber(cacheCreation['ephemeral_1h_input_tokens']) ?? 0) : 0,
+      cacheCreation !== undefined ? tokenCount(cacheCreation['ephemeral_1h_input_tokens']) : 0,
   };
 }
 
@@ -795,15 +825,16 @@ function extractUsageRows(transcripts: readonly Transcript[]): UsageRow[] {
 // --- Public entry point -----------------------------------------------------
 
 /**
- * Reconstructs one session's agents, spawn edges and message-deduped usage
- * from already-read file contents. Pure: no I/O, no mutation of the input.
+ * Reconstructs one session's agents, spawn edges, message-deduped usage and
+ * outcomes from already-read file contents. Pure: no I/O, no mutation of the input.
  *
  * @throws {SubstrateError} on a non-JSON line, an inline-agentId / filename-hex
  *   disagreement, a duplicated agent hex, a `sessionId` contradiction, or a
  *   transcript with no timestamped record.
- * @throws {UsageConflictError} (from {@link dedupeUsageByMessageId}) when two
- *   rows share a `message.id` but disagree on `model` or `agentId` — never
- *   swallowed. Streamed usage partials collapse to the per-bucket maximum.
+ * @throws {UsageConflictError} (from {@link dedupeUsageByMessageId}) when rows
+ *   sharing a `message.id` disagree on `agentId`, tie two models at max output,
+ *   or carry an invalid bucket — never swallowed. Streamed usage partials
+ *   collapse to the per-bucket maximum.
  */
 export function parseSession(substrate: SessionSubstrate): ParsedSession {
   const files: ParsedFile[] = substrate.files.map((file) => ({

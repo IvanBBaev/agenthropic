@@ -67,6 +67,17 @@ function providerOver(
   });
 }
 
+/** Wrap a {@link CorpusFs} so every directory LISTING is recorded (probes and reads are not). */
+function readdirLoggingFs(inner: CorpusFs, listed: string[]): CorpusFs {
+  return {
+    ...inner,
+    readDirNames(absDir) {
+      listed.push(absDir);
+      return inner.readDirNames(absDir);
+    },
+  };
+}
+
 /** Wrap a {@link CorpusFs} so every path handed to the port is recorded. */
 function recordingFs(inner: CorpusFs, paths: string[]): CorpusFs {
   return {
@@ -186,8 +197,8 @@ describe('substrate provider slug hint (M-18)', () => {
   it('a symlinked slug directory declines the hint (an intermediate symlink is never followed)', () => {
     // readFileConfined's O_NOFOLLOW guards only the FINAL path component, so
     // the hint path must reject a symlinked slug dir itself - mirroring
-    // enumeration's isRealDir. Fallback enumeration then answers from the
-    // real slug dir.
+    // enumeration's `probeLstat` + `isRealDir(st)` pair. Fallback enumeration
+    // then answers from the real slug dir.
     const paths: string[] = [];
     const fs = recordingFs(
       makeFakeCorpusFs(ROOT, {
@@ -212,6 +223,87 @@ describe('substrate provider slug hint (M-18)', () => {
       () => SLUG,
     );
     expect(provider.loadSession(SESSION_ID)).toEqual({ kind: 'session-not-found' });
+  });
+
+  it('a main transcript that is a directory declines the hint (and enumeration skips it too)', () => {
+    const provider = providerOver(
+      { [SLUG]: dir({ [`${SESSION_ID}.jsonl`]: dir({}) }) },
+      () => SLUG,
+    );
+    expect(provider.loadSession(SESSION_ID)).toEqual({ kind: 'session-not-found' });
+  });
+
+  // An entry the hint names and the probe CANNOT LOOK AT is not a stale hint.
+  // Declining it silently would send the lookup into enumeration, which either
+  // hits the same errno or - worse - lists every OTHER session and lets the
+  // fallback answer "not found" for a session nobody managed to look at: the
+  // confident lie the unreadable-root arm exists to prevent, one level down.
+  it('a slug directory that cannot be probed (EACCES) is reported unreadable, never declined', () => {
+    const listed: string[] = [];
+    const fs = readdirLoggingFs(
+      makeFakeCorpusFs(
+        ROOT,
+        { [SLUG]: dir(fixtureSlugDir(), { throwLstat: 'EACCES' }) },
+        { rootReaddirCode: 'EACCES' },
+      ),
+      listed,
+    );
+    const provider = createSubstrateProvider({
+      env: { CLAUDE_PROJECTS_DIR: ROOT },
+      fs,
+      slugOf: () => SLUG,
+    });
+    expect(provider.loadSession(SESSION_ID)).toEqual({
+      kind: 'session-unreadable',
+      path: SLUG,
+      code: 'EACCES',
+    });
+    // No fallback: the root was never listed (the rigged root readdir would
+    // have turned any attempt into 'unreadable-root' as a second witness).
+    expect(listed).toEqual([]);
+  });
+
+  it('a main transcript that cannot be probed (EPERM) is reported unreadable at its corpus-relative path', () => {
+    const listed: string[] = [];
+    const fs = readdirLoggingFs(
+      makeFakeCorpusFs(
+        ROOT,
+        { [SLUG]: dir({ [`${SESSION_ID}.jsonl`]: file('{}\n', { throwLstat: 'EPERM' }) }) },
+        { rootReaddirCode: 'EACCES' },
+      ),
+      listed,
+    );
+    const provider = createSubstrateProvider({
+      env: { CLAUDE_PROJECTS_DIR: ROOT },
+      fs,
+      slugOf: () => SLUG,
+    });
+    expect(provider.loadSession(SESSION_ID)).toEqual({
+      kind: 'session-unreadable',
+      path: `${SLUG}/${SESSION_ID}.jsonl`,
+      code: 'EPERM',
+    });
+    expect(listed).toEqual([]);
+  });
+
+  it('a hinted entry that VANISHED (ENOENT / ENOTDIR) is a stale hint and still falls back', () => {
+    // The `gone` probe outcome is the ONE errno family that keeps the old
+    // behaviour: nothing is there to be denied, so enumeration answers.
+    for (const code of ['ENOENT', 'ENOTDIR']) {
+      const goneDir = providerOver(
+        { [SLUG]: dir(fixtureSlugDir()), 'gone-slug': dir({}, { throwLstat: code }) },
+        () => 'gone-slug',
+      );
+      expect(goneDir.loadSession(SESSION_ID).kind).toBe('resolved');
+    }
+    const goneMain = providerOver(
+      {
+        [SLUG]: dir(fixtureSlugDir()),
+        'moved-slug': dir({ [`${SESSION_ID}.jsonl`]: file('', { throwLstat: 'ENOENT' }) }),
+      },
+      () => 'moved-slug',
+    );
+    expect(goneMain.loadSession(SESSION_ID).kind).toBe('resolved');
   });
 
   it('start() wires the DB as the hint source end to end', async () => {

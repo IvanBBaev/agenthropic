@@ -1,6 +1,6 @@
 /**
  * View registry (WP-U5): the ONLY place that maps a route id to a view.
- * NEXT WAVE: swap a view's internals in its own file; this registry and the
+ * To change a view, swap its internals in its own file; this registry and the
  * shell stay untouched. Every component must satisfy ComponentType<ViewProps>.
  */
 import type { ComponentType } from 'react';

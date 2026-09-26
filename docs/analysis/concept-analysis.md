@@ -8,7 +8,7 @@
 
 > **What this is.** A merciless, multi-lens review of the **agenthropic conceptual
 > brief** — the product idea as defined in `docs/ai/DESIGN.md`,
-> [`README.md`](../../README.md) and the project `CLAUDE.md`,
+> [`README.md`](https://github.com/IvanBBaev/agenthropic/blob/main/README.md) and the project `CLAUDE.md`,
 > which are themselves a synthesis of the vendor due-diligence (`*.docx` v1/v2) and
 > the independent source-level audit (`docs/due-diligence/*`,
 > `docs/independent-due-diligence.md`).

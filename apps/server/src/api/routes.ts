@@ -290,7 +290,7 @@ export const apiRoutes: FastifyPluginAsync<ApiRoutesOptions> = async (app, optio
         }
         throw error; // e.g. ContainmentError → uniform detail-free 500
       }
-      // Four ways to have no substrate, four different answers. They used to
+      // Six ways to have no substrate, six different answers. They used to
       // share one `404 Session not found.`, which was untrue in most cases:
       // with no corpus root (or one that cannot be read) nothing here knows
       // whether the session exists, and an empty remnant was found — it simply
@@ -309,6 +309,33 @@ export const apiRoutes: FastifyPluginAsync<ApiRoutesOptions> = async (app, optio
         return reply
           .code(503)
           .send({ error: 'the corpus root exists but could not be read; retry shortly' });
+      }
+      if (lookup.kind === 'session-unreadable') {
+        // The unreadable-root fact one level down: the entry that names the
+        // session is there (or may be) and could not be probed. Same 503, same
+        // "retry", and never the 404 that would assert an absence this request
+        // could not establish. The path is corpus-root-relative (a slug or
+        // `<slug>/<uuid>.jsonl`, never absolute); the errno goes to the log
+        // only — it is an operator fact, not something the body must carry.
+        request.log.warn(
+          { path: lookup.path, code: lookup.code },
+          'corpus entry could not be probed; session existence unknown',
+        );
+        return reply.code(503).send({
+          error: `the corpus could not be read at "${lookup.path}"; whether the session exists is unknown; retry shortly`,
+        });
+      }
+      if (lookup.kind === 'session-unlisted') {
+        // Every LISTED session was checked, but some slug directories could
+        // not be listed and any of them may hold this one — so the honest
+        // answer is "unknown", not "not found".
+        request.log.warn(
+          { unreadableDirs: lookup.unreadableDirs },
+          'session not listed while corpus directories were unreadable; existence unknown',
+        );
+        return reply.code(503).send({
+          error: `the session is not among the listed sessions, but ${lookup.unreadableDirs} of the corpus directories could not be read, so whether it exists is unknown; retry shortly`,
+        });
       }
       if (lookup.kind === 'session-not-found') {
         return reply.code(404).send({ error: 'Session not found.' });
@@ -362,9 +389,31 @@ export const apiRoutes: FastifyPluginAsync<ApiRoutesOptions> = async (app, optio
       const summary = getCostSummary(db, request.query.topN);
       // Attached here rather than inside getCostSummary: the query answers
       // "what do the stored rows say", and what ingest could NOT store is not
-      // knowable from those rows - by construction, a session that failed to
-      // ingest left none behind. Keeping the seam at the route means the query
-      // stays a pure read and the disclosure stays honest about its source.
+      // knowable from those rows. Keeping the seam at the route means the
+      // query stays a pure read and the disclosure stays honest about its
+      // source.
+      //
+      // AMENDED 2026-09-23 (lane-P/coverage-claim). This comment used to end
+      // "by construction, a session that failed to ingest left none behind",
+      // and that is true only of a session that NEVER ingested. A session can
+      // ingest cleanly, then have its transcript grow lines naming a model
+      // with no price row: from then on every pass halts at the pricing gate
+      // BEFORE opening a transaction, the retry budget is spent, and the
+      // session is quarantined - with the rows of its last good pass still
+      // committed, still summed into `totals` below, and still listed by
+      // /api/sessions. Proved in test/ingest-quarantine-coverage.test.ts,
+      // which measures $1.00 and 1,000,000 tokens inside `totals` for the very
+      // session reported here as excluded and quarantined.
+      //
+      // So these two counts do NOT mean "this much usage is missing from the
+      // number above". They mean "this many sessions are either absent from it
+      // or present in it at an older extent than the corpus now holds", and
+      // the route cannot tell the reader which - the watcher's `attempts` map
+      // is in memory, keyed by session, and carries no record of whether a
+      // parked session ever committed a pass. Narrowing that is a change to
+      // what ingest REMEMBERS, not to what this route reads, so it is not
+      // quietly fixed here; `totals` remains a lower bound whenever
+      // `sessionsQuarantined` is non-zero, and the UI copy says so.
       const exclusions = options.ingestExclusions?.();
       return exclusions === undefined
         ? summary
@@ -461,9 +510,10 @@ export const apiRoutes: FastifyPluginAsync<ApiRoutesOptions> = async (app, optio
       const { since, limit, offset } = request.query;
       const normalized = normalizeSinceInstant(since);
       if (normalized === null) {
-        return reply
-          .code(400)
-          .send({ error: 'The `since` parameter must be a real ISO-8601 instant in UTC.' });
+        return reply.code(400).send({
+          error:
+            'The `since` parameter must be an ISO-8601 instant with a zone designator (Z or ±hh:mm), or a bare UTC date.',
+        });
       }
       return getChanges(db, normalized, limit, offset);
     },

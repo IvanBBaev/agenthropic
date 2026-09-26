@@ -64,14 +64,25 @@ distinction rather than only a *driver* distinction. Its report has a `configure
 flag whose whole purpose is to keep two very different facts apart: "retention ran
 and found nothing to delete" and "retention is not configured at all." Collapsing
 those into a single empty report would be the kind of plausible-looking summary this
-project refuses to produce. The default policy makes every call a reported no-op, so
-wiring the port up anywhere does not, by itself, delete anything — the mechanism
-exists and the policy remains unset pending OPEN-1/2/3.
+project refuses to produce. The library default policy makes every call a reported
+no-op, so wiring the port up anywhere does not, by itself, delete anything — what
+deletes is the policy handed to it, and since 2026-09-10 the composition root hands it
+the signed v1.0 policy (`events` 90 days, `token_usage` never, backup files 30 days
+behind a floor of 7; D3, signed 2026-09-08), run after each successful daily backup.
 
 Nothing else in the port set has changed: `Normalizer`/`Projection`, `AlertSink`,
 `HookSource`, `StoragePort`, `PricingProvider` and `CostEngine` still have no named
 interface, and the second-runtime portability claim is still **unproven** — no
 non-Claude-Code adapter has been attempted.
+
+*(As built — 2026-08-09, recorded 2026-09-22: `Normalizer` and `Projection` do exist as
+separate stages — `normalizeSession` in `apps/server/src/ingest/normalize-session.ts` is a
+pure function from parser output to a `NormalizedSession` value, and `projectSession` in
+`apps/server/src/ingest/project-session.ts` writes that value in one transaction. Neither is
+a named port with a fake behind it, and neither reads `events_raw`, so the port-set count
+above is unchanged and the "reachable through a port" half of the second acceptance
+criterion is still unmet; the "never built as separate stages" wording in the 2026-07-30
+update is what no longer holds.)*
 
 ## Context
 

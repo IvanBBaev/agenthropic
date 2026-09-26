@@ -208,13 +208,71 @@ describe('enumerateSessions', () => {
     expect(refsOf(enumerateSessions(hostile, ROOT))).toEqual([]);
   });
 
-  it('skips a slug whose readdir throws but keeps walking the remaining slugs', () => {
+  it('records a slug whose readdir throws as unreadable and keeps walking the remaining slugs', () => {
     const fs = fakeFs({
       [OTHER_SLUG]: dir({}, { throwReaddir: 'EACCES' }),
       [SLUG]: dir({ [MAIN]: file('{}\n') }),
     });
 
-    expect(refsOf(enumerateSessions(fs, ROOT)).map((r) => r.projectSlug)).toEqual([SLUG]);
+    const enumeration = enumerateSessions(fs, ROOT);
+    expect(refsOf(enumeration).map((r) => r.projectSlug)).toEqual([SLUG]);
+    // "I could not look" is not "there is nothing there": every session under
+    // that slug is invisible this pass, and the operator must be told.
+    expect(enumeration).toMatchObject({
+      skipped: [{ relativePath: OTHER_SLUG, reason: 'unreadable', code: 'EACCES' }],
+    });
+  });
+
+  it('treats a slug that vanished (ENOENT) between listing and reading as simply gone', () => {
+    const fs = fakeFs({
+      [OTHER_SLUG]: dir({}, { throwReaddir: 'ENOENT' }),
+      [SLUG]: dir({ [MAIN]: file('{}\n') }),
+    });
+
+    expect(enumerateSessions(fs, ROOT)).toMatchObject({ skipped: [] });
+  });
+
+  // The lstat probe is the same "could not look" fact as a failed readdir: a
+  // slug whose probe fails hides every session under it, and a main transcript
+  // whose probe fails is a session the dashboard cannot see. Neither is "there
+  // is nothing there", so neither may be a silent skip.
+  it('records a slug whose lstat throws as unreadable and keeps walking the remaining slugs', () => {
+    const fs = fakeFs({
+      [OTHER_SLUG]: dir({ [`${OTHER_SESSION_ID}.jsonl`]: file('{}\n') }, { throwLstat: 'EACCES' }),
+      [SLUG]: dir({ [MAIN]: file('{}\n') }),
+    });
+
+    const enumeration = enumerateSessions(fs, ROOT);
+    expect(refsOf(enumeration).map((r) => r.projectSlug)).toEqual([SLUG]);
+    expect(enumerationSkipsOf(enumeration)).toEqual([
+      { relativePath: OTHER_SLUG, reason: 'unreadable', code: 'EACCES' },
+    ]);
+  });
+
+  it('treats a slug whose lstat throws ENOENT (vanished after listing) as simply gone', () => {
+    const fs = fakeFs({
+      [OTHER_SLUG]: dir({}, { throwLstat: 'ENOENT' }),
+      [SLUG]: dir({ [MAIN]: file('{}\n') }),
+    });
+
+    const enumeration = enumerateSessions(fs, ROOT);
+    expect(refsOf(enumeration).map((r) => r.projectSlug)).toEqual([SLUG]);
+    expect(enumerationSkipsOf(enumeration)).toEqual([]);
+  });
+
+  it('records a <uuid>.jsonl whose lstat throws as unreadable, slug-relative, and keeps walking', () => {
+    const fs = fakeFs({
+      [SLUG]: dir({
+        [MAIN]: file('{}\n', { throwLstat: 'EPERM' }),
+        [`${OTHER_SESSION_ID}.jsonl`]: file('{}\n'),
+      }),
+    });
+
+    const enumeration = enumerateSessions(fs, ROOT);
+    expect(refsOf(enumeration).map((r) => r.sessionId)).toEqual([OTHER_SESSION_ID]);
+    expect(enumerationSkipsOf(enumeration)).toEqual([
+      { relativePath: `${SLUG}/${MAIN}`, reason: 'unreadable', code: 'EPERM' },
+    ]);
   });
 
   it('ignores slug entries that are not *.jsonl files', () => {
@@ -586,11 +644,54 @@ describe('buildSessionSubstrate — artifact walk', () => {
     const built = builtOf(buildSessionSubstrate(fs, refFor(), limits));
 
     // Depth 1 (directly under subagents/) survives; the deeper one is never
-    // visited — not ingested and not even recorded as skipped.
+    // visited and never ingested — but the directory the walk declined to
+    // enter IS recorded, so the dropped subtree is countable, not silent.
     expect(relPaths(built.substrate.files).sort()).toEqual(
       [MAIN, 'subagents/agent-aaaa1111.jsonl'].sort(),
     );
-    expect(built.skipped).toEqual([]);
+    expect(built.skipped).toEqual([{ relativePath: 'subagents/workflows', reason: 'too-deep' }]);
+  });
+
+  it('records the over-depth directory once, at the depth boundary, under the default limits', () => {
+    // subagents=1, a=2, b=3, c=4 are walked; d would be depth 5 and is not.
+    const fs = fakeFs(
+      treeWith({
+        subagents: dir({
+          a: dir({
+            b: dir({
+              c: dir({
+                'agent-aaaa1111.jsonl': file('{"a":1}\n'),
+                d: dir({ e: dir({ 'agent-bbbb2222.jsonl': file('{"a":1}\n') }) }),
+              }),
+            }),
+          }),
+        }),
+      }),
+    );
+
+    const built = builtOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
+
+    expect(relPaths(built.substrate.files).sort()).toEqual(
+      [MAIN, 'subagents/a/b/c/agent-aaaa1111.jsonl'].sort(),
+    );
+    expect(built.skipped).toEqual([{ relativePath: 'subagents/a/b/c/d', reason: 'too-deep' }]);
+  });
+
+  it('keeps a too-deep skip on the no-substrate verdict when nothing else survived', () => {
+    const limits: ReadLimits = { maxFileBytes: 1024, maxDepth: 1 };
+    const fs = fakeFs(
+      treeWith(
+        { subagents: dir({ nested: dir({ 'agent-aaaa1111.jsonl': file('{"a":1}\n') }) }) },
+        file(''),
+      ),
+    );
+
+    const verdict = noSubstrateOf(buildSessionSubstrate(fs, refFor(), limits));
+
+    expect(skipFor(verdict.skipped, 'subagents/nested')).toEqual({
+      relativePath: 'subagents/nested',
+      reason: 'too-deep',
+    });
   });
 
   it('does not walk when subagents is a file rather than a directory', () => {
@@ -641,12 +742,39 @@ describe('buildSessionSubstrate — artifact walk', () => {
     expect(built.skipped).toEqual([]);
   });
 
-  it('survives a subagents dir whose readdir throws mid-walk', () => {
+  it('survives a subagents dir whose readdir throws mid-walk, and records it as unreadable', () => {
     const fs = fakeFs(treeWith({ subagents: dir({}, { throwReaddir: 'EACCES' }) }));
 
     const built = builtOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
 
     expect(relPaths(built.substrate.files)).toEqual([MAIN]);
+    expect(built.skipped).toEqual([
+      { relativePath: 'subagents', reason: 'unreadable', code: 'EACCES' },
+    ]);
+  });
+
+  it('records an unreadable nested workflow dir instead of dropping its agents silently', () => {
+    const fs = fakeFs(
+      treeWith({
+        subagents: dir({
+          'agent-aaaa1111.jsonl': file('{"a":1}\n'),
+          workflows: dir({ wf_one: dir({}, { throwReaddir: 'EACCES' }) }),
+        }),
+      }),
+    );
+
+    const built = builtOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
+
+    expect(built.skipped).toEqual([
+      { relativePath: 'subagents/workflows/wf_one', reason: 'unreadable', code: 'EACCES' },
+    ]);
+  });
+
+  it('treats a walk dir that vanished (ENOENT) mid-walk as benign', () => {
+    const fs = fakeFs(treeWith({ subagents: dir({}, { throwReaddir: 'ENOENT' }) }));
+
+    const built = builtOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
+
     expect(built.skipped).toEqual([]);
   });
 
@@ -665,6 +793,115 @@ describe('buildSessionSubstrate — artifact walk', () => {
 
     expect(relPaths(built.substrate.files)).toEqual([MAIN]);
     expect(built.skipped).toEqual([]);
+  });
+
+  // An lstat that fails for any reason other than "gone" is the same hazard as
+  // a failed read: the artifact exists and was not ingested. It used to be
+  // indistinguishable from a TOCTOU vanish, so the session was ingested
+  // main-only AND, with nothing in `skipped`, the watcher checkpointed it as
+  // complete and never re-read the file.
+  it('records an artifact whose lstat throws as unreadable and keeps walking its siblings', () => {
+    const fs = fakeFs(
+      treeWith({
+        subagents: dir({
+          'agent-aaaa1111.jsonl': file('{"a":1}\n', { throwLstat: 'EACCES' }),
+          'agent-bbbb2222.jsonl': file('{"b":2}\n'),
+        }),
+      }),
+    );
+
+    const built = builtOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
+
+    expect(relPaths(built.substrate.files).sort()).toEqual(
+      [MAIN, 'subagents/agent-bbbb2222.jsonl'].sort(),
+    );
+    expect(built.skipped).toEqual([
+      { relativePath: 'subagents/agent-aaaa1111.jsonl', reason: 'unreadable', code: 'EACCES' },
+    ]);
+  });
+
+  it.each([
+    ['ENOENT', 'the entry itself vanished'],
+    ['ENOTDIR', 'its parent was replaced by a non-directory'],
+  ])('treats an artifact whose lstat throws %s as vanished, not unreadable (%s)', (code) => {
+    const fs = fakeFs(
+      treeWith({
+        subagents: dir({ 'agent-aaaa1111.jsonl': file('{"a":1}\n', { throwLstat: code }) }),
+      }),
+    );
+
+    const built = builtOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
+
+    expect(relPaths(built.substrate.files)).toEqual([MAIN]);
+    expect(built.skipped).toEqual([]);
+  });
+
+  it('records an unreadable <uuid>/subagents dir instead of walking nothing silently', () => {
+    const fs = fakeFs(
+      treeWith({
+        subagents: dir({ 'agent-aaaa1111.jsonl': file('{"a":1}\n') }, { throwLstat: 'EACCES' }),
+      }),
+    );
+
+    const built = builtOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
+
+    expect(relPaths(built.substrate.files)).toEqual([MAIN]);
+    expect(built.skipped).toEqual([
+      { relativePath: 'subagents', reason: 'unreadable', code: 'EACCES' },
+    ]);
+  });
+
+  it('records an unreadable <uuid>/ session dir as the subagents subtree it could not vet', () => {
+    // The probe that failed is on `<uuid>/` itself; what the build consequently
+    // declined is `subagents/**` (its only walk target), and that is the path
+    // the skip names — the same way a failed readdir names the directory whose
+    // contents went unseen.
+    const fs = fakeFs({
+      [SLUG]: dir({
+        [MAIN]: file('{"a":1}\n'),
+        [SESSION_ID]: dir(
+          { subagents: dir({ 'agent-aaaa1111.jsonl': file('{"a":1}\n') }) },
+          { throwLstat: 'EIO' },
+        ),
+      }),
+    });
+
+    const built = builtOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
+
+    expect(relPaths(built.substrate.files)).toEqual([MAIN]);
+    expect(built.skipped).toEqual([
+      { relativePath: 'subagents', reason: 'unreadable', code: 'EIO' },
+    ]);
+  });
+
+  it('treats a <uuid>/ session dir whose lstat throws ENOENT as absent (nothing recorded)', () => {
+    const fs = fakeFs({
+      [SLUG]: dir({
+        [MAIN]: file('{"a":1}\n'),
+        [SESSION_ID]: dir({ subagents: dir({}) }, { throwLstat: 'ENOENT' }),
+      }),
+    });
+
+    const built = builtOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
+
+    expect(relPaths(built.substrate.files)).toEqual([MAIN]);
+    expect(built.skipped).toEqual([]);
+  });
+
+  it('keeps an lstat-unreadable agent on the no-substrate verdict when nothing else survived', () => {
+    const fs = fakeFs(
+      treeWith(
+        { subagents: dir({ 'agent-aaaa1111.jsonl': file('{"a":1}\n', { throwLstat: 'EACCES' }) }) },
+        file(''),
+      ),
+    );
+
+    const verdict = noSubstrateOf(buildSessionSubstrate(fs, refFor(), DEFAULT_READ_LIMITS));
+
+    expect(verdict.skipped).toEqual([
+      { relativePath: MAIN, reason: 'empty-main' },
+      { relativePath: 'subagents/agent-aaaa1111.jsonl', reason: 'unreadable', code: 'EACCES' },
+    ]);
   });
 });
 

@@ -123,8 +123,21 @@ export function canonicalizeEffectiveFrom(value: string): string {
  * value would miss the existing row, insert a second one, and only then be
  * rewritten by the trigger - straight into a primary-key violation instead of
  * the intended in-place rate update.
+ *
+ * The rate is validated with the same rule core's `computeCostUsd` and the API's
+ * priced CTE apply on read - a finite, non-negative number - and refused here
+ * rather than stored: the column has no guard, and one bad row makes core
+ * refuse the WHOLE table, halting pricing for every model, far from the write
+ * that caused it.
  */
 export function upsertPricingRate(db: SqliteDatabase, entry: PricingEntry): void {
+  if (!Number.isFinite(entry.usdPerMtok) || entry.usdPerMtok < 0) {
+    throw new Error(
+      `model_pricing.usd_per_mtok ${String(entry.usdPerMtok)} for model ` +
+        `${JSON.stringify(entry.model)} bucket ${JSON.stringify(entry.bucket)} ` +
+        'is not a finite, non-negative number; a rate is never stored unusable.',
+    );
+  }
   db.prepare(
     `INSERT INTO model_pricing (model, bucket, usd_per_mtok, effective_from)
      VALUES (?, ?, ?, ?)

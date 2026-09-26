@@ -86,7 +86,9 @@ layer bolted onto the `token_usage` projection, not a separate pipeline.
 *(As built, the picture's shape holds with two label changes: the bucketing column
 reads `input / output / cache_read / cache_write_5m / cache_write_1h` rather than
 speed/geo/tier, and `model_pricing` carries `effective_from` only — no `verified_on`.
-`agent_id` is attributed in the parser before the write, not backfilled.)*
+`agent_id` is attributed before the write — subagent rows by the parser's hard join,
+main-transcript rows by the writer, which resolves the parser's `null` to the session
+id; migration 8 back-fills only rows persisted before that resolution existed.)*
 
 ## 1. Ground truth in, dollars out
 
@@ -157,9 +159,12 @@ specifically because its bucketing is production-grade (DESIGN §4):
 > ```
 >
 > `tokens` is copied verbatim from JSONL — the never-inferred rule shipped intact.
-> `agent_id` is nullable, but there is no post-write backfill pass: attribution happens
-> **inside the parser** via the hard join (parser-spec §5.1), before any row is
-> written, and a `NULL` means genuinely unattributable.
+> `agent_id` is nullable. Subagent rows are attributed **inside the parser** via the
+> hard join (parser-spec §5.1), before any row is written; main-transcript rows arrive
+> from the parser with a `null` agent id and the writer (`db/token-usage.ts`) resolves
+> them to the session id — the main agent's node id — at insert time. Migration 8
+> back-fills that same resolution into rows persisted before it existed. A `NULL` that
+> survives both means genuinely unattributable.
 >
 > One column in that DDL does nothing, and is documented rather than quietly implied to
 > work: **`is_compaction_baseline` is dead** (implementation review 2026-08-09, finding
@@ -246,9 +251,21 @@ enforces it. Two honest departures from the CD-4 sketch:
 - **A later migration converged the seed rather than editing it.** An applied migration is
   immutable — the runner records a content checksum per migration and refuses to start if
   one changed — so widening the seed's coverage required migration 11 to re-apply it
-  idempotently, with the seed values duplicated inside that migration so its own checksum
-  covers them. [The data model](../architecture/data-model.md) carries the full seed table,
+  idempotently, with the cache-rate derivation duplicated inside that migration's body
+  and the module-level seed constants themselves folded into every migration's content
+  checksum, so an edit to either fails loudly. [The data model](../architecture/data-model.md) carries the full seed table,
   the coverage counts it was verified against, and the migration-checksum mechanism.
+- **Migration 18 (2026-09-10) widened the table for the two model ids the real corpus
+  actually uses**, `claude-opus-5` and `claude-fable-5-1`, after a boot over the owner's
+  corpus showed 52 of 60 sessions halting at the `PricingError` gate for want of a row. Its
+  ten rows are explicit per bucket rather than derived, because Fable 5.1's published
+  cache-read rate is 0.025× input, not the 0.1× the derivation assumes: seven models, 35
+  rows, the same floor, the same PROVISIONAL label. A boot on 2026-09-18 at schema 18 over
+  the same corpus admitted all 54 sessions it held that day (`sessionsExcluded` 0).
+- **Migration 19 (2026-09-26) did the same for `claude-opus-5-5`**, after a boot at schema
+  18 that day refused 27 of 61 sessions on it. Five explicit rows again, because Opus 5.5's
+  published cache-read rate is 0.05× input, a third ratio no derivation covers: eight
+  models, 40 rows, the same floor, the same PROVISIONAL label.
 
 **What is genuinely undecided:** the *authoritative dated source* for these rates and
 the *refresh cadence* that keeps the staleness-fails-CI test honest as the model lineup
@@ -292,6 +309,32 @@ row that was live at the time, per bucket.
 > **zero** tokens needs no price row; a bucket with nonzero tokens and no resolvable
 > rate raises `PricingError` in the engine — and in the read aggregates is surfaced as
 > `unpricedTokens` rather than silently priced.
+
+**AMENDED 2026-09-23 (J-2).** "No resolvable rate" used to mean only "no row". It now also
+means "a row whose stored rate cannot be used", and the two halves of the system answer that
+case differently. Keep them apart - blurring them is how a reader concludes that a bad rate
+halts ingest, which it does not.
+
+| Case | Where | What happens |
+|---|---|---|
+| Model id / bucket with nonzero tokens and **no** dated row at or before `occurred_at` | `computeCostUsd`, `packages/core/src/cost/compute-cost.ts` | **`PricingError`, unchanged.** At ingest this halts before the write transaction opens; at `GET /api/sessions/:id/cost-analysis` it is a `422`. The docblock still reads "silence here is phantom-free but money-wrong". |
+| A dated row exists but `usd_per_mtok` is negative, non-finite or text-coerced | the read SQL in `apps/server/src/api/queries.ts` | **Resolves to NULL: the tokens are served as unpriced and contribute `$0`, visibly.** No halt, no 500, and no dollar figure derived from the bad value. |
+
+Three specifics worth stating, because each was a live wrong answer before:
+
+- **The validity test is applied to the latest row only. It never falls back to an older
+  `effective_from`.** Falling back would price at a rate that is no longer in force, which is a
+  quietly wrong number rather than a missing one. The SQL selects the newest dated row first and
+  *then* tests it: `CASE WHEN typeof(mp.usd_per_mtok) IN ('integer', 'real') AND
+  mp.usd_per_mtok >= 0 AND mp.usd_per_mtok < 9e999 THEN mp.usd_per_mtok END`.
+- **The rollup-backed summary applies the same test in TypeScript** (`usableRate` in the same
+  file), so `/api/cost/summary` and the SQL-priced session, tree and DAG routes agree on which
+  tokens are unpriced. Previously an unusable rate could 500 the summary.
+- **`upsertPricingRate` now refuses the value at write time** (`apps/server/src/db/pricing.ts`)
+  with "a rate is never stored unusable". The read-side test is therefore belt-and-braces for
+  rows written by a migration, by hand or by an older build - `usd_per_mtok` has REAL affinity
+  but no `CHECK`, so SQLite will still accept text or a negative number from outside this
+  function.
 
 ## 5. `CostEngine`: every dollar = tokens × dated price
 
@@ -490,8 +533,8 @@ README badge, which under Berne convention makes it **all-rights-reserved by def
 
 This is enforced structurally, not by policy alone — a CI license/provenance scan is a
 build-failing gate (development plan `WP-F6`; Phase 1 exit gate: "no-spawner/no-SSRF/
-license gates green"). Full rule and enforcement detail: [licensing &
-provenance](../contributing/licensing.md).
+license gates green"). Full rule and enforcement detail:
+[licensing & provenance](../contributing/licensing.md).
 
 ## 9. The no-priceless-model-fails-CI rule
 

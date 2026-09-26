@@ -5,6 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
+import { DEFAULT_COST_TOP_N } from '@agenthropic/shared';
 import { buildServer } from '../src/server';
 import type { SqliteDatabase } from '../src/db/connection';
 import { createMigratedTempDb, TEST_TOKEN, type TempDb } from './helpers';
@@ -129,6 +130,78 @@ describe('/api/cost/summary (WP-U4)', () => {
     }
   });
 
+  it('states the population topSessions was cut from (closing-plan L1)', async () => {
+    // Two seeded sessions, default topN: the slice is the whole corpus.
+    const whole = await app.inject({ method: 'GET', url: '/api/cost/summary', headers: AUTH });
+    expect(whole.statusCode).toBe(200);
+    expect(whole.json()).toMatchObject({ sessionCount: 2, hasMore: false });
+    expect(whole.json().topSessions).toHaveLength(2);
+
+    // topN=1 truncates: the count still names both sessions and says so.
+    const cut = await app.inject({
+      method: 'GET',
+      url: '/api/cost/summary?topN=1',
+      headers: AUTH,
+    });
+    expect(cut.json()).toMatchObject({ sessionCount: 2, hasMore: true });
+    expect(cut.json().topSessions).toHaveLength(1);
+    // (`topN=0` never reaches the query over HTTP - the querystring schema
+    // rejects it - so the empty-slice case lives with `getCostSummary` in
+    // api-cost-summary-equivalence.test.ts, against the ledger oracle.)
+  });
+
+  it('serves hasMore with the exact count once the corpus exceeds the default topN', async () => {
+    // Exactly one session more than the default slice - the case the old
+    // payload could not distinguish from "topN sessions is all there is".
+    const population = DEFAULT_COST_TOP_N + 1;
+    const big = createMigratedTempDb();
+    const values = Array.from({ length: population }, (_, i) => {
+      const id = `p${String(i + 1).padStart(2, '0')}`;
+      return {
+        session: `('${id}', 'proj-p', '2026-07-10T00:00:00Z', '2026-07-11T00:00:00Z', 'active')`,
+        // Distinct token counts so the ranking is total and the slice is deterministic;
+        // the unpriced model on the last one proves unpriced-only sessions still count.
+        usage:
+          i === population - 1
+            ? `('${id}', NULL, 'u${id}', 'unknown-model', 'input', 10, 0, '2026-07-10T01:00:00Z')`
+            : `('${id}', NULL, 'u${id}', 'claude-sonnet-5', 'output', ${(i + 1) * 1000}, 0, '2026-07-10T01:00:00Z')`,
+      };
+    });
+    big.db.exec(`
+      INSERT INTO sessions (id, project_slug, started_at, last_activity_at, status) VALUES
+        ${values.map((v) => v.session).join(',\n        ')};
+      INSERT INTO token_usage (session_id, agent_id, message_id, model, bucket, tokens, is_compaction_baseline, occurred_at) VALUES
+        ${values.map((v) => v.usage).join(',\n        ')};
+    `);
+    const bigApp = buildServer({ token: TEST_TOKEN, schemaVersion: 7, db: big.db });
+    try {
+      const sliced = await bigApp.inject({
+        method: 'GET',
+        url: '/api/cost/summary',
+        headers: AUTH,
+      });
+      expect(sliced.statusCode).toBe(200);
+      const body = sliced.json();
+      expect(body.topSessions).toHaveLength(DEFAULT_COST_TOP_N);
+      expect(body).toMatchObject({ sessionCount: population, hasMore: true });
+      // The unpriced-only session is part of the population even though it
+      // carries no dollars - it has usage, and a wider topN would list it.
+      expect(body.totals.unpricedTokens).toBe(10);
+
+      // A slice at least as wide as the population is the whole corpus again.
+      const all = await bigApp.inject({
+        method: 'GET',
+        url: `/api/cost/summary?topN=${population}`,
+        headers: AUTH,
+      });
+      expect(all.json()).toMatchObject({ sessionCount: population, hasMore: false });
+      expect(all.json().topSessions).toHaveLength(population);
+    } finally {
+      await bigApp.close();
+      big.cleanup();
+    }
+  });
+
   it('returns honest zeros on a virgin database', async () => {
     const empty = createMigratedTempDb();
     const emptyApp = buildServer({ token: TEST_TOKEN, schemaVersion: 7, db: empty.db });
@@ -144,6 +217,8 @@ describe('/api/cost/summary (WP-U4)', () => {
         perModel: [],
         perDay: [],
         topSessions: [],
+        sessionCount: 0,
+        hasMore: false,
       });
     } finally {
       await emptyApp.close();

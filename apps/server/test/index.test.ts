@@ -113,6 +113,20 @@ describe('composition root (src/index)', () => {
     expect(error).toHaveBeenCalledWith(expect.stringContaining('192.168.1.10'));
   });
 
+  it('enforceLoopbackOrExit fails closed on an empty address list: nothing was verified', async () => {
+    const cleanup = vi.fn().mockResolvedValue(undefined);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => {
+      throw new Error('process.exit called');
+    }) as never);
+
+    await expect(enforceLoopbackOrExit([], cleanup)).rejects.toThrow('process.exit called');
+
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('no bound address'));
+  });
+
   describe('WP-IN10 replay-on-startup', () => {
     const SLUG = '-Users-synthetic-replay-project';
     const SESSION_BAD = 'dddddddd-4444-4444-8444-444444444444';

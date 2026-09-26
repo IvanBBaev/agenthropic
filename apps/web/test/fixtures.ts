@@ -135,13 +135,33 @@ export function globalDag(
   };
 }
 
+/**
+ * `GET /api/cost/summary`.
+ *
+ * `sessionCount` and `hasMore` (added 2026-09-09, L1) default to what the rest
+ * of the fixture already implies rather than to a flat zero. A builder called
+ * as `costSummary({ topSessions: [a, b, c] })` yields `sessionCount: 3` and
+ * `hasMore: false`, so a test that omits the counter cannot hand a view three
+ * rows and a denominator of nought: "3 of 0 sessions" is not a smaller lie than
+ * the hedge CV-5 replaced, it is a louder one, and it would be produced by
+ * forgetting rather than by deciding.
+ *
+ * The two numbers legitimately disagree in exactly one case - a corpus larger
+ * than the slice - and a test that wants that case says so by passing
+ * `sessionCount` itself. Passing `hasMore` on its own is possible too, and is
+ * how the suite builds the payloads a consistent server cannot send.
+ */
 export function costSummary(overrides: Partial<CostSummaryDto> = {}): CostSummaryDto {
+  const topSessions = overrides.topSessions ?? [];
+  const sessionCount = overrides.sessionCount ?? topSessions.length;
   return {
     totals: { tokens: 0, costUsd: 0, unpricedTokens: 0 },
     perModel: [],
     perDay: [],
-    topSessions: [],
     ...overrides,
+    topSessions,
+    sessionCount,
+    hasMore: overrides.hasMore ?? sessionCount > topSessions.length,
   };
 }
 
@@ -261,4 +281,79 @@ export function textResponse(status: number): Response {
     status,
     json: () => Promise.reject(new SyntaxError('not json')),
   } as Response;
+}
+
+/**
+ * L5 (2026-09-09, WP-U13): one agent per persisted outcome cause, plus one
+ * that carries none - the payload a view has to render honestly.
+ *
+ * Mirrors the SHAPE of the `agent-outcome-errors` fixture in
+ * @agenthropic/test-fixtures, which this package cannot import (it is not a
+ * dependency of apps/web, on purpose - the web tests never touch the ingest
+ * side). The two agent ids that fixture defines are reused verbatim for the
+ * two causes it actually carries, so a reader who greps `fa11ed01` or
+ * `de1e7ed2` lands on both halves of the same story, and the statuses match
+ * what the normalizer assigns there: `terminated_early` is the ONE cause in
+ * `ERROR_CAUSES`, and `user_interrupt` deliberately keeps its ordinary
+ * liveness status. The remaining four causes exist in the measured corpus
+ * (19 concurrency_limit, 3 permission_failed, 2 dispatch_unavailable of 33)
+ * but not in that two-agent fixture, so they get synthetic ids here.
+ *
+ * Deliberately spread across statuses: a surface that filtered on
+ * `status === 'error'` would render exactly one of these seven rows.
+ */
+export function outcomeCauseAgents(): readonly AgentNodeDto[] {
+  return [
+    agentNode({
+      id: 'fa11ed01',
+      type: 'subagent',
+      subagentType: 'Explore',
+      status: 'error',
+      outcomeCause: 'terminated_early',
+    }),
+    agentNode({
+      id: 'de1e7ed2',
+      type: 'subagent',
+      subagentType: 'general-purpose',
+      status: 'completed',
+      outcomeCause: 'user_interrupt',
+    }),
+    agentNode({
+      id: 'c0ffee01',
+      type: 'subagent',
+      subagentType: 'Plan',
+      status: 'unknown',
+      outcomeCause: 'concurrency_limit',
+    }),
+    agentNode({
+      id: 'c0ffee02',
+      type: 'subagent',
+      subagentType: 'statusline-setup',
+      status: 'completed',
+      outcomeCause: 'permission_failed',
+    }),
+    agentNode({
+      id: 'c0ffee03',
+      type: 'subagent',
+      subagentType: 'code-reviewer',
+      status: 'waiting',
+      outcomeCause: 'dispatch_unavailable',
+    }),
+    agentNode({
+      id: 'c0ffee04',
+      type: 'subagent',
+      subagentType: 'doc-writer',
+      status: 'working',
+      outcomeCause: 'unclassified',
+    }),
+    // No parent-side outcome was ever observed for this one - by far the
+    // commonest case, and NOT a claim that it finished cleanly.
+    agentNode({
+      id: 'c0ffee05',
+      type: 'subagent',
+      subagentType: 'Explore',
+      status: 'completed',
+      outcomeCause: null,
+    }),
+  ];
 }

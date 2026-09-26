@@ -10,7 +10,7 @@
     }
   },
   "scripts": {
-    "test": "vitest run --coverage"
+    "test": "node ../../scripts/check-node-version.mjs && vitest run --coverage"
   },
   "dependencies": {
     "@sinclair/typebox": "^0.34.51"
