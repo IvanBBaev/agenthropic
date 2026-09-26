@@ -931,6 +931,18 @@ exit and proof live in the plan. Dated one-word answers under D1…D8 are the si
     1.5× too high; whether the seed's figure was ever right is itself unratified (WP-C1).
     Recommended default: migration 19 with the official five-bucket rows at the same floor,
     shipped together with the WP-C1 ratification tick.
+    **Decided and applied 2026-09-26** (Ivan, in chat: "продължавай" after the D10 offer) as
+    **migration 20** — 19 had meanwhile gone to `claude-opus-5-5`. The pricing page re-read that
+    day settles the "was the seed ever right" half too: footnote 3 says the $2 / $10 launch
+    price "is now the standard price" and the scheduled 3 / 15 increase "will not occur", so the
+    five floor rows are rewritten in place (`ON CONFLICT DO UPDATE`), not superseded by a dated
+    row. Still 40 rows; the other seed models re-checked against the same page and unchanged
+    (opus-4-8 5/25/0.5, fable-5 10/50/1, haiku-4-5 1/5/0.1). Checksum `1ab85d62…`, identical
+    under tsx, vitest and `node --experimental-strip-types`. Four new migration tests; every
+    existing dollar expectation that read the seeded Sonnet rate re-derived by hand (api-cost,
+    cost-summary cache, aggregate-savings, dag-scoping), and the rollup tie test's sonnet inputs moved
+    200k → 300k so every slice stays exactly $3. Mutation (input 2 → 3) killed by 5 tests.
+    Server 1625 → 1629. **The WP-C1 ratification tick stays Ivan's.**
 - [ ] **Wave 3 · 2026-10-13 → 2026-11-08 — Ivan's, no new features** — fill the 60 claims,
   run the hierarchy gate, drop PROVISIONAL (closes WP-X2 + LABEL-ME) · stopwatch run on five
   sessions (closes the `<30s` clause) · **friction log, 14 consecutive days** (Step-0 box;

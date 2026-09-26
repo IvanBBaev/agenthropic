@@ -1201,6 +1201,53 @@ export const migrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    id: 20,
+    name: 'model-pricing-sonnet-5-official',
+    up(db) {
+      // WHY. Open decision D10: the seed (migrations 7 and 11) prices
+      // `claude-sonnet-5` at 3 / 15 with derived cache rates, and the official
+      // price has never been that. Every sonnet-5 dollar the dashboard showed
+      // was 1.5x too high - on every bucket, because the seed derives the
+      // cache rates from the wrong input rate.
+      //
+      // SOURCE. https://platform.claude.com/docs/en/about-claude/pricing,
+      // fetched 2026-09-26, USD per million tokens:
+      //   Claude Sonnet 5   input 2   5m write 2.50   1h write 4   read 0.20  output 10
+      // with the page's footnote 3: "The $2/$10 per million input/output token
+      // pricing for Claude Sonnet 5, announced at launch as introductory
+      // pricing through August 31, 2026, is now the standard price. The
+      // previously scheduled increase to $3/$15 per million input/output
+      // tokens on September 1, 2026 will not occur." So 3 / 15 was a scheduled
+      // price that was cancelled, never a price in force, and there is no
+      // window in which the seed's figure was right.
+      //
+      // WHY THE FLOOR ROWS ARE REWRITTEN, NOT SUPERSEDED BY A DATED ROW. A new
+      // row at a later `effective_from` would keep 3 / 15 in force for every
+      // message before it - i.e. it would record the cancelled price as
+      // history. The correction therefore lands on the seed's own instant
+      // (2026-01-01, canonical spelling), where ON CONFLICT DO UPDATE replaces
+      // the five seeded rates. A row an operator wrote at any other instant is
+      // never touched. Sonnet 5 follows the standard ratios (0.1x / 1.25x /
+      // 2.0x), but the rows are spelled out anyway, as in migrations 18 and 19,
+      // so every figure is inside the checksummed SQL text.
+      //
+      // ROLLUP. Only `usd_per_mtok` changes, which migration 16's pricing
+      // UPDATE trigger deliberately ignores: the rate is applied at read time,
+      // not stored in the rollup key, so the next read re-prices every stored
+      // sonnet-5 token with no rebuild and no re-ingest. PROVISIONAL like the
+      // rest of the seed until WP-C1 ratifies.
+      db.exec(`
+        INSERT INTO model_pricing (model, bucket, usd_per_mtok, effective_from) VALUES
+          ('claude-sonnet-5', 'input',          2,   '2026-01-01T00:00:00.000Z'),
+          ('claude-sonnet-5', 'output',         10,  '2026-01-01T00:00:00.000Z'),
+          ('claude-sonnet-5', 'cache_read',     0.2, '2026-01-01T00:00:00.000Z'),
+          ('claude-sonnet-5', 'cache_write_5m', 2.5, '2026-01-01T00:00:00.000Z'),
+          ('claude-sonnet-5', 'cache_write_1h', 4,   '2026-01-01T00:00:00.000Z')
+        ON CONFLICT (model, bucket, effective_from) DO UPDATE SET usd_per_mtok = excluded.usd_per_mtok;
+      `);
+    },
+  },
 ];
 
 export interface MigrationRunResult {

@@ -13,7 +13,7 @@ later without touching page content.
 > existed**. Implementation began **2026-07-11** (by explicit owner override of the CD-8
 > no-code-before-Phase-0 gate), so pages that describe agenthropic as "pre-code" or
 > "bootstrap phase" are design history, not current truth. What runs today: the
-> loopback-bound, token-gated Fastify server; the SQLite/WAL substrate with eighteen
+> loopback-bound, token-gated Fastify server; the SQLite/WAL substrate with twenty
 > migrations and a daily backup timer; JSONL corpus ingest with replay-on-startup and
 > tail-follow polling that re-reads only new bytes; the persisted subagent DAG; the cost
 > engine (compaction repricing + delegation savings); the hook receiver and its installer;

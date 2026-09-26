@@ -416,7 +416,10 @@ unknown model id** — never silently price it at $0.
 > `claude-opus-5` and `claude-fable-5-1` (Fable 5.1's cache-read rate is 0.025× input, so
 > those rows are not derived by the seed's multipliers); migration 19 (2026-09-26) added
 > five more for `claude-opus-5-5` (cache-read 0.05× input, a third ratio), the id a boot at
-> schema 18 that day found refusing 27 of 61 sessions. Three details a reader should not
+> schema 18 that day found refusing 27 of 61 sessions; migration 20 (the same day) rewrote
+> the five `claude-sonnet-5` rows to the official 2 / 10, because the pricing page then said
+> the intro price above had become the standard one and the 3 / 15 increase would not occur
+> (decision D10). Three details a reader should not
 > have to reverse-engineer:
 >
 > - **`effective_from = '2026-01-01'`** is a *coverage floor*, not the authoring date.

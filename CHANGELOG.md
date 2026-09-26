@@ -44,6 +44,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of them on this id; the schema-19 boot admits 61/61 with no `unknown model id` line
   (`docs/measurement/time-to-understand-log.md` §0.6–0.7). The gate itself is unchanged: the
   cure for an unknown id is a price row, never a relaxed check.
+- Migration 20 corrects `claude-sonnet-5` from the seed's 3 / 15 to the official rate (input 2,
+  output 10, cache read 0.2, five-minute cache write 2.5, one-hour cache write 4 USD per MTok),
+  read from the platform pricing page on 2026-09-26, which says the $2 / $10 launch price is now
+  standard and the scheduled increase to $3 / $15 will not occur. Every Sonnet 5 dollar shown
+  before it was 1.5x too high. The five seeded floor rows are rewritten in place rather than
+  superseded by a later-dated row, so the cancelled price never becomes history; no row is
+  added (still 40), a Sonnet 5 row an operator wrote at another instant is untouched, and stored
+  usage re-prices on the next read without a re-ingest. PROVISIONAL like the rest of the seed.
 - Tests: `apps/web/test/realtime-wire-shape.test.ts` pins the two hand-narrowed sibling arms to
   the shared types as it already pinned `ingest-failed`. An exhaustive `satisfies
   Record<keyof AgentStatusChangedEvent, true>` field list makes a field added to, removed from or

@@ -1,7 +1,7 @@
 /**
  * WP-U4 - /api/cost/summary against a real migrated temp-file database.
  * Seeded rates (WP-C1): claude-fable-5 input $10 / output $50 per Mtok,
- * claude-sonnet-5 input $3 / output $15 per Mtok.
+ * claude-sonnet-5 input $2 / output $10 per Mtok (migration 20, the official rate).
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
@@ -52,10 +52,10 @@ describe('/api/cost/summary (WP-U4)', () => {
     const response = await app.inject({ method: 'GET', url: '/api/cost/summary', headers: AUTH });
     expect(response.statusCode).toBe(200);
     const body = response.json();
-    // c1: 1M input fable = $10; c2: 1M output sonnet = $15; c3: 0.2M output
+    // c1: 1M input fable = $10; c2: 1M output sonnet = $10; c3: 0.2M output
     // fable = $10. c4 (unknown model) and c5 (no timestamp) are unpriceable.
     expect(body.totals.tokens).toBe(2_200_700);
-    expect(body.totals.costUsd).toBeCloseTo(35, 9);
+    expect(body.totals.costUsd).toBeCloseTo(30, 9);
     expect(body.totals.unpricedTokens).toBe(700);
   });
 
@@ -71,7 +71,7 @@ describe('/api/cost/summary (WP-U4)', () => {
     expect(fable.tokens).toBe(1_200_300);
     expect(fable.costUsd).toBeCloseTo(20, 9);
     expect(fable.unpricedTokens).toBe(300);
-    expect(sonnet.costUsd).toBeCloseTo(15, 9);
+    expect(sonnet.costUsd).toBeCloseTo(10, 9);
     // The unknown model shows $0 WITH its tokens flagged unpriced - the
     // estimated-is-never-silently-zero rule.
     expect(unknown).toEqual({
@@ -92,7 +92,7 @@ describe('/api/cost/summary (WP-U4)', () => {
     ]);
     const [day11, day10, unknownDay] = perDay;
     expect(day11.tokens).toBe(1_200_400);
-    expect(day11.costUsd).toBeCloseTo(25, 9);
+    expect(day11.costUsd).toBeCloseTo(20, 9);
     expect(day11.unpricedTokens).toBe(400);
     expect(day10.costUsd).toBeCloseTo(10, 9);
     expect(unknownDay).toEqual({ day: 'unknown', tokens: 300, costUsd: 0, unpricedTokens: 300 });
@@ -110,7 +110,7 @@ describe('/api/cost/summary (WP-U4)', () => {
       ['s1', 'proj-x'],
       ['s2', 'proj-y'],
     ]);
-    expect(topSessions[0].costUsd).toBeCloseTo(25, 9);
+    expect(topSessions[0].costUsd).toBeCloseTo(20, 9);
     expect(topSessions[1].costUsd).toBeCloseTo(10, 9);
     expect(topSessions[1].unpricedTokens).toBe(700);
 

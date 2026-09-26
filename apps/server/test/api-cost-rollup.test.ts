@@ -19,9 +19,10 @@ const AUTH = { authorization: `Bearer ${TEST_TOKEN}` };
 /**
  * Four exactly-$3 slices, arranged so that BOTH rankings are decided purely by
  * the tie-break: every session is worth $3, and the two models are worth $6
- * each. Seeded rates (WP-C1) make the amounts exact integers - fable input
- * $10/Mtok so 300k = $3, sonnet output $15/Mtok so 200k = $3 - because a
- * ranking test that leans on float slop tests the slop, not the ranking.
+ * each. Seeded rates (WP-C1; sonnet-5 from migration 20) make the amounts
+ * exact integers - fable input $10/Mtok so 300k = $3, sonnet output $10/Mtok
+ * so 300k = $3 - because a ranking test that leans on float slop tests the
+ * slop, not the ranking.
  *
  * `orphan` has usage but no `sessions` row: the state a corpus is in when a
  * transcript is deleted while its usage rows remain.
@@ -35,8 +36,8 @@ function seed(db: SqliteDatabase): void {
     INSERT INTO token_usage (session_id, agent_id, message_id, model, bucket, tokens, is_compaction_baseline, occurred_at) VALUES
       ('s-a',    NULL, 'm1', 'claude-fable-5',  'input',  300000, 0, '2026-07-10T01:00:00Z'),
       ('s-c',    NULL, 'm2', 'claude-fable-5',  'input',  300000, 0, '2026-07-10T09:00:00Z'),
-      ('s-b',    NULL, 'm3', 'claude-sonnet-5', 'output', 200000, 0, '2026-07-11T01:00:00Z'),
-      ('orphan', NULL, 'm4', 'claude-sonnet-5', 'output', 200000, 0, '2026-07-12T01:00:00Z');
+      ('s-b',    NULL, 'm3', 'claude-sonnet-5', 'output', 300000, 0, '2026-07-11T01:00:00Z'),
+      ('orphan', NULL, 'm4', 'claude-sonnet-5', 'output', 300000, 0, '2026-07-12T01:00:00Z');
   `);
 }
 
