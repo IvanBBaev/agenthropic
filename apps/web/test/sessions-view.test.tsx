@@ -324,6 +324,37 @@ describe('SessionsView', () => {
     expect(screen.queryByRole('img', { name: `agent tree for session ${sessionA.id}` })).toBeNull();
   });
 
+  it('names a quarantined session instead of "not found", with no Retry', async () => {
+    routeFetch({
+      tree: jsonResponse(409, {
+        error: 'The corpus holds this session, but ingest rejected it (quarantined).',
+        code: 'quarantined',
+        reason: 'line 3 is not JSON',
+      }),
+    });
+    renderView();
+    await screen.findByRole('list', { name: 'session list' });
+    fireEvent.click(screen.getByRole('button', { name: /agenthropic/ }));
+
+    await screen.findByText(/ingest quarantined this session: line 3 is not JSON/);
+    expect(screen.queryByText(/not found/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+  });
+
+  it('names a session ingest is retrying, and keeps Retry for the tree', async () => {
+    routeFetch({
+      tree: jsonResponse(409, { error: 'retrying', code: 'ingest-failing', reason: 'read failed' }),
+    });
+    renderView();
+    await screen.findByRole('list', { name: 'session list' });
+    fireEvent.click(screen.getByRole('button', { name: /agenthropic/ }));
+
+    await screen.findByText(/ingest is retrying this session: read failed/);
+    routeFetch();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByText(/ingest is retrying/)).toBeNull());
+  });
+
   it('surfaces a tree fetch failure without dropping the list', async () => {
     routeFetch({ tree: jsonResponse(404, { error: 'Session not found.' }) });
     renderView();

@@ -56,6 +56,8 @@ const validAnalysis: CostAnalysisDto = {
     skippedAgentIds: ['deadbeef'],
     isEstimate: true,
   },
+  partial: null,
+  usageRecordsDropped: 0,
 };
 
 /** Deep-clone + patch helper so each rejection case mutates a fresh copy. */
@@ -118,6 +120,30 @@ describe('CostAnalysisSchema (WP-C4 + WP-C5 DTO)', () => {
       ),
     ).toBe(false);
     expect(Value.Check(CostAnalysisSchema, { compaction: validAnalysis.compaction })).toBe(false);
+  });
+
+  // The analysis prints session figures, so it carries the session honesty
+  // pair like every other session total - and requires it.
+  it('carries the session honesty facts, and requires both', () => {
+    expect(
+      Value.Check(
+        CostAnalysisSchema,
+        withPatch((draft) => {
+          draft.partial = { reason: 'main-transcript-oversize', skippedBytes: 73400320 };
+          draft.usageRecordsDropped = 2;
+        }),
+      ),
+    ).toBe(true);
+    for (const key of ['partial', 'usageRecordsDropped'] as const) {
+      expect(
+        Value.Check(
+          CostAnalysisSchema,
+          withPatch((draft) => {
+            delete (draft as Partial<CostAnalysisDto>)[key];
+          }),
+        ),
+      ).toBe(false);
+    }
   });
 
   it('allows a negative deltaUsd - the reconciliation delta is signed', () => {

@@ -5,7 +5,7 @@
  * hidden behind a tooltip.
  */
 import { useEffect, useState } from 'react';
-import { checkHealth, type HealthUnreachableReason } from './api';
+import { checkHealth, REPLAY_POLL_MS, type HealthUnreachableReason } from './api';
 import { useHashRoute, viewHash, VIEW_IDS } from './router';
 import {
   createSseClient,
@@ -91,6 +91,13 @@ const CONNECTION_SCOPE_LABEL = 'event stream';
 type HealthState =
   | { readonly kind: 'checking' }
   | { readonly kind: 'ok'; readonly schemaVersion: number }
+  /**
+   * Owner decision (2026-10-01): the server answered, accepted the token, and
+   * is still replaying its corpus at startup - figures are incomplete until it
+   * finishes. A wait, not a failure: no re-check button, no error chip, and
+   * the probe repeats by itself every `replayPollMs` until it says `ok`.
+   */
+  | { readonly kind: 'replaying'; readonly schemaVersion: number }
   | {
       readonly kind: 'unreachable';
       readonly message: string;
@@ -110,7 +117,13 @@ export interface ShellProps {
   readonly onLock: () => void;
   /** The server answered 401 for the stored token: clear it and bounce back. */
   readonly onAuthRejected: () => void;
+  /** How often a replaying server is probed again, in ms (tests shorten it). */
+  readonly replayPollMs?: number;
 }
+
+/** Beside the header while the server replays its corpus at startup. */
+const REPLAYING_NOTICE =
+  'replaying the corpus, please wait - figures are incomplete until it finishes';
 
 interface Chip {
   /**
@@ -401,7 +414,12 @@ function chipFor(
   }
 }
 
-export function Shell({ token, onLock, onAuthRejected }: ShellProps) {
+export function Shell({
+  token,
+  onLock,
+  onAuthRejected,
+  replayPollMs = REPLAY_POLL_MS,
+}: ShellProps) {
   const view = useHashRoute();
   const [health, setHealth] = useState<HealthState>({ kind: 'checking' });
   const [stream, setStream] = useState<SseConnectionState>('connecting');
@@ -442,18 +460,30 @@ export function Shell({ token, onLock, onAuthRejected }: ShellProps) {
 
   useEffect(() => {
     const controller = new AbortController();
+    // The replay re-probe (2026-10-01). It bumps the same nonce the re-check
+    // button does, so it inherits this effect's teardown: cleared here, and
+    // the probe it starts aborted, when the shell unmounts or the token moves.
+    let replayTimer: ReturnType<typeof setTimeout> | undefined;
     void checkHealth(token, controller.signal).then((result) => {
       if (controller.signal.aborted) return;
       if (result.kind === 'ok') {
         setHealth({ kind: 'ok', schemaVersion: result.schemaVersion });
+      } else if (result.kind === 'replaying') {
+        // No `checking` in between: the notice stays up until an answer
+        // replaces it, rather than flickering on every re-probe.
+        setHealth({ kind: 'replaying', schemaVersion: result.schemaVersion });
+        replayTimer = setTimeout(() => setProbeNonce((nonce) => nonce + 1), replayPollMs);
       } else if (result.kind === 'unauthorized') {
         onAuthRejected();
       } else {
         setHealth({ kind: 'unreachable', message: result.message, reason: result.reason });
       }
     });
-    return () => controller.abort();
-  }, [token, onAuthRejected, probeNonce]);
+    return () => {
+      controller.abort();
+      clearTimeout(replayTimer);
+    };
+  }, [token, onAuthRejected, probeNonce, replayPollMs]);
 
   useEffect(() => {
     const client = createSseClient(token, { knownEventTypes: SERVER_EVENT_TYPES });
@@ -568,7 +598,12 @@ export function Shell({ token, onLock, onAuthRejected }: ShellProps) {
             the server
           </span>
         )}
-        {health.kind === 'ok' && (
+        {health.kind === 'replaying' && (
+          <span className="chip chip-wait" role="status" data-testid="replaying-notice">
+            {REPLAYING_NOTICE}
+          </span>
+        )}
+        {(health.kind === 'ok' || health.kind === 'replaying') && (
           <span className="muted schema">schema v{health.schemaVersion}</span>
         )}
         <button type="button" className="lock" onClick={onLock}>

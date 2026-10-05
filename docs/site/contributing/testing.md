@@ -206,6 +206,20 @@ correctness gate** is measured against in Phase 3 (concept-analysis-v2 §6) — 
 [ingest & reconciliation](../architecture/ingest-reconciliation.md) §10 for that gate in
 full.
 
+> **Amended 2026-09-30 (owner decision D14(a)).** `WP-X1` no longer promises real
+> sessions in the repository. The **CI corpus is synthetic**: the fixtures in
+> `packages/test-fixtures/src/fixtures/` are invented ids, timestamps and prose, built
+> to the parser contract, and nothing in them is copied from a real transcript. The real
+> corpus stays on the owner's machine, as the LABEL-ME corpus already does, so the
+> "raw" and "redacted" tiers above are not built and no redaction pass for fixtures is
+> needed. What survives is the pathology requirement: all four shapes in the table are
+> to be represented **synthetically**, with a pathology manifest and a self-test that
+> reads it. Before this decision the fixtures covered deep nesting and mid-session
+> compaction but not a crashed session with no `Stop` or two concurrent instances, and
+> there was no manifest; the two missing fixtures and the manifest are being added in
+> the same dispatch. The ≥95% hierarchy gate is unaffected — it is scored only against a
+> human-labelled real corpus and refuses a synthetic one (§3.1).
+
 ## 3. Labeled ground truth: `expected/*.json` and the typed loader
 
 A corpus of real sessions is only useful to CI if there is a machine-checkable answer
@@ -376,7 +390,7 @@ CD/acceptance criterion" that `WP-X4`'s Done-when requires:
 | Kill+restart resumes JSONL tail-follow at the persisted offset, zero loss/dup | development-plan §3, Phase 2 exit gate | Ingest robustness |
 | Missing `SubagentStop` → explicit "unknown" within the watchdog window | concept-analysis-v2 §6; `WP-IN12` | Live-flow honesty |
 | A `PreCompact` session reprices correctly against its preserved baseline | concept-analysis-v2 §6; `WP-C4` | Cost correctness |
-| A fixture model with no price row **FAILS CI** | concept-analysis-v2 §6; `WP-C6` | Cost correctness |
+| A fixture model with no price row **FAILS CI** | concept-analysis-v2 §6; `WP-C6` — _amended 2026-09-30 (D13(a)): a runtime `PricingError` halt at ingest plus a pre-tag real-corpus boot (`RELEASE.md` §6), not a CI failure_ | Cost correctness |
 | `events_raw` exposes no UPDATE/DELETE path | CD-4, CD-7; concept-analysis-v2 §6 | Data integrity |
 | Server **fails startup** when `DASHBOARD_TOKEN` is unset | CD-7 | Security |
 | No-spawner grep/static gate fails the build on a `child_process` import | CD-7; `WP-F5` | Security |
@@ -409,7 +423,7 @@ scenarios were **hardened** as they crossed into the plan of record — flagged 
 | 5 | **Unauthenticated POST** | 401/403; no raw event stored. | CD-7 mandatory `DASHBOARD_TOKEN`; **NFR-SEC-02**. |
 | 6 | **Invalid-token timing-attack attempt** | Timing-safe compare; no differentiated error leak. | CD-7 timing-safe `DASHBOARD_TOKEN` compare; **NFR-SEC-02**. |
 | 7 | **Connection from a foreign origin** _(hardened: WS → SSE)_ | Rejected. | CD-5 same-origin **SSE** (transport corrected from the source's "WebSocket" per CD-5/ADR-0007), CD-7. Overlaps §5's "SSE rejects a cross-origin connection". |
-| 8 | **Unknown model pricing** _(hardened)_ | Token counts shown; cost marked unknown/estimated, **not silently zero**. | CD-3/CD-4; the "estimated, never silent zero" rule governs **runtime** display. **Project hardening:** at fixture/build time a model with **no price row FAILS CI** (`WP-C6`) — a stricter gate the source did not have; both hold, at different times. |
+| 8 | **Unknown model pricing** _(hardened)_ | Token counts shown; cost marked unknown/estimated, **not silently zero**. | CD-3/CD-4; the "estimated, never silent zero" rule governs **runtime** display. **Project hardening:** at fixture/build time a model with **no price row FAILS CI** (`WP-C6`) — a stricter gate the source did not have; both hold, at different times. _(Amended 2026-09-30, owner decision D13(a): the build-time facet is now a runtime `PricingError` halt at ingest plus a real-corpus boot before every tag — no CI job. The synthetic CI fixtures use models the seed deliberately does not price, so a CI version would be red or circular.)_ |
 | 9 | **Huge payload** | Rejected or truncated per policy; no UI lockup. | Payload-size + redaction policy (CD-10); **NFR-PERF-01** (no UI lockup — render budget). |
 | 10 | **Server restart mid-session** | Session resumes / marks stale via watchdog; raw events intact. | CD-1 replay-on-startup; **NFR-OPS-01**; P0 double-replay test (§4). **Refinement:** the project's watchdog separates **stale** (idle session) from **"unknown"** (an agent whose `SubagentStop` never arrived, `WP-IN12`); the source folded both into "stale". |
 
@@ -420,7 +434,8 @@ scenarios **overlap** the §5 illustrative anchor table, they are the same contr
 the negative-test angle: #5/#6 ↔ "Server fails startup when `DASHBOARD_TOKEN` is unset" +
 the timing-safe compare (one CD-7 control, three distinct assertions — keep all three);
 #7 ↔ "SSE rejects a cross-origin connection"; #8 ↔ "a fixture model with no price row
-FAILS CI" (`WP-C6`, the hardened build-time facet); #10 ↔ "kill+restart resumes JSONL
+FAILS CI" (`WP-C6`, the hardened build-time facet — amended 2026-09-30 to a runtime halt plus a
+pre-tag real-corpus boot, see row 8); #10 ↔ "kill+restart resumes JSONL
 tail-follow at the persisted offset" + P0 test #2.
 
 Where the recovered scenarios fill a **gap** — EXPANDED entries with *no* row in §5's
@@ -457,6 +472,11 @@ that shipped (§6.1 below), and their "blocks merges" half was intent rather tha
 merge button from a contributor, but not from the repository owner, whose `enforce_admins`
 exemption is deliberate in a single-maintainer repository — see the note at the top of this page
 and [the standing correction](decisions/README.md#a-standing-correction-merge-blocking).)*
+
+*(Amended 2026-09-30, owner decision D15(a): `WP-X5`'s "**demonstrated**" is still owed — no PR
+has been blocked by a coverage drop yet. The demonstration will be one throwaway PR that lowers
+coverage, its red `ci` run recorded, then closed unmerged. It is opened only on the owner's
+separate go-ahead.)*
 
 **Scope is resolved explicitly, not left ambiguous.** The open scope question the gap
 analysis raised — whether the shipped UI would be quietly exempted from the bar — is
@@ -675,7 +695,8 @@ that sole maintainer out (see
   derivation the DAG-rebuild test and the deep-nesting/two-instances pathologies exist
   to validate.
 - [Cost model](../architecture/cost-model.md) — the `PreCompact` re-pricing case and the
-  no-priceless-model-fails-CI gate (`WP-C6`).
+  no-priceless-model gate (`WP-C6`; a runtime halt plus a pre-tag real-corpus boot since the
+  2026-09-30 amendment, not a CI failure).
 - [Security model](../security/model.md) — the loopback/token/no-spawner/no-SSRF
   invariants the security-flavored negative-catalogue entries in §5 trace to.
 - [Roadmap](../guide/roadmap.md) — the full phase-by-phase build sequence this page's

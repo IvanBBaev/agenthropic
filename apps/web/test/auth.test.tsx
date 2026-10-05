@@ -24,6 +24,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import App from '../src/App';
+import { Shell } from '../src/Shell';
 import { TokenScreen } from '../src/TokenScreen';
 import { clearToken, readToken, storeToken } from '../src/token';
 import {
@@ -612,5 +613,200 @@ describe('a hash this build has no view for is disclosed (RT-1)', () => {
       window.dispatchEvent(new Event('hashchange'));
     });
     expect(screen.getByTestId('unknown-route')).toBeDefined();
+  });
+});
+
+/**
+ * Owner decision, 2026-10-01: the server listens BEFORE its startup replay and
+ * answers /api/health with `status: 'replaying'` until it finishes. The entry
+ * screen and the shell must say "replaying the corpus, please wait" - not an
+ * error, which would send the reader to restart a healthy server or discard a
+ * working token - and must move on by themselves once the replay is over.
+ */
+describe('a server still replaying its corpus is a wait, not an error', () => {
+  function replaying(): Response {
+    return healthResponse(200, { status: 'replaying', schemaVersion: 18, ingest: 'replaying' });
+  }
+
+  function ok(): Response {
+    return healthResponse(200, { status: 'ok', schemaVersion: 18, ingest: 'idle' });
+  }
+
+  async function settle(ms: number): Promise<void> {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, ms));
+    });
+  }
+
+  describe('the entry screen', () => {
+    it('says the corpus is replaying, waits, and lets the user in once it finishes', async () => {
+      // The second probe is held open, so the wait is observed on the test's
+      // schedule rather than racing a 5 ms poll.
+      const second = deferred<Response>();
+      fetchMock.mockResolvedValueOnce(replaying()).mockReturnValueOnce(second.promise);
+      const onSuccess = vi.fn();
+      render(<TokenScreen onSuccess={onSuccess} replayPollMs={5} />);
+      submitToken('secret-token');
+
+      const status = await screen.findByTestId('token-replaying');
+      expect(status.getAttribute('role')).toBe('status');
+      expect(status.textContent).toContain('replaying the corpus, please wait');
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(screen.getByRole('button', { name: 'Connecting…' })).toHaveProperty('disabled', true);
+      expect(onSuccess).not.toHaveBeenCalled();
+
+      await act(async () => {
+        second.resolve(ok());
+        await second.promise;
+      });
+      await waitFor(() => expect(onSuccess).toHaveBeenCalledWith('secret-token'));
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(screen.queryByTestId('token-replaying')).toBeNull();
+    });
+
+    it('reports a failure that arrives after the wait as that failure', async () => {
+      fetchMock
+        .mockResolvedValueOnce(replaying())
+        .mockResolvedValue(healthResponse(401, { error: 'Unauthorized.' }));
+      render(<TokenScreen onSuccess={() => undefined} replayPollMs={5} />);
+      submitToken('secret-token');
+
+      const alert = await screen.findByRole('alert');
+      expect(alert.textContent).toContain('Invalid token');
+      expect(screen.queryByTestId('token-replaying')).toBeNull();
+    });
+
+    it('stops waiting the moment the field is edited', async () => {
+      fetchMock.mockImplementation(() => Promise.resolve(replaying()));
+      const onSuccess = vi.fn();
+      render(<TokenScreen onSuccess={onSuccess} replayPollMs={5} />);
+      submitToken('secret-token');
+      await screen.findByTestId('token-replaying');
+
+      fireEvent.change(tokenInput(), { target: { value: 'another-token' } });
+      expect(screen.queryByTestId('token-replaying')).toBeNull();
+      expect(screen.getByRole('button', { name: 'Connect' })).toHaveProperty('disabled', false);
+
+      // Let any poll already in flight land; after that nothing more is asked.
+      await settle(30);
+      const calls = fetchMock.mock.calls.length;
+      await settle(30);
+      expect(fetchMock.mock.calls.length).toBe(calls);
+      expect(onSuccess).not.toHaveBeenCalled();
+      expect(screen.queryByTestId('token-replaying')).toBeNull();
+    });
+
+    it.each([
+      ['replaying', replaying],
+      ['ok', ok],
+    ] as const)(
+      'drops a re-probe that lands (%s) after the field was edited',
+      async (_label, answer) => {
+        // The re-probe is held open until the edit has abandoned the wait, so
+        // its answer - still replaying, or finished - arrives for a submit the
+        // user has already walked away from, and must change nothing.
+        const second = deferred<Response>();
+        fetchMock.mockResolvedValueOnce(replaying()).mockReturnValueOnce(second.promise);
+        const onSuccess = vi.fn();
+        render(<TokenScreen onSuccess={onSuccess} replayPollMs={5} />);
+        submitToken('secret-token');
+        await screen.findByTestId('token-replaying');
+        await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+        fireEvent.change(tokenInput(), { target: { value: 'another-token' } });
+        await act(async () => {
+          second.resolve(answer());
+          await second.promise;
+        });
+        await settle(30);
+
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(onSuccess).not.toHaveBeenCalled();
+        expect(screen.queryByTestId('token-replaying')).toBeNull();
+        expect(screen.queryByRole('alert')).toBeNull();
+        expect(screen.getByRole('button', { name: 'Connect' })).toHaveProperty('disabled', false);
+      },
+    );
+
+    it('stops polling when it unmounts', async () => {
+      fetchMock.mockImplementation(() => Promise.resolve(replaying()));
+      const { unmount } = render(<TokenScreen onSuccess={() => undefined} replayPollMs={5} />);
+      submitToken('secret-token');
+      await screen.findByTestId('token-replaying');
+
+      unmount();
+      await settle(30);
+      const calls = fetchMock.mock.calls.length;
+      await settle(30);
+      expect(fetchMock.mock.calls.length).toBe(calls);
+    });
+  });
+
+  describe('the shell', () => {
+    function routeWith(health: () => Response): void {
+      fetchMock.mockImplementation((url: string) => {
+        if (url.startsWith('/api/health')) return Promise.resolve(health());
+        if (url.includes('/tree')) return Promise.resolve(jsonResponse(200, sessionTree()));
+        if (url.startsWith('/api/sessions'))
+          return Promise.resolve(jsonResponse(200, sessionList()));
+        if (url.startsWith('/api/dag/global'))
+          return Promise.resolve(jsonResponse(200, globalDag()));
+        if (url.startsWith('/api/cost/summary'))
+          return Promise.resolve(jsonResponse(200, costSummary()));
+        return Promise.reject(new Error(`unrouted fetch in test: ${url}`));
+      });
+    }
+
+    it('shows a replaying notice, not an error, and clears it once the replay is over', async () => {
+      let replayDone = false;
+      routeWith(() => (replayDone ? ok() : replaying()));
+      render(
+        <Shell token="secret-token" onLock={vi.fn()} onAuthRejected={vi.fn()} replayPollMs={5} />,
+      );
+
+      const notice = await screen.findByTestId('replaying-notice');
+      expect(notice.textContent).toContain('replaying the corpus, please wait');
+      expect(screen.getByText('schema v18')).toBeTruthy();
+      expect(screen.queryByTestId('recheck-health')).toBeNull();
+      expect(screen.getByTestId('connection-chip').textContent).not.toContain('unreachable');
+
+      replayDone = true;
+      await waitFor(() => expect(screen.queryByTestId('replaying-notice')).toBeNull());
+      expect(screen.getByText('schema v18')).toBeTruthy();
+    });
+
+    it('bounces to the entry screen when a re-probe during the replay answers 401', async () => {
+      let rejected = false;
+      routeWith(() => (rejected ? healthResponse(401, { error: 'Unauthorized.' }) : replaying()));
+      const onAuthRejected = vi.fn();
+      render(
+        <Shell
+          token="secret-token"
+          onLock={vi.fn()}
+          onAuthRejected={onAuthRejected}
+          replayPollMs={5}
+        />,
+      );
+      await screen.findByTestId('replaying-notice');
+
+      rejected = true;
+      await waitFor(() => expect(onAuthRejected).toHaveBeenCalled());
+    });
+
+    it('stops re-probing when it unmounts', async () => {
+      routeWith(replaying);
+      const { unmount } = render(
+        <Shell token="secret-token" onLock={vi.fn()} onAuthRejected={vi.fn()} replayPollMs={5} />,
+      );
+      await screen.findByTestId('replaying-notice');
+
+      unmount();
+      await settle(30);
+      const probes = fetchMock.mock.calls.filter(([url]) => String(url) === '/api/health').length;
+      await settle(30);
+      expect(fetchMock.mock.calls.filter(([url]) => String(url) === '/api/health').length).toBe(
+        probes,
+      );
+    });
   });
 });

@@ -1251,6 +1251,43 @@ export const migrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    id: 21,
+    name: 'sessions-partial-and-dropped-usage',
+    up(db) {
+      // WHY. Two owner decisions on silent undercounts, both recorded per
+      // session because both are facts about ONE ingest pass of ONE session.
+      //
+      // partial_reason / partial_skipped_bytes (decision 1). The corpus reader
+      // keeps its 64 MiB per-file cap, so a main transcript over it is
+      // skipped while the session's subagent transcripts still ingest. Before
+      // this column that session looked whole, and its totals - missing the
+      // main agent's own usage - were presented as the truth. The reason is a
+      // closed CHECK list rather than free text: a new cause has to be a
+      // migration that the API schema and the dashboard learn in the same
+      // change. NULL means the whole session was read. The byte size is the
+      // skipped file's size at read time; NULL is "not known", never 0.
+      //
+      // usage_records_dropped (decision 2, NN1). Assistant records whose usage
+      // has no message.id cannot be deduplicated - streamed partials share the
+      // id - so they stay EXCLUDED from token_usage, but the count of them is
+      // now kept instead of vanishing. NOT NULL DEFAULT 0: every pre-existing
+      // row reads as "none known dropped" until its next ingest pass.
+      //
+      // All three are written by the ingest upsert on every pass - the latest
+      // pass is the truth, so a main that shrinks back under the cap clears
+      // the flag. Hook-created session rows never write them and keep the
+      // defaults.
+      db.exec(`
+        ALTER TABLE sessions ADD COLUMN partial_reason TEXT
+          CHECK (partial_reason IS NULL OR partial_reason IN ('main-transcript-oversize'));
+        ALTER TABLE sessions ADD COLUMN partial_skipped_bytes INTEGER
+          CHECK (partial_skipped_bytes IS NULL OR partial_skipped_bytes >= 0);
+        ALTER TABLE sessions ADD COLUMN usage_records_dropped INTEGER NOT NULL DEFAULT 0
+          CHECK (usage_records_dropped >= 0);
+      `);
+    },
+  },
 ];
 
 export interface MigrationRunResult {

@@ -184,6 +184,19 @@ the hierarchy-accuracy gate still reports **NOT CERTIFIED** because the hand-lab
 does not exist. Where §3 and §5 speak of Phase 0 gating the build, read it as a gate that
 was stepped over knowingly and is still owed its evidence.
 
+**Seven Done-when clauses were amended by owner decision (2026-09-30).** The WP audit of
+2026-09-26 compared every ticked work package with its Done-when and found seven clauses
+that the tree does not meet as written and that the owner chose to amend rather than build
+(decisions D12–D18, every recommended default accepted). The original text stays in the
+§5 rows; each carries a dated note: `WP-U7` (layered tree, no force layout; "live" is the
+refresh control), `WP-C6` (runtime `PricingError` halt plus a real-corpus boot in
+`RELEASE.md`, not a CI gate), `WP-X1` (synthetic fixtures are the CI corpus), `WP-X5` (the
+blocking demonstration is still owed — one throwaway PR), `WP-X10` (no presence check),
+`WP-C1` (refresh before every tag) and `WP-C2` (met without a `PricingProvider`
+interface). A related decision, D19(a), touches no Done-when: the
+`token_usage.is_compaction_baseline` column stays, documented as reserved — written as 0
+and read by nothing, because repricing across a compaction happens at analysis time.
+
 ---
 
 ## 3. Roadmap — phases & exit gates
@@ -330,12 +343,12 @@ deliberately off for the sole maintainer. See §2c and
 
 | ID | Owner | Sz | Deps | Title & Done-when |
 |---|---|---|---|---|
-| WP-C1 | cost | M | D3 | **Versioned `model_pricing` table + authoritative dated seed + refresh cadence** (absorbs `WP-D9`). Multiple `effective_from` rows per bucket without conflict. |
-| WP-C2 | cost | M | C1, D1 | **PricingProvider port + timestamp-aware dated-price resolver.** An event resolves to the OLD rate before a change, the new rate at/after. |
+| WP-C1 | cost | M | D3 | **Versioned `model_pricing` table + authoritative dated seed + refresh cadence** (absorbs `WP-D9`). Multiple `effective_from` rows per bucket without conflict. _(Amended 2026-09-30, owner decision D17(a) of the 2026-09-26 WP audit: the **refresh cadence is "before every tag"** — a [HUMAN] `RELEASE.md` §6 box re-reads the Anthropic pricing page and boots the real corpus; no dated calendar cadence. Until then the seed had been refreshed only by outage, migrations 18–20.)_ |
+| WP-C2 | cost | M | C1, D1 | **PricingProvider port + timestamp-aware dated-price resolver.** An event resolves to the OLD rate before a change, the new rate at/after. _(Amended 2026-09-30, owner decision D18(a) of the 2026-09-26 WP audit: **accepted as met in substance** — `loadPricing` (`apps/server/src/db/pricing.ts`) plus the dated resolver in `computeCostUsd` (`packages/core`). No `PricingProvider` interface was built and none will be: one implementation, no second caller.)_ |
 | WP-C3 | cost | M | C2, D2 | **CostEngine** — ground-truth tokens × dated bucketed price. Cost matches a hand-computed value from JSONL tokens × seed. |
 | WP-C4 | cost | M | C3, IN7 | **Compaction-baseline preservation + RE-pricing across PreCompact.** A PreCompact session reprices to baseline + post-compaction spend, matching the oracle. |
 | WP-C5 | cost | M | C3 | **Delegation-savings metric** (clean-room, tied to the model-routing decision). Savings = Σ max(0, top-tier-equiv − actual), matching a hand check. |
-| WP-C6 | qa | S | C2, C1, X1, X5 | **Staleness-fails-CI gate.** A model+bucket in the golden corpus with no priced row → **red build**. |
+| WP-C6 | qa | S | C2, C1, X1, X5 | **Staleness-fails-CI gate.** A model+bucket in the golden corpus with no priced row → **red build**. _(Amended 2026-09-30, owner decision D13(a) of the 2026-09-26 WP audit: now reads **"an unknown model or bucket halts ingest loudly — runtime `PricingError`, before any row is written — plus a real-corpus boot in the release checklist"** (`RELEASE.md` §6). The literal CI gate cannot be built honestly: the CI corpus is synthetic and uses `synthetic-model-a/b`, which the seed deliberately does not price, so the check would be red today or circular if the fixtures borrowed seeded ids.)_ |
 | WP-C7 | backend | M | C3, C5, **U0** | **Cost query API** — TypeBox-validated, loopback+token-gated cost/savings endpoints. Figures match direct engine calls (no drift). |
 
 ### Track U — Realtime + Web UI _(Phase 1/4)_
@@ -349,7 +362,7 @@ deliberately off for the sole maintainer. See §2c and
 | WP-U4 | backend | M | U2, D7, C3 | **Cost, delegation & global-DAG endpoints** (daily Q2/Q4). Cost matches JSONL × versioned pricing; no API-side inference. |
 | WP-U5 | frontend | M | F1, U1 | **React/Vite SPA shell + token auth + resilient SSE client.** Loads only behind the token gate; no token → no data/stream. |
 | WP-U6 | frontend | M | U5, U3, IN8, IN12 | **Live status view** (working/unknown/done) — the **<30s at-a-glance**. A newly-stuck agent flips to "unknown" live via SSE within the window. |
-| WP-U7 | frontend | L | U5, U3 | **Session-scoped subagent tree view** (D3 force+tree, live). From a real fixture the tree matches the labeled hierarchy (**≥95%**). |
+| WP-U7 | frontend | L | U5, U3 | **Session-scoped subagent tree view** (D3 force+tree, live). From a real fixture the tree matches the labeled hierarchy (**≥95%**). _(Amended 2026-09-30, owner decision D12(a) of the 2026-09-26 WP audit: the **layered SVG tree stays** (`apps/web/src/views/layout/layered.ts`) — no force layout will be built — and **"live" means the existing refresh control**; the tree does not subscribe to SSE. The ≥95% bar is unchanged and still owed its LABEL-ME evidence.)_ |
 | WP-U8 | frontend | L | U5, U4 | **Global persistent per-instance orchestration DAG view** (the moat). Spans multiple sessions, sourced from a query over persisted edges. |
 | WP-U9 | frontend | L | U5, U4 | **Cost / Sankey / delegation-savings view** (daily Q2/Q4). Every displayed dollar traces to ground-truth tokens × dated price. |
 
@@ -372,16 +385,16 @@ deliberately off for the sole maintainer. See §2c and
 
 | ID | Owner | Sz | Deps | Title & Done-when |
 |---|---|---|---|---|
-| WP-X1 | qa | L | S2, S4, F1 | **Golden real-session fixture corpus** (raw, redacted, manifested). ≥3 real sessions; all four pathologies each represented (manifest self-test). |
+| WP-X1 | qa | L | S2, S4, F1 | **Golden real-session fixture corpus** (raw, redacted, manifested). ≥3 real sessions; all four pathologies each represented (manifest self-test). _(Amended 2026-09-30, owner decision D14(a) of the 2026-09-26 WP audit: **synthetic fixtures are the CI corpus** (`packages/test-fixtures`); the real corpus stays local, as LABEL-ME's already does, so "real, redacted" no longer applies. All four pathologies are to be represented synthetically — crashed-no-Stop and two concurrent instances were the missing two, being added in the same dispatch — with a pathology manifest and a self-test that reads it.)_ |
 | WP-X2 | qa | L | X1, D1 | **Labeled ground-truth annotations + typed fixture loader.** Every session has an `expected/*.json`; a test fails if any lacks one. |
 | WP-X3 | qa | M | X2, IN10, IN7, D1 | **Three P0 reconciliation release-blocker tests.** Σ`token_usage`==JSONL exact; double-replay byte-identical; DAG-rebuild-from-JSONL-alone. |
 | WP-X4 | qa | L | X2, IN6, C4 | **Expanded negative-test catalogue (12 scenarios).** Each maps to a CD/acceptance criterion. |
-| WP-X5 | devops | M | F1, S7 | **CI coverage gate (>90%, blocking) live from Phase 1.** A PR dropping below the threshold is blocked (demonstrated). |
+| WP-X5 | devops | M | F1, S7 | **CI coverage gate (>90%, blocking) live from Phase 1.** A PR dropping below the threshold is blocked (demonstrated). _(Amended 2026-09-30, owner decision D15(a) of the 2026-09-26 WP audit: the demonstration will be **one throwaway PR that lowers coverage**, its red `ci` run recorded, the PR then closed unmerged. **Pending, not done** — the PR is opened only on the owner's separate go-ahead.)_ |
 | WP-X6 | docs | S | X5, X7 | **README with green-only badges + donation.** Every badge renders green/true (via the badges skill). |
 | WP-X7 | docs | M | F1 | **GitHub Pages docs site build** (docs public, app stays 127.0.0.1). CI builds & publishes on merge. |
 | WP-X8 | devops | M | S4, IN1, S7, IN3 | **`hooks/` installable scripts + install docs** (absorbs `WP-IN4`). Install → working end-to-end hook → loopback ingest → `events_raw` on a real session. |
 | WP-X9 | docs | S | X3, X5 | **Release checklist + per-role DoD.** `RELEASE.md` enumerates every CD-7 build-failing gate + CD-9 provenance check with a verification step each. |
-| WP-X10 | docs | S | — | **WORKLOG discipline** — template + presence check. Exists locally, follows the worklog skill format, git-excluded. |
+| WP-X10 | docs | S | — | **WORKLOG discipline** — template ~~+ presence check~~. Exists locally, follows the worklog skill format, git-excluded. _(Amended 2026-09-30, owner decision D16(a) of the 2026-09-26 WP audit: the **presence check is dropped**. `WORKLOG.md` is git-excluded, so a check tracked in the repository and run in CI can never see it; none was ever built.)_ |
 | WP-X11 | docs | S | F1 | **DELETED (best-path §6.3, applied 2026-07-06)** — ~~**Vector-DB EXPERIMENTAL stub** (labeled, off critical path). Unambiguously labeled; documented as non-blocking.~~ _(vector-DB track removed entirely; row kept for WP-numbering stability)_ |
 
 ---

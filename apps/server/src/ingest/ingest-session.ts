@@ -30,6 +30,7 @@ import {
   type PricingEntry,
   type SessionSubstrate,
 } from '@agenthropic/core';
+import type { SessionPartialDto } from '@agenthropic/shared';
 import type { SqliteDatabase } from '../db/connection';
 import type { AgentStatusChangedEvent } from './ingest-events';
 import { normalizeSession } from './normalize-session';
@@ -43,6 +44,12 @@ export interface IngestDeps {
   readonly projectSlug?: string | null;
   /** Injectable clock for the edge `created_at` stamp; defaults to wall time. */
   readonly now?: () => string;
+  /**
+   * Owner decision 1: set when this pass could NOT read the main transcript
+   * (over the read cap), so the session's totals are a lower bound. Persisted
+   * on the session row; absent / null records a whole read and clears it.
+   */
+  readonly partial?: SessionPartialDto | null;
 }
 
 export interface IngestOutcome {
@@ -101,6 +108,7 @@ export function ingestSession(substrate: SessionSubstrate, deps: IngestDeps): In
       projectSlug: deps.projectSlug ?? null,
       instance: deps.instance,
       hostId: deps.hostId,
+      partial: deps.partial ?? null,
     });
     const counts = projectSession(deps.db, normalized, now);
 

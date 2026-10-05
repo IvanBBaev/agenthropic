@@ -44,6 +44,13 @@ tree, and live-flow correctness (concept-analysis-v2 §4.3).
 >   What is unverified is the **gate itself**, not the enforcement wrapped around it. And
 >   if `WP-C6` is ever wired, it has to land as a step *inside* the `ci` job: `ci` is the
 >   only required context, so a separate job would go red without withholding anything.
+>   *Amended 2026-09-30 (owner decision D13(a) of the 2026-09-26 WP audit):* the question
+>   is settled — the CI half will **not** be built. `WP-C6` now reads "unknown model halts
+>   ingest loudly (runtime `PricingError`) + a real-corpus boot in the release checklist";
+>   the boot is a [HUMAN] box in `RELEASE.md` §6, run before every tag together with a
+>   re-read of the Anthropic pricing page (D17(a)). A CI step over the synthetic fixtures
+>   could not do the job: they use `synthetic-model-a`/`-b`, which the seed deliberately
+>   does not price.
 > - **Compaction (G0.2b) resolved toward JSONL**: boundaries are parsed from the
 >   transcript substrate itself; the `PreCompact` hook contributes liveness only.
 >   Delegation savings shipped with its honesty labels: a literal `isEstimate: true`
@@ -118,6 +125,28 @@ of this page is the mechanism that closes that gap: buckets that track what actu
 changes the rate, a pricing table that is dated rather than a single constant, and a
 compaction baseline so a context rewrite mid-session doesn't corrupt history.
 
+### What a total does NOT contain (owner decisions 1 and 2, 2026-10)
+
+"Ground truth" is only as whole as what was read, so three known gaps are disclosed on
+the figures they affect rather than left silent:
+
+- **Partial sessions.** A main transcript larger than the per-file read cap (64 MiB,
+  PROVISIONAL) is not read; its subagent transcripts still are. The session is then marked
+  `partial` (`reason: 'main-transcript-oversize'`, with the skipped byte size), and every
+  total it contributes to is a **lower bound**. The dashboard says so on the session and
+  the cost summary says how many partial sessions its totals include.
+- **Usage records without `message.id` (NN1).** Dedupe is by `message.id`, taking the
+  per-bucket maximum. A record with no id has no dedupe key, so it is **excluded** and
+  counted per session as `usageRecordsDropped`. It is not quarantined and is not given a
+  synthetic key; the dedupe key is unchanged.
+- **Partial `cache_creation` splits (NN2).** When a usage block's `cache_creation` object
+  is absent, empty, or sums to less than the flat `cache_creation_input_tokens`, the flat
+  figure wins: the 5m and 1h parts that *are* stated are kept, and the unsplit remainder is
+  booked to `cache_write_5m`. No split is ever invented. Before this change the unsplit
+  remainder was dropped, which under-counted cache-write tokens. Booking the remainder at
+  the 5-minute rate is itself a lower bound if the tokens were really 1-hour writes, since
+  the 1h rate is higher.
+
 ## 2. `token_usage`: bucketed by whatever changes the rate
 
 The base schema (`simple10`-derived: `projects`/`sessions`/`agents`/`events`/`filters`)
@@ -173,6 +202,13 @@ specifically because its bucketing is production-grade (DESIGN §4):
 > not by a flag on a row. It survives because dropping a column costs a full table
 > rebuild for no behavioral gain; what it must not do is mislead a reader into thinking a
 > baseline flag is what makes compaction repricing work.
+>
+> *Amended 2026-09-30 (owner decision D19(a)):* the column is now documented as
+> **reserved**, not dead-and-pending-removal. It is written as `0`, read by nothing, and
+> carries no meaning today; repricing happens at analysis time in
+> `packages/core/src/cost/compaction-repricing.ts`. It stays in the schema so a future
+> persisted marker has a slot without a table rebuild — and until one is specified, no
+> code may start reading it.
 
 The source docs name these three dimensions as rate-changing without enumerating their
 literal values or exact column types — that detail is schema work not yet written
@@ -279,6 +315,13 @@ churns is an open Phase-0 input, not yet answered (concept-analysis-v2 §7, ques
 the staleness-fails-CI test honest"). This page does not assert real dollar figures for
 that reason — the rate columns above are placeholders, not published prices.
 
+*Amended 2026-09-30 (owner decisions D13(a) and D17(a)):* the refresh cadence is answered.
+Before every tag, a human re-reads the Anthropic pricing page and boots the real corpus
+(a [HUMAN] box in `RELEASE.md` §6); a changed rate lands as a new dated migration, never
+an edit. There is no staleness-fails-CI test for it to keep honest any more
+([§9](#9-the-no-priceless-model-fails-ci-rule)). The authoritative source is still the
+pricing page read by hand, not a feed.
+
 ## 4. `PricingProvider`: a dated lookup, not "the current price"
 
 Pricing a historical event correctly requires resolving the rate **that was in effect
@@ -289,6 +332,13 @@ page). Its contract, from the development plan (`WP-C2`):
 
 > **`PricingProvider` port + timestamp-aware dated-price resolver.** An event resolves
 > to the OLD rate before a change, the new rate at/after.
+
+*Amended 2026-09-30 (owner decision D18(a)):* `WP-C2` is **accepted as met in substance**.
+There is no `PricingProvider` interface in the code and none will be added: the port is
+`loadPricing` (`apps/server/src/db/pricing.ts`) plus the dated resolver in
+`computeCostUsd` (`packages/core/src/cost/compute-cost.ts`, latest `effective_from` at or
+before `occurred_at`). One implementation and no second caller do not justify an
+interface. `PricingProvider` below names that pair, not a type.
 
 Conceptually, the resolver is a "latest row at or before this timestamp" lookup per
 bucket:
@@ -409,7 +459,7 @@ implementation mechanism.
 > **Resolved as built: the JSONL branch won.** Compaction boundaries are detected in the
 > parsed transcript substrate itself — no hook-time snapshot exists, and the `PreCompact`
 > hook contributes a liveness timestamp only. Note that no row is *flagged* as a baseline:
-> `token_usage.is_compaction_baseline` is a dead column ([§2](#2-token_usage-bucketed-by-whatever-changes-the-rate)),
+> `token_usage.is_compaction_baseline` is a reserved column, written as `0` and read by nothing ([§2](#2-token_usage-bucketed-by-whatever-changes-the-rate)),
 > and the whole mechanism lives in the repricer
 > (`packages/core/src/cost/compaction-repricing.ts`), which cuts each transcript's usage
 > stream at its own boundaries and prices the segments.
@@ -583,6 +633,18 @@ criteria alongside the three P0 reconciliation tests).
 > to run as a step inside the `ci` job**, and a gate that never runs blocks nobody's merge,
 > however `main` is protected. (A gate added as a *separate* job would not block one either:
 > `ci` is the only required context.)
+>
+> **Amended 2026-09-30 (owner decision D13(a) of the 2026-09-26 WP audit).** The CI half
+> will not be built, and this section's rule is restated rather than left as unmet intent.
+> `WP-C6` now reads: **unknown model halts ingest loudly (runtime `PricingError`) + a
+> real-corpus boot in the release checklist.** The boot is a [HUMAN] box in `RELEASE.md`
+> §6, run before every tag: `pnpm start` against the real `~/.claude/projects` and a
+> throwaway database, where `0 failed` on the `corpus replay:` line passes and any
+> `corpus replay failure:` line carrying a `PricingError` message is a red box. The reason
+> a CI step would not help: the CI corpus is synthetic and uses `synthetic-model-a`/`-b`,
+> which the seed deliberately leaves unpriced, so the models that can actually go stale
+> only ever appear in the real corpus, which stays local. The acceptance wording "FAILS
+> CI" quoted above is history, not a live criterion.
 
 ## 10. Read surface (as built: shipped)
 

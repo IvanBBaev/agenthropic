@@ -237,6 +237,13 @@ parent→child. `WP-U7`'s Done-when:
 > **Session-scoped subagent tree view** (D3 force+tree, live). From a real fixture the
 > tree matches the labeled hierarchy (**≥95%**). (`development-plan.md`, `WP-U7`)
 
+> **Amended 2026-09-30 (owner decision D12(a)).** Both halves of "D3 force+tree, live"
+> were dropped from `WP-U7` rather than built. The tree is hand-written SVG over the
+> layered layout described below — not D3, and no force layout is planned. "Live" means
+> the **Refresh tree** button (and **Refresh sessions** for the list): the view does
+> **not** subscribe to the SSE stream, and each pane shows how old its last read is.
+> The ≥95% accuracy bar is unchanged and still unmeasured.
+
 **What backs it.** This is the point where the moat's core discipline is most visible
 in the UI: the tree is **not** walked from a raw event log by the browser at render
 time. `WP-U3`'s backend endpoint states this explicitly — `GET /sessions/:id/tree`
@@ -406,7 +413,9 @@ whatever model actually ran (see
 [cost model §7](../architecture/cost-model.md#7-delegation-savings-quantifying-haikusonnet-routing)).
 A model observed in a fixture with no priced row is a **red build**, never a silent
 "estimated" label (`WP-C6`, the staleness-fails-CI gate) *(As built: the enforcement
-is at **runtime**, not only in CI — see the box below.)* — so a dollar figure this view
+is at **runtime**, not only in CI — see the box below.)* *(Amended 2026-09-30, owner
+decision D13(a): there is no CI half. `WP-C6` now means the runtime `PricingError` halt
+plus a real-corpus boot before every tag, a [HUMAN] box in `RELEASE.md` §6.)* — so a dollar figure this view
 shows is never a guess, and the delegation-savings metric is explicitly tied to the
 model-routing decision it's meant to inform, not displayed as a decoration
 (`WP-C5`; see [cost model §7](../architecture/cost-model.md#7-delegation-savings-quantifying-haikusonnet-routing)
@@ -594,6 +603,28 @@ an earlier version told readers "this server has no corpus configured" about a m
 whose corpus was merely missing. Naming the wrong cause is worse than naming none: it
 sends the reader to fix something that is not broken. The full list of answers that
 endpoint can give is on [the API reference](api.md#the-six-answers-of-the-cost-analysis-endpoint).
+
+## Partial sessions and excluded usage records
+
+*Added 2026-10 (owner decisions 1 and 2).* Two notes can appear beside a session total.
+Each one appears only when there is something to disclose. A session with neither note is
+whole and had nothing excluded.
+
+- **"partial — main transcript too large to read; totals are a lower bound"**, followed by
+  the size that was not read when it is known. The session's main transcript was over the
+  per-file read cap (64 MiB, PROVISIONAL), so only its subagent transcripts were read. It
+  appears on the live board card, the session list row, above the subagent tree's
+  unattributed line, and on the session's row in the cost view's top-sessions table.
+- **"N usage records could not be deduplicated and were excluded"**. That many usage
+  records in the session had no `message.id`. They are left out of every total rather than
+  risk double-counting. It appears in the same four places.
+
+The cost view adds a corpus-wide line above the top-sessions table:
+*"Includes N partial sessions (lower bound)."* and the corpus-wide count of excluded usage
+records. Both cover every session, not only the rows listed. A server that does not send
+these fields is refused as out of date rather than shown as "whole". See
+[troubleshooting §6](../operations/troubleshooting.md) for what to do about either note
+(usually nothing).
 
 ## Auth & realtime: the SPA loads only behind the token gate
 

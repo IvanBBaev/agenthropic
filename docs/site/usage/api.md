@@ -110,7 +110,7 @@ six optional ones:
 
 | Field | Type | Always present? | Meaning |
 |---|---|---|---|
-| `status` | the literal `"ok"` | yes | The process is serving. It stays `"ok"` even while ingest is still replaying: a warming server is healthy, just not yet current. |
+| `status` | `"ok"` or `"replaying"` | yes | The process is serving. `"replaying"` while the startup replay pass has not finished (the server binds first and replays after, so health answers during the replay); `"ok"` from then on. A replaying server is healthy, just not yet current - the SPA shows "replaying the corpus, please wait" rather than an error. *(Amended 2026-10-01: until then `status` was always `"ok"` and only the optional `ingest` field said the replay was running.)* |
 | `schemaVersion` | integer | yes | The migration version the open database is at. |
 | `ingestSkips` | object of `{ reason: count }` | no | Cumulative count of skip events per skip reason since boot; a file declined again on a later pass counts again, so it is not a count of distinct files. |
 | `ingest` | `"replaying"` or `"idle"` | no | `"replaying"` between the loopback bind and the end of the startup replay pass; `"idle"` after, whether or not that pass could read the corpus. |
@@ -280,7 +280,7 @@ so a new route is gated by construction rather than by remembering.)*
 
 - **`GET /api/sessions/:id/events` never conflates "no events" with "no session".** A
   known session with zero hook events is `200` with an empty array; only an unknown
-  session id is `404`. Rows are oldest-first with `id` as tiebreak and carry a `total`
+  session id is `404` (or `409` for a session ingest rejected - see below). Rows are oldest-first with `id` as tiebreak and carry a `total`
   so truncation stays visible.
 - **Those event rows are hook *liveness* only.** They are not the DAG, they never
   influence `agents` / `orchestration_edges` / `token_usage`, and their **absence means
@@ -313,6 +313,29 @@ so a new route is gated by construction rather than by remembering.)*
   value that is not a number, not an integer, or out of range is a `400`.
   *(Amended 2026-09-25 (OO).)*
 
+- **A session ingest rejected is a `409`, not a `404`** (since 2026-10-01), on all four
+  per-session reads - `GET /api/sessions/:id`, `/tree`, `/events` and `/cost-analysis`.
+  When the session is not in the database but ingest holds a failure against it, the
+  answer is `409` with a machine-readable body:
+
+  ```json
+  { "error": "The corpus holds this session, but ingest rejected it ...",
+    "code": "quarantined",
+    "reason": "no price for model claude-x" }
+  ```
+
+  `code` is `"quarantined"` (ingest has stopped retrying; the session is re-read when its
+  transcript changes, or at once when the pricing table does) or `"ingest-failing"` (the
+  latest attempt failed and the next pass retries it). `reason` is the watcher's
+  sanitized, single-line failure reason with errno codes (`EACCES`, `ENOENT`, ...)
+  removed - those go to the server log only, never the body, and the body never carries
+  an absolute path. A session id that neither the database nor ingest knows stays `404`.
+  `409` rather than `422` because the resource exists and its *state* conflicts with
+  serving it; `422` is about the request's content, and a `GET` has none. The registry
+  behind it is in-memory and fed by the watcher's failure seam, so it is emptied on a
+  restart (the startup replay refills it) and cleared per session on a successful
+  ingest.
+
 ### The six answers of the cost-analysis endpoint
 
 `GET /api/sessions/:id/cost-analysis` is the only route that reads the JSONL substrate
@@ -325,6 +348,7 @@ other — and it answers each one differently, on purpose:
 | `503` | `no corpus root is present on this machine, so nothing can be analysed` | The provider exists but there is no corpus root here. Retryable: the root is re-resolved per call, so a corpus that appears later fixes this without a restart. |
 | `503` | `the corpus root exists but could not be read; retry shortly` | The root is there; this process could not read it on this attempt. Also retryable, and deliberately a different sentence from the one above. |
 | `404` | `Session not found.` | The corpus was read and this session id is genuinely not in it. |
+| `409` | `The corpus holds this session, but ...` | Since 2026-10-01: ingest rejected the session (`code` `quarantined` or `ingest-failing`, plus a path-free `reason`). Shared with the other three per-session reads - see above. |
 | `422` | `Session transcripts could not be parsed.` | A poisoned transcript — a data problem, not a server bug. |
 | `422` | `the session transcript holds no analysable records` | The session was found and read, and holds nothing to analyse. |
 
@@ -516,6 +540,13 @@ The `422` bullet is unchanged and must not be read as covering this: an **unknow
 still raises `PricingError` from `packages/core/src/cost/compute-cost.ts` and halts. A bad
 stored rate degrades to unpriced; an absent price halts. Those are different endpoints and
 different answers.
+
+**AMENDED 2026-09-30 (owner decisions D13(a), D18(a)).** Two names in the second bullet above
+describe things that were never built and now will not be. There is no `PricingProvider`
+interface: `WP-C2` was accepted as met by `loadPricing` (`apps/server/src/db/pricing.ts`) plus
+the dated resolver inside `computeCostUsd`, one implementation with no second caller. And an
+unpriced model+bucket is not a **build failure**: `WP-C6` now means the runtime `PricingError`
+halt described above plus a real-corpus boot before every tag (`RELEASE.md` §6).
 
 ### The tree is a query, not a reconstruction
 

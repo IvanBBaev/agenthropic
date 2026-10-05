@@ -152,7 +152,11 @@ describe('the shell survives a view that cannot read the server', () => {
    */
   const costSummaryTheGuardsAccept = {
     ...costSummary(),
-    topSessions: [{ tokens: 10, costUsd: 1, unpricedTokens: 0 }],
+    // `partial` / `usageRecordsDropped` (owner decisions 1 and 2) are held by
+    // the guard like the figures, so they ride along; `sessionId` stays absent.
+    topSessions: [
+      { tokens: 10, costUsd: 1, unpricedTokens: 0, partial: null, usageRecordsDropped: 0 },
+    ],
   };
 
   /**

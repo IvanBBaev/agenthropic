@@ -60,6 +60,23 @@
  * Sessions that yield no substrate at all (`sessionsSkipped`) are not failures
  * and are not retried.
  *
+ * CHUNKED PASSES (opt-in, per call). `tick({ maxSessions })` admits at most
+ * that many changed sessions, in enumeration order, and reports the rest as
+ * `pending` on the 'ingested' outcome. The composition root uses it for the
+ * startup replay only, yielding to the event loop between passes so the
+ * server answers requests (and /api/health says 'replaying') while a large
+ * corpus is read; the scheduled poll never passes a cap. A deferred session is
+ * simply not settled, so its fingerprint stays uncommitted and a later pass
+ * picks it up - no new bookkeeping is needed for that half. What IS needed is
+ * the SWEEP: the passes that drain one capped working set count as ONE pass
+ * for the retry budget and the backoff clock. A continuation pass does not
+ * advance `pass` and does not re-admit a session an earlier pass of the same
+ * sweep already read. Without that, a session that failed in the first chunk
+ * would be retried in the second and quarantined by the third, milliseconds
+ * apart, and every re-read schedule would come due during the replay - the
+ * chunking would change which sessions are quarantined, not just when the
+ * event loop breathes.
+ *
  * Concurrency: better-sqlite3 makes a tick fully synchronous, so two passes
  * can only overlap through re-entrancy (a callback calling `tick()`); a simple
  * in-flight flag makes the inner call a no-op. Error posture: a transient I/O
@@ -68,6 +85,7 @@
  * through `onFatal` (the composition root turns it into a loud non-zero exit).
  */
 import type { PricingEntry } from '@agenthropic/core';
+import type { SessionRejectionCode } from '@agenthropic/shared';
 import { resolveCorpusRoot } from '../corpus/corpus-paths';
 import { enumerateSessions } from '../corpus/disk-substrate';
 import type { EnumeratedSessions } from '../corpus/fs-port';
@@ -110,6 +128,21 @@ export const MAX_INGEST_ATTEMPTS = 3;
  * permanent fault costs about 3% of the passes an every-poll retry would.
  */
 export const REREAD_BACKOFF_CAP_PASSES = 32;
+
+/**
+ * Default per-pass session cap for the chunked startup replay (see
+ * {@link TickOptions}). The cost of a pass is dominated by parsing the admitted
+ * transcripts, so the cap is what bounds how long one pass blocks the event
+ * loop - and with it how long a /api/health probe or a dashboard read waits
+ * during a replay. Each pass also re-enumerates and re-fingerprints the whole
+ * corpus (lstat only, no content read), a per-pass overhead the cap amortizes.
+ * 25 sits between the two: small enough that a pass of ordinary transcripts
+ * stays well under the 3 s default poll interval, so the server keeps answering
+ * between passes, and large enough that a corpus of a few thousand sessions
+ * needs on the order of a hundred passes, not thousands. It is a responsiveness
+ * knob only: the replay RESULT is the same for every cap (see the module doc).
+ */
+export const REPLAY_MAX_SESSIONS_PER_PASS = 25;
 
 /** Maximum length of a reported failure reason, after sanitization. */
 const MAX_REASON_LENGTH = 300;
@@ -253,6 +286,28 @@ export interface CorpusWatcherDeps {
   readonly onTickDuration?: (durationMs: number) => void;
 }
 
+/** Per-call options for {@link CorpusWatcher.tick}. */
+export interface TickOptions {
+  /**
+   * Admit at most this many changed sessions in this pass; the rest are left
+   * for a continuation pass and the outcome says `pending: true`. Absent (the
+   * scheduled poll), every changed session is admitted, exactly as before.
+   * Must be a positive integer.
+   */
+  readonly maxSessions?: number;
+}
+
+/**
+ * Why ingest is holding a session back, read straight off the retry budget:
+ * `ingest-failing` while the session is still retried every pass,
+ * `quarantined` once the budget is spent. `reason` is the sanitized reason of
+ * its latest failed pass.
+ */
+export interface IngestRejection {
+  readonly code: SessionRejectionCode;
+  readonly reason: string;
+}
+
 /**
  * The result of one pass. Six of the seven arms carry no summary — but they are
  * six DIFFERENT facts about the corpus and the watcher, and a caller that wants
@@ -264,8 +319,16 @@ export interface CorpusWatcherDeps {
  * field and buys the composition root a truthful boot line.
  */
 export type TickOutcome =
-  /** A pass ran and ingested the changed sessions. */
-  | { readonly kind: 'ingested'; readonly summary: CorpusIngestSummary }
+  /**
+   * A pass ran and ingested the changed sessions - all of them, or, under a
+   * `maxSessions` cap, the first ones; `pending` then says more are waiting
+   * for a continuation pass of the same sweep.
+   */
+  | {
+      readonly kind: 'ingested';
+      readonly summary: CorpusIngestSummary;
+      readonly pending: boolean;
+    }
   /** A pass ran; every session on disk matched its committed fingerprint. */
   | { readonly kind: 'unchanged' }
   /** No corpus root resolved (not configured, or gone) — fingerprints reset. */
@@ -289,7 +352,7 @@ export interface CorpusWatcher {
    * Run one poll pass now. Always reports WHY the pass ended as it did — see
    * {@link TickOutcome}; use {@link tickSummary} when only the summary matters.
    */
-  tick(): TickOutcome;
+  tick(options?: TickOptions): TickOutcome;
   /** Begin polling every `intervalMs`. Idempotent; a stopped watcher stays stopped. */
   start(): void;
   /** Stop polling permanently (clearInterval). Idempotent; wired into server close. */
@@ -299,6 +362,13 @@ export interface CorpusWatcher {
    * spend every dollar total is currently missing. See {@link IngestExclusions}.
    */
   exclusions(): IngestExclusions;
+  /**
+   * The session's current rejection, or undefined when ingest holds nothing
+   * against it (never seen, succeeded, pruned, or re-admitted by a pricing
+   * change). Read off the same retry budget as {@link exclusions}, so the two
+   * can never disagree.
+   */
+  rejectionOf(sessionId: string): IngestRejection | undefined;
 }
 
 /**
@@ -337,9 +407,10 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
    * budget is spent, the re-read schedule a byte change is held to: `gap`
    * doubles up to {@link REREAD_BACKOFF_CAP_PASSES} and `dueAt` is the first
    * pass a change may be read on. Both are 0 while the session is still
-   * within budget, where every pass retries it anyway.
+   * within budget, where every pass retries it anyway. `reason` is the
+   * sanitized reason of the latest failed pass, served by `rejectionOf`.
    */
-  const attempts = new Map<string, { count: number; gap: number; dueAt: number }>();
+  const attempts = new Map<string, { count: number; gap: number; dueAt: number; reason: string }>();
   /**
    * sessionId → re-read schedule for sessions whose last pass could not read
    * one of their files (EACCES, EIO, EMFILE...) and did not fail. Such a
@@ -360,8 +431,16 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
    * checkpoint has no entry until this process enumerates it.
    */
   const slugs = new Map<string, string>();
-  /** Passes that reached the fingerprint diff; the clock the backoff counts in. */
+  /**
+   * Sweeps that reached the fingerprint diff; the clock the backoff counts in.
+   * A capped sweep spans several passes and advances this once.
+   */
   let pass = 0;
+  /**
+   * Sessions already admitted by the capped sweep in progress, or null when no
+   * sweep is pending (always null for the uncapped scheduled poll).
+   */
+  let sweep: Set<string> | null = null;
   /** Corpus root the persisted checkpoint was hydrated from; null = not yet. */
   let hydratedRoot: string | null = null;
   /** Pricing content seen by the previous pass; null = no pass yet. */
@@ -506,10 +585,11 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
         const gap = Math.min(Math.max(prior.gap * 2, 1), REREAD_BACKOFF_CAP_PASSES);
         backoff = { gap, dueAt: pass + gap };
       }
-      attempts.set(sessionId, { count, ...backoff });
+      const sanitized = sanitizeFailureReason(reason);
+      attempts.set(sessionId, { count, ...backoff, reason: sanitized });
       deps.onIngestFailure?.({
         sessionId,
-        reason: sanitizeFailureReason(reason),
+        reason: sanitized,
         attempt: Math.min(count, MAX_INGEST_ATTEMPTS),
         willRetry: !quarantined,
       });
@@ -521,10 +601,9 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
    * Enumerate, diff fingerprints, ingest the changed set. Throws
    * ContainmentError only; every other end is named in the returned outcome.
    */
-  function ingestChanged(): Extract<
-    TickOutcome,
-    { kind: 'ingested' | 'unchanged' | 'no-corpus-root' | 'read-error' }
-  > {
+  function ingestChanged(
+    maxSessions: number | undefined,
+  ): Extract<TickOutcome, { kind: 'ingested' | 'unchanged' | 'no-corpus-root' | 'read-error' }> {
     const corpusRoot = resolveCorpusRoot(deps.env, fs, deps.homedir);
     if (corpusRoot === null) {
       // No corpus (yet / any more): forget every fingerprint and retry budget so
@@ -535,6 +614,7 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
       rereadSchedule.clear();
       slugs.clear();
       hydratedRoot = null;
+      sweep = null;
       return { kind: 'no-corpus-root' };
     }
 
@@ -547,6 +627,7 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
       fingerprints.clear();
       attempts.clear();
       slugs.clear();
+      sweep = null;
       for (const [sessionId, fingerprint] of deps.checkpoints.load(corpusRoot)) {
         fingerprints.set(sessionId, fingerprint);
       }
@@ -568,13 +649,21 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
         reason: `corpus root unreadable (${enumeration.code ?? 'unknown'})`,
       };
     }
-    pass += 1;
+    // A continuation of a capped sweep is the same logical pass: the backoff
+    // clock does not move, and nothing the sweep already read is re-admitted.
+    const continuing = sweep;
+    if (continuing === null) {
+      pass += 1;
+    }
     const changed = new Set<string>();
     const next = new Map<string, string>();
     for (const ref of enumeration.refs) {
       const fingerprint = fingerprintSession(fs, ref, limits);
       next.set(ref.sessionId, fingerprint);
       slugs.set(ref.sessionId, ref.projectSlug);
+      if (continuing?.has(ref.sessionId) === true) {
+        continue; // read earlier in this sweep; a later sweep picks up new bytes
+      }
       if (fingerprints.get(ref.sessionId) !== fingerprint) {
         // New bytes, or a session this process has never settled. Read it now,
         // unless it is quarantined and its backoff schedule is not yet due: a
@@ -598,6 +687,18 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
     pruneMissing(attempts, present);
     pruneMissing(rereadSchedule, present);
     pruneMissing(slugs, present);
+
+    // The cap: admit the first `maxSessions` in enumeration order and leave the
+    // rest unsettled - their fingerprints stay uncommitted, so the next pass of
+    // this sweep sees them as changed again.
+    let pending = false;
+    if (maxSessions !== undefined && changed.size > maxSessions) {
+      pending = true;
+      for (const sessionId of [...changed].slice(maxSessions)) {
+        changed.delete(sessionId);
+      }
+    }
+    sweep = pending ? new Set([...(continuing ?? []), ...changed]) : null;
 
     if (changed.size === 0) {
       return { kind: 'unchanged' };
@@ -662,7 +763,7 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
     // `present`, not the enumerated set: a session hidden by an unreadable slug
     // keeps its persisted checkpoint, as it keeps its in-memory fingerprint.
     deps.checkpoints?.commit(corpusRoot, checkpointable, present);
-    return { kind: 'ingested', summary };
+    return { kind: 'ingested', summary, pending };
   }
 
   function stop(): void {
@@ -673,7 +774,7 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
     stopped = true;
   }
 
-  function tick(): TickOutcome {
+  function tick(options: TickOptions = {}): TickOutcome {
     // Never two passes at once, and a stopped watcher does nothing — but those
     // are two different reasons and the caller is told which.
     if (stopped) {
@@ -687,7 +788,7 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
     try {
       let outcome: TickOutcome;
       try {
-        outcome = ingestChanged();
+        outcome = ingestChanged(options.maxSessions);
       } catch (error) {
         if (error instanceof ContainmentError) {
           stop(); // a crafted corpus is a stop-everything signal — no more polls
@@ -748,5 +849,17 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
     return { failing: attempts.size, quarantined };
   }
 
-  return { tick, start, stop, exclusions };
+  /** Same source of truth as {@link exclusions}, per session. */
+  function rejectionOf(sessionId: string): IngestRejection | undefined {
+    const entry = attempts.get(sessionId);
+    if (entry === undefined) {
+      return undefined;
+    }
+    return {
+      code: entry.count >= MAX_INGEST_ATTEMPTS ? 'quarantined' : 'ingest-failing',
+      reason: entry.reason,
+    };
+  }
+
+  return { tick, start, stop, exclusions, rejectionOf };
 }

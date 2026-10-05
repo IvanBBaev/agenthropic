@@ -31,8 +31,24 @@ describe('computeCostFlow', () => {
           { model: 'claude-b', tokens: 1000, costUsd: 0.3, unpricedTokens: 0 },
         ],
         topSessions: [
-          { sessionId: 's1', projectSlug: 'p1', tokens: 2500, costUsd: 0.8, unpricedTokens: 0 },
-          { sessionId: 's2', projectSlug: null, tokens: 500, costUsd: 0.2, unpricedTokens: 0 },
+          {
+            sessionId: 's1',
+            partial: null,
+            usageRecordsDropped: 0,
+            projectSlug: 'p1',
+            tokens: 2500,
+            costUsd: 0.8,
+            unpricedTokens: 0,
+          },
+          {
+            sessionId: 's2',
+            partial: null,
+            usageRecordsDropped: 0,
+            projectSlug: null,
+            tokens: 500,
+            costUsd: 0.2,
+            unpricedTokens: 0,
+          },
         ],
       }),
     );
@@ -65,7 +81,15 @@ describe('computeCostFlow', () => {
         totals: { tokens: 3000, costUsd: 1.0, unpricedTokens: 0 },
         perModel: [{ model: 'claude-a', tokens: 3000, costUsd: 1.0, unpricedTokens: 0 }],
         topSessions: [
-          { sessionId: 's1', projectSlug: 'p1', tokens: 2000, costUsd: 0.75, unpricedTokens: 0 },
+          {
+            sessionId: 's1',
+            partial: null,
+            usageRecordsDropped: 0,
+            projectSlug: 'p1',
+            tokens: 2000,
+            costUsd: 0.75,
+            unpricedTokens: 0,
+          },
         ],
       }),
     );
@@ -206,7 +230,15 @@ describe('computeCostFlow', () => {
         totals: { tokens: 1000, costUsd: 2, unpricedTokens: 0 },
         perModel: [{ model: 'claude-a', tokens: 1000, costUsd: 2, unpricedTokens: 0 }],
         topSessions: [
-          { sessionId: 's1', projectSlug: 'p1', tokens: 1000, costUsd: 2, unpricedTokens: 0 },
+          {
+            sessionId: 's1',
+            partial: null,
+            usageRecordsDropped: 0,
+            projectSlug: 'p1',
+            tokens: 1000,
+            costUsd: 2,
+            unpricedTokens: 0,
+          },
         ],
       }),
       400,
@@ -244,9 +276,19 @@ describe('computeCostFlow', () => {
         totals: { tokens: 3000, costUsd: 1, unpricedTokens: 500 },
         perModel: [{ model: 'claude-a', tokens: 3000, costUsd: 1, unpricedTokens: 500 }],
         topSessions: [
-          { sessionId: 'priced', projectSlug: 'p', tokens: 2000, costUsd: 0.6, unpricedTokens: 0 },
+          {
+            sessionId: 'priced',
+            partial: null,
+            usageRecordsDropped: 0,
+            projectSlug: 'p',
+            tokens: 2000,
+            costUsd: 0.6,
+            unpricedTokens: 0,
+          },
           {
             sessionId: 'unpriced-only',
+            partial: null,
+            usageRecordsDropped: 0,
             projectSlug: 'q',
             tokens: 1000,
             costUsd: 0,
@@ -269,8 +311,24 @@ describe('computeCostFlow', () => {
         totals: { tokens: 3000, costUsd: 0.3, unpricedTokens: 0 },
         perModel: [{ model: 'claude-a', tokens: 3000, costUsd: 0.3, unpricedTokens: 0 }],
         topSessions: [
-          { sessionId: 's1', projectSlug: null, tokens: 1000, costUsd: 0.1, unpricedTokens: 0 },
-          { sessionId: 's2', projectSlug: null, tokens: 2000, costUsd: 0.2, unpricedTokens: 0 },
+          {
+            sessionId: 's1',
+            partial: null,
+            usageRecordsDropped: 0,
+            projectSlug: null,
+            tokens: 1000,
+            costUsd: 0.1,
+            unpricedTokens: 0,
+          },
+          {
+            sessionId: 's2',
+            partial: null,
+            usageRecordsDropped: 0,
+            projectSlug: null,
+            tokens: 2000,
+            costUsd: 0.2,
+            unpricedTokens: 0,
+          },
         ],
       }),
     );
@@ -295,6 +353,8 @@ describe('computeCostFlow', () => {
         topSessions: [
           {
             sessionId: 's',
+            partial: null,
+            usageRecordsDropped: 0,
             projectSlug: null,
             tokens: 1_000_000_000,
             costUsd: 1_000_000,
@@ -363,6 +423,8 @@ describe('computeCostFlow', () => {
         topSessions: [
           {
             sessionId: 's-ok',
+            partial: null,
+            usageRecordsDropped: 0,
             projectSlug: 'agenthropic',
             tokens: 1000,
             costUsd: 1,
@@ -370,6 +432,8 @@ describe('computeCostFlow', () => {
           },
           {
             sessionId: 's-neg',
+            partial: null,
+            usageRecordsDropped: 0,
             projectSlug: 'refunded',
             tokens: 500,
             costUsd: -2,
@@ -377,12 +441,22 @@ describe('computeCostFlow', () => {
           },
           {
             sessionId: 'aaaaaaaa-1111-2222-3333-444444444444',
+            partial: null,
+            usageRecordsDropped: 0,
             projectSlug: null,
             tokens: 500,
             costUsd: Number.POSITIVE_INFINITY,
             unpricedTokens: 0,
           },
-          { sessionId: 's-zero', projectSlug: 'quiet', tokens: 0, costUsd: 0, unpricedTokens: 0 },
+          {
+            sessionId: 's-zero',
+            partial: null,
+            usageRecordsDropped: 0,
+            projectSlug: 'quiet',
+            tokens: 0,
+            costUsd: 0,
+            unpricedTokens: 0,
+          },
         ],
       }),
     );
@@ -416,7 +490,15 @@ describe('computeCostFlow', () => {
         totals: { tokens: 3000, costUsd: 1, unpricedTokens: 0 },
         perModel: [{ model: 'claude-a', tokens: 3000, costUsd: 1, unpricedTokens: 0 }],
         topSessions: [
-          { sessionId: 's1', projectSlug: 'p', tokens: 2000, costUsd: 3, unpricedTokens: 0 },
+          {
+            sessionId: 's1',
+            partial: null,
+            usageRecordsDropped: 0,
+            projectSlug: 'p',
+            tokens: 2000,
+            costUsd: 3,
+            unpricedTokens: 0,
+          },
         ],
       }),
     );
@@ -447,7 +529,15 @@ describe('computeCostFlow', () => {
         totals: { tokens: 3000, costUsd: 1, unpricedTokens: 0 },
         perModel: [{ model: 'claude-a', tokens: 3000, costUsd: 1.000_02, unpricedTokens: 0 }],
         topSessions: [
-          { sessionId: 's1', projectSlug: 'p', tokens: 3000, costUsd: 1.000_02, unpricedTokens: 0 },
+          {
+            sessionId: 's1',
+            partial: null,
+            usageRecordsDropped: 0,
+            projectSlug: 'p',
+            tokens: 3000,
+            costUsd: 1.000_02,
+            unpricedTokens: 0,
+          },
         ],
       }),
     );
@@ -518,7 +608,15 @@ describe('the hub node and its prose alternative', () => {
         totals: { tokens: 3000, costUsd: 0.7, unpricedTokens: 0 },
         perModel: [{ model: 'claude-a', tokens: 3000, costUsd: 1.0, unpricedTokens: 0 }],
         topSessions: [
-          { sessionId: 's1', projectSlug: 'p', tokens: 3000, costUsd: 1.0, unpricedTokens: 0 },
+          {
+            sessionId: 's1',
+            partial: null,
+            usageRecordsDropped: 0,
+            projectSlug: 'p',
+            tokens: 3000,
+            costUsd: 1.0,
+            unpricedTokens: 0,
+          },
         ],
       }),
     );
@@ -610,6 +708,8 @@ describe('computeCostFlow - names the server left blank (lane-P)', () => {
         topSessions: [
           {
             sessionId: 'aaaaaaaa-1111-2222-3333-444444444444',
+            partial: null,
+            usageRecordsDropped: 0,
             projectSlug: 'agenthropic',
             tokens: 1000,
             costUsd: 1,
@@ -635,6 +735,8 @@ describe('computeCostFlow - names the server left blank (lane-P)', () => {
         topSessions: [
           {
             sessionId: 'aaaaaaaa-1111-2222-3333-444444444444',
+            partial: null,
+            usageRecordsDropped: 0,
             projectSlug: '',
             tokens: 1000,
             costUsd: 1,
@@ -655,6 +757,8 @@ describe('computeCostFlow - names the server left blank (lane-P)', () => {
         topSessions: [
           {
             sessionId: 'aaaaaaaa-1111-2222-3333-444444444444',
+            partial: null,
+            usageRecordsDropped: 0,
             projectSlug: '',
             tokens: 1000,
             costUsd: -1,

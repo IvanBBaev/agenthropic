@@ -34,6 +34,7 @@
  */
 import type {
   AggregateDelegationSavingsDto,
+  ChangesDto,
   CostAnalysisDto,
   CostSummaryDto,
   GlobalDagDto,
@@ -42,6 +43,7 @@ import type {
 } from './dto';
 import {
   isAggregateSavings,
+  isChanges,
   isCostAnalysis,
   isCostSummary,
   isGlobalDag,
@@ -106,6 +108,13 @@ export type HealthUnreachableReason = 'no-response' | 'server-error' | 'malforme
 
 export type HealthResult =
   | { readonly kind: 'ok'; readonly schemaVersion: number }
+  /**
+   * Owner decision (2026-10-01): the server listens BEFORE its startup replay
+   * and says `status: 'replaying'` until it finishes. The token was accepted
+   * and the server is working - this is not a failure - but its figures are
+   * incomplete, so it is neither `ok` nor `unreachable`.
+   */
+  | { readonly kind: 'replaying'; readonly schemaVersion: number }
   | { readonly kind: 'unauthorized' }
   | {
       readonly kind: 'unreachable';
@@ -116,10 +125,18 @@ export type HealthResult =
     };
 
 /**
+ * How often the entry screen and the shell ask a `replaying` server again, in
+ * ms. The replay is a one-off at startup; a second is short enough that the
+ * wait ends promptly and long enough not to crowd a busy server.
+ */
+export const REPLAY_POLL_MS = 1000;
+
+/**
  * Validate a token by probing GET /api/health.
  *
  * - 200 with a well-formed body -> `ok` (+ the schemaVersion, a non-negative
- *   safe integer; any other number is a malformed body);
+ *   safe integer; any other number is a malformed body), or `replaying` when
+ *   the body says `status: 'replaying'` (2026-10-01);
  * - 401 -> `unauthorized` (bad token);
  * - any network failure, non-401 error status, or malformed body ->
  *   `unreachable` with a token-free message.
@@ -185,6 +202,11 @@ export async function checkHealth(token: string, signal?: AbortSignal): Promise<
       status: response.status,
     };
   }
+  // Only the one documented value changes the verdict: an older server that
+  // sends no `status` (or any other string) keeps answering `ok` as before.
+  if ((body as Record<string, unknown>)['status'] === 'replaying') {
+    return { kind: 'replaying', schemaVersion };
+  }
   return { kind: 'ok', schemaVersion };
 }
 
@@ -217,6 +239,11 @@ export type ApiResult<T> =
       readonly message: string;
       readonly status: number | null;
       readonly reason?: ApiErrorReason;
+      /**
+       * The ingest failure reason, present exactly when `reason` is
+       * `'quarantined'` or `'ingest-failing'` (token-redacted, path-free).
+       */
+      readonly rejectionReason?: string;
     };
 
 /**
@@ -230,7 +257,33 @@ export type ApiResult<T> =
  * fix a thing that is not broken. Absent on every other failure, where `status`
  * already carries the distinction.
  */
-export type ApiErrorReason = 'malformed-body';
+export type ApiErrorReason = 'malformed-body' | SessionRejectionReason;
+
+/**
+ * Owner decision (2026-10-01): the server answers 409 - not 404 - for a
+ * per-session read of a session the corpus HOLDS but ingest rejected, with a
+ * machine-readable `code`. `'quarantined'`: ingest stopped retrying it (it is
+ * re-read when its transcript or the pricing table changes);
+ * `'ingest-failing'`: its latest ingest failed and the next pass retries it.
+ * Either way the session exists - a view that says "not found" is wrong.
+ * Mirrors `SessionRejectionCode` in @agenthropic/shared.
+ */
+export type SessionRejectionReason = 'quarantined' | 'ingest-failing';
+
+function rejectionOf(
+  status: number,
+  body: unknown,
+  token: string,
+): { reason: SessionRejectionReason; rejectionReason: string } | undefined {
+  if (status !== 409 || typeof body !== 'object' || body === null) {
+    return undefined;
+  }
+  const { code, reason } = body as Record<string, unknown>;
+  if ((code !== 'quarantined' && code !== 'ingest-failing') || typeof reason !== 'string') {
+    return undefined;
+  }
+  return { reason: code, rejectionReason: copiedMessage(reason, token, 'no reason given') };
+}
 
 /**
  * What the reader is told when a body arrives intact and unreadable.
@@ -316,14 +369,18 @@ async function getJson<T>(
   }
   if (!response.ok) {
     let message = `request failed (HTTP ${response.status})`;
+    let rejection: ReturnType<typeof rejectionOf>;
     try {
       const body: unknown = await response.json();
       const serverError = (body as Record<string, unknown> | null)?.['error'];
       if (typeof serverError === 'string') message = copiedMessage(serverError, token, message);
+      rejection = rejectionOf(response.status, body, token);
     } catch {
       // Keep the status-only message; the body is not required to be JSON.
     }
-    return { kind: 'error', message, status: response.status };
+    return rejection === undefined
+      ? { kind: 'error', message, status: response.status }
+      : { kind: 'error', message, status: response.status, ...rejection };
   }
   let body: unknown;
   try {
@@ -455,4 +512,23 @@ export function fetchCostAnalysis(
     isCostAnalysis,
     signal,
   );
+}
+
+/**
+ * GET /api/changes (WP-U11, D11(a)) - the sessions that changed in the
+ * half-open event-time window `(since, until]`. `since` is REQUIRED by the
+ * server and has no default there, so this helper has none either: the caller
+ * supplies the reader's own lower bound, because a delta whose lower bound was
+ * invented answers a different question than the one asked. The server answers
+ * a malformed `since` with a 400 whose `{error}` names the problem.
+ */
+export function fetchChanges(
+  token: string,
+  since: string,
+  options: { readonly limit?: number } = {},
+  signal?: AbortSignal,
+): Promise<ApiResult<ChangesDto>> {
+  const params = new URLSearchParams({ since });
+  if (options.limit !== undefined) params.set('limit', String(options.limit));
+  return getJson<ChangesDto>(`/api/changes?${params.toString()}`, token, isChanges, signal);
 }

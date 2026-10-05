@@ -55,7 +55,7 @@ function agentHexFromPath(relativePath: string): string {
 }
 
 describe('fixture manifest', () => {
-  it('lists exactly the eight expected fixtures', () => {
+  it('lists exactly the eleven expected fixtures', () => {
     expect([...listFixtures()]).toEqual([
       'flat-tool-use',
       'nested-workflow',
@@ -65,6 +65,9 @@ describe('fixture manifest', () => {
       'depth-2-sync',
       'legacy-bare-explore',
       'agent-outcome-errors',
+      'crashed-no-stop',
+      'concurrent-instance-a',
+      'concurrent-instance-b',
     ]);
   });
 

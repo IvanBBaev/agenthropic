@@ -901,7 +901,12 @@ describe('runCorpusIngest (WP-IN5)', () => {
       // The override bites: 5000 bytes is over the overridden 1000-byte cap.
       expect(summary.filesSkipped).toBe(1);
       expect(warnings).toEqual([
-        { relativePath: 'subagents/agent-dead.jsonl', reason: 'oversize', code: undefined },
+        {
+          relativePath: 'subagents/agent-dead.jsonl',
+          reason: 'oversize',
+          code: undefined,
+          sizeBytes: 5000,
+        },
       ]);
       // ...while the un-overridden maxDepth keeps its default, so the depth-3
       // artifact is still walked and read.

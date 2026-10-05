@@ -292,23 +292,49 @@ function ledgerOracle(db: SqliteDatabase, topN = TOP_N): CostSummaryDto {
   const top = [...bySession]
     .sort(([aKey, a], [bKey, b]) => b.costUsd - a.costUsd || byText(aKey, bKey))
     .slice(0, topN);
-  const slugOf = db.prepare('SELECT project_slug FROM sessions WHERE id = ?');
+  const sessionOf = db.prepare(
+    `SELECT project_slug, partial_reason, partial_skipped_bytes, usage_records_dropped
+       FROM sessions WHERE id = ?`,
+  );
+  const honesty = db
+    .prepare(
+      `SELECT
+         (SELECT COUNT(*) FROM sessions WHERE partial_reason IS NOT NULL) AS p,
+         (SELECT COALESCE(SUM(usage_records_dropped), 0) FROM sessions) AS d`,
+    )
+    .get() as { p: number; d: number };
   return {
     totals,
     perModel,
     perDay,
-    topSessions: top.map(([sessionId, bucket]) => ({
-      sessionId,
-      // A session in `token_usage` with no `sessions` row keeps a null slug.
-      projectSlug:
-        (slugOf.get(sessionId) as { project_slug: string | null } | undefined)?.project_slug ??
-        null,
-      ...bucket,
-    })),
+    topSessions: top.map(([sessionId, bucket]) => {
+      // A session in `token_usage` with no `sessions` row keeps a null slug,
+      // and reads as whole with nothing dropped.
+      const row = sessionOf.get(sessionId) as
+        | {
+            project_slug: string | null;
+            partial_reason: 'main-transcript-oversize' | null;
+            partial_skipped_bytes: number | null;
+            usage_records_dropped: number;
+          }
+        | undefined;
+      return {
+        sessionId,
+        projectSlug: row?.project_slug ?? null,
+        ...bucket,
+        partial:
+          row?.partial_reason == null
+            ? null
+            : { reason: row.partial_reason, skippedBytes: row.partial_skipped_bytes },
+        usageRecordsDropped: row?.usage_records_dropped ?? 0,
+      };
+    }),
     // The population the slice came from (L1): every session with a ledger
     // row, priced or not - never the slice length.
     sessionCount: bySession.size,
     hasMore: bySession.size > top.length,
+    partialSessions: honesty.p,
+    usageRecordsDropped: honesty.d,
   };
 }
 
@@ -861,6 +887,9 @@ describe('cost summary equals an uncached scan (M-19)', () => {
       tokens: 4_000_000,
       costUsd: 12,
       unpricedTokens: 0,
+      // No sessions row, so no honesty facts: whole, nothing dropped.
+      partial: null,
+      usageRecordsDropped: 0,
     });
     expect(summary).toEqual(ledgerOracle(temp.db));
   });
@@ -901,6 +930,8 @@ describe('cost summary equals an uncached scan (M-19)', () => {
       topSessions: [],
       sessionCount: 0,
       hasMore: false,
+      partialSessions: 0,
+      usageRecordsDropped: 0,
     });
     expect(summary).toEqual(ledgerOracle(temp.db));
     // A migrated database is NOT empty of prices - so "no rows" here is the
@@ -1211,6 +1242,8 @@ describe('cost summary equals an uncached scan (M-19)', () => {
         // 1M input at $4/Mtok on day one + 0.5M output at $4/Mtok on day two.
         costUsd: 6,
         unpricedTokens: 0,
+        partial: null,
+        usageRecordsDropped: 0,
       },
     ]);
     const dayTwo = summary.perDay.find((entry) => entry.day === DAY_TWO.slice(0, 10));

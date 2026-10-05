@@ -21,6 +21,41 @@ export const ApiErrorSchema = Type.Object(
 export type ApiErrorDto = Static<typeof ApiErrorSchema>;
 
 /**
+ * Why ingest rejected a session, as a machine-readable code.
+ *
+ * - `ingest-failing`: its latest ingest attempt failed and the watcher will
+ *   retry it on the next pass - it may resolve itself.
+ * - `quarantined`: the retry budget is spent. It is re-read only when its
+ *   bytes change (on a backoff schedule) or at once when the pricing table
+ *   changes - this one needs a human, typically a missing price.
+ */
+export const SessionRejectionCodeSchema = Type.Union([
+  Type.Literal('quarantined'),
+  Type.Literal('ingest-failing'),
+]);
+
+export type SessionRejectionCode = Static<typeof SessionRejectionCodeSchema>;
+
+/**
+ * 409 body of every per-session read endpoint for a session the corpus holds
+ * but ingest rejected - as opposed to 404, which means the session is unknown.
+ * `error` is the uniform human sentence (so a client that only reads `error`
+ * still says something true), `code` is for code, and `reason` is the ingest
+ * failure reason: single-line, length-capped, with absolute paths collapsed to
+ * `<path>` and errno codes left to the server log.
+ */
+export const SessionRejectedErrorSchema = Type.Object(
+  {
+    error: Type.String(),
+    code: SessionRejectionCodeSchema,
+    reason: Type.String(),
+  },
+  { additionalProperties: false },
+);
+
+export type SessionRejectedErrorDto = Static<typeof SessionRejectedErrorSchema>;
+
+/**
  * Agent status incl. `'unknown'` (OPEN-2: assigned by the missing-Stop
  * watchdog; the UI depends on it being always visible, never hidden).
  */

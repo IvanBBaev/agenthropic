@@ -53,6 +53,7 @@ import { computeCostWindows, isReadableDay } from './cost-windows';
 import type { WindowTotals } from './cost-windows';
 import { computeCostFlow, type CostFlowLayout, type FlowNode } from './layout/cost-flow';
 import { SessionCostAnalysis } from './SessionCostAnalysis';
+import { DroppedUsageNote, PartialAggregateNote, PartialBadge } from './session-honesty';
 import { snapshotAge } from './snapshot';
 import { NO_FIGURE_META } from './status';
 import { rankTopBurners } from './top-burners';
@@ -537,6 +538,13 @@ function AggregateSavingsPanel({
   readonly aggregate: AggregateDelegationSavingsDto;
 }) {
   const subagentsSeen = aggregate.subagentsPriced + aggregate.subagentsSkipped;
+  // RR2 (2026-09-30): the per-session panel's CA-3, on the aggregate. The
+  // schema defines `savingsUsd` as a sum of per-subagent floors, so it exceeds
+  // `hypotheticalUsd - actualUsd` exactly when some subagent cost more than its
+  // top-tier alternative. The payload carries no per-agent rows here, so the
+  // overspend is detected from the three served figures rather than counted.
+  const flooredOverspend =
+    aggregate.savingsUsd - (aggregate.hypotheticalUsd - aggregate.actualUsd) > USD_EPSILON;
   return (
     <>
       <p className="muted" data-testid="aggregate-savings-basis">
@@ -575,6 +583,16 @@ function AggregateSavingsPanel({
           </span>
         </div>
       </div>
+      {/* Placed under the three figures it qualifies, as CA-3 is: a reader who
+          subtracts them is not wrong about arithmetic. */}
+      {flooredOverspend && (
+        <p className="empty-state" data-testid="aggregate-savings-floor">
+          <span className="status-error">✕</span> Some subagents cost more than the top-tier
+          alternative would have. Each subagent&apos;s saving is floored at $0.00 before the sum, so
+          that overspend is nowhere subtracted: &quot;Saved by delegating&quot; is a sum of floors
+          and does not equal the difference between the two levels beside it.
+        </p>
+      )}
       <p className="muted" data-testid="aggregate-savings-scope">
         Scope: {plural(aggregate.sessionsPriced, 'session')} priced of{' '}
         {plural(aggregate.sessionsWithSubagents, 'session')} that recorded a subagent, out of{' '}
@@ -777,6 +795,14 @@ export function CostView({ token, onAuthRejected }: ViewProps) {
     windows.today.tokens === 0 &&
     windows.today.unpricedTokens === 0 &&
     windows.today.unreadableRows === 0;
+  // RR2 (2026-09-30): the week tile's twin of the pair above. The read predates
+  // the window's FIRST day, so every day in it is unread; an empty bucket is
+  // then a structural zero, exactly as `todayEmpty` is for the today tile.
+  const weekUnread = windows.observedUtc < windows.weekStartUtc;
+  const weekEmpty =
+    windows.last7Days.tokens === 0 &&
+    windows.last7Days.unpricedTokens === 0 &&
+    windows.last7Days.unreadableRows === 0;
   // CV-5: what the top-sessions table covers, in dollars, and what it does
   // not. Both are arithmetic on the served payload - no second endpoint is
   // consulted, so neither figure can be fresher or staler than the rows.
@@ -939,22 +965,44 @@ export function CostView({ token, onAuthRejected }: ViewProps) {
         </div>
         <div className="kpi" data-testid="kpi-week">
           <span className="kpi-label">Last 7 days (UTC)</span>
-          <span className="kpi-value">{formatUsd(windows.last7Days.costUsd)}</span>
-          <span className="muted kpi-note">
-            {windows.weekStartUtc} → {windows.todayUtc} · {formatTokens(windows.last7Days.tokens)}{' '}
-            tokens
-          </span>
-          <WindowCoverageNote totals={windows.last7Days} testId="kpi-week-coverage" />
-          {/*
-            Weaker than the today tile on purpose. This window still holds six
-            measured days, so the figure is a real lower bound rather than an
-            artefact - it is only the tail of the range that is unread. Blanking
-            it would hide more truth than it protects.
-          */}
-          {!windows.todayObserved && (
-            <span className="kpi-note unpriced" data-testid="kpi-week-partial">
-              read on {windows.observedUtc} · a lower bound, the rest of this window is unread
-            </span>
+          {weekUnread && weekEmpty ? (
+            // RR2 (2026-09-30): the premise of the arm below - "six measured
+            // days" - is gone once the read is older than the window itself.
+            // Same refusal, same wording, as the today tile's structural zero.
+            <>
+              <span className="kpi-value unpriced" data-testid="kpi-week-unread">
+                not measured
+              </span>
+              <span className="muted kpi-note">
+                {windows.weekStartUtc} → {windows.todayUtc} · no usage was dated in this window when
+                this page was read on {windows.observedUtc} - use {REFRESH_LABEL} to measure it
+              </span>
+            </>
+          ) : (
+            <>
+              <span className="kpi-value">{formatUsd(windows.last7Days.costUsd)}</span>
+              <span className="muted kpi-note">
+                {windows.weekStartUtc} → {windows.todayUtc} ·{' '}
+                {formatTokens(windows.last7Days.tokens)} tokens
+              </span>
+              <WindowCoverageNote totals={windows.last7Days} testId="kpi-week-coverage" />
+              {/*
+                Weaker than the today tile on purpose. While the read falls
+                inside the window, the window still holds measured days, so the
+                figure is a real lower bound rather than an artefact - it is
+                only the tail of the range that is unread. Blanking it would
+                hide more truth than it protects.
+                AMENDED 2026-09-30 (RR2): that premise holds only while the read
+                falls inside the window. Once it does not, an empty bucket takes
+                the arm above; a non-empty one (rows a fast writer clock dated
+                ahead of the read) keeps its real figure and this note.
+              */}
+              {!windows.todayObserved && (
+                <span className="kpi-note unpriced" data-testid="kpi-week-partial">
+                  read on {windows.observedUtc} · a lower bound, the rest of this window is unread
+                </span>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -1355,6 +1403,18 @@ export function CostView({ token, onAuthRejected }: ViewProps) {
               : ` The remaining ${formatUsd(outsideTopSessionsUsd)} is unaccounted for: this payload lists every session with recorded usage, so there is no unlisted session to attribute it to - the served total and the served rows disagree.`)}
         </p>
       )}
+      {/* Owner decisions 1 and 2: every total on this page is a lower bound
+          while any session is partial, and excludes usage records that had no
+          dedupe key. Corpus-wide, not per slice. See views/session-honesty.tsx. */}
+      {(summary.partialSessions !== 0 || summary.usageRecordsDropped !== 0) && (
+        <p className="muted" data-testid="cost-honesty">
+          <PartialAggregateNote count={summary.partialSessions} />
+          <DroppedUsageNote
+            count={summary.usageRecordsDropped}
+            lead={summary.partialSessions === 0 ? '' : ' '}
+          />
+        </p>
+      )}
       {listedSessionCount === 0 ? (
         <p className="empty-state" data-testid="top-sessions-empty">
           {summary.sessionCount > 0
@@ -1391,6 +1451,8 @@ export function CostView({ token, onAuthRejected }: ViewProps) {
                   >
                     <code>{shortId(session.sessionId)}</code>
                   </button>
+                  <PartialBadge partial={session.partial} lead=" " />
+                  <DroppedUsageNote count={session.usageRecordsDropped} lead=" " />
                 </td>
                 <td className={session.projectSlug === null ? 'muted' : undefined}>
                   {projectLabel(session.projectSlug)}

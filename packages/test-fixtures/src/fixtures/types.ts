@@ -4,8 +4,11 @@
  * Every fixture models one join provenance of docs/analysis/parser-spec.md
  * section 4.1 (five: tool_use, directory, task_notification, queue_operation,
  * legacy_explore), the depth-2 parent (gate item 4), the N3 usage-dedup case
- * (section 5.2) or the WP-U10 outcome terminals. All content is SYNTHETIC — invented ids, hex, timestamps and
- * prose; nothing is copied from real transcripts.
+ * (section 5.2), the WP-U10 outcome terminals, or one of the WP-X1 hostile
+ * pathologies of section 1 (live-crash / no-Stop, same-slug concurrency — the
+ * latter as a pair of sessions); `pathologies.ts` maps each pathology to the
+ * fixtures that exhibit it. All content is SYNTHETIC — invented ids, hex,
+ * timestamps and prose; nothing is copied from real transcripts.
  */
 
 /** One on-disk file of a fixture, expressed as JSONL lines (or a single JSON line for `.meta.json`). */
@@ -32,6 +35,9 @@ export const FIXTURE_NAMES = [
   'depth-2-sync',
   'legacy-bare-explore',
   'agent-outcome-errors',
+  'crashed-no-stop',
+  'concurrent-instance-a',
+  'concurrent-instance-b',
 ] as const;
 
 export type FixtureName = (typeof FIXTURE_NAMES)[number];

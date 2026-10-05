@@ -212,6 +212,8 @@ Two things fall out of this:
 > boundaries at analysis time. And **`agent_id` is not backfilled by a later pass**: the
 > parser attributes it before the row is ever written, so a `NULL` means genuinely
 > unattributable rather than "not yet resolved" (`WP-IN9` was never needed).
+> *(Amended 2026-09-30, owner decision D19(a): `is_compaction_baseline` is documented as
+> **reserved** — written as `0`, read by nothing, kept as a slot for a future marker.)*
 
 Every event — hook or JSONL line — goes through the same immutable-substrate,
 deterministic-projection pipeline (`CD-2`, `development-plan.md` Track IN):

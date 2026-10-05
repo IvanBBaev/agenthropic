@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The Sessions view now answers "what changed since X".** A "Changed since" form reads
+  `GET /api/changes` for a chosen UTC day and lists the changed sessions as plain text. It states
+  the served `(since, until]` event-time window and the totals for the whole window, and, when
+  they apply, that the list is a slice, how many tokens fell outside the listed sessions, and how
+  many undated rows no window can include. Nothing is fetched until the reader picks a day (D11).
+- **Synthetic WP-X1 pathology corpus.** `packages/test-fixtures` adds `crashed-no-stop` (transcripts
+  end mid-turn, the spawn never gets a tool_result, no Stop) and the `concurrent-instance-a`/`-b`
+  pair (same slug, interleaved timestamps, look-alike spawns 2 ms apart). A typed
+  `PATHOLOGY_MANIFEST` maps all four pathologies to their fixtures, and a self-test fails on a
+  pathology with no fixture or an entry naming a missing one. The synthetic hierarchy corpus is
+  now 14 edges over eleven fixtures, all reproduced (D14).
+
 - The event stream is resumable: the server keeps the last 256 frames and, when a browser
   reconnects with `Last-Event-ID` (which `EventSource` sends by itself), replays the frames it
   missed before live frames resume. A longer absence, or a reconnect across a server restart,
@@ -74,6 +86,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   added, `sessionId` renamed, the guard's `agentId` check removed): all three went red.
 
 ### Changed
+
+- **Docs record the 2026-09-30 owner decisions from the WP audit (D12–D19) as dated amendments.**
+  The session tree stays a layered SVG refreshed on demand (WP-U7); an unknown model halts ingest,
+  and `RELEASE.md` §6 gains a [HUMAN] pre-tag pricing-page re-read plus real-corpus boot instead of
+  a CI staleness gate (WP-C6, WP-C1); WP-C2 is met without a `PricingProvider` interface; the
+  WORKLOG presence check is dropped (WP-X10); the X5 red-run demonstration is recorded as pending;
+  and `token_usage.is_compaction_baseline` is documented as reserved.
 
 - `/api/cost/summary` is served from the `token_usage_rollup` materialization rather than computed over `token_usage` on every request; an equivalence suite pins both paths to the same answer.
 - `packages/shared` drops its unused `*Row` interfaces; `types/rows.ts` becomes `types/enums.ts` with named exports.
@@ -199,6 +218,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Sessions whose main transcript is larger than the 64 MiB read cap were served as complete.
+  They are now flagged **partial**: the dashboard shows a "partial — main transcript too large
+  to read; totals are a lower bound" badge with the unread size, and cost totals say how many
+  partial sessions they include (migration 21).
+- Usage records without a message id are no longer dropped silently: each session reports how
+  many "could not be deduplicated and were excluded", and the cost summary shows the
+  corpus-wide count.
+- Cache-write tokens are no longer lost when a record's `cache_creation` breakdown is missing
+  or incomplete: the flat total is used, and any unsplit remainder is counted as 5-minute cache
+  writes (a lower bound if it was really 1-hour).
+- A quarantined or failing session no longer reads as "Session not found": the per-session
+  reads (`/api/sessions/:id`, `/tree`, `/events`, `/cost-analysis`) answer `409` with
+  `{ error, code: "quarantined" | "ingest-failing", reason }` — sanitized, no path, no errno
+  (errno goes to the server log only). Unknown session ids stay `404`. The session tree and
+  the cost analysis read "ingest quarantined this session: …" or "ingest is retrying this
+  session: …", and a quarantined session no longer offers a Retry that cannot succeed.
+- The dashboard was dark for ~40 s while a large corpus replayed at boot. The startup replay
+  now runs in passes of 25 sessions and yields between them, so the server answers (with the
+  data ingested so far) and `GET /api/health` reports `status: "replaying"` (widened from the
+  literal `"ok"`) until it finishes; the entry screen waits and lets the user in once the
+  replay is done, and the header shows a replaying chip until it clears.
+- The per-session cost analysis shows the partial badge and the excluded-usage note, taken from
+  the transcript read the analysis was computed from; both notices are styled like unpriced
+  figures.
+- A status change that arrived during a refetch could be silently undone: the live board armed
+  its "re-read after a dropped frame" guard only while its very first snapshot loaded, so a frame
+  landing while a Retry or a later refetch was in flight was dropped or patched onto a board the
+  older response then replaced. The board now re-reads once whenever a status frame overlaps any
+  read in flight.
+- The "Last 7 days" tile printed $0.00 for a window it never read: once a cost page outlived its
+  snapshot by more than a week, every day in the window postdated the read. It now says "not
+  measured" with the read date, as the Today tile does.
+- The aggregate delegation savings panel no longer lets overspend read as savings: "Saved by
+  delegating" is a sum of per-subagent savings each floored at $0.00, and when it exceeds the
+  difference between the two figures beside it the panel now says so, as the per-session panel
+  does.
+- An infinite compaction delta no longer raises both the mispricing and the "unknown" banner; a
+  difference that cannot be read is treated as unknown only.
+- A cost-analysis lookup no longer calls an unreadable session "not found": when a session's
+  project directory or transcript cannot be probed (a permission or I/O error), the server answers
+  503 with the corpus-relative path it could not read instead of treating the entry as absent,
+  whether the session was located through the database hint or by enumerating the corpus.
 - Tests: a 2026-09-26 audit of every ticked v1.0 work package against its Done-when found
   three clauses the code met but no test proved. Redaction is now proven deterministic and
   idempotent, and a redelivered or re-ingested secret-bearing hook event stores one row with

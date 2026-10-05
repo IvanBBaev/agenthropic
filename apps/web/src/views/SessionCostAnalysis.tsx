@@ -54,11 +54,13 @@ import { useEffect, useState } from 'react';
 import { fetchCostAnalysis } from '../api';
 import type { CostAnalysisDto } from '../dto';
 import { formatTokens, formatUsd, hasVisibleText, nameOrBlank, shortId } from '../format';
+import { DroppedUsageNote, PartialBadge } from './session-honesty';
+import { sessionRejectionText, type RejectionFields } from './session-rejection';
 import { NO_FIGURE_META } from './status';
 
 type AnalysisState =
   | { readonly kind: 'loading' }
-  | { readonly kind: 'error'; readonly message: string }
+  | { readonly kind: 'error'; readonly message: string; readonly retryable: boolean }
   | { readonly kind: 'ready'; readonly analysis: CostAnalysisDto };
 
 /**
@@ -83,7 +85,17 @@ type AnalysisState =
  * wrong cause is worse than naming none: it sends the reader to fix a thing
  * that is not broken.
  */
-export function analysisErrorText(message: string, status: number | null): string {
+export function analysisErrorText(
+  message: string,
+  status: number | null,
+  rejection: RejectionFields = {},
+): string {
+  // A 409 names an ingest rejection: the shared sentence, so this panel and the
+  // tree pane in SessionsView give one account of it (see session-rejection.ts).
+  const rejected = sessionRejectionText(rejection);
+  if (rejected !== undefined) {
+    return rejected.text;
+  }
   if (status === 503) {
     return `Per-session analysis is unavailable on this server: ${message}`;
   }
@@ -241,7 +253,11 @@ export function SessionCostAnalysis({
       if (result.kind === 'unauthorized') {
         onAuthRejected();
       } else if (result.kind === 'error') {
-        setState({ kind: 'error', message: analysisErrorText(result.message, result.status) });
+        setState({
+          kind: 'error',
+          message: analysisErrorText(result.message, result.status, result),
+          retryable: sessionRejectionText(result)?.retryable ?? true,
+        });
       } else {
         setState({ kind: 'ready', analysis: result.data });
       }
@@ -261,14 +277,16 @@ export function SessionCostAnalysis({
     return (
       <p className="empty-state" data-testid="analysis-error">
         <span className="status-error">✕</span> {state.message}{' '}
-        <button
-          type="button"
-          onClick={() => {
-            setRequestKey((key) => key + 1);
-          }}
-        >
-          Retry
-        </button>
+        {state.retryable && (
+          <button
+            type="button"
+            onClick={() => {
+              setRequestKey((key) => key + 1);
+            }}
+          >
+            Retry
+          </button>
+        )}
       </p>
     );
   }
@@ -278,10 +296,14 @@ export function SessionCostAnalysis({
   // Derived once: the banner and the table's accessible description have to
   // agree about whether there is a signal, and two copies of the comparison is
   // how they stop agreeing.
-  const hasDeltaSignal = Math.abs(compaction.deltaUsd) >= DELTA_SIGNAL_USD;
-  // KK6. The comparison above is false for NaN, so on its own it went silent
+  // KK6. The size comparison is false for NaN, so on its own it went silent
   // exactly when the difference could not be read. Unknown is its own state.
   const deltaUnknown = !Number.isFinite(compaction.deltaUsd);
+  // RR2 (2026-09-30): ...and it is TRUE for an infinite delta, which then
+  // rendered the signal banner ("a difference this size") beside the unknown
+  // notice. A difference that cannot be read has no size, so only a finite one
+  // can be a signal.
+  const hasDeltaSignal = !deltaUnknown && Math.abs(compaction.deltaUsd) >= DELTA_SIGNAL_USD;
   const compactionDescribedBy = hasDeltaSignal
     ? COMPACTION_SIGNAL_ID
     : deltaUnknown
@@ -343,6 +365,18 @@ export function SessionCostAnalysis({
 
   return (
     <div data-testid="session-analysis">
+      {/* Owner decisions 1 and 2: these figures come from a transcript read
+          that may have skipped the main transcript (a lower bound) or dropped
+          usage records with no dedupe key. See views/session-honesty.tsx. */}
+      {(state.analysis.partial !== null || state.analysis.usageRecordsDropped !== 0) && (
+        <p className="muted" data-testid="analysis-honesty">
+          <PartialBadge partial={state.analysis.partial} lead="" />
+          <DroppedUsageNote
+            count={state.analysis.usageRecordsDropped}
+            lead={state.analysis.partial === null ? '' : ' · '}
+          />
+        </p>
+      )}
       <h3>Compaction repricing</h3>
       {compaction.compactionCount === 0 ? (
         <p className="empty-state" data-testid="no-compaction">

@@ -39,16 +39,30 @@
  * the string it judges, so the screen can tell the two apart: when the field
  * has moved on under it, the sentence says which string it is about and the
  * field - whose contents nothing has judged - is not marked invalid.
+ *
+ * AMENDED 2026-10-01 (owner decision). The server now listens BEFORE its
+ * startup replay and answers `status: 'replaying'` until the replay finishes.
+ * That answer proves the token (every /api/* route is auth-gated) and says the
+ * server is busy, not broken - so it is shown as a wait, never as an error, and
+ * the probe is repeated every `replayPollMs` until the server answers `ok` (the
+ * user is let in) or anything else (that verdict is shown as before). An edit
+ * to the field abandons the wait, like any other verdict about the old string.
  */
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { checkHealth, type HealthResult } from './api';
+import { checkHealth, REPLAY_POLL_MS, type HealthResult } from './api';
 
 export interface TokenScreenProps {
   /** Called with the validated token; the caller stores it and mounts the shell. */
   readonly onSuccess: (token: string) => void;
   /** Optional message shown when the shell bounced the user back here. */
   readonly notice?: string;
+  /** How often a replaying server is asked again, in ms (tests shorten it). */
+  readonly replayPollMs?: number;
 }
+
+/** Shown, as a status and not an alert, while the server replays its corpus. */
+const REPLAYING_NOTICE =
+  'The server accepted this token and is replaying the corpus, please wait - you will be let in as soon as it finishes.';
 
 /** Said in the form the user can act on: the field, not the transport. */
 const EMPTY_TOKEN_ERROR = 'The token field is empty - paste the dashboard token first.';
@@ -78,7 +92,7 @@ interface TokenVerdict {
  * The three `unreachable` reasons are three different situations with three
  * different next actions, and only one of them is about the token.
  */
-function describeFailure(result: Exclude<HealthResult, { kind: 'ok' }>): string {
+function describeFailure(result: Exclude<HealthResult, { kind: 'ok' | 'replaying' }>): string {
   if (result.kind === 'unauthorized') {
     return 'Invalid token: the server rejected it.';
   }
@@ -95,11 +109,30 @@ function describeFailure(result: Exclude<HealthResult, { kind: 'ok' }>): string 
   }
 }
 
-export function TokenScreen({ onSuccess, notice }: TokenScreenProps) {
+export function TokenScreen({
+  onSuccess,
+  notice,
+  replayPollMs = REPLAY_POLL_MS,
+}: TokenScreenProps) {
   const [value, setValue] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<TokenVerdict | null>(null);
+  const [replaying, setReplaying] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  /**
+   * Identifies the current replay wait. Bumped to abandon it - by an edit, or
+   * by unmounting - so a poll that lands afterwards sees a different number
+   * and does nothing; the pending timer is cleared alongside.
+   */
+  const waitRef = useRef(0);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  function abandonWait(): void {
+    waitRef.current += 1;
+    clearTimeout(timerRef.current);
+  }
+
+  useEffect(() => abandonWait, []);
 
   /**
    * Put the caret back where the correction has to be made. The ref is
@@ -155,7 +188,18 @@ export function TokenScreen({ onSuccess, notice }: TokenScreenProps) {
     }
     setBusy(true);
     setError(null);
-    const result = await checkHealth(token);
+    const wait = waitRef.current;
+    let result = await checkHealth(token);
+    while (result.kind === 'replaying') {
+      if (waitRef.current !== wait) return;
+      setReplaying(true);
+      await new Promise<void>((resolve) => {
+        timerRef.current = setTimeout(resolve, replayPollMs);
+      });
+      result = await checkHealth(token);
+    }
+    if (waitRef.current !== wait) return;
+    setReplaying(false);
     setBusy(false);
     if (result.kind === 'ok') {
       onSuccess(token);
@@ -201,11 +245,24 @@ export function TokenScreen({ onSuccess, notice }: TokenScreenProps) {
           // changes, the verdict is stale, and a stale verdict left on screen
           // is a claim nobody made.
           setError(null);
+          // "Replaying, please wait" is a verdict about the old string too:
+          // the wait for it is abandoned and the button offered again. A
+          // probe still in flight for the FIRST answer is not touched (B1).
+          if (replaying) {
+            abandonWait();
+            setReplaying(false);
+            setBusy(false);
+          }
         }}
       />
       {error !== null && (
         <p className="status-error" role="alert" id="token-error">
           {staleVerdict ? `${error.message} ${STALE_VERDICT_NOTE}` : error.message}
+        </p>
+      )}
+      {replaying && (
+        <p className="status-warn" role="status" data-testid="token-replaying">
+          {REPLAYING_NOTICE}
         </p>
       )}
       <button type="submit" disabled={busy}>

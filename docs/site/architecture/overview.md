@@ -155,7 +155,7 @@ around:
 | `StoragePort` | Persisted read/write of projected tables | `better-sqlite3`, WAL mode — single driver *(the `node:sqlite` fallback was dropped per best-path §6.3, applied 2026-07-06)* |
 | `RealtimeHub` | Push projected-state deltas to connected clients | SSE endpoint, same-origin enforced |
 | `AlertSink` | Match rules against state, deliver outbound | Webhook target → Telegram formatter |
-| `PricingProvider` | Versioned `model_pricing` lookup | SQLite table, keyed by `(model, bucket, effective_from)` — a dated lookup that picks the newest row not later than the message *(the `verified_on` column sketched under CD-4 was never built; provenance of a rate lives in the migration that seeded it, not in a column)* |
+| `PricingProvider` | Versioned `model_pricing` lookup | SQLite table, keyed by `(model, bucket, effective_from)` — a dated lookup that picks the newest row not later than the message *(the `verified_on` column sketched under CD-4 was never built; provenance of a rate lives in the migration that seeded it, not in a column. Amended 2026-09-30, owner decision D18(a): there is no `PricingProvider` interface and none will be added — the port is `loadPricing` plus the dated resolver in `computeCostUsd`; one implementation, no second caller)* |
 | `CostEngine` | Combine `token_usage` + `PricingProvider` into dollar cost and delegation-savings | Pure computation over persisted data |
 
 *(Port names and the full rationale: concept-analysis-v2 §3, CD-6. This table is a
@@ -217,7 +217,9 @@ Strengths). The reconciliation precedence that enforces this in the schema:
   the transcript's own compaction boundaries at analysis time, not by consulting a
   persisted flag; the column is recorded here so nobody plans against a marker the code
   does not maintain. See [data model](../architecture/data-model.md) and
-  [cost model](../architecture/cost-model.md).)*
+  [cost model](../architecture/cost-model.md).)* *(Amended 2026-09-30, owner decision
+  D19(a): the column is documented as **reserved** — written as `0`, read by nothing,
+  kept as a slot for a future marker; repricing happens at analysis time.)*
 
 This is why the ingest loop reads the JSONL transcript directly rather than trusting hook
 payloads for anything cost-bearing — see

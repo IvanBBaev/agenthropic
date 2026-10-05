@@ -49,6 +49,9 @@ deleting today. They describe code that exists and were written from it.
 >   `is_compaction_baseline = 1` — the shipped name for the sketched
 >   `is_precompact_baseline`), and repricing holds a delta-of-approximately-zero
 >   invariant against the oracle. No hook-time snapshot was needed.
+>   *(Amended 2026-09-30, owner decision D19(a): no row is ever flagged `1`. The column is
+>   **reserved** — written as `0`, read by nothing — and the baseline lives only in the
+>   repricer, `packages/core/src/cost/compaction-repricing.ts`, at analysis time.)*
 > - **Stuck-transcript detection: built as a polling watcher, deliberately without
 >   `fs.watch`.** `apps/server/src/ingest/corpus-watcher.ts` polls (default 3000 ms,
 >   PROVISIONAL) with an `lstat`-only fingerprint and re-ingests changed sessions
@@ -308,6 +311,10 @@ abstract.
 > against the JSONL oracle. No hook-time snapshot exists — the `PreCompact` hook
 > contributes liveness only; it carries no status verdict the way `Stop` and
 > `SubagentStop` do.
+>
+> *Amended 2026-09-30 (owner decision D19(a)):* the column is **reserved**. The writer
+> inserts `0` on every row and nothing reads it; the baseline is never stored, only
+> recomputed by the repricer at analysis time.
 
 **What is genuinely undecided:** whether the JSONL transcript itself carries
 pre/post-compaction markers precise enough to reconstruct the baseline after the fact,
@@ -403,8 +410,8 @@ needs the token:
 curl -s -H "Authorization: Bearer $DASHBOARD_TOKEN" http://127.0.0.1:4317/api/health
 ```
 
-Two fields are always present — `status`, which is the literal `"ok"`, and
-`schemaVersion`. Everything else is optional:
+Two fields are always present — `status`, which is `"replaying"` until the startup
+replay pass finishes and `"ok"` after it, and `schemaVersion`. Everything else is optional:
 
 | Field | Present when | What it means |
 |---|---|---|
@@ -428,11 +435,23 @@ the seam does not exist the field disappears, because the server genuinely does 
 know. The response schema is declared with `additionalProperties: false`, so a field
 you do not recognise is a bug rather than an undocumented extra.
 
-A subtlety worth internalising: `status` stays `"ok"` while `ingest` is `"replaying"`.
-That is deliberate. A replaying server is healthy — it is answering requests — it is
-just not yet current. If you probe health during a restart and act on `status` alone,
-you will conclude the dashboard's numbers are final when the corpus is still being
-re-read.
+**A `"replaying"` status is a wait, not an error** *(amended 2026-10-01: until then
+`status` stayed `"ok"` during the replay and only `ingest` said otherwise, so a probe
+reading `status` alone concluded the numbers were final while the corpus was still being
+re-read)*. The server binds first and replays the corpus after, so health answers during
+the replay; a replaying server is healthy — it is answering requests — it is just not yet
+current. The token screen says *"the server accepted this token and is replaying the
+corpus, please wait"* and lets you in when the replay finishes; the header shows a
+*replaying the corpus, please wait* chip and re-probes until it clears. Nothing to do
+but wait; if it never clears, check the server log for the replay pass.
+
+**A per-session read answering `409`** (since 2026-10-01) means the corpus holds that
+session but ingest rejected it. The body's `code` says which way: `ingest-failing` is
+retried on the next pass and may clear by itself; `quarantined` needs a human —
+typically a missing price (add it to the pricing table, which re-admits every
+quarantined session at once) or a transcript that cannot be parsed (it is re-read when
+the file changes). The body's `reason` is the sanitized failure; the errno and full
+context are in the server log (§6). A `404` still means the session id is unknown.
 
 One thing you might expect on health is **deliberately not there**, and one is there
 only as a count:
@@ -460,7 +479,7 @@ There are eight skip reasons, and they fall into two groups:
 
 | Reason | Group | What happened |
 |---|---|---|
-| `oversize` | read hazard | The file is larger than the per-file read cap (64 MiB, PROVISIONAL) and was deliberately not read. |
+| `oversize` | read hazard | The file is larger than the per-file read cap (64 MiB, PROVISIONAL) and was deliberately not read. When the file is a session's **main** transcript and the session still has subagent transcripts to read, the session is ingested and marked `partial` (`main-transcript-oversize`, with the skipped size) - see below. |
 | `symlink` | read hazard | The path is (or was swapped to) a symlink; the open uses `O_NOFOLLOW`, so it failed with `ELOOP` rather than following the link out of the corpus. |
 | `not-regular-file` | read hazard | The open descriptor turned out to be a directory or a character device — a TOCTOU re-check on the *open* file, not on the path. |
 | `unreadable` | read hazard | Any other filesystem error (`EACCES`, `EIO`, …); the `code` is carried in the log line. |
@@ -502,6 +521,24 @@ poll tick, and one line every three seconds is exactly how an operator learns to
 ignore a log. The counters behind the aggregate never rate-limit; they are the
 `ingestSkips` object on `/api/health` (§5), so the cumulative truth is always
 available even if you missed the lines.
+
+**A partial session** (owner decision 1, 2026-10) is the visible half of an oversize skip.
+If the file skipped as `oversize` is the session's main transcript `<uuid>.jsonl`, the
+session's subagent transcripts are still ingested, and the session row carries
+`partial_reason = 'main-transcript-oversize'` and `partial_skipped_bytes`. The dashboard
+shows *"partial — main transcript too large to read; totals are a lower bound"* on the
+session, and the cost view says how many partial sessions its totals include. What to do:
+nothing is wrong with the database; the totals for that session are simply missing the
+main transcript's usage. The cap is deliberate (PROVISIONAL) and is not raised per file.
+The mark clears on the next ingest that reads the main transcript. An oversize main
+transcript in a session with **no** subagent transcripts leaves nothing to ingest, so that
+session has no row at all and is visible only through the skip line and `ingestSkips`.
+
+**"N usage records could not be deduplicated and were excluded"** (owner decision 2, NN1)
+means that many usage records in the session had no `message.id`. Dedupe is by
+`message.id`, so a record without one cannot be told apart from a streamed retry of the
+same message; it is excluded from every total rather than guessed at. Such records are
+not an ingest failure and do not quarantine the session.
 
 **A session that fails to ingest** is a different event from a skipped file, and gets
 its own line:
@@ -604,7 +641,9 @@ carried is now resolved item by item:
   snapshot) was an open Phase-0 probe (`G0.2b`). **Resolved toward JSONL:** the
   transcript's markers proved usable; the baseline is parsed, stored as
   `is_compaction_baseline` rows, and repriced with a delta-of-approximately-zero
-  invariant (§3).
+  invariant (§3). *(Amended 2026-09-30, owner decision D19(a): the baseline is parsed and
+  repriced at analysis time but not stored; `is_compaction_baseline` is reserved, written
+  as `0` and read by nothing.)*
 - Whether the general stuck-session watchdog and the `WP-IN12`-scoped missing-Stop
   rule were one mechanism or two was unstated. **Resolved as two cooperating
   mechanisms**, neither of them `fs.watch`: the polling ingest watcher and the

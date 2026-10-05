@@ -398,6 +398,22 @@ button:disabled {
   color: #c98500;
 }
 
+/* Per-session honesty (owner decisions 1 and 2, views/session-honesty.tsx):
+   the same family of honest gap as `.unpriced` - a figure that is real but
+   incomplete - so it wears the same amber. `.partial-badge` (a lower bound:
+   the main transcript was never read) is the stronger claim and is boxed;
+   `.dropped-usage` (records excluded for want of a dedupe key) stays inline. */
+.partial-badge {
+  color: #c98500;
+  border: 1px solid #4a422a;
+  border-radius: 4px;
+  padding: 0 0.3rem;
+}
+
+.dropped-usage {
+  color: #c98500;
+}
+
 /* --- Live status board (WP-U6) --- */
 
 .board {

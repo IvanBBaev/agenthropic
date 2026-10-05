@@ -34,8 +34,8 @@
  *
  *   vitest (vite's esbuild transform, what this file pins) and `tsx` (what
  *   `pnpm start`, `pnpm dev` and `pnpm bench` run) now produce an IDENTICAL
- *   checksum for FIFTEEN of the twenty migrations - ids 1-6, 8, 9, 10, 12,
- *   13, 17, 18, 19 and 20. They differ on ids 7, 11, 14, 15 and 16. Running the pre-H-1
+ *   checksum for SIXTEEN of the twenty-one migrations - ids 1-6, 8, 9, 10,
+ *   12, 13, 17, 18, 19, 20 and 21. They differ on ids 7, 11, 14, 15 and 16. Running the pre-H-1
  *   whitespace-only formula over the SAME two transform outputs puts the
  *   agreement at ZERO, so the agreeing set is what H-1 bought.
  *
@@ -54,6 +54,10 @@
  * the day it was written. Migration 20 (`model-pricing-sonnet-5-official`,
  * appended the same day) is the same five-row shape and joined the same way,
  * measured identical under tsx, vitest and `node --experimental-strip-types`.
+ * Migration 21 (`sessions-partial-and-dropped-usage`, appended 2026-10-01) is
+ * one `db.exec` of a single template literal of three `ALTER TABLE` statements
+ * - no JS number literal, no `new`, no arrow function - and joined the set on
+ * its own measurement, identical under tsx and vitest on the day it was written.
  * The residual five are still exactly ids 7, 11, 14,
  * 15 and 16.
  *
@@ -280,6 +284,11 @@ const PINNED: readonly PinnedChecksum[] = [
     name: 'model-pricing-sonnet-5-official',
     checksum: '1ab85d628e8fc59a527933d0bb247289f733f4bac43cb5e24d2de53092dbbaed',
   },
+  {
+    id: 21,
+    name: 'sessions-partial-and-dropped-usage',
+    checksum: 'be69986f328412a763d1b92ccdfc887f5a31cf07944cf51439d9c4132bd029fd',
+  },
 ];
 
 /** The literal whitespace normalisation `migrationChecksum` applies. */
@@ -361,7 +370,7 @@ describe('migration checksum pin', () => {
     // One `toEqual` over the whole table rather than a loop of assertions: the
     // failure output then shows every literal that moved at once, which
     // separates "someone edited migration 11" from "the transform changed" at a
-    // glance - one row versus twenty.
+    // glance - one row versus twenty-one.
     expect(computed).toEqual(PINNED);
   });
 

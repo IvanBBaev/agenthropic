@@ -271,7 +271,42 @@ describe('/api/health ingest phase (review M-16)', () => {
         headers: { authorization: `Bearer ${TEST_TOKEN}` },
       });
       expect(health.statusCode).toBe(200);
-      expect(health.json()).toEqual({ status: 'ok', schemaVersion: 0, ingest: phase });
+      // AMENDED 2026-10-01 (owner decision): `status` mirrors the phase, so a
+      // client reading only `status` can say "replaying, please wait" instead
+      // of presenting partial figures as current.
+      expect(health.json()).toEqual({
+        status: phase === 'replaying' ? 'replaying' : 'ok',
+        schemaVersion: 0,
+        ingest: phase,
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("stays 'ok' when no ingest seam is wired - nothing is being replayed", async () => {
+    const app = buildServer({ token: TEST_TOKEN, schemaVersion: 0 });
+    try {
+      const health = await app.inject({
+        method: 'GET',
+        url: '/api/health',
+        headers: { authorization: `Bearer ${TEST_TOKEN}` },
+      });
+      expect(health.json()).toEqual({ status: 'ok', schemaVersion: 0 });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('keeps the replaying status behind the auth gate', async () => {
+    const app = buildServer({
+      token: TEST_TOKEN,
+      schemaVersion: 0,
+      ingestPhase: () => 'replaying',
+    });
+    try {
+      const health = await app.inject({ method: 'GET', url: '/api/health' });
+      expect(health.statusCode).toBe(401);
     } finally {
       await app.close();
     }

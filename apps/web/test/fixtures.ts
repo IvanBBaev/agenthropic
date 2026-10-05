@@ -8,12 +8,16 @@ import type {
   AggregateDelegationSavingsDto,
   AgentDelegationSavingsDto,
   AgentNodeDto,
+  ChangedSessionDto,
+  ChangesDto,
   CompactionSegmentDto,
   CostAnalysisDto,
   CostSummaryDto,
   GlobalDagDto,
   OrchestrationEdgeDto,
+  SessionCostDto,
   SessionListDto,
+  SessionPartialDto,
   SessionStatusCountsDto,
   SessionSummaryDto,
   SessionTreeDto,
@@ -37,6 +41,8 @@ export function sessionSummary(overrides: Partial<SessionSummaryDto> = {}): Sess
     totalCostUsd: 0.42,
     unpricedTokens: 0,
     statusCounts: statusCounts({ working: 1, completed: 2 }),
+    partial: null,
+    usageRecordsDropped: 0,
     ...overrides,
   };
 }
@@ -107,6 +113,8 @@ export function sessionTree(overrides: Partial<SessionTreeDto> = {}): SessionTre
     agentCount: agents.length,
     edgeCount: edges.length,
     unattributed: { totalTokens: 0, costUsd: 0, unpricedTokens: 0 },
+    partial: null,
+    usageRecordsDropped: 0,
     ...overrides,
     agents,
     edges,
@@ -158,12 +166,37 @@ export function costSummary(overrides: Partial<CostSummaryDto> = {}): CostSummar
     totals: { tokens: 0, costUsd: 0, unpricedTokens: 0 },
     perModel: [],
     perDay: [],
+    partialSessions: 0,
+    usageRecordsDropped: 0,
     ...overrides,
     topSessions,
     sessionCount,
     hasMore: overrides.hasMore ?? sessionCount > topSessions.length,
   };
 }
+
+/**
+ * One `topSessions` row of the cost summary, whole by default: `partial: null`
+ * and nothing dropped, so a test opts INTO the owner-decision-1/2 disclosures.
+ */
+export function sessionCost(overrides: Partial<SessionCostDto> = {}): SessionCostDto {
+  return {
+    sessionId: 'aaaaaaaa-1111-2222-3333-444444444444',
+    projectSlug: 'agenthropic',
+    tokens: 1000,
+    costUsd: 1,
+    unpricedTokens: 0,
+    partial: null,
+    usageRecordsDropped: 0,
+    ...overrides,
+  };
+}
+
+/** Owner decision 1: the main transcript was over the 64 MiB read cap. */
+export const OVERSIZE_PARTIAL: SessionPartialDto = {
+  reason: 'main-transcript-oversize',
+  skippedBytes: 73_400_320,
+};
 
 /**
  * `GET /api/cost/delegation-savings` (M-9, aggregate half). Like the
@@ -217,6 +250,8 @@ export function costAnalysis(overrides: Partial<CostAnalysisDto> = {}): CostAnal
       skippedAgentIds: [],
       isEstimate: true,
     },
+    partial: null,
+    usageRecordsDropped: 0,
     ...overrides,
   };
 }
@@ -356,4 +391,53 @@ export function outcomeCauseAgents(): readonly AgentNodeDto[] {
       outcomeCause: null,
     }),
   ];
+}
+
+/** D11(a): one session that changed inside a `/api/changes` window. */
+export function changedSession(overrides: Partial<ChangedSessionDto> = {}): ChangedSessionDto {
+  return {
+    id: 'cccccccc-1111-2222-3333-444444444444',
+    projectSlug: 'agenthropic',
+    status: 'completed',
+    startedAt: '2026-09-29T08:00:00.000Z',
+    lastActivityAt: '2026-09-29T09:30:00.000Z',
+    changedAt: '2026-09-29T09:30:00.000Z',
+    change: 'new',
+    agentsAppeared: 2,
+    tokensAdded: 12_000,
+    costAddedUsd: 0.42,
+    unpricedTokensAdded: 0,
+    ...overrides,
+  };
+}
+
+/**
+ * D11(a): a `/api/changes` answer. By default one new session, a consistent
+ * `total`, zero residue and zero undated rows - the complete, unremarkable
+ * window, so each honesty notice appears only when a test asks for it.
+ */
+export function changes(overrides: Partial<ChangesDto> = {}): ChangesDto {
+  const sessions = overrides.sessions ?? [changedSession()];
+  return {
+    since: '2026-09-29T00:00:00.000Z',
+    until: '2026-09-29T09:30:00.000Z',
+    interval: '(since, until]',
+    basis: 'event-time',
+    sessions,
+    totals: {
+      sessionsNew: 1,
+      sessionsUpdated: 0,
+      sessionsUnknownStart: 0,
+      agentsAppeared: 2,
+      tokensAdded: 12_000,
+      costAddedUsd: 0.42,
+      unpricedTokensAdded: 0,
+      tokensAddedOutsideChangedSessions: 0,
+    },
+    coverage: { undatedSessions: 0, undatedAgents: 0, undatedUsageRows: 0 },
+    total: sessions.length,
+    limit: 50,
+    offset: 0,
+    ...overrides,
+  };
 }

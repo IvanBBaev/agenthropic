@@ -892,6 +892,10 @@ describe('migration 16 - the seed and the triggers produce the same table', () =
       insertUsage(fresh, row);
     }
 
+    // A real upgrade continues past 16 to the latest migration; the cost
+    // reader reads migration 21's session columns, so stand those in here.
+    // Migration 21 touches only `sessions`, never the ledger or the rollup.
+    migrations.find((m) => m.id === 21)!.up(upgraded);
     const seededBill = getCostSummary(upgraded, 5);
     expect(seededBill).toEqual(getCostSummary(fresh, 5));
 

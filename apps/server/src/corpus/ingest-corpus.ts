@@ -34,6 +34,7 @@ import {
   type PricingEntry,
   type SessionSubstrate,
 } from '@agenthropic/core';
+import type { SessionPartialDto } from '@agenthropic/shared';
 import type { SqliteDatabase } from '../db/connection';
 import type { AgentStatusChangedEvent, SessionIngestedEvent } from '../ingest/ingest-events';
 import { ingestSession, type IngestDeps, type IngestOutcome } from '../ingest/ingest-session';
@@ -48,6 +49,28 @@ import {
 } from './fs-port';
 import { resolveIdentity } from './identity';
 import { nodeCorpusFs } from './node-corpus-fs';
+
+/**
+ * Owner decision 1: a session whose MAIN transcript was skipped as over the
+ * read cap - while its subagent transcripts still built a substrate - is
+ * PARTIAL, and its totals are a lower bound. Only an `oversize` skip of the
+ * session's own `<uuid>.jsonl` counts; an oversize subagent file or an
+ * unreadable main is not this condition (see the owner's open question on
+ * `unreadable`). Exported for its unit test: the port types `sizeBytes` as
+ * optional, so a size-less oversize skip must still map to `skippedBytes: null`
+ * rather than an invented number.
+ */
+export function partialFor(
+  sessionId: string,
+  skipped: readonly SkippedFile[],
+): SessionPartialDto | null {
+  const main = skipped.find(
+    (entry) => entry.reason === 'oversize' && entry.relativePath === `${sessionId}.jsonl`,
+  );
+  return main === undefined
+    ? null
+    : { reason: 'main-transcript-oversize', skippedBytes: main.sizeBytes ?? null };
+}
 
 /** The ingest entry point the runner drives — injectable so tests can stub it. */
 export type IngestFn = (substrate: SessionSubstrate, deps: IngestDeps) => IngestOutcome;
@@ -241,6 +264,7 @@ export function runCorpusIngest(deps: CorpusIngestDeps): CorpusIngestSummary {
         hostId,
         projectSlug: built.projectSlug,
         now,
+        partial: partialFor(ref.sessionId, built.skipped),
       });
     } catch (err) {
       // Belt-and-braces: ingestSession contracts never to throw, but the runner

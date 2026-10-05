@@ -221,6 +221,11 @@ from the repository owner. Verify with
 [the standing correction](decisions/README.md#a-standing-correction-merge-blocking). See
 [Testing & quality](testing.md) §6.1 for the mechanism and its three honest gaps.
 
+_Amended 2026-09-30 (owner decision D15(a)):_ "demonstrated as such" is still **owed**. No PR
+has yet been blocked by a coverage drop. The demonstration will be one throwaway PR that
+lowers coverage, its red `ci` run recorded, then closed unmerged — opened only on the
+owner's separate go-ahead.
+
 ## WORKLOG discipline
 
 Every project keeps a local `WORKLOG.md` — a session journal appended after each
@@ -233,6 +238,12 @@ a presence check that a WP isn't considered closed without a corresponding entry
 ([`TODO.md`](https://github.com/IvanBBaev/agenthropic/blob/main/TODO.md), [`development-plan.md`](../../analysis/development-plan.md)
 Track X). It is one of only two dep-free work packages in wave 1 (alongside `WP-S1`),
 so it is actionable immediately, ahead of any scaffold.
+
+> **Amended 2026-09-30 (owner decision D16(a)).** There is **no presence check**, and
+> none will be built: the clause was dropped from `WP-X10`. `WORKLOG.md` is
+> git-excluded, so a check tracked in this repository and run in CI can never see the
+> file it would be checking. What remains is the template and the habit: an entry is
+> an attestation by whoever did the work, never something CI can verify.
 
 ## Version-control conventions
 

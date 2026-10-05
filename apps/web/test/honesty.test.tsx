@@ -255,7 +255,15 @@ describe('a missing project slug', () => {
         costSummary({
           totals: { tokens: 100, costUsd: 0.5, unpricedTokens: 0 },
           topSessions: [
-            { sessionId: 's1', projectSlug: null, tokens: 100, costUsd: 0.5, unpricedTokens: 0 },
+            {
+              sessionId: 's1',
+              partial: null,
+              usageRecordsDropped: 0,
+              projectSlug: null,
+              tokens: 100,
+              costUsd: 0.5,
+              unpricedTokens: 0,
+            },
           ],
         }),
       ),
@@ -423,6 +431,47 @@ describe('a cost page left open across UTC midnight', () => {
     expect(week.textContent).toContain('$0.10');
     expect(screen.getByTestId('kpi-week-partial').textContent).toContain('a lower bound');
   });
+
+  /*
+   * RR2 (2026-09-30). The week tile kept its figure on the premise, stated in
+   * CostView beside it, that the window "still holds six measured days". That
+   * premise expires with the snapshot: once the read is older than the window,
+   * every day in it postdates the read, the bucket is empty by construction,
+   * and the tile printed "$0.00" - the structural zero F-1 exists to refuse -
+   * with a note calling it a lower bound.
+   */
+  it('refuses to print a week figure once the whole window postdates the read', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.UTC(2026, 7, 15, 23, 59, 50));
+    routeCostFetch(
+      jsonResponse(
+        200,
+        costSummary({
+          totals: { tokens: 1000, costUsd: 0.1, unpricedTokens: 0 },
+          perDay: [{ day: '2026-08-15', tokens: 1000, costUsd: 0.1, unpricedTokens: 0 }],
+        }),
+      ),
+    );
+    renderCost();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.getByTestId('kpi-week').textContent).toContain('$0.10');
+
+    // Eight UTC days later the window is 2026-08-17 → 2026-08-23: not one of
+    // its days existed when the page was read on 2026-08-15.
+    vi.setSystemTime(Date.UTC(2026, 7, 23, 12, 0, 0));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(CLOCK_INTERVAL_MS);
+    });
+
+    const week = screen.getByTestId('kpi-week');
+    expect(screen.getByTestId('kpi-week-unread').textContent).toBe('not measured');
+    expect(week.textContent).not.toContain('$0.00');
+    expect(week.textContent).toContain('2026-08-17 → 2026-08-23');
+    expect(week.textContent).toContain('read on 2026-08-15');
+    expect(screen.queryByTestId('kpi-week-partial')).toBeNull();
+  });
 });
 
 describe('the cost-flow session labels', () => {
@@ -436,6 +485,8 @@ describe('the cost-flow session labels', () => {
           topSessions: [
             {
               sessionId: 'aaaaaaaa-1111-2222-3333-444444444444',
+              partial: null,
+              usageRecordsDropped: 0,
               projectSlug: 'agenthropic',
               tokens: 4000,
               costUsd: 1,
@@ -459,6 +510,8 @@ describe('the cost-flow session labels', () => {
         topSessions: [
           {
             sessionId: 'aaaaaaaa-1111-2222-3333-444444444444',
+            partial: null,
+            usageRecordsDropped: 0,
             projectSlug: null,
             tokens: 4000,
             costUsd: 1,
@@ -525,6 +578,8 @@ describe('the chart text alternatives', () => {
       topSessions: [
         {
           sessionId: 's1',
+          partial: null,
+          usageRecordsDropped: 0,
           projectSlug: 'agenthropic',
           tokens: 5000,
           costUsd: 1.0,

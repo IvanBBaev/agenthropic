@@ -8,7 +8,13 @@ interface SessionRow {
   readonly started_at: string | null;
   readonly last_activity_at: string | null;
   readonly status: string;
+  readonly partial_reason: string | null;
+  readonly partial_skipped_bytes: number | null;
+  readonly usage_records_dropped: number;
 }
+
+/** What an upsert that names no honesty field records: a whole read, nothing dropped. */
+const WHOLE = { partial_reason: null, partial_skipped_bytes: null, usage_records_dropped: 0 };
 
 describe('upsertSession (WP-D4)', () => {
   let temp: TempDb;
@@ -46,6 +52,7 @@ describe('upsertSession (WP-D4)', () => {
       started_at: '2026-07-11T00:00:00Z',
       last_activity_at: '2026-07-11T00:05:00Z',
       status: 'active',
+      ...WHOLE,
     });
   });
 
@@ -72,6 +79,7 @@ describe('upsertSession (WP-D4)', () => {
       started_at: '2026-07-11T00:00:00Z',
       last_activity_at: '2026-07-11T00:42:00Z',
       status: 'completed',
+      ...WHOLE,
     });
   });
 
@@ -91,6 +99,7 @@ describe('upsertSession (WP-D4)', () => {
       started_at: null,
       last_activity_at: null,
       status: 'active',
+      ...WHOLE,
     });
   });
 });

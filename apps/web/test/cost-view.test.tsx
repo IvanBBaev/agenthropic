@@ -111,6 +111,8 @@ function richSummary() {
     topSessions: [
       {
         sessionId: 'aaaaaaaa-1111-2222-3333-444444444444',
+        partial: null,
+        usageRecordsDropped: 0,
         projectSlug: 'agenthropic',
         tokens: 40000,
         costUsd: 1.0,
@@ -118,6 +120,8 @@ function richSummary() {
       },
       {
         sessionId: 'bbbbbbbb-5555-6666-7777-888888888888',
+        partial: null,
+        usageRecordsDropped: 0,
         projectSlug: null,
         tokens: 5000,
         costUsd: 0.05,
@@ -694,6 +698,55 @@ describe('CostView', () => {
     expect(screen.queryByTestId('aggregate-savings-skipped')).toBeNull();
   });
 
+  it('says the aggregate saving is a sum of floors when it exceeds the difference beside it', async () => {
+    // RR2 (2026-09-30). `savingsUsd` is Σ max(0, hypothetical - actual) per
+    // subagent (the schema says so), and the panel prints it beside the two
+    // levels a reader subtracts. Here one subagent saved $2.50 and another
+    // overspent by $1.50: the levels differ by $1.00 and "Saved" says $2.50.
+    // The per-session panel discloses exactly this (CA-3); the aggregate one
+    // said nothing, so the overspend read as savings.
+    routeFetch({
+      savings: jsonResponse(
+        200,
+        aggregateSavings({
+          actualUsd: 3,
+          hypotheticalUsd: 4,
+          savingsUsd: 2.5,
+          sessionsTotal: 2,
+          sessionsWithSubagents: 2,
+          sessionsPriced: 2,
+          subagentsPriced: 2,
+        }),
+      ),
+    });
+    renderView();
+    await screen.findByLabelText('aggregate delegation savings');
+
+    const floor = screen.getByTestId('aggregate-savings-floor').textContent ?? '';
+    expect(floor).toContain('floored at $0.00');
+    expect(floor).toContain('does not equal the difference');
+  });
+
+  it('adds no floor note when the aggregate saving equals the difference beside it', async () => {
+    routeFetch({
+      savings: jsonResponse(
+        200,
+        aggregateSavings({
+          actualUsd: 1.25,
+          hypotheticalUsd: 4.5,
+          savingsUsd: 3.25,
+          sessionsTotal: 1,
+          sessionsWithSubagents: 1,
+          sessionsPriced: 1,
+          subagentsPriced: 1,
+        }),
+      ),
+    });
+    renderView();
+    await screen.findByLabelText('aggregate delegation savings');
+    expect(screen.queryByTestId('aggregate-savings-floor')).toBeNull();
+  });
+
   it('names every excluded session rather than counting it as $0', async () => {
     routeFetch({
       savings: jsonResponse(
@@ -977,7 +1030,15 @@ describe('CostView', () => {
             totals: { tokens: 3000, costUsd: 1, unpricedTokens: 0 },
             perModel: [{ model: 'claude-a', tokens: 3000, costUsd: 1, unpricedTokens: 0 }],
             topSessions: [
-              { sessionId: 's1', projectSlug: 'p', tokens: 2000, costUsd: 3, unpricedTokens: 0 },
+              {
+                sessionId: 's1',
+                partial: null,
+                usageRecordsDropped: 0,
+                projectSlug: 'p',
+                tokens: 2000,
+                costUsd: 3,
+                unpricedTokens: 0,
+              },
             ],
           }),
         ),
@@ -1352,6 +1413,8 @@ describe('CostView', () => {
         tokens: 1000,
         costUsd,
         unpricedTokens: 0,
+        partial: null,
+        usageRecordsDropped: 0,
       };
     }
 
@@ -1394,7 +1457,15 @@ describe('CostView', () => {
             totals: { tokens: 3000, costUsd: 1, unpricedTokens: 0 },
             perModel: [{ model: 'claude-a', tokens: 3000, costUsd: 1, unpricedTokens: 0 }],
             topSessions: [
-              { sessionId: 's1', projectSlug: 'p', tokens: 2000, costUsd: 3, unpricedTokens: 0 },
+              {
+                sessionId: 's1',
+                partial: null,
+                usageRecordsDropped: 0,
+                projectSlug: 'p',
+                tokens: 2000,
+                costUsd: 3,
+                unpricedTokens: 0,
+              },
             ],
           }),
         ),
@@ -2185,6 +2256,8 @@ describe('CostView - a model the server did not name (lane-P)', () => {
           topSessions: [
             {
               sessionId: 'aaaaaaaa-1111-2222-3333-444444444444',
+              partial: null,
+              usageRecordsDropped: 0,
               projectSlug: 'agenthropic',
               tokens: 1000,
               costUsd: 1,

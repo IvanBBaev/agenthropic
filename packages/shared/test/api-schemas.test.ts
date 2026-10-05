@@ -21,6 +21,7 @@ import {
   SessionHookEventSchema,
   SessionIngestedEventSchema,
   SessionListResponseSchema,
+  SessionRejectedErrorSchema,
   SessionTreeResponseSchema,
   nullable,
   type AgentNodeDto,
@@ -67,6 +68,8 @@ const sessionSummary: SessionSummaryDto = {
   totalCostUsd: 0.05,
   unpricedTokens: 100,
   statusCounts: { working: 1, waiting: 0, completed: 1, error: 0, unknown: 0 },
+  partial: null,
+  usageRecordsDropped: 0,
 };
 
 describe('common API schemas', () => {
@@ -81,6 +84,30 @@ describe('common API schemas', () => {
     expect(Value.Check(ApiErrorSchema, { error: 'Unauthorized.' })).toBe(true);
     expect(Value.Check(ApiErrorSchema, { error: 'x', detail: 'leak' })).toBe(false);
     expect(Value.Check(ApiErrorSchema, {})).toBe(false);
+  });
+
+  it('SessionRejectedErrorSchema carries the uniform error plus a machine-readable code and reason', () => {
+    for (const code of ['quarantined', 'ingest-failing'] as const) {
+      expect(
+        Value.Check(SessionRejectedErrorSchema, { error: 'x', code, reason: 'no price' }),
+      ).toBe(true);
+    }
+    // A code outside the two ingest verdicts would be a promise the server never makes.
+    expect(
+      Value.Check(SessionRejectedErrorSchema, { error: 'x', code: 'missing', reason: 'r' }),
+    ).toBe(false);
+    // Nothing else may ride along - no path, no errno.
+    expect(
+      Value.Check(SessionRejectedErrorSchema, {
+        error: 'x',
+        code: 'quarantined',
+        reason: 'r',
+        errno: 'EACCES',
+      }),
+    ).toBe(false);
+    expect(Value.Check(SessionRejectedErrorSchema, { error: 'x', code: 'quarantined' })).toBe(
+      false,
+    );
   });
 
   it('AgentStatusSchema accepts all five statuses including unknown', () => {
@@ -205,6 +232,8 @@ describe('session schemas', () => {
       agentCount: 1,
       edgeCount: 1,
       unattributed: { totalTokens: 10, costUsd: 0.0001, unpricedTokens: 0 },
+      partial: null,
+      usageRecordsDropped: 0,
     };
     expect(Value.Check(SessionTreeResponseSchema, tree)).toBe(true);
     expect(Value.Check(SessionTreeResponseSchema, { ...tree, unattributed: {} })).toBe(false);
@@ -279,10 +308,14 @@ describe('cost and DAG schemas', () => {
           tokens: 5000,
           costUsd: 0.07,
           unpricedTokens: 100,
+          partial: null,
+          usageRecordsDropped: 0,
         },
       ],
       sessionCount: 1,
       hasMore: false,
+      partialSessions: 0,
+      usageRecordsDropped: 0,
     };
     expect(Value.Check(CostSummaryResponseSchema, summary)).toBe(true);
     expect(Value.Check(CostSummaryResponseSchema, { ...summary, totals: undefined })).toBe(false);
@@ -294,6 +327,8 @@ describe('cost and DAG schemas', () => {
       perModel: [],
       perDay: [],
       topSessions: [],
+      partialSessions: 0,
+      usageRecordsDropped: 0,
     };
     // Both fields are mandatory: a payload without them is the pre-L1 shape,
     // which a client must refuse rather than render as "0 of 0".

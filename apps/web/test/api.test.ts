@@ -4,6 +4,7 @@ import {
   UNREADABLE_BODY_MESSAGE,
   checkHealth,
   fetchAggregateSavings,
+  fetchChanges,
   fetchCostAnalysis,
   fetchCostSummary,
   fetchGlobalDag,
@@ -13,6 +14,7 @@ import {
 import {
   aggregateSavings,
   agentNode,
+  changes,
   compactionSegment,
   costAnalysis,
   costSummary,
@@ -499,6 +501,7 @@ const TOKEN_CARRYING_CALLS: ReadonlyArray<readonly [string, (token: string) => P
     ['fetchCostSummary', (token) => fetchCostSummary(token, 5)],
     ['fetchAggregateSavings', (token) => fetchAggregateSavings(token)],
     ['fetchCostAnalysis', (token) => fetchCostAnalysis(token, 'session-1')],
+    ['fetchChanges', (token) => fetchChanges(token, '2026-09-29')],
     ['checkHealth', (token) => checkHealth(token)],
   ];
 
@@ -883,5 +886,150 @@ describe('CA-8/AU-10 - a body that arrived intact and still cannot be read', () 
     fetchMock.mockResolvedValue(jsonResponse(200, {}));
     const result = await fetchSessions('secret-token');
     expect(result.kind === 'error' && result.message.includes('secret-token')).toBe(false);
+  });
+});
+
+describe('fetchChanges (D11(a))', () => {
+  it('sends the required `since` (encoded) and the limit with the Bearer header', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, changes()));
+    const result = await fetchChanges('secret-token', '2026-09-29T00:00:00+02:00', { limit: 50 });
+    expect(result).toEqual({ kind: 'ok', data: changes() });
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/changes?since=2026-09-29T00%3A00%3A00%2B02%3A00&limit=50');
+    expect(init.headers).toEqual({ Authorization: 'Bearer secret-token' });
+  });
+
+  it('omits `limit` when the caller names none, leaving the server default', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, changes()));
+    await fetchChanges('secret-token', '2026-09-29');
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/changes?since=2026-09-29');
+  });
+
+  it("carries the server's 400 message for a malformed `since`", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(400, { error: 'since must be an ISO-8601 instant.' }));
+    expect(await fetchChanges('secret-token', 'yesterday')).toEqual({
+      kind: 'error',
+      message: 'since must be an ISO-8601 instant.',
+      status: 400,
+    });
+  });
+
+  it('refuses a body that dropped `until` rather than rendering an open-ended window', async () => {
+    const body: Partial<ReturnType<typeof changes>> = changes();
+    delete body.until;
+    fetchMock.mockResolvedValue(jsonResponse(200, body));
+    expect(await fetchChanges('secret-token', '2026-09-29')).toEqual({
+      kind: 'error',
+      message: UNREADABLE_BODY_MESSAGE,
+      status: 200,
+      reason: 'malformed-body',
+    });
+  });
+});
+
+/**
+ * Owner decision, 2026-10-01: the server listens before its startup replay and
+ * reports `status: 'replaying'` until the replay finishes. That is not an
+ * error - the token was accepted and the server is working - so it gets its own
+ * arm rather than being folded into `ok` (figures are incomplete) or into
+ * `unreachable` (which sends the reader to restart a healthy process).
+ */
+describe('checkHealth reports a replaying server as its own arm', () => {
+  it('returns replaying with the schemaVersion while the corpus is replayed', async () => {
+    fetchMock.mockResolvedValue(
+      response(200, { status: 'replaying', schemaVersion: 18, ingest: 'replaying' }),
+    );
+    expect(await checkHealth('secret')).toEqual({ kind: 'replaying', schemaVersion: 18 });
+  });
+
+  it('still validates the schemaVersion of a replaying body', async () => {
+    fetchMock.mockResolvedValue(response(200, { status: 'replaying', schemaVersion: -1 }));
+    expect(await checkHealth('secret')).toEqual({
+      kind: 'unreachable',
+      message: 'malformed health response',
+      reason: 'malformed',
+      status: 200,
+    });
+  });
+
+  it('treats any other status string as ok, as before', async () => {
+    // Only the one documented value changes the verdict; an older server that
+    // sends no status at all keeps working exactly as it did.
+    fetchMock.mockResolvedValue(response(200, { schemaVersion: 4 }));
+    expect(await checkHealth('secret')).toEqual({ kind: 'ok', schemaVersion: 4 });
+  });
+});
+
+/**
+ * Owner decision, 2026-10-01: a per-session read of a session the corpus holds
+ * but ingest rejected answers 409 with a machine-readable `code`, instead of a
+ * 404 that says the session does not exist. The client surfaces the code as a
+ * typed `reason` so a view can say which of the two it is.
+ */
+describe('a 409 for a session ingest rejected is a typed result', () => {
+  const QUARANTINED = {
+    error: 'The corpus holds this session, but ingest rejected it (quarantined). Reason: x',
+    code: 'quarantined',
+    reason: 'no price for model m',
+  };
+
+  it('surfaces quarantined as the reason, with the server sentence as the message', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(409, QUARANTINED));
+    expect(await fetchSessionTree('secret', 'session-1')).toEqual({
+      kind: 'error',
+      message: QUARANTINED.error,
+      status: 409,
+      reason: 'quarantined',
+      rejectionReason: 'no price for model m',
+    });
+  });
+
+  it('surfaces ingest-failing on the cost-analysis route too', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(409, { error: 'retrying', code: 'ingest-failing', reason: 'bad line' }),
+    );
+    expect(await fetchCostAnalysis('secret', 'session-1')).toEqual({
+      kind: 'error',
+      message: 'retrying',
+      status: 409,
+      reason: 'ingest-failing',
+      rejectionReason: 'bad line',
+    });
+  });
+
+  it('keeps the token out of the copied reason', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(409, { ...QUARANTINED, reason: 'echoed secret-token back' }),
+    );
+    const result = await fetchSessionTree('secret-token', 'session-1');
+    expect(JSON.stringify(result)).not.toContain('secret-token');
+    expect(result).toMatchObject({ reason: 'quarantined' });
+  });
+
+  it('does not invent a rejection from a 409 without a known code', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(409, { error: 'conflict', code: 'other' }));
+    expect(await fetchSessionTree('secret', 'session-1')).toEqual({
+      kind: 'error',
+      message: 'conflict',
+      status: 409,
+    });
+  });
+
+  it('does not invent a rejection from a 409 whose reason is not a string', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(409, { error: 'conflict', code: 'quarantined' }));
+    expect(await fetchSessionTree('secret', 'session-1')).toEqual({
+      kind: 'error',
+      message: 'conflict',
+      status: 409,
+    });
+  });
+
+  it('reads the code only on a 409: a 404 that happens to carry one stays a plain 404', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(404, { ...QUARANTINED, error: 'Session not found.' }));
+    expect(await fetchSessionTree('secret', 'session-1')).toEqual({
+      kind: 'error',
+      message: 'Session not found.',
+      status: 404,
+    });
   });
 });

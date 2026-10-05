@@ -219,6 +219,8 @@ describe('/api/cost/summary (WP-U4)', () => {
         topSessions: [],
         sessionCount: 0,
         hasMore: false,
+        partialSessions: 0,
+        usageRecordsDropped: 0,
       });
     } finally {
       await emptyApp.close();

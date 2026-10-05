@@ -30,6 +30,7 @@ import { registerHookRoutes } from './hooks/routes';
 import {
   createCorpusWatcher,
   MAX_INGEST_ATTEMPTS,
+  REPLAY_MAX_SESSIONS_PER_PASS,
   REREAD_BACKOFF_CAP_PASSES,
   type CorpusWatcher,
   type IngestFailureReport,
@@ -224,6 +225,94 @@ function logReplaySummary(replay: CorpusIngestSummary): void {
       `corpus replay failure: session ${failure.sessionId} (${failure.projectSlug}): ${failure.error}`,
     );
   }
+}
+
+/** Two pass summaries as one: counts add up, failures concatenate in order. */
+export function mergeReplaySummaries(
+  a: CorpusIngestSummary,
+  b: CorpusIngestSummary,
+): CorpusIngestSummary {
+  return {
+    sessionsDiscovered: a.sessionsDiscovered + b.sessionsDiscovered,
+    sessionsOk: a.sessionsOk + b.sessionsOk,
+    sessionsFailed: a.sessionsFailed + b.sessionsFailed,
+    sessionsSkipped: a.sessionsSkipped + b.sessionsSkipped,
+    agentsUpserted: a.agentsUpserted + b.agentsUpserted,
+    edgesInserted: a.edgesInserted + b.edgesInserted,
+    usageRowsInserted: a.usageRowsInserted + b.usageRowsInserted,
+    filesSkipped: a.filesSkipped + b.filesSkipped,
+    totalCostUsd: a.totalCostUsd + b.totalCostUsd,
+    failures: [...a.failures, ...b.failures],
+  };
+}
+
+export interface StartupReplayOptions {
+  /** The per-pass session cap handed to every replay tick. */
+  readonly maxSessionsPerPass: number;
+  /**
+   * Resolves after one event-loop turn; awaited before EVERY pass, the first
+   * included, so connections accepted during the bind - and every request that
+   * arrives while the replay runs - are answered between passes. Defaults to
+   * `setImmediate`; a test seam.
+   */
+  readonly yieldTurn?: () => Promise<void>;
+}
+
+function nextTurn(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
+/**
+ * WP-IN10 replay-on-startup, in chunks. The first sweep IS the replay: without
+ * a persisted checkpoint every discovered session is admitted; with one, only
+ * the sessions whose bytes moved while the process was down. A single
+ * synchronous pass over a large corpus would hold the event loop for its whole
+ * duration - /api/health could not even say 'replaying' - so the sweep runs as
+ * capped passes with an event-loop turn before each, until the watcher reports
+ * nothing pending. The watcher counts the passes of one sweep as ONE pass for
+ * the retry budget (see corpus-watcher.ts), so the chunking changes when the
+ * event loop breathes, never which sessions fail or are quarantined.
+ *
+ * The boot log gets ONE summary for the whole sweep. A pass that ingested
+ * nothing is not silent either: `tick()` names which reason ended it, and
+ * {@link replayOutcomeLine} says so - except an 'unchanged' or 'stopped'
+ * ending AFTER passes that did ingest, which only means the remainder vanished
+ * from disk or the server is shutting down, and would otherwise read as
+ * "nothing was replayed" under a summary that says otherwise.
+ *
+ * Returns the last pass's outcome, which seeds the tick-trouble state.
+ */
+export async function runStartupReplay(
+  watcher: Pick<CorpusWatcher, 'tick'>,
+  options: StartupReplayOptions,
+): Promise<TickOutcome> {
+  const yieldTurn = options.yieldTurn ?? nextTurn;
+  let total: CorpusIngestSummary | null = null;
+  let outcome: TickOutcome;
+  for (;;) {
+    await yieldTurn();
+    outcome = watcher.tick({ maxSessions: options.maxSessionsPerPass });
+    if (outcome.kind !== 'ingested') {
+      break;
+    }
+    total = total === null ? outcome.summary : mergeReplaySummaries(total, outcome.summary);
+    if (!outcome.pending) {
+      break;
+    }
+  }
+  if (total !== null) {
+    logReplaySummary(total);
+  }
+  if (
+    outcome.kind !== 'ingested' &&
+    !(total !== null && (outcome.kind === 'unchanged' || outcome.kind === 'stopped'))
+  ) {
+    const line = replayOutcomeLine(outcome);
+    (line.level === 'error' ? console.error : console.log)(line.text);
+  }
+  return outcome;
 }
 
 /**
@@ -792,6 +881,11 @@ export async function start(
     // watcher exists: with ingest off there is nothing to exclude, and the
     // fields stay absent rather than reporting a zero nobody measured.
     ingestExclusions: ingestWatcher === null ? undefined : () => ingestWatcher.exclusions(),
+    // 409 instead of 404 for a session the corpus holds but ingest rejected
+    // (owner decision, 2026-10-01) - read off the watcher's own retry budget,
+    // the same source `ingestExclusions` counts.
+    ingestRejection:
+      ingestWatcher === null ? undefined : (sessionId) => ingestWatcher.rejectionOf(sessionId),
     // One command, one port: the built SPA is served from this same loopback
     // origin, which is also what keeps the /api/stream same-origin check a real
     // defence instead of a permanent CORS exception. A missing build directory
@@ -845,29 +939,12 @@ export async function start(
     throw error;
   }
   if (watcher !== null) {
-    // One macrotask turn so connections accepted during the bind are answered
-    // ('replaying') before the synchronous replay blocks the event loop —
-    // without it the phase would be true but never observable in-process.
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
+    // Chunked replay (see runStartupReplay): the server answers - health says
+    // 'replaying', data endpoints serve what has landed so far - between
+    // passes, and the phase turns 'idle' only once the whole sweep is done.
+    const replay = await runStartupReplay(watcher, {
+      maxSessionsPerPass: REPLAY_MAX_SESSIONS_PER_PASS,
     });
-    // WP-IN10 replay-on-startup: the first tick IS the replay. Without a
-    // persisted checkpoint the fingerprint map starts empty, so every
-    // discovered session is admitted; with one (wired at watcher creation)
-    // only the sessions whose bytes moved while the process was down are
-    // re-read. Either way the pass is idempotent, and a poisoned session is
-    // isolated inside the runner and only surfaces in the summary below.
-    //
-    // A pass that ingested nothing is no longer silent: `tick()` names WHICH
-    // of the reasons ended it, so the boot says so instead of guessing — see
-    // replayOutcomeLine.
-    const replay = watcher.tick();
-    if (replay.kind === 'ingested') {
-      logReplaySummary(replay.summary);
-    } else {
-      const line = replayOutcomeLine(replay);
-      (line.level === 'error' ? console.error : console.log)(line.text);
-    }
     if (replay.kind === 'read-error' || replay.kind === 'no-corpus-root') {
       tickTrouble = replay.kind;
     }

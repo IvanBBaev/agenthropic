@@ -386,6 +386,22 @@ maximum before summing.** This is correctness, not optimization.
 > an unknown model id**" pricing MUST is **unchanged** — the settle only chooses *between two
 > known models*, and a genuinely unknown settled id still halts.
 
+> **Amended 2026-10-01 (owner decision E4 — "count and show"; E1 — partial sessions).**
+>
+> - **NN1:** a `usage` record without `message.id` cannot be deduplicated and is excluded
+>   from all totals. The exclusion is not silent: the parser counts such records per session
+>   as `usageRecordsDropped`, which is persisted, exposed on every per-session DTO and summed
+>   in the cost summary. The dedupe key (`message.id`, per-bucket maximum) is unchanged; there
+>   is no quarantine.
+> - **NN2:** when `usage.cache_creation` is absent or its 5m + 1h split sums to less than the
+>   flat `cache_creation_input_tokens`, the flat value is authoritative: the split buckets are
+>   kept as reported and the unsplit remainder is attributed to `cacheWrite5m`. No split is
+>   inferred beyond that; if the remainder was really 1h, the priced cost is a lower bound.
+> - **Oversize main transcript:** a session whose own `<uuid>.jsonl` exceeds the read cap is
+>   ingested from its remaining files and marked `partial = { reason:
+>   'main-transcript-oversize', skippedBytes }`; its totals are a lower bound and every surface
+>   that shows them says so.
+
 ### 5.3 Parent-rollup is 0.00% (gate #6)
 Parent `usage` rows are the main agent's own turns (`agentId=null`, `isSidechain=false`);
 child usage lives only in `agent-<hex>.jsonl`. A subagent's result returns to the parent as

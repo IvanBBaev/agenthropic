@@ -75,6 +75,12 @@ Nothing else in the port set has changed: `Normalizer`/`Projection`, `AlertSink`
 interface, and the second-runtime portability claim is still **unproven** — no
 non-Claude-Code adapter has been attempted.
 
+*(Amended 2026-09-30, owner decision D18(a) of the 2026-09-26 WP audit: for
+`PricingProvider` the missing interface is now a decision, not a gap. `WP-C2` is accepted
+as met in substance by `loadPricing` (`apps/server/src/db/pricing.ts`) plus the dated
+resolver in `computeCostUsd` (`packages/core/src/cost/compute-cost.ts`); with one
+implementation and no second caller, no `PricingProvider` interface will be added.)*
+
 *(As built — 2026-08-09, recorded 2026-09-22: `Normalizer` and `Projection` do exist as
 separate stages — `normalizeSession` in `apps/server/src/ingest/normalize-session.ts` is a
 pure function from parser output to a `NormalizedSession` value, and `projectSession` in

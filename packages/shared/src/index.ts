@@ -14,6 +14,8 @@ export type { HealthDto } from './schemas/health';
 export {
   nullable,
   ApiErrorSchema,
+  SessionRejectedErrorSchema,
+  SessionRejectionCodeSchema,
   AgentStatusSchema,
   AgentTypeSchema,
   AgentOutcomeCauseSchema,
@@ -28,6 +30,8 @@ export {
 } from './schemas/common';
 export type {
   ApiErrorDto,
+  SessionRejectedErrorDto,
+  SessionRejectionCode,
   AgentStatus,
   AgentType,
   AgentOutcomeCause,
@@ -54,6 +58,7 @@ export {
   ModelCostSchema,
   DailyCostSchema,
   SessionCostSchema,
+  SessionPartialSchema,
   CostCoverageSchema,
   CostSummaryResponseSchema,
   TokenBucketsSchema,
@@ -73,6 +78,7 @@ export type {
   ModelCostDto,
   DailyCostDto,
   SessionCostDto,
+  SessionPartialDto,
   CostCoverageDto,
   CostSummaryDto,
   TokenBucketsDto,

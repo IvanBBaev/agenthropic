@@ -139,6 +139,17 @@ describe('analysisErrorText', () => {
     expect(analysisErrorText(serverText, status)).toContain(serverText);
   });
 
+  it('names an ingest rejection instead of the server sentence (409)', () => {
+    expect(
+      analysisErrorText('raw detail', 409, { reason: 'quarantined', rejectionReason: 'bad line' }),
+    ).toBe('ingest quarantined this session: bad line');
+    expect(
+      analysisErrorText('raw detail', 409, { reason: 'ingest-failing', rejectionReason: 'x' }),
+    ).toBe('ingest is retrying this session: x');
+    // A 409 without a known code stays the server's own sentence.
+    expect(analysisErrorText('raw detail', 409, {})).toBe('raw detail');
+  });
+
   it('never claims a cause the server did not report', () => {
     // The two sentences the old hard-coded version produced. Each was FALSE for
     // one of the two causes its status now covers.
@@ -305,6 +316,36 @@ describe('SessionCostAnalysis', () => {
     const describedBy = table.getAttribute('aria-describedby') ?? '';
     expect(describedBy.length).toBeGreaterThan(0);
     expect(document.getElementById(describedBy)).toBe(notice);
+  });
+
+  it('does not call an infinite difference both a mispricing signal and unknown', async () => {
+    // RR2 (2026-09-30). KK6 made "unknown" its own state, but only NaN reached
+    // it alone: `Math.abs(Infinity) >= 0.01` is true, so an infinite delta (a
+    // JSON literal like 1e400 parses to it, and the guards admit any number)
+    // rendered BOTH banners - "a difference this size" about a figure the tile
+    // calls unreadable, beside a notice saying the difference could not be
+    // computed - and the table was described by the signal banner alone.
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        200,
+        costAnalysis({
+          compaction: {
+            naiveUsd: 3.0,
+            repricedUsd: Number.POSITIVE_INFINITY,
+            deltaUsd: Number.POSITIVE_INFINITY,
+            compactionCount: 1,
+            segments: [compactionSegment()],
+          },
+        }),
+      ),
+    );
+    renderPanel();
+    await screen.findByTestId('session-analysis');
+
+    expect(screen.queryByTestId('delta-signal')).toBeNull();
+    const notice = screen.getByTestId('delta-unknown');
+    const table = screen.getByRole('table', { name: 'compaction segments' });
+    expect(document.getElementById(table.getAttribute('aria-describedby') ?? '')).toBe(notice);
   });
 
   it('shows no unknown-difference notice when the difference is readable', async () => {
@@ -927,6 +968,68 @@ describe('SessionCostAnalysis', () => {
     const error = await screen.findByTestId('analysis-error');
     expect(error.textContent).toContain(expected);
     expect(screen.queryByTestId('session-analysis')).toBeNull();
+  });
+
+  it('renders a quarantined session as such, with no Retry a click could not honour', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(409, {
+        error: 'The corpus holds this session, but ingest rejected it (quarantined).',
+        code: 'quarantined',
+        reason: 'line 3 is not JSON',
+      }),
+    );
+    renderPanel();
+    const error = await screen.findByTestId('analysis-error');
+    expect(error.textContent).toContain('ingest quarantined this session: line 3 is not JSON');
+    expect(error.textContent).not.toContain('not found');
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+  });
+
+  it('renders a session ingest is retrying as such, and keeps Retry', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(409, { error: 'retrying', code: 'ingest-failing', reason: 'read failed' }),
+    );
+    renderPanel();
+    const error = await screen.findByTestId('analysis-error');
+    expect(error.textContent).toContain('ingest is retrying this session: read failed');
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, richAnalysis()));
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await screen.findByTestId('session-analysis');
+  });
+
+  it('marks a partial analysis as a lower bound and names the dropped usage records', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        200,
+        costAnalysis({
+          partial: { reason: 'main-transcript-oversize', skippedBytes: 70 * 1024 * 1024 },
+          usageRecordsDropped: 2,
+        }),
+      ),
+    );
+    renderPanel();
+    const honesty = await screen.findByTestId('analysis-honesty');
+    expect(honesty.textContent).toContain('totals are a lower bound');
+    expect(honesty.textContent).toContain('(70.0 MiB not read)');
+    expect(honesty.textContent).toContain(
+      '2 usage records could not be deduplicated and were excluded',
+    );
+    expect(honesty.querySelector('.partial-badge')).not.toBeNull();
+    expect(honesty.querySelector('.dropped-usage')).not.toBeNull();
+  });
+
+  it('names dropped usage records on a whole analysis without calling it partial', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, costAnalysis({ usageRecordsDropped: 1 })));
+    renderPanel();
+    const honesty = await screen.findByTestId('analysis-honesty');
+    expect(honesty.textContent).toBe('1 usage record could not be deduplicated and was excluded');
+  });
+
+  it('adds no honesty line to a whole analysis with nothing dropped', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, costAnalysis()));
+    renderPanel();
+    await screen.findByTestId('session-analysis');
+    expect(screen.queryByTestId('analysis-honesty')).toBeNull();
   });
 
   it('retries a failed analysis for the same session and renders the result', async () => {

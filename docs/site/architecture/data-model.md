@@ -100,6 +100,7 @@ leaves the schema byte-identical.
 | 18 | `model-pricing-opus-5-fable-5-1` | Ten explicit rate rows — all five buckets for each of the two model ids the real corpus exposed as unpriced |
 | 19 | `model-pricing-opus-5-5` | Five explicit rate rows for `claude-opus-5-5`, the next model id the real corpus exposed as unpriced |
 | 20 | `model-pricing-sonnet-5-official` | Rewrites the five seeded `claude-sonnet-5` floor rows to the official 2 / 10 rate (decision D10); adds no row |
+| 21 | `sessions-partial-and-dropped-usage` | Three `ALTER TABLE sessions ADD COLUMN`s: `partial_reason` and `partial_skipped_bytes` (owner decision 1 - an oversize main transcript makes the session partial) and `usage_records_dropped` (owner decision 2, NN1), each with an inline CHECK |
 
 Three properties of that list are worth stating explicitly, because they are the reason
 the ledger table exists at all.
@@ -342,6 +343,32 @@ CREATE TABLE sessions (
 The primary key is the **session UUID, never the project slug** — the parser spec (§6.2)
 requires that two concurrent sessions in the same project directory stay two distinct
 roots. Rows are upserted whole by the per-session ingest transaction.
+
+**Amended 2026-10 (owner decisions 1 and 2, migration 21).** Three honesty columns were
+added so a session total can say what it does NOT contain:
+
+```sql
+partial_reason        TEXT     -- NULL, or 'main-transcript-oversize'
+partial_skipped_bytes INTEGER  -- NULL, or the size of the file that was not read (>= 0)
+usage_records_dropped INTEGER NOT NULL DEFAULT 0  -- >= 0
+```
+
+- `partial_reason = 'main-transcript-oversize'` means the session's main transcript was
+  larger than the per-file read cap (64 MiB, PROVISIONAL) and was skipped while its subagent
+  transcripts were read. Every total for that session is a **lower bound**.
+  `partial_skipped_bytes` is the size the reader saw, or `NULL` when it is unknown. The cap
+  itself is unchanged; the column only makes the skip visible on the session instead of in
+  the log alone. A later ingest that reads the main transcript overwrites both back to `NULL`.
+- `usage_records_dropped` counts the usage records in the session that carried no
+  `message.id`. Without an id there is no dedupe key, and counting such a record could
+  double-count a streamed retry, so it is excluded from the totals - never quarantined and
+  never given a synthetic key. The dedupe key (`message.id`) is unchanged.
+
+Session rows created by the hook path, before any transcript ingest, keep the defaults
+(`NULL`, `NULL`, `0`). The API carries the columns as `partial` (`null` or
+`{ reason, skippedBytes }`) and `usageRecordsDropped` on every DTO that shows a session total
+(session list, detail, tree, and the cost summary's top sessions); the cost summary also
+carries the corpus-wide `partialSessions` and `usageRecordsDropped` aggregates.
 
 ## `agents` — the self-referential subagent tree
 
@@ -608,6 +635,12 @@ Rationale — updated to the as-built facts:
   — see [the cost model](../architecture/cost-model.md), where the `deltaUsd ≈ 0`
   reconciliation invariant is the exit gate. Dropping the column would require a
   table rebuild for no behavioral gain, so it stays; what it must not do is mislead.
+  *Amended 2026-09-30 (owner decision D19(a) of the 2026-09-26 WP audit):* the column's
+  documented status is **reserved**. It is written as `0`, read by nothing, and means
+  nothing today; compaction repricing happens at analysis time in
+  `packages/core/src/cost/compaction-repricing.ts`, never from a stored flag. The slot is
+  kept for a future persisted marker; until one is specified and built, no code, query or
+  API field may read it, and a `1` in it is a bug.
 - **No `source_event_id`** — the design sketch traced each row to a normalized event; as
   built token rows come from the parser, not from `events`, so the provenance column has
   nothing to reference. The transcript itself is the audit trail (`message_id` keys back
@@ -712,7 +745,11 @@ CREATE TABLE model_pricing (
   at $0" is a hard gate, not a label. Zero-token buckets need no price row.
 - **The designed CI staleness gate** (`WP-C6` — an unpriced model+bucket in the fixture
   corpus fails the build) is not verified as wired in CI; the runtime halt above is the
-  enforcement that provably exists.
+  enforcement that provably exists. *Amended 2026-09-30 (owner decision D13(a)):* the CI
+  gate will not be built. `WP-C6` now means the runtime halt above plus a real-corpus boot
+  before every tag, a [HUMAN] box in `RELEASE.md` §6 that also re-reads the Anthropic
+  pricing page (D17(a)). The synthetic CI fixtures use models the seed deliberately leaves
+  unpriced, so only the real, local corpus can show a stale seed.
 
 ### What the seed actually contains
 
@@ -962,6 +999,8 @@ roadmap of record.)*
 >   (literal `0` written, never read); the *capability* it stood for shipped anyway, in
 >   the repricer that walks the transcript's own compaction boundaries at analysis time.
 >   The invariant survived; the column did not earn its place.
+>   *(Amended 2026-09-30, owner decision D19(a): the column is documented as
+>   **reserved** — written as `0`, read by nothing, repricing at analysis time.)*
 
 | Aspect | Status |
 |---|---|

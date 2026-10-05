@@ -246,7 +246,9 @@ time, and `model_pricing` is a seeded, migration-checksummed table.)* Land on
 tile itself is Phase 4 in the roadmap (§6 below).
 
 > **As built: shipped.** The cost engine computes delegation savings and re-prices across
-> compaction baselines (`token_usage` carries `is_compaction_baseline`), driven by a
+> compaction baselines (`token_usage` carries an `is_compaction_baseline` column, but it is
+> reserved — written as `0`, read by nothing; repricing works from the transcript's own
+> boundaries at analysis time, amended 2026-09-30 per owner decision D19(a)), driven by a
 > `model_pricing` table with dated rates rather than a hardcoded constant — the "stale
 > pricing table" caveat above was designed out. The dashboard surfaces it at
 > `/api/sessions/:id/cost-analysis` and `/api/cost/summary`, rendered by the cost/Sankey

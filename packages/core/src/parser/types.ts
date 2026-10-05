@@ -142,4 +142,16 @@ export interface ParsedSession {
    * `version`, not "unknown version".
    */
   claudeCodeVersions?: string[];
+  /**
+   * NN1: how many assistant records carried a `usage` block but no string
+   * `message.id`. Such a record cannot be deduplicated, so it is EXCLUDED from
+   * {@link usage} — the session's token and dollar totals are a lower bound by
+   * exactly these records. Counted per RECORD, not per message: two streamed
+   * partials of one id-less message count twice, because without an id there
+   * is no way to tell them from two messages.
+   *
+   * Optional on the type, always present on `parseSession`'s output, for the
+   * same additive reason as `outcomes`; `0` means nothing was dropped.
+   */
+  usageRecordsDropped?: number;
 }

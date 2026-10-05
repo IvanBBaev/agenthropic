@@ -714,13 +714,19 @@ describe('composition root (src/index)', () => {
       };
       expect(tickTroubleTransition('read-error', { kind: 'unchanged' })).toEqual(recovery);
       expect(
-        tickTroubleTransition('no-corpus-root', { kind: 'ingested', summary: SUMMARY }),
+        tickTroubleTransition('no-corpus-root', {
+          kind: 'ingested',
+          summary: SUMMARY,
+          pending: false,
+        }),
       ).toEqual(recovery);
       expect(tickTroubleTransition(null, { kind: 'unchanged' })).toEqual({
         next: null,
         line: null,
       });
-      expect(tickTroubleTransition(null, { kind: 'ingested', summary: SUMMARY })).toEqual({
+      expect(
+        tickTroubleTransition(null, { kind: 'ingested', summary: SUMMARY, pending: false }),
+      ).toEqual({
         next: null,
         line: null,
       });

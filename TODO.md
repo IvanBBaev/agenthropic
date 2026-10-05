@@ -1092,46 +1092,86 @@ not counted._
 **Open decisions from the audit (Ivan)** — found, verified here, deliberately not built. Each is a
 one-word answer; the recommended default is first.
 
-- [ ] **D11 — Q5 has no dashboard reader.** `GET /api/changes` closed WP-U11 on the server, but
+> **Decisions recorded 2026-09-30** (Ivan, in chat: "Всички (a)" — every recommended default
+> accepted). Dispatched the same day in three disjoint lanes: D11 (web, `apps/web`), D14
+> (fixtures, `packages/test-fixtures`), D12/D13/D15–D19 (docs: `development-plan.md`,
+> `RELEASE.md`, `docs/site`). D15's throwaway PR is opened only on Ivan's separate go-ahead.
+
+- [x] **D11 — Q5 has no dashboard reader.** `GET /api/changes` closed WP-U11 on the server, but
   nothing in `apps/web/src` calls it, while the Phase-4 exit gate asks the *views* to answer
   the five questions — the "true of the server, false of the dashboard" pattern this board
   already caught twice. **(a)** a minimal "changed since" list on the Sessions view, text
   only, like D4 (one agent lane, ~1 day) · (b) amend the gate to "answerable through the
   documented API" and say so in `RELEASE.md` §6.
-- [ ] **D12 — WP-U7 "D3 force+tree, live".** The tree is a hand-rolled layered SVG (no
+  - **Done 2026-09-30 (a):** `ChangesPanel` on the Sessions view reads `/api/changes`; web tests 862 → 913, 100% coverage.
+- [x] **D12 — WP-U7 "D3 force+tree, live".** The tree is a hand-rolled layered SVG (no
   force graph) and does not subscribe to SSE (`SessionsView.tsx:37`, "an open owner
   decision" never raised here). **(a)** amend the WP: layered tree stays, "live" means the
   refresh control that exists · (b) subscribe the tree to `session-ingested` /
   `agent-status-changed` and refetch the selected tree (small) · (c) build the force layout
   (large).
-- [ ] **D13 — WP-C6 "staleness-fails-CI" cannot mean what it says.** The golden fixtures are
+  - **Done 2026-09-30 (a):** WP-U7 amended in the plan and `dashboard.md`.
+- [x] **D13 — WP-C6 "staleness-fails-CI" cannot mean what it says.** The golden fixtures are
   synthetic and use `synthetic-model-a/b`, which the seed deliberately does not price (the P0
   harness adds its own rows), so a literal "every corpus model+bucket has a seeded row" test
   would be red today, or circular if the fixtures borrowed seeded ids. What actually stopped
   the 52/60 and 27/61 stale-seed outages was the runtime `PricingError` halt plus a real-corpus
   boot. **(a)** amend C6 to "unknown model halts ingest loudly (runtime) + a real-corpus boot
   in the release checklist", adding that boot line to `RELEASE.md` · (b) keep C6 open.
-- [ ] **D14 — WP-X1 "≥3 real sessions, redacted, manifested, all four pathologies".** All eight
+  - **Done 2026-09-30 (a):** WP-C6 amended; `RELEASE.md` §6 [HUMAN] pre-tag real-corpus boot box (shared with D17).
+- [x] **D14 — WP-X1 "≥3 real sessions, redacted, manifested, all four pathologies".** All eight
   fixtures are synthetic by design (`fixtures/types.ts:6-8`); crashed-no-Stop and
   two-concurrent-instances are not represented; there is no pathology manifest. **(a)** accept
   synthetic fixtures as the CI corpus (the real corpus stays local, as LABEL-ME's already
   does) and add the two missing pathologies synthetically (agent lane) · (b) promote redacted
   real sessions (needs your corpus and a redaction pass).
-- [ ] **D15 — WP-X5 "a PR dropping below the threshold is blocked (demonstrated)".** Never
+  - **Done 2026-09-30 (a):** `crashed-no-stop` + `concurrent-instance-a/-b` fixtures and `PATHOLOGY_MANIFEST`; synthetic hierarchy corpus 14/14 edges; WP-X1 amended.
+- [~] **D15 — WP-X5 "a PR dropping below the threshold is blocked (demonstrated)".** Never
   demonstrated. **(a)** one throwaway PR lowering coverage, red `ci` run recorded, PR closed
   (needs your go-ahead to open it) · (b) accept the gate's configuration as the evidence.
-- [ ] **D16 — WP-X10 "WORKLOG presence check".** None exists; WORKLOG is a git-excluded local
+  - **Decided 2026-09-30 (a), not yet run:** docs record it as pending; the throwaway PR waits for Ivan's go-ahead.
+- [x] **D16 — WP-X10 "WORKLOG presence check".** None exists; WORKLOG is a git-excluded local
   file. **(a)** drop the clause — a tracked check for an untracked file cannot run in CI ·
   (b) a local-only warning script.
-- [ ] **D17 — WP-C1 "refresh cadence".** No cadence is defined; the seed has been refreshed
+  - **Done 2026-09-30 (a):** clause dropped from WP-X10 with its reason.
+- [x] **D17 — WP-C1 "refresh cadence".** No cadence is defined; the seed has been refreshed
   three times by outage (migrations 18-20). **(a)** a `RELEASE.md` line: re-read the pricing
   page and boot the real corpus before every tag · (b) a dated calendar cadence.
-- [ ] **D18 — WP-C2 "PricingProvider port".** No port interface; `loadPricing` is a plain
+  - **Done 2026-09-30 (a):** `RELEASE.md` §6 pre-tag pricing re-read; WP-C1 amended.
+- [x] **D18 — WP-C2 "PricingProvider port".** No port interface; `loadPricing` is a plain
   function and the dated resolver is met. **(a)** accept as met in substance · (b) add the
   interface (trivial, but an interface with one implementation and no second caller).
-- [ ] **D19 — `token_usage.is_compaction_baseline` is written as 0 and read by nothing.**
+  - **Done 2026-09-30 (a):** WP-C2 accepted as met in substance; plan, `cost-model.md`, ADR CD-6 amended.
+- [x] **D19 — `token_usage.is_compaction_baseline` is written as 0 and read by nothing.**
   Repricing happens at analysis time (`docs/site/architecture/hooks.md`), so the column is
   dead. **(a)** keep it, documented as reserved · (b) drop it in a migration.
+  - **Done 2026-09-30 (a):** documented as reserved across `data-model.md`, `cost-model.md` and five other site pages.
+
+> **Decisions recorded 2026-10-01** (Ivan, in chat — the recommended default on each of the
+> four open owner items from the 2026-09-26 WORKLOG). Agent lanes dispatched the same day.
+
+- [x] **E1 — oversize main transcript served as complete** (151 MiB > 64 MiB cap). **Decided:**
+  keep the cap; add a `partial` flag with its reason, carried through the DTOs and shown in the
+  views; aggregates say they include N partial sessions (lower bound).
+- [x] **E2 — `/api/health` dark for ~40 s during the boot replay.** **Decided:** health listens
+  at once and reports `replaying` until the replay ends.
+- [x] **E3 — quarantined and nonexistent sessions both 404.** **Decided:** a quarantined session
+  gets a distinct response carrying a machine-readable `quarantined` code and its reason;
+  nonexistent stays 404.
+- [x] **E4 — NN1/NN2 usage silently dropped.** **Decided:** count and show — an empty/partial
+  `cache_creation` object falls back to the flat `cache_creation_input_tokens`; records without
+  `message.id` are counted per session and surfaced; nothing is quarantined.
+  - **Done 2026-10-01 (E1–E4):** migration 21 (`partial_reason`, `partial_skipped_bytes`,
+    `usage_records_dropped`); partial/dropped fields on every per-session DTO, cost summary and
+    cost analysis; 409 `quarantined`/`ingest-failing` via `watcher.rejectionOf`; chunked boot
+    replay (25 sessions/pass) with health `replaying`; parser-spec §5.2 amended.
+  - **Open (owner):** NN2 remainder → 5m (lower bound if 1h)? Should an `unreadable` main
+    transcript also mark a session partial? An oversize main with no subagents creates no
+    session row (invisible, not partial). Partial counts on DAG/changes aggregates? Replay cap
+    25 — constant or env var?
+- [x] **RR2 — second web review pass** (the 2026-09-26 RR coverage gap). Done 2026-10-01: four
+  defects fixed test-first (LiveView refetch race, week tile unmeasured $0.00, aggregate savings
+  floor note, infinite delta double banner); the two carried candidates refuted.
 
 ### Post-1.0 / v2.0 · Alerting core _(off the v1.0 critical path — best-path §6.1; **entered only via KC-5**: 14 consecutive days of real daily v1.0 use + ≥3 friction-log entries wanting alerts — roadmap §6. If that evidence never materializes, v2.0 never starts, and that is a success of the roadmap, not a failure.)_
 - [ ] **WP-A2** alert/webhook schema · **A3** secret `token_ref` resolver · **A4** no-SSRF

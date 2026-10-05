@@ -79,6 +79,7 @@ import {
 } from './live-model';
 import { AGENT_STATUSES, NO_FIGURE_META, STATUS_META, statusMeta } from './status';
 import type { ViewProps } from './types';
+import { DroppedUsageNote, PartialBadge } from './session-honesty';
 import { UnpricedNote } from './unpriced';
 
 /** Page size for the board snapshot (server max is far above this). */
@@ -249,6 +250,17 @@ export function LiveView({ token, sse, onAuthRejected }: ViewProps) {
    * snapshot lands, and never rendered.
    */
   const missedWhileLoadingRef = useRef(false);
+  /**
+   * Whether a snapshot read is in flight (RR2, 2026-09-30). LV-9 keyed its
+   * re-read on the board being `loading`, which is true of the first fetch
+   * only: every later fetch runs with the previous board still on screen (a
+   * Retry leaves `error` showing, a refetch leaves `ready` showing), so a frame
+   * that landed during one of those was dropped or patched onto a board the
+   * response then replaced - and that response may have been read before the
+   * transition was persisted. The condition LV-9 meant is "a read is in the
+   * air", and this is that condition, not a proxy for it.
+   */
+  const fetchInFlightRef = useRef(false);
 
   useEffect(() => {
     // Each fetch starts after every frame seen so far, so its read already
@@ -256,10 +268,12 @@ export function LiveView({ token, sse, onAuthRejected }: ViewProps) {
     // component. Clearing here matters when the first fetch is superseded by a
     // reload before it lands.
     missedWhileLoadingRef.current = false;
+    fetchInFlightRef.current = true;
     const covers = observationRef.current;
     const controller = new AbortController();
     void fetchSessions(token, { limit: SESSION_LIMIT }, controller.signal).then((result) => {
       if (controller.signal.aborted) return;
+      fetchInFlightRef.current = false;
       if (result.kind === 'unauthorized') {
         onAuthRejected();
       } else if (result.kind === 'error') {
@@ -276,8 +290,12 @@ export function LiveView({ token, sse, onAuthRejected }: ViewProps) {
           // LV-9: a status frame was dropped while this response was in the
           // air, and the response may have been read before that transition was
           // persisted. Settle it the way the board settles every other
-          // disagreement. Bounded to one extra fetch per mount: the board is
-          // ready from here on, so no later frame takes the dropping path.
+          // disagreement.
+          // AMENDED 2026-09-30 (RR2): "bounded to one extra fetch per mount"
+          // no longer holds - the flag is now armed by ANY read in flight, not
+          // by the first one alone. It is bounded to one extra fetch per read
+          // that a status frame overlapped, and the re-read is itself a read
+          // that a later frame may overlap.
           missedWhileLoadingRef.current = false;
           setReload((value) => value + 1);
         }
@@ -318,6 +336,10 @@ export function LiveView({ token, sse, onAuthRejected }: ViewProps) {
         setReload((value) => value + 1);
         return;
       }
+      // RR2 (2026-09-30): whatever the board shows, a read in the air may
+      // predate this transition, and when it lands it replaces the board -
+      // including a patch applied below. So it is re-read once it has landed.
+      if (fetchInFlightRef.current) missedWhileLoadingRef.current = true;
       const current = boardRef.current;
       if (current.kind !== 'ready') {
         // LV-9 (2026-09-08). The frame is still dropped - there is no snapshot
@@ -332,7 +354,10 @@ export function LiveView({ token, sse, onAuthRejected }: ViewProps) {
         // Only while LOADING. In the error state the next fetch is issued after
         // this frame anyway, so its read already contains the transition and a
         // second one would buy nothing.
-        if (current.kind === 'loading') missedWhileLoadingRef.current = true;
+        // AMENDED 2026-09-30 (RR2): "the next fetch is issued after this frame"
+        // is false while a Retry is already in flight - the error stays on
+        // screen for the whole of that read. The flag is now armed above, by
+        // the read being in the air, whatever the board shows.
         return;
       }
       const result = applyAgentStatusChange(current.sessions, event.data);
@@ -602,6 +627,9 @@ export function LiveView({ token, sse, onAuthRejected }: ViewProps) {
                         nothing beside it, which on this board means "fully
                         priced". See views/unpriced.tsx. */}
                     <UnpricedNote tokens={session.unpricedTokens} lead="" />
+                    {/* Owner decisions 1 and 2: see views/session-honesty.tsx. */}
+                    <PartialBadge partial={session.partial} lead="" />
+                    <DroppedUsageNote count={session.usageRecordsDropped} lead="" />
                   </div>
                   {/* Only on a card the stream has actually rewritten. An
                       unpatched card is uniformly as old as the snapshot, and

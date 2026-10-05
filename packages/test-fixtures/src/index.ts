@@ -5,29 +5,48 @@
  * The synthetic corpus under `src/fixtures/` covers the five edge provenances
  * of docs/analysis/parser-spec.md section 4.1 (tool_use, directory,
  * task_notification, queue_operation, legacy_explore), the depth-2 parent
- * (gate item 4), the N3 usage-dedup case and the WP-U10 outcome terminals.
+ * (gate item 4), the N3 usage-dedup case, the WP-U10 outcome terminals and
+ * the four WP-X1 hostile pathologies (see `PATHOLOGY_MANIFEST`).
  * All fixture content is invented; nothing is copied from real
  * transcripts.
  */
 import type { RawEventEnvelope } from '@agenthropic/shared';
 
 export {
+  CONCURRENT_A_AGENT_ID,
+  CONCURRENT_A_SESSION_ID,
+  CONCURRENT_B_AGENT_ID,
+  CONCURRENT_B_SESSION_ID,
+  CONCURRENT_CWD,
+  CRASHED_AGENT_ID,
+  CRASHED_PENDING_TOOL_USE_ID,
+  CRASHED_SPAWN_TOOL_USE_ID,
   DUPLICATED_MESSAGE_ID,
   EVICTED_TOOL_USE_ID,
   FIXTURE_NAMES,
   INTERRUPT_TOOL_USE_ID,
   LEGACY_CHILD_HEX,
   LEGACY_DECOY_HEX,
+  PATHOLOGY_MANIFEST,
   QUEUED_TASK_ID,
   QUEUED_TOOL_USE_ID,
   TASK_ID,
   TERMINATED_EARLY_AGENT_ID,
   TERMINATED_TOOL_USE_ID,
   USER_INTERRUPT_AGENT_ID,
+  WP_X1_PATHOLOGIES,
+  checkPathologyManifest,
   getFixture,
   listFixtures,
 } from './fixtures/index.js';
-export type { Fixture, FixtureFile, FixtureName } from './fixtures/index.js';
+export type {
+  Fixture,
+  FixtureFile,
+  FixtureName,
+  Pathology,
+  PathologyEntry,
+  PathologyManifest,
+} from './fixtures/index.js';
 
 export {
   ANNOTATION_SUFFIX,

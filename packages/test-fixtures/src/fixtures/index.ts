@@ -1,9 +1,11 @@
 /**
  * Registry + typed loader for the synthetic fixture corpus
  * (parser-spec section 4.1 provenances, gate item 4 depth-2, the N3
- * usage-dedup case and the WP-U10 outcome terminals).
+ * usage-dedup case, the WP-U10 outcome terminals and the WP-X1 pathologies).
  */
 import { agentOutcomeErrors } from './agent-outcome-errors.js';
+import { concurrentInstanceA, concurrentInstanceB } from './concurrent-instances.js';
+import { crashedNoStop } from './crashed-no-stop.js';
 import { depth2Sync } from './depth-2-sync.js';
 import { flatToolUse } from './flat-tool-use.js';
 import { legacyBareExplore } from './legacy-bare-explore.js';
@@ -22,6 +24,9 @@ const REGISTRY: Readonly<Record<FixtureName, Fixture>> = {
   'depth-2-sync': depth2Sync,
   'legacy-bare-explore': legacyBareExplore,
   'agent-outcome-errors': agentOutcomeErrors,
+  'crashed-no-stop': crashedNoStop,
+  'concurrent-instance-a': concurrentInstanceA,
+  'concurrent-instance-b': concurrentInstanceB,
 };
 
 /** All fixture names, in a stable order. */
@@ -50,3 +55,17 @@ export {
   TERMINATED_TOOL_USE_ID,
   USER_INTERRUPT_AGENT_ID,
 } from './agent-outcome-errors.js';
+export {
+  CRASHED_AGENT_ID,
+  CRASHED_PENDING_TOOL_USE_ID,
+  CRASHED_SPAWN_TOOL_USE_ID,
+} from './crashed-no-stop.js';
+export {
+  CONCURRENT_A_AGENT_ID,
+  CONCURRENT_A_SESSION_ID,
+  CONCURRENT_B_AGENT_ID,
+  CONCURRENT_B_SESSION_ID,
+  CONCURRENT_CWD,
+} from './concurrent-instances.js';
+export { PATHOLOGY_MANIFEST, WP_X1_PATHOLOGIES, checkPathologyManifest } from './pathologies.js';
+export type { Pathology, PathologyEntry, PathologyManifest } from './pathologies.js';

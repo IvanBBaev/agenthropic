@@ -31,6 +31,7 @@ import {
   WILSON_Z_95_ONE_SIDED,
   certifyExitGate,
   formatPercent,
+  listFixtures,
   minimumClaimsForThreshold,
   parseAnnotation,
   readAnnotationDir,
@@ -723,9 +724,12 @@ describe('readAnnotationDir', () => {
 
   it('loads the shipped synthetic corpus, all of it machine-authored', () => {
     const corpus = readAnnotationDir(join(ANNOTATIONS_DIR, 'synthetic'));
-    // One annotation per shipped fixture — 8 since `agent-outcome-errors`
-    // (WP-U10) joined the corpus.
-    expect(corpus).toHaveLength(8);
+    // One annotation per shipped fixture — 11 since the WP-X1 pathologies
+    // `crashed-no-stop` and `concurrent-instance-a`/`-b` joined the corpus.
+    expect(corpus).toHaveLength(11);
+    expect(
+      corpus.map((a) => (a.substrate.kind === 'fixture' ? a.substrate.name : '')).sort(),
+    ).toEqual([...listFixtures()].sort());
     for (const annotation of corpus) {
       expect(annotation.provenance).toBe('synthetic-by-construction');
       expect(annotation.substrate.kind).toBe('fixture');

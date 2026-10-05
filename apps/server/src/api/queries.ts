@@ -28,6 +28,7 @@ import {
   type SessionChangeKind,
   type SessionDetailDto,
   type SessionEventsDto,
+  type SessionPartialDto,
   type SessionSummaryDto,
   type SessionTreeDto,
 } from '@agenthropic/shared';
@@ -135,7 +136,10 @@ function sessionSummarySelect(idCount: number): string {
     COALESCE(a.unknown_count, 0) AS unknown_count,
     COALESCE(u.total_tokens, 0) AS total_tokens,
     COALESCE(u.cost_usd, 0) AS cost_usd,
-    COALESCE(u.unpriced_tokens, 0) AS unpriced_tokens
+    COALESCE(u.unpriced_tokens, 0) AS unpriced_tokens,
+    s.partial_reason AS partial_reason,
+    s.partial_skipped_bytes AS partial_skipped_bytes,
+    s.usage_records_dropped AS usage_records_dropped
   FROM sessions s
   LEFT JOIN agents_by_session a ON a.session_id = s.id
   LEFT JOIN usage_by_session u ON u.session_id = s.id
@@ -158,6 +162,33 @@ interface SessionSummaryRow {
   readonly total_tokens: number;
   readonly cost_usd: number;
   readonly unpriced_tokens: number;
+  readonly partial_reason: string | null;
+  readonly partial_skipped_bytes: number | null;
+  readonly usage_records_dropped: number;
+}
+
+/**
+ * The per-session honesty columns (owner decisions 1 and 2), as their DTO
+ * fields. `partial_reason` is CHECK-constrained to the one reason the schema
+ * knows, so the cast only restates what the migration enforces; a null reason
+ * is a whole read whatever the byte column says.
+ */
+function toHonesty(
+  reason: string | null,
+  skippedBytes: number | null,
+  usageRecordsDropped: number,
+): { partial: SessionPartialDto | null; usageRecordsDropped: number } {
+  return {
+    partial:
+      reason === null ? null : { reason: reason as SessionPartialDto['reason'], skippedBytes },
+    usageRecordsDropped,
+  };
+}
+
+interface HonestyRow {
+  readonly partial_reason: string | null;
+  readonly partial_skipped_bytes: number | null;
+  readonly usage_records_dropped: number;
 }
 
 function toSessionSummary(row: SessionSummaryRow): SessionSummaryDto {
@@ -178,6 +209,7 @@ function toSessionSummary(row: SessionSummaryRow): SessionSummaryDto {
       error: row.error_count,
       unknown: row.unknown_count,
     },
+    ...toHonesty(row.partial_reason, row.partial_skipped_bytes, row.usage_records_dropped),
   };
 }
 
@@ -341,8 +373,13 @@ const EDGE_COLUMNS =
  * an agent. Undefined for an unknown session.
  */
 export function getSessionTree(db: SqliteDatabase, sessionId: string): SessionTreeDto | undefined {
-  const exists = db.prepare('SELECT 1 AS one FROM sessions WHERE id = ?').get(sessionId);
-  if (exists === undefined) {
+  const honesty = db
+    .prepare(
+      `SELECT partial_reason, partial_skipped_bytes, usage_records_dropped
+         FROM sessions WHERE id = ?`,
+    )
+    .get(sessionId) as HonestyRow | undefined;
+  if (honesty === undefined) {
     return undefined;
   }
   const agentRows = db
@@ -399,6 +436,11 @@ export function getSessionTree(db: SqliteDatabase, sessionId: string): SessionTr
       costUsd: unattributed.cost_usd,
       unpricedTokens: unattributed.unpriced_tokens,
     },
+    ...toHonesty(
+      honesty.partial_reason,
+      honesty.partial_skipped_bytes,
+      honesty.usage_records_dropped,
+    ),
   };
 }
 
@@ -873,21 +915,44 @@ export function getCostSummary(
       ? []
       : (db
           .prepare(
-            `SELECT id, project_slug FROM sessions
+            `SELECT id, project_slug, partial_reason, partial_skipped_bytes, usage_records_dropped
+               FROM sessions
               WHERE id IN (${Array.from({ length: top.length }, () => '?').join(', ')})`,
           )
-          .all(...top.map(([id]) => id)) as Array<{ id: string; project_slug: string | null }>);
-  const slugs = new Map<string, string | null>(slugRows.map((row) => [row.id, row.project_slug]));
+          .all(...top.map(([id]) => id)) as Array<
+          HonestyRow & { id: string; project_slug: string | null }
+        >);
+  const sessionRows = new Map(slugRows.map((row) => [row.id, row]));
+  // Owner decisions 1 and 2, corpus-wide: how many sessions' totals are a lower
+  // bound, and how many usage records could not be deduplicated. Counted over
+  // every session row, not just the top slice - the totals above cover every
+  // session, so their caveat has to as well.
+  const honestyTotals = db
+    .prepare(
+      `SELECT COUNT(partial_reason) AS partial_sessions,
+              COALESCE(SUM(usage_records_dropped), 0) AS usage_records_dropped
+         FROM sessions`,
+    )
+    .get() as { partial_sessions: number; usage_records_dropped: number };
 
   const summary: CostSummaryDto = {
     totals,
     perModel,
     perDay,
-    topSessions: top.map(([sessionId, bucket]) => ({
-      sessionId,
-      projectSlug: slugs.get(sessionId) ?? null,
-      ...bucket,
-    })),
+    topSessions: top.map(([sessionId, bucket]) => {
+      // A usage-only session (token_usage rows, no sessions row) has no
+      // honesty facts recorded: it reads as whole with nothing dropped, the
+      // same absence-is-null rule its slug follows.
+      const row = sessionRows.get(sessionId);
+      return {
+        sessionId,
+        projectSlug: row?.project_slug ?? null,
+        ...bucket,
+        ...(row === undefined
+          ? { partial: null, usageRecordsDropped: 0 }
+          : toHonesty(row.partial_reason, row.partial_skipped_bytes, row.usage_records_dropped)),
+      };
+    }),
     // The population the slice was cut from, so the client can say "N of M"
     // rather than hedge (closing-plan L1). `bySession` holds every session with
     // a rollup row - priced or unpriced - which is exactly what a longer
@@ -895,6 +960,8 @@ export function getCostSummary(
     // "sessions with cost" and are not counted here.
     sessionCount: bySession.size,
     hasMore: bySession.size > top.length,
+    partialSessions: honestyTotals.partial_sessions,
+    usageRecordsDropped: honestyTotals.usage_records_dropped,
   };
   // Stored under the key OBSERVED BEFORE the scan — safe because better-sqlite3
   // is synchronous: nothing on this connection can write between the two.

@@ -27,8 +27,14 @@ describe('HealthSchema', () => {
     expect(Value.Check(HealthSchema, dto)).toBe(true);
   });
 
-  it('rejects a status other than the literal "ok"', () => {
+  it('accepts status "replaying": the server is up and still reading the corpus at boot', () => {
+    const dto: HealthDto = { status: 'replaying', schemaVersion: 18, ingest: 'replaying' };
+    expect(Value.Check(HealthSchema, dto)).toBe(true);
+  });
+
+  it('rejects a status other than "ok" or "replaying"', () => {
     expect(Value.Check(HealthSchema, { status: 'degraded', schemaVersion: 18 })).toBe(false);
+    expect(Value.Check(HealthSchema, { status: 'idle', schemaVersion: 18 })).toBe(false);
   });
 
   it('rejects an extra top-level property (no accidental data leakage into the DTO)', () => {

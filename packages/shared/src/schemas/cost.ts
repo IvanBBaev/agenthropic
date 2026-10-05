@@ -47,6 +47,35 @@ export const DailyCostSchema = Type.Object(
 
 export type DailyCostDto = Static<typeof DailyCostSchema>;
 
+/**
+ * Why a session's totals are a LOWER BOUND. `main-transcript-oversize`: the
+ * session's `<uuid>.jsonl` main transcript was over the ingest read cap
+ * (64 MiB), so only its subagent transcripts were read - the main agent's own
+ * usage is missing from every total. `skippedBytes` is the skipped file's size
+ * as observed at read time (null when unknown). A closed union on purpose:
+ * a new cause is a schema change the dashboard must learn to explain.
+ */
+export const SessionPartialSchema = Type.Object(
+  {
+    reason: Type.Literal('main-transcript-oversize'),
+    skippedBytes: nullable(Type.Integer({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
+
+export type SessionPartialDto = Static<typeof SessionPartialSchema>;
+
+/**
+ * The two per-session honesty facts every session total carries: `partial`
+ * (null when the whole session was read) and `usageRecordsDropped` - usage
+ * records the parser could not deduplicate (no `message.id`) and therefore
+ * EXCLUDED from the totals. Both mean "the real number is at least this".
+ */
+export const SessionHonestyFields = {
+  partial: nullable(SessionPartialSchema),
+  usageRecordsDropped: Type.Integer({ minimum: 0 }),
+};
+
 export const SessionCostSchema = Type.Object(
   {
     sessionId: Type.String(),
@@ -54,6 +83,7 @@ export const SessionCostSchema = Type.Object(
     tokens: Type.Integer({ minimum: 0 }),
     costUsd: Type.Number({ minimum: 0 }),
     unpricedTokens: Type.Integer({ minimum: 0 }),
+    ...SessionHonestyFields,
   },
   { additionalProperties: false },
 );
@@ -112,6 +142,13 @@ export const CostSummaryResponseSchema = Type.Object(
     sessionCount: Type.Integer({ minimum: 0 }),
     /** `true` when `sessionCount` exceeds the slice - the table is truncated. */
     hasMore: Type.Boolean(),
+    /**
+     * Sessions marked partial (see {@link SessionPartialSchema}) anywhere in
+     * the corpus. Non-zero means `totals` is a lower bound.
+     */
+    partialSessions: Type.Integer({ minimum: 0 }),
+    /** Usage records excluded corpus-wide because they had no `message.id`. */
+    usageRecordsDropped: Type.Integer({ minimum: 0 }),
     coverage: Type.Optional(CostCoverageSchema),
   },
   { additionalProperties: false },
@@ -315,11 +352,19 @@ export const AggregateDelegationSavingsSchema = Type.Object(
 
 export type AggregateDelegationSavingsDto = Static<typeof AggregateDelegationSavingsSchema>;
 
-/** `GET /api/sessions/:id/cost-analysis` response (WP-C4 + WP-C5 over one session). */
+/**
+ * `GET /api/sessions/:id/cost-analysis` response (WP-C4 + WP-C5 over one session).
+ *
+ * Carries the session honesty facts like every other session total. They are
+ * taken from the transcript read the analysis was computed from (not from the
+ * stored rows), so they describe exactly these figures: a `partial` analysis
+ * is a lower bound, and `usageRecordsDropped` records were left out of it.
+ */
 export const CostAnalysisSchema = Type.Object(
   {
     compaction: CompactionAnalysisSchema,
     delegationSavings: DelegationSavingsSchema,
+    ...SessionHonestyFields,
   },
   { additionalProperties: false },
 );

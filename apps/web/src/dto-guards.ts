@@ -279,6 +279,32 @@ function hasSavingsNumbers(row: Record<string, unknown>): boolean {
   return hasNumbers(row, SAVINGS_NUMBERS);
 }
 
+// --- per-session honesty (owner decisions 1 and 2) ---------------------------
+
+/** The one partial reason the contract knows; any other is a newer server. */
+const PARTIAL_REASONS: readonly unknown[] = ['main-transcript-oversize'];
+
+/**
+ * `partial` + `usageRecordsDropped`, on every row that shows a session total.
+ * Both GATE a disclosure - the "totals are a lower bound" badge and the
+ * "N usage records ... were excluded" note - so an absent one is not a blank:
+ * it is an assertion that the session is whole and nothing was dropped, the
+ * same claim an absent `hasMore` makes about a table. `partial: null` is the
+ * honest "whole" and is accepted; `partial` present but malformed is refused,
+ * because a reason the view cannot name is a disclosure it cannot make.
+ * `skippedBytes` is nullable in the contract (the size may be unknown), so
+ * only its type is held.
+ */
+function hasHonesty(row: Record<string, unknown>): boolean {
+  const partial = row['partial'];
+  const partialOk =
+    partial === null ||
+    (isRecord(partial) &&
+      PARTIAL_REASONS.includes(partial['reason']) &&
+      (partial['skippedBytes'] === null || typeof partial['skippedBytes'] === 'number'));
+  return partialOk && typeof row['usageRecordsDropped'] === 'number';
+}
+
 // --- per-endpoint predicates -------------------------------------------------
 
 /**
@@ -297,7 +323,11 @@ function isSessionSummary(row: Record<string, unknown>): boolean {
   // it and would throw - but its five buckets are NOT checked: a bucket the
   // server omitted already renders as NO_FIGURE_META, which says more than a
   // blacked-out board would (rule 2).
-  return recordAt(row, 'statusCounts') !== null && hasNumbers(row, SESSION_SUMMARY_NUMBERS);
+  return (
+    recordAt(row, 'statusCounts') !== null &&
+    hasNumbers(row, SESSION_SUMMARY_NUMBERS) &&
+    hasHonesty(row)
+  );
 }
 
 /** `GET /api/sessions` - drives the live board and the session list. */
@@ -316,6 +346,7 @@ export function isSessionTree(body: Record<string, unknown>): boolean {
     unattributed !== null &&
     hasAgentNumbers(unattributed) &&
     hasNumbers(body, SESSION_TREE_NUMBERS) &&
+    hasHonesty(body) &&
     isArrayOfRecords(body['agents'], hasAgentNumbers) &&
     // Edges carry no figure - only ids, which are checked nowhere by design -
     // but the array itself is mapped and counted, so it must exist.
@@ -363,8 +394,16 @@ function hasOptionalCoverage(body: Record<string, unknown>): boolean {
  * The corpus-scope counter beside the top-sessions table: how many sessions the
  * corpus holds, not how many rows the slice carries. `hasMore` travels with it
  * but is a boolean, so it is checked in place rather than listed here.
+ * `partialSessions` / `usageRecordsDropped` (owner decisions 1 and 2) are the
+ * corpus-wide honesty aggregates: each gates the "includes N partial sessions
+ * (lower bound)" / "N usage records ... excluded" note, so absence is refused.
  */
-const COST_SUMMARY_NUMBERS = ['sessionCount'] as const;
+const COST_SUMMARY_NUMBERS = ['sessionCount', 'partialSessions', 'usageRecordsDropped'] as const;
+
+/** A top-sessions row prints a session total, so it carries the honesty pair. */
+function isTopSession(row: Record<string, unknown>): boolean {
+  return hasCostRowNumbers(row) && hasHonesty(row);
+}
 
 /**
  * `GET /api/cost/summary` - the KPI row, the day windows and the cost flow.
@@ -383,7 +422,7 @@ export function isCostSummary(body: Record<string, unknown>): boolean {
     hasCostRowNumbers(totals) &&
     isArrayOfRecords(body['perModel'], hasCostRowNumbers) &&
     isArrayOfRecords(body['perDay'], hasCostRowNumbers) &&
-    isArrayOfRecords(body['topSessions'], hasCostRowNumbers) &&
+    isArrayOfRecords(body['topSessions'], isTopSession) &&
     // The population the slice above was cut from, printed raw as a
     // denominator: an absent counter reaches the reader as itself.
     hasNumbers(body, COST_SUMMARY_NUMBERS) &&
@@ -505,6 +544,65 @@ export function isCostAnalysis(body: Record<string, unknown>): boolean {
     isArrayOfRecords(delegationSavings['perAgent'], isAgentSavingsRow) &&
     // Counted (`.length`) to report how many subagents were left out; an absent
     // array crashes the panel, and an absent COUNT would erase the exclusion.
-    Array.isArray(delegationSavings['skippedAgentIds'])
+    Array.isArray(delegationSavings['skippedAgentIds']) &&
+    // The analysis prints session figures, so it carries the honesty pair.
+    hasHonesty(body)
+  );
+}
+
+const CHANGE_TOTALS_NUMBERS = [
+  'sessionsNew',
+  'sessionsUpdated',
+  'sessionsUnknownStart',
+  'agentsAppeared',
+  'tokensAdded',
+  'costAddedUsd',
+  'unpricedTokensAdded',
+  'tokensAddedOutsideChangedSessions',
+] as const;
+
+const CHANGES_COVERAGE_NUMBERS = ['undatedSessions', 'undatedAgents', 'undatedUsageRows'] as const;
+
+const CHANGED_SESSION_NUMBERS = [
+  'agentsAppeared',
+  'tokensAdded',
+  'costAddedUsd',
+  'unpricedTokensAdded',
+] as const;
+
+/** `total` is the window's session count, printed raw as the denominator of the page. */
+const CHANGES_NUMBERS = ['total'] as const;
+
+/**
+ * D11(a) (2026-09-30). `GET /api/changes` - the "changed since" list on the
+ * Sessions view. The same two categories as every predicate above, and nothing
+ * new decided:
+ *
+ * - every figure the panel prints (`totals`, `coverage`, each row's four
+ *   numbers, `total`) is either printed raw or gates a disclosure - the
+ *   `tokensAddedOutsideChangedSessions > 0` residue notice, the coverage notice,
+ *   the "showing n of total" slice notice - so each is checked;
+ * - `since` and `until` are strings, but they are not merely rendered: they ARE
+ *   the answer's scope. An absent `until` would print the window as
+ *   `(since, ]`, which reads as open-ended - a claim of completeness to the
+ *   present that the server never made. They are refused when absent for the
+ *   same reason `counts.truncated` is: the missing value asserts more than the
+ *   server did. Their SPELLING is not checked (rule 1's string exemption);
+ * - `change` is an enum and, per DG-4, is left to the renderer's funnel
+ *   (`changeKindText` in `views/ChangesPanel.tsx`), which names an unrecognised
+ *   or absent word instead of folding it into `updated`.
+ */
+export function isChanges(body: Record<string, unknown>): boolean {
+  const totals = recordAt(body, 'totals');
+  const coverage = recordAt(body, 'coverage');
+  return (
+    typeof body['since'] === 'string' &&
+    typeof body['until'] === 'string' &&
+    totals !== null &&
+    hasNumbers(totals, CHANGE_TOTALS_NUMBERS) &&
+    coverage !== null &&
+    hasNumbers(coverage, CHANGES_COVERAGE_NUMBERS) &&
+    hasNumbers(body, CHANGES_NUMBERS) &&
+    isArrayOfRecords(body['sessions'], (row) => hasNumbers(row, CHANGED_SESSION_NUMBERS))
   );
 }

@@ -779,24 +779,60 @@ function tokenCount(value: unknown): number {
   return typeof value === 'number' ? value : Number.NaN;
 }
 
+/**
+ * Maps one API `usage` block onto the five buckets.
+ *
+ * Cache WRITES arrive two ways: the flat `cache_creation_input_tokens` total,
+ * and (on newer records) a `cache_creation` object splitting it by TTL. A
+ * flat-only record has always been attributed to `cacheWrite5m` — the API's
+ * default TTL, and the unsplit bucket of the cost model.
+ *
+ * NN2: when the breakdown is present but EMPTY or covers only part of the flat
+ * total, the breakdown alone would lose the uncovered tokens. So the known
+ * split is kept exactly as written and only the REMAINDER
+ * (flat - 5m - 1h) is added to the unsplit bucket. No split is ever invented,
+ * and nothing is ever subtracted: a breakdown that exceeds the flat total is
+ * kept verbatim, a non-numeric flat total is not trusted over the breakdown,
+ * and a non-numeric breakdown value still becomes `NaN` and fails loudly.
+ */
 function mapUsageBuckets(usage: JsonRecord): TokenBuckets {
   const cacheCreation = asRecord(usage['cache_creation']);
+  const flatCacheWrite = tokenCount(usage['cache_creation_input_tokens']);
+  let cacheWrite5m = flatCacheWrite;
+  let cacheWrite1h = 0;
+  if (cacheCreation !== undefined) {
+    cacheWrite5m = tokenCount(cacheCreation['ephemeral_5m_input_tokens']);
+    cacheWrite1h = tokenCount(cacheCreation['ephemeral_1h_input_tokens']);
+    const unsplit = flatCacheWrite - cacheWrite5m - cacheWrite1h;
+    if (unsplit > 0) {
+      cacheWrite5m += unsplit;
+    }
+  }
   return {
     input: tokenCount(usage['input_tokens']),
     output: tokenCount(usage['output_tokens']),
     cacheRead: tokenCount(usage['cache_read_input_tokens']),
-    cacheWrite5m:
-      cacheCreation !== undefined
-        ? tokenCount(cacheCreation['ephemeral_5m_input_tokens'])
-        : tokenCount(usage['cache_creation_input_tokens']),
-    cacheWrite1h:
-      cacheCreation !== undefined ? tokenCount(cacheCreation['ephemeral_1h_input_tokens']) : 0,
+    cacheWrite5m,
+    cacheWrite1h,
   };
 }
 
+/** The usage rows the ledger can take, plus the count of records it could not. */
+interface ExtractedUsage {
+  readonly rows: UsageRow[];
+  /**
+   * NN1: assistant records carrying a `usage` block but no string `message.id`.
+   * They cannot be deduplicated (streamed partials of one message share the
+   * id and would otherwise be summed several times), so they stay out of the
+   * ledger — but they are counted here instead of vanishing.
+   */
+  readonly dropped: number;
+}
+
 /** One UsageRow per assistant message carrying a `usage` block, across every transcript. */
-function extractUsageRows(transcripts: readonly Transcript[]): UsageRow[] {
+function extractUsageRows(transcripts: readonly Transcript[]): ExtractedUsage {
   const rows: UsageRow[] = [];
+  let dropped = 0;
   for (const transcript of transcripts) {
     const agentId = transcript.isMain ? null : transcript.owner;
     for (const rawRecord of transcript.records) {
@@ -807,7 +843,11 @@ function extractUsageRows(transcripts: readonly Transcript[]): UsageRow[] {
       const message = asRecord(record?.['message']);
       const usage = asRecord(message?.['usage']);
       const messageId = asString(message?.['id']);
-      if (usage === undefined || messageId === undefined) {
+      if (usage === undefined) {
+        continue;
+      }
+      if (messageId === undefined) {
+        dropped += 1;
         continue;
       }
       rows.push({
@@ -819,7 +859,7 @@ function extractUsageRows(transcripts: readonly Transcript[]): UsageRow[] {
       });
     }
   }
-  return rows;
+  return { rows, dropped };
 }
 
 // --- Public entry point -----------------------------------------------------
@@ -906,7 +946,8 @@ export function parseSession(substrate: SessionSubstrate): ParsedSession {
     }
   }
 
-  const usage: DedupedUsage[] = dedupeUsageByMessageId(extractUsageRows(transcripts));
+  const extracted = extractUsageRows(transcripts);
+  const usage: DedupedUsage[] = dedupeUsageByMessageId(extracted.rows);
 
   return {
     sessionId,
@@ -915,6 +956,7 @@ export function parseSession(substrate: SessionSubstrate): ParsedSession {
     usage,
     outcomes,
     claudeCodeVersions: collectClaudeCodeVersions(files),
+    usageRecordsDropped: extracted.dropped,
   };
 }
 

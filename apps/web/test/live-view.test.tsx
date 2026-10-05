@@ -333,6 +333,117 @@ describe('LiveView', () => {
     expect(screen.getByText(/Could not load sessions: Internal server error\./)).toBeDefined();
   });
 
+  /*
+   * RR2 (2026-09-30). LV-9 armed its re-read only while the board was
+   * `loading`, which is true of the FIRST fetch alone. Every later fetch runs
+   * with the previous board still on screen - a Retry from the error state
+   * leaves `error` showing, a refetch leaves `ready` showing - so a status
+   * frame that landed while one of those was in flight took a path that never
+   * re-read: dropped outright in the error state (on the premise, false here,
+   * that "the next fetch is issued after this frame"), or patched onto a board
+   * the in-flight response then replaced wholesale. Either way the response,
+   * possibly read before the transition was persisted, was rendered as the
+   * current state with nothing on the page saying otherwise.
+   */
+  it('re-reads once when a status frame lands while a Retry from the error state is in flight', async () => {
+    const session = sessionSummary();
+    const retry = deferred<Response>();
+    let calls = 0;
+    fetchMock.mockImplementation(() => {
+      calls += 1;
+      if (calls === 1)
+        return Promise.resolve(jsonResponse(500, { error: 'Internal server error.' }));
+      if (calls === 2) return retry.promise;
+      return Promise.resolve(
+        jsonResponse(
+          200,
+          sessionList([{ ...session, statusCounts: statusCounts({ completed: 3 }) }]),
+        ),
+      );
+    });
+    renderView();
+    await screen.findByText(/Could not load sessions: Internal server error\./);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(sessionsCalls()).toHaveLength(2);
+    act(() => {
+      MockEventSource.latest().emit('agent-status-changed', {
+        type: 'agent-status-changed',
+        sessionId: session.id,
+        agentId: 'agent-main',
+        status: 'completed',
+        previousStatus: 'working',
+        occurredAt: '2026-07-29T10:10:00.000Z',
+      });
+    });
+    await act(async () => {
+      retry.resolve(jsonResponse(200, sessionList([session])));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    await waitFor(() => expect(sessionsCalls()).toHaveLength(3));
+    await waitFor(() =>
+      expect(screen.getByLabelText(`status counts for ${session.id}`).textContent).toContain(
+        '3 done',
+      ),
+    );
+  });
+
+  it('re-reads once when a status frame is patched onto a board whose refetch is still in flight', async () => {
+    const session = sessionSummary();
+    const refetch = deferred<Response>();
+    let calls = 0;
+    fetchMock.mockImplementation(() => {
+      calls += 1;
+      if (calls === 1) return Promise.resolve(jsonResponse(200, sessionList([session])));
+      if (calls === 2) return refetch.promise;
+      return Promise.resolve(
+        jsonResponse(
+          200,
+          sessionList([{ ...session, statusCounts: statusCounts({ completed: 3 }) }]),
+        ),
+      );
+    });
+    renderView();
+    await screen.findByRole('list', { name: 'sessions' });
+
+    act(() => {
+      MockEventSource.latest().emit('session-ingested', {
+        type: 'session-ingested',
+        sessionId: 'dddddddd-0000-0000-0000-000000000000',
+        occurredAt: '2026-07-29T10:09:00.000Z',
+      });
+    });
+    expect(sessionsCalls()).toHaveLength(2);
+    act(() => {
+      MockEventSource.latest().emit('agent-status-changed', {
+        type: 'agent-status-changed',
+        sessionId: session.id,
+        agentId: 'agent-main',
+        status: 'completed',
+        previousStatus: 'working',
+        occurredAt: '2026-07-29T10:10:00.000Z',
+      });
+    });
+    // The patch lands on the board on screen, as before.
+    expect(screen.getByLabelText(`status counts for ${session.id}`).textContent).toContain(
+      '3 done',
+    );
+
+    // The in-flight read predates the transition and replaces the patched board.
+    await act(async () => {
+      refetch.resolve(jsonResponse(200, sessionList([session])));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    await waitFor(() => expect(sessionsCalls()).toHaveLength(3));
+    await waitFor(() =>
+      expect(screen.getByLabelText(`status counts for ${session.id}`).textContent).toContain(
+        '3 done',
+      ),
+    );
+  });
+
   it('drops a snapshot that lands after a newer refetch already replaced it', async () => {
     const stale = sessionSummary({ projectSlug: 'stale-project' });
     const fresh = sessionSummary({

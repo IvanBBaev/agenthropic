@@ -283,6 +283,26 @@ scan."**
 - [ ] **Every displayed dollar traces to ground-truth tokens × a dated price** — proven
       by P0-1 (§3) plus `apps/server/test/api-cost.test.ts` / `db-pricing` suites; no
       silent zero-cost default (CD-3/CD-4 cost-trust chain).
+- [ ] **[HUMAN] Pricing page re-read and real-corpus boot — before every tag.** _(Added
+      2026-09-30: owner decisions D13(a) and D17(a) of the 2026-09-26 WP audit; this box is
+      what `WP-C6` and the `WP-C1` "refresh cadence" now mean — see
+      [`development-plan.md`](docs/analysis/development-plan.md) §5.)_
+      1. Re-read Anthropic's published pricing page and compare it with the newest seeded
+         `model_pricing` rows (`apps/server/src/db/migrations.ts`). A changed rate or a new
+         model lands as a **new dated migration** before the tag, never as an edit to an
+         applied one.
+      2. Boot the release commit against the owner's real corpus — `pnpm start` with
+         `DASHBOARD_TOKEN` set, `CLAUDE_PROJECTS_DIR` unset (so `~/.claude/projects`) and a
+         throwaway `DASHBOARD_DB_PATH`, so every session is replayed from scratch — and read
+         the `corpus replay:` line. `0 failed` is the pass. Any
+         `corpus replay failure:` line carrying a `PricingError` message (`unknown model id`,
+         `has no price for bucket`, `no price effective at`) is a red box: seed the rate and
+         boot again.
+
+      Why this and not a CI job: the CI corpus is synthetic and uses `synthetic-model-a/b`,
+      which the seed deliberately does not price, so a CI "every corpus model has a row"
+      check would be red or circular. The runtime `PricingError` halt plus this boot is what
+      actually caught the stale-seed outages that migrations 18–20 repaired.
 - [ ] **README truth pass.** **Resolved 2026-07-30** — the "Pre-code… no application
       code yet" Status section was replaced with what actually runs, and the CI badge
       now attests to the full build: CI is `success` on `9b6c6b3`, the first pushed
@@ -357,7 +377,8 @@ pnpm --filter @agenthropic/web build
 pnpm run test
 pnpm run gate:spawner
 pnpm run gate:licenses
-# then: §5 live restore drill, §0/§4/§6 gh api verifications
+# then: §5 live restore drill, §6 pricing re-read + real-corpus boot [HUMAN],
+#       §0/§4/§6 gh api verifications
 ```
 
 Last rehearsal of this block on a non-release tree: **2026-09-18**, HEAD `39e565a` plus

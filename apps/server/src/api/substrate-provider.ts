@@ -42,12 +42,21 @@ import {
   type SessionRef,
   type SkippedFile,
 } from '../corpus/index';
+import type { SessionPartialDto } from '@agenthropic/shared';
 import { isRealDir, probeLstat } from '../corpus/corpus-paths';
+import { partialFor } from '../corpus/ingest-corpus';
 
 /** One session's parsed reconstruction plus its compaction boundaries. */
 export interface ResolvedSessionSubstrate {
   readonly session: ParsedSession;
   readonly boundaries: readonly CompactionBoundary[];
+  /**
+   * The honesty facts of THIS read (see `SessionHonestyFields`): whether the
+   * main transcript was skipped as over the read cap, and how many usage
+   * records the parser dropped for want of a dedupe key.
+   */
+  readonly partial: SessionPartialDto | null;
+  readonly usageRecordsDropped: number;
 }
 
 /**
@@ -307,11 +316,16 @@ export function createSubstrateProvider(deps: SubstrateProviderDeps): SubstrateP
         return { kind: 'no-substrate' };
       }
 
+      const session = parseSession(built.substrate);
       return {
         kind: 'resolved',
         substrate: {
-          session: parseSession(built.substrate),
+          session,
           boundaries: extractCompactionBoundaries(built.substrate),
+          // The same skip -> partial mapping ingest persists, applied to the
+          // read these figures come from.
+          partial: partialFor(ref.sessionId, built.skipped),
+          usageRecordsDropped: session.usageRecordsDropped ?? 0,
         },
       };
     },

@@ -6,7 +6,7 @@
 import { Type, type Static } from '@sinclair/typebox';
 import { nullable } from './common';
 import { AgentNodeSchema, OrchestrationEdgeDtoSchema } from './graph';
-import { ModelCostSchema } from './cost';
+import { ModelCostSchema, SessionHonestyFields } from './cost';
 
 /**
  * Per-status agent counts. `unknown` is a first-class bucket: the status
@@ -37,6 +37,7 @@ export const SessionSummarySchema = Type.Object(
     totalCostUsd: Type.Number({ minimum: 0 }),
     unpricedTokens: Type.Integer({ minimum: 0 }),
     statusCounts: SessionStatusCountsSchema,
+    ...SessionHonestyFields,
   },
   { additionalProperties: false },
 );
@@ -91,6 +92,7 @@ export const SessionTreeResponseSchema = Type.Object(
       },
       { additionalProperties: false },
     ),
+    ...SessionHonestyFields,
   },
   { additionalProperties: false },
 );

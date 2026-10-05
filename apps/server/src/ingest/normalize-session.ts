@@ -29,7 +29,7 @@
  */
 import { canonicalizeTimestamp } from '@agenthropic/core';
 import type { ParsedAgent, ParsedSession, DedupedUsage } from '@agenthropic/core';
-import type { AgentOutcomeCause, AgentStatus } from '@agenthropic/shared';
+import type { AgentOutcomeCause, AgentStatus, SessionPartialDto } from '@agenthropic/shared';
 import type { AgentUpsert } from '../db/agents';
 import type { OrchestrationEdgeInsert } from '../db/edges';
 import type { SessionUpsert } from '../db/sessions';
@@ -131,6 +131,12 @@ export interface NormalizeOptions {
   readonly projectSlug: string | null;
   readonly instance: string;
   readonly hostId: string;
+  /**
+   * Owner decision 1: whether THIS pass read the session whole. The corpus
+   * runner sets it when the main transcript was over the read cap and only the
+   * subagent transcripts were ingested; absent / null means a whole read.
+   */
+  readonly partial?: SessionPartialDto | null;
 }
 
 /**
@@ -313,6 +319,9 @@ export function normalizeSession(
       startedAt,
       lastActivityAt: maxLastActivity(parsedAgents),
       status: LIVENESS_STATUS,
+      partialReason: options.partial?.reason ?? null,
+      partialSkippedBytes: options.partial?.skippedBytes ?? null,
+      usageRecordsDropped: parsed.usageRecordsDropped ?? 0,
     },
     agents,
     edges: parsed.edges.map((edge) => ({

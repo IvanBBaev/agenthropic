@@ -9,7 +9,7 @@
  * limit/offset pagination on anything unbounded. All SQL behind these routes
  * is read-only (queries.ts).
  */
-import type { FastifyError, FastifyPluginAsync } from 'fastify';
+import type { FastifyBaseLogger, FastifyError, FastifyPluginAsync } from 'fastify';
 import { Type, type TypeBoxTypeProvider } from '@fastify/type-provider-typebox';
 import {
   AggregateDelegationSavingsSchema,
@@ -28,7 +28,9 @@ import {
   SessionDetailSchema,
   SessionEventsResponseSchema,
   SessionListResponseSchema,
+  SessionRejectedErrorSchema,
   SessionTreeResponseSchema,
+  type SessionRejectedErrorDto,
 } from '@agenthropic/shared';
 import {
   PricingError,
@@ -39,6 +41,7 @@ import {
 import type { SqliteDatabase } from '../db/connection';
 import { loadPricing } from '../db/pricing';
 import type { SubstrateLookup, SubstrateProvider } from './substrate-provider';
+import { rejectionResponse, type IngestRejection } from './ingest-rejections';
 import {
   ISO_INSTANT_PATTERN,
   countSessions,
@@ -72,6 +75,15 @@ export interface ApiRoutesOptions {
    * omitted rather than reported as zero (see {@link CostCoverageSchema}).
    */
   readonly ingestExclusions?: () => { readonly failing: number; readonly quarantined: number };
+  /**
+   * Owner decision (2026-10-01): whether ingest rejected this session, and
+   * why. Consulted ONLY where a per-session read would otherwise answer 404,
+   * turning "no such session" into 409 "the corpus holds it, ingest refused
+   * it". A session with rows from an earlier good pass keeps answering 200 -
+   * those rows are still true as of that pass. Optional: a DB-only server has
+   * no ingest to ask, and keeps its plain 404.
+   */
+  readonly ingestRejection?: (sessionId: string) => IngestRejection | undefined;
 }
 
 /** Capped limit/offset pagination - /api/sessions and /api/sessions/:id/events. */
@@ -141,6 +153,31 @@ const CostAnalysisQuerySchema = Type.Object(
 );
 
 export const apiRoutes: FastifyPluginAsync<ApiRoutesOptions> = async (app, options) => {
+  /**
+   * The 409 body for a session ingest rejected, or undefined when the 404 is
+   * the truth. 409 Conflict rather than 422: the request is well-formed and
+   * names a resource the corpus really holds; it is the resource's STATE
+   * (rejected at ingest) that conflicts with serving it, and 422 is about a
+   * request's content, which a GET does not have. The reason is path-free (the
+   * watcher collapses absolute paths to `<path>`); errno codes are moved to the
+   * log, the same division the 503 `session-unreadable` arm below makes.
+   */
+  const rejectedSession = (
+    sessionId: string,
+    log: FastifyBaseLogger,
+  ): SessionRejectedErrorDto | undefined => {
+    const rejection = options.ingestRejection?.(sessionId);
+    if (rejection === undefined) {
+      return undefined;
+    }
+    const { body, errno } = rejectionResponse(rejection);
+    log.warn(
+      { sessionId, code: rejection.code, errno },
+      'per-session read of a session ingest rejected',
+    );
+    return body;
+  };
+
   const { db, substrateProvider } = options;
   const typed = app.withTypeProvider<TypeBoxTypeProvider>();
 
@@ -185,6 +222,7 @@ export const apiRoutes: FastifyPluginAsync<ApiRoutesOptions> = async (app, optio
           200: SessionDetailSchema,
           400: ApiErrorSchema,
           404: ApiErrorSchema,
+          409: SessionRejectedErrorSchema,
           500: ApiErrorSchema,
         },
       },
@@ -192,6 +230,10 @@ export const apiRoutes: FastifyPluginAsync<ApiRoutesOptions> = async (app, optio
     async (request, reply) => {
       const detail = getSessionDetail(db, request.params.id);
       if (detail === undefined) {
+        const rejected = rejectedSession(request.params.id, request.log);
+        if (rejected !== undefined) {
+          return reply.code(409).send(rejected);
+        }
         return reply.code(404).send({ error: 'Session not found.' });
       }
       return detail;
@@ -207,6 +249,7 @@ export const apiRoutes: FastifyPluginAsync<ApiRoutesOptions> = async (app, optio
           200: SessionTreeResponseSchema,
           400: ApiErrorSchema,
           404: ApiErrorSchema,
+          409: SessionRejectedErrorSchema,
           500: ApiErrorSchema,
         },
       },
@@ -214,6 +257,10 @@ export const apiRoutes: FastifyPluginAsync<ApiRoutesOptions> = async (app, optio
     async (request, reply) => {
       const tree = getSessionTree(db, request.params.id);
       if (tree === undefined) {
+        const rejected = rejectedSession(request.params.id, request.log);
+        if (rejected !== undefined) {
+          return reply.code(409).send(rejected);
+        }
         return reply.code(404).send({ error: 'Session not found.' });
       }
       return tree;
@@ -240,6 +287,7 @@ export const apiRoutes: FastifyPluginAsync<ApiRoutesOptions> = async (app, optio
           200: SessionEventsResponseSchema,
           400: ApiErrorSchema,
           404: ApiErrorSchema,
+          409: SessionRejectedErrorSchema,
           500: ApiErrorSchema,
         },
       },
@@ -248,6 +296,10 @@ export const apiRoutes: FastifyPluginAsync<ApiRoutesOptions> = async (app, optio
       const { limit, offset } = request.query;
       const events = getSessionEvents(db, request.params.id, limit, offset);
       if (events === undefined) {
+        const rejected = rejectedSession(request.params.id, request.log);
+        if (rejected !== undefined) {
+          return reply.code(409).send(rejected);
+        }
         return reply.code(404).send({ error: 'Session not found.' });
       }
       return events;
@@ -268,6 +320,7 @@ export const apiRoutes: FastifyPluginAsync<ApiRoutesOptions> = async (app, optio
           200: CostAnalysisSchema,
           400: ApiErrorSchema,
           404: ApiErrorSchema,
+          409: SessionRejectedErrorSchema,
           422: ApiErrorSchema,
           500: ApiErrorSchema,
           503: ApiErrorSchema,
@@ -338,6 +391,10 @@ export const apiRoutes: FastifyPluginAsync<ApiRoutesOptions> = async (app, optio
         });
       }
       if (lookup.kind === 'session-not-found') {
+        const rejected = rejectedSession(request.params.id, request.log);
+        if (rejected !== undefined) {
+          return reply.code(409).send(rejected);
+        }
         return reply.code(404).send({ error: 'Session not found.' });
       }
       if (lookup.kind === 'no-substrate') {
@@ -361,6 +418,8 @@ export const apiRoutes: FastifyPluginAsync<ApiRoutesOptions> = async (app, optio
             pricing,
             topTierModel === undefined ? {} : { topTierModel },
           ),
+          partial: resolved.partial,
+          usageRecordsDropped: resolved.usageRecordsDropped,
         };
       } catch (error) {
         if (error instanceof PricingError) {

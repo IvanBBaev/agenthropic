@@ -63,6 +63,17 @@ function reasonFor(err: unknown): SkipReason {
 }
 
 /**
+ * The skip record for a caught read hazard: its reason, its errno code and -
+ * for an {@link OversizeError} only - the size the cap refused, which is what
+ * lets an oversize MAIN transcript be reported as a partial session with its
+ * skipped byte count rather than just "skipped".
+ */
+function skipFor(relativePath: string, err: unknown): SkippedFile {
+  const base = { relativePath, reason: reasonFor(err), code: errnoCodeOf(err) };
+  return err instanceof OversizeError ? { ...base, sizeBytes: err.sizeBytes } : base;
+}
+
+/**
  * Enumerate every session under the canonical corpus root. A session exists iff
  * a slug directory holds a regular, non-symlink `<uuid>.jsonl` file whose stem
  * is a canonical session UUID. `<uuid>/` subdirectories are NOT sessions on
@@ -306,7 +317,7 @@ function walkArtifacts(
     try {
       content = fs.readFileConfined(abs, limits.maxFileBytes);
     } catch (err) {
-      state.skipped.push({ relativePath: relPath, reason: reasonFor(err), code: errnoCodeOf(err) });
+      state.skipped.push(skipFor(relPath, err));
       continue;
     }
 
@@ -373,7 +384,7 @@ export function buildSessionSubstrate(
       hasMain = true;
     }
   } catch (err) {
-    state.skipped.push({ relativePath: mainRel, reason: reasonFor(err), code: errnoCodeOf(err) });
+    state.skipped.push(skipFor(mainRel, err));
   }
 
   // Producer 2 — nested subagent artifacts, confined to `<uuid>/subagents/**`.

@@ -52,6 +52,18 @@ at $0, and that halt is exercised by tests that run in CI. The cost-trust chain
 holds; the enforcement point moved from a dedicated staleness gate (`WP-C6`, not
 built) into the pricing function itself.
 
+*(Amended 2026-09-30, owner decisions D13(a) and D17(a) of the 2026-09-26 WP audit: the
+dedicated CI gate will not be built. `WP-C6` now reads "unknown model halts ingest loudly
+(runtime `PricingError`) + a real-corpus boot in the release checklist" — a [HUMAN] box in
+`RELEASE.md` §6, run before every tag together with a re-read of the Anthropic pricing
+page. The CI fixtures are synthetic and use models the seed deliberately leaves unpriced,
+so a CI step could not detect a stale seed; only the real, local corpus can.)*
+
+*(Amended 2026-09-30, owner decision D19(a): the "flag on the row" in the table above is
+never set. `is_compaction_baseline` is documented as **reserved** — written as `0`, read
+by nothing — and the guarantee is met by repricing at analysis time in
+`packages/core/src/cost/compaction-repricing.ts`.)*
+
 **The seeded prices are PROVISIONAL.** `model_pricing` is seeded with approximate
 list prices, labelled in the migration as "a mechanism proof for the cost engine,
 NOT a billing source," awaiting ratification. The *mechanism* is verified; the
@@ -254,7 +266,9 @@ crosscut ("Cost-trust chain"):
   `orchestration_edges`, `token_usage`) plus `model_pricing` — more migration surface for a solo
   owner to keep in a single, always-forward-only migration chain.
 - **Follow-ups:** `development-plan.md` Track D (`WP-D4`…`WP-D8`) implements the exact DDL;
-  `WP-C1` seeds `model_pricing`; `WP-C6` is the staleness-fails-CI gate. See
+  `WP-C1` seeds `model_pricing`; `WP-C6` is the staleness-fails-CI gate *(amended
+  2026-09-30, D13(a): now the runtime halt plus a pre-tag real-corpus boot, not a CI
+  gate)*. See
   [the data model](../../architecture/data-model.md) and
   [the DAG moat](../../architecture/dag-moat.md).
 

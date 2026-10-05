@@ -27,6 +27,7 @@ import {
   timingSafeTokenEqual,
 } from '@agenthropic/shared';
 import { apiRoutes } from './api/routes';
+import type { IngestRejection } from './api/ingest-rejections';
 import type { SubstrateProvider } from './api/substrate-provider';
 import type { SkipReason } from './corpus/fs-port';
 import type { SqliteDatabase } from './db/connection';
@@ -114,6 +115,12 @@ export interface BuildServerOptions {
    * fields are omitted rather than faking a zero.
    */
   readonly ingestExclusions?: () => { readonly failing: number; readonly quarantined: number };
+  /**
+   * Whether ingest rejected a session (and why), so the per-session read
+   * routes can answer 409 instead of a misleading 404. See
+   * api/ingest-rejections.ts. Absent on a server built without ingest wiring.
+   */
+  readonly ingestRejection?: (sessionId: string) => IngestRejection | undefined;
   /**
    * Directory holding the built SPA, served from this same loopback origin so
    * the product is one command and one port. When absent no static route is
@@ -288,7 +295,11 @@ export function buildServer(options: BuildServerOptions) {
     const lastTickDurationMs = options.tickDurationMs?.() ?? null;
     const exclusions = options.ingestExclusions?.();
     return {
-      status: 'ok' as const,
+      // Owner decision (2026-10-01): the server listens BEFORE the startup
+      // replay and says so here, so a client can show "replaying, please wait"
+      // instead of an error. Not a failure state: data endpoints answer, but
+      // figures are incomplete until this turns 'ok'. No seam, no replay: 'ok'.
+      status: options.ingestPhase?.() === 'replaying' ? ('replaying' as const) : ('ok' as const),
       schemaVersion,
       ...(options.skipCounters === undefined ? {} : { ingestSkips: options.skipCounters() }),
       ...(options.ingestPhase === undefined ? {} : { ingest: options.ingestPhase() }),
@@ -428,6 +439,7 @@ export function buildServer(options: BuildServerOptions) {
       db: options.db,
       substrateProvider: options.substrateProvider,
       ingestExclusions: options.ingestExclusions,
+      ingestRejection: options.ingestRejection,
     });
   }
 

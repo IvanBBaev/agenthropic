@@ -1146,6 +1146,9 @@ describe('migration runner (WP-D3)', () => {
    * guarantees as migration 18, proven the same way.
    */
   const throughMigration19 = migrations.filter((m) => m.id <= 19);
+  // Migration 20's own tests stop the runner at 20: an unbounded run would
+  // also apply every later migration, and "applied [20]" is the claim.
+  const throughMigration20 = migrations.filter((m) => m.id <= 20);
 
   describe('migration 19 (model-pricing-opus-5-5)', () => {
     const FLOOR = '2026-01-01T00:00:00.000Z';
@@ -1185,7 +1188,7 @@ describe('migration runner (WP-D3)', () => {
       // The fresh database is at the latest schema; migration 20 touches only
       // claude-sonnet-5, so the opus-5-5 rows read exactly as 19 wrote them.
       temp = createMigratedTempDb();
-      expect(currentSchemaVersion(temp.db)).toBe(20);
+      expect(currentSchemaVersion(temp.db)).toBe(21);
       expect(opus55Rows(temp.db)).toEqual(
         OFFICIAL_RATES.map((row) => ({ ...row, effective_from: FLOOR })),
       );
@@ -1331,7 +1334,7 @@ describe('migration runner (WP-D3)', () => {
 
     it('prices claude-sonnet-5 at the official per-bucket rates on a fresh database', () => {
       temp = createMigratedTempDb();
-      expect(currentSchemaVersion(temp.db)).toBe(20);
+      expect(currentSchemaVersion(temp.db)).toBe(21);
       expect(sonnet5Rows(temp.db)).toEqual(at(OFFICIAL_RATES));
     });
 
@@ -1341,7 +1344,7 @@ describe('migration runner (WP-D3)', () => {
         const before = pricingRows(db) as Array<{ model: string }>;
         expect(before).toHaveLength(40);
 
-        expect(runMigrations(db).appliedIds).toEqual([20]);
+        expect(runMigrations(db, throughMigration20).appliedIds).toEqual([20]);
 
         const after = pricingRows(db) as Array<{ model: string }>;
         // A correction, not an addition: no row is added, so the cancelled
@@ -1352,7 +1355,7 @@ describe('migration runner (WP-D3)', () => {
           before.filter((r) => r.model !== 'claude-sonnet-5'),
         );
         // Second run: nothing pending, nothing rewritten.
-        expect(runMigrations(db).appliedIds).toEqual([]);
+        expect(runMigrations(db, throughMigration20).appliedIds).toEqual([]);
         expect(pricingRows(db)).toEqual(after);
       });
     });
@@ -1363,7 +1366,7 @@ describe('migration runner (WP-D3)', () => {
           'INSERT INTO model_pricing (model, bucket, usd_per_mtok, effective_from) VALUES (?, ?, ?, ?)',
         ).run('claude-sonnet-5', 'output', 12, '2026-11-01');
 
-        expect(runMigrations(db).appliedIds).toEqual([20]);
+        expect(runMigrations(db, throughMigration20).appliedIds).toEqual([20]);
 
         expect(sonnet5Rows(db)).toEqual([
           ...at(OFFICIAL_RATES),
@@ -1399,10 +1402,15 @@ describe('migration runner (WP-D3)', () => {
           { bucket: 'input', rate_effective_from: FLOOR, tokens: 1_000_000 },
           { bucket: 'output', rate_effective_from: FLOOR, tokens: 100_000 },
         ]);
+        // The cost reader is today's, and it reads migration 21's session
+        // columns; stand those in on this schema-19 database so the read-time
+        // re-pricing below is observed through the real reader. Migration 21
+        // touches only `sessions`, never pricing or the rollup.
+        migrations.find((m) => m.id === 21)!.up(db);
         // 1M input @ $3 + 100k output @ $15 = 3 + 1.5.
         expect(getCostSummary(db, 10).totals.costUsd).toBeCloseTo(4.5, 9);
 
-        expect(runMigrations(db).appliedIds).toEqual([20]);
+        expect(runMigrations(db, throughMigration20).appliedIds).toEqual([20]);
 
         // Only `usd_per_mtok` moved, which migration 16's UPDATE trigger does not
         // watch: the rollup keys are unchanged and the read applies the new rate.

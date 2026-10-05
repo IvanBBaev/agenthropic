@@ -14,7 +14,13 @@ import { Type, type Static } from '@sinclair/typebox';
 
 export const HealthSchema = Type.Object(
   {
-    status: Type.Literal('ok'),
+    // 'replaying' from the loopback bind until the startup replay has finished,
+    // then 'ok' for the life of the process (owner decision, 2026-10-01). The
+    // server IS up and the token IS accepted in both states - a client must not
+    // treat 'replaying' as an error, only as "the figures are still being
+    // read in; ask again shortly". Every other condition (excluded sessions,
+    // skipped files) stays a coverage fact and never changes this field.
+    status: Type.Union([Type.Literal('ok'), Type.Literal('replaying')]),
     schemaVersion: Type.Integer({ minimum: 0 }),
     // Keys are SkipReason members - enforced at compile time by the
     // skipCounters seam type (`BuildServerOptions.skipCounters` in
@@ -22,8 +28,11 @@ export const HealthSchema = Type.Object(
     // record so a new skip reason can never desync route schema from reporter.
     ingestSkips: Type.Optional(Type.Record(Type.String(), Type.Integer({ minimum: 0 }))),
     // 'replaying' between the loopback bind and the end of the startup replay
-    // tick, 'idle' after (review M-16). `status` stays 'ok' throughout: a
-    // replaying server is healthy, just not yet current.
+    // tick, 'idle' after (review M-16). AMENDED 2026-10-01: `status` now
+    // mirrors the replay too ('replaying' / 'ok'), because a client that only
+    // reads `status` - the token screen, the shell - was told 'ok' about a
+    // server whose figures were still being read in. This field stays for the
+    // probes that already read it.
     ingest: Type.Optional(Type.Union([Type.Literal('replaying'), Type.Literal('idle')])),
     // Duration of the last completed corpus pass (review M-15) — how long the
     // poll ACTUALLY takes, so an operator can see it approaching the poll

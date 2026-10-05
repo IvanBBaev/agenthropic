@@ -124,6 +124,13 @@ export interface SkippedFile {
   readonly relativePath: string;
   readonly reason: SkipReason;
   readonly code?: string;
+  /**
+   * The file's size at read time - set for an `oversize` skip ONLY (it is what
+   * the cap refused), absent for every other reason. An oversize MAIN
+   * transcript marks its session partial and this is the skipped byte count
+   * the dashboard shows.
+   */
+  readonly sizeBytes?: number;
 }
 
 /**

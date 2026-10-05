@@ -17,6 +17,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   isAggregateSavings,
+  isChanges,
   isCostAnalysis,
   isCostSummary,
   isGlobalDag,
@@ -26,6 +27,8 @@ import {
 import {
   aggregateSavings,
   agentNode,
+  changedSession,
+  changes,
   agentSavings,
   compactionSegment,
   costAnalysis,
@@ -244,7 +247,15 @@ describe('isCostSummary', () => {
             perModel: [{ model: 'claude-opus-5', tokens: 1, costUsd: 1, unpricedTokens: 0 }],
             perDay: [{ day: '2026-09-03', tokens: 1, costUsd: 1, unpricedTokens: 0 }],
             topSessions: [
-              { sessionId: 's', projectSlug: null, tokens: 1, costUsd: 1, unpricedTokens: 0 },
+              {
+                sessionId: 's',
+                partial: null,
+                usageRecordsDropped: 0,
+                projectSlug: null,
+                tokens: 1,
+                costUsd: 1,
+                unpricedTokens: 0,
+              },
             ],
           }),
         ),
@@ -366,6 +377,7 @@ describe('isCostAnalysis', () => {
     expect(
       isCostAnalysis(
         body({
+          ...analysis,
           compaction: { ...analysis.compaction, segments: [compactionSegment()] },
           delegationSavings: { ...analysis.delegationSavings, perAgent: [agentSavings()] },
         }),
@@ -379,6 +391,24 @@ describe('isCostAnalysis', () => {
 
   it('refuses a missing `delegationSavings` block', () => {
     expect(isCostAnalysis(omit(costAnalysis(), 'delegationSavings'))).toBe(false);
+  });
+
+  // The analysis prints session figures, so it carries the session honesty
+  // pair: an absent one would silently withdraw the "lower bound" badge or the
+  // "N usage records were excluded" note.
+  it.each(['partial', 'usageRecordsDropped'] as const)(
+    'refuses an analysis with no `%s`',
+    (key) => {
+      expect(isCostAnalysis(omit(costAnalysis(), key))).toBe(false);
+    },
+  );
+
+  it('accepts a partial analysis and refuses a partial reason it cannot name', () => {
+    const partial = { reason: 'main-transcript-oversize' as const, skippedBytes: 1024 };
+    expect(isCostAnalysis(body(costAnalysis({ partial, usageRecordsDropped: 2 })))).toBe(true);
+    expect(
+      isCostAnalysis(body({ ...costAnalysis(), partial: { reason: 'newer', skippedBytes: null } })),
+    ).toBe(false);
   });
 
   it.each(['naiveUsd', 'repricedUsd', 'deltaUsd', 'compactionCount'] as const)(
@@ -623,7 +653,17 @@ describe('isCostAnalysis', () => {
 describe('isCostSummary - the corpus-scope pair (L1)', () => {
   /** One row of a corpus of 51, i.e. the truncated case the pair exists for. */
   const truncated = costSummary({
-    topSessions: [{ sessionId: 's', projectSlug: null, tokens: 1, costUsd: 1, unpricedTokens: 0 }],
+    topSessions: [
+      {
+        sessionId: 's',
+        partial: null,
+        usageRecordsDropped: 0,
+        projectSlug: null,
+        tokens: 1,
+        costUsd: 1,
+        unpricedTokens: 0,
+      },
+    ],
     sessionCount: 51,
   });
 
@@ -667,5 +707,70 @@ describe('isCostSummary - the corpus-scope pair (L1)', () => {
     // black out a whole cost page over a figure the reader could already see
     // was wrong.
     expect(isCostSummary(body({ ...truncated, sessionCount: 2.5 }))).toBe(true);
+  });
+});
+
+describe('isChanges (D11(a))', () => {
+  it('accepts a populated window and an empty one', () => {
+    expect(isChanges(body(changes()))).toBe(true);
+    expect(isChanges(body(changes({ sessions: [], total: 0 })))).toBe(true);
+  });
+
+  it.each(['since', 'until'] as const)(
+    'refuses a missing `%s`, which would print the window as open-ended',
+    (key) => {
+      expect(isChanges(omit(changes(), key))).toBe(false);
+    },
+  );
+
+  it('refuses a missing `total`, the denominator of the page', () => {
+    expect(isChanges(omit(changes(), 'total'))).toBe(false);
+  });
+
+  it('refuses a missing `totals` or `coverage` block', () => {
+    expect(isChanges(omit(changes(), 'totals'))).toBe(false);
+    expect(isChanges(omit(changes(), 'coverage'))).toBe(false);
+  });
+
+  it.each([
+    'sessionsNew',
+    'sessionsUpdated',
+    'sessionsUnknownStart',
+    'agentsAppeared',
+    'tokensAdded',
+    'costAddedUsd',
+    'unpricedTokensAdded',
+    'tokensAddedOutsideChangedSessions',
+  ] as const)('refuses a `totals` block with no `%s`', (key) => {
+    const answer = changes();
+    expect(isChanges(body({ ...answer, totals: omit(answer.totals, key) }))).toBe(false);
+  });
+
+  it.each(['undatedSessions', 'undatedAgents', 'undatedUsageRows'] as const)(
+    'refuses a `coverage` block with no `%s`, whose zero would withdraw the blind-spot notice',
+    (key) => {
+      const answer = changes();
+      expect(isChanges(body({ ...answer, coverage: omit(answer.coverage, key) }))).toBe(false);
+    },
+  );
+
+  it('refuses a missing or non-array `sessions`', () => {
+    expect(isChanges(omit(changes(), 'sessions'))).toBe(false);
+    expect(isChanges(body({ ...changes(), sessions: {} }))).toBe(false);
+  });
+
+  it.each(['agentsAppeared', 'tokensAdded', 'costAddedUsd', 'unpricedTokensAdded'] as const)(
+    'refuses a row with no `%s`',
+    (key) => {
+      expect(isChanges(body(changes({ sessions: [omit(changedSession(), key) as never] })))).toBe(
+        false,
+      );
+    },
+  );
+
+  it('accepts an unrecognised `change` word, which the panel names (DG-4)', () => {
+    expect(
+      isChanges(body(changes({ sessions: [changedSession({ change: 'renamed' as never })] }))),
+    ).toBe(true);
   });
 });

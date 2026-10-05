@@ -16,6 +16,21 @@ export interface SessionUpsert {
   readonly startedAt: string | null;
   readonly lastActivityAt: string | null;
   readonly status: string;
+  /**
+   * Owner decision 1 - why this pass could not read the session whole, or null
+   * for a whole read. Omitted means null. Overwritten on every pass: the
+   * latest ingest pass is the truth, so a main transcript that comes back
+   * under the read cap clears the flag.
+   */
+  readonly partialReason?: 'main-transcript-oversize' | null;
+  /** The skipped main transcript's size in bytes; null when unknown or whole. */
+  readonly partialSkippedBytes?: number | null;
+  /**
+   * Owner decision 2 (NN1) - assistant usage records with no `message.id`,
+   * excluded because they cannot be deduplicated. Omitted means 0; overwritten
+   * on every pass like the two fields above.
+   */
+  readonly usageRecordsDropped?: number;
 }
 
 /**
@@ -35,10 +50,17 @@ const SESSION_STATUS_CASE = `CASE
 
 export function upsertSession(db: SqliteDatabase, row: SessionUpsert): void {
   db.prepare(
-    `INSERT INTO sessions (id, project_slug, started_at, last_activity_at, status)
-     VALUES (@id, @projectSlug, @startedAt, @lastActivityAt, @status)
+    `INSERT INTO sessions (id, project_slug, started_at, last_activity_at, status,
+                           partial_reason, partial_skipped_bytes, usage_records_dropped)
+     VALUES (@id, @projectSlug, @startedAt, @lastActivityAt, @status,
+             @partialReason, @partialSkippedBytes, @usageRecordsDropped)
      ON CONFLICT(id) DO UPDATE SET
        project_slug     = excluded.project_slug,
+       -- Honesty facts about THIS pass, not accumulations: overwritten, so a
+       -- session read whole again stops claiming to be partial.
+       partial_reason        = excluded.partial_reason,
+       partial_skipped_bytes = excluded.partial_skipped_bytes,
+       usage_records_dropped = excluded.usage_records_dropped,
        -- Monotonic non-increasing, the mirror of last_activity_at below: a
        -- pass whose earliest agent starts LATER (compaction evicted the head,
        -- a skipped file, duplicate-slug dedupe picking a copy that starts
@@ -61,7 +83,16 @@ export function upsertSession(db: SqliteDatabase, row: SessionUpsert): void {
        last_activity_at = COALESCE(MAX(excluded.last_activity_at, sessions.last_activity_at),
                                    excluded.last_activity_at, sessions.last_activity_at),
        status          = ${SESSION_STATUS_CASE}`,
-  ).run(row);
+  ).run({
+    id: row.id,
+    projectSlug: row.projectSlug,
+    startedAt: row.startedAt,
+    lastActivityAt: row.lastActivityAt,
+    status: row.status,
+    partialReason: row.partialReason ?? null,
+    partialSkippedBytes: row.partialSkippedBytes ?? null,
+    usageRecordsDropped: row.usageRecordsDropped ?? 0,
+  });
 }
 
 /**

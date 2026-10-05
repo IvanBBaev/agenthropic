@@ -184,7 +184,9 @@ is **dead** — the writer inserts a literal `0` on every row and no read path e
 it (implementation review 2026-08-09, finding L-7). Compaction boundaries are detected in
 the parsed JSONL substrate itself, at analysis time, and repricing walks them directly;
 the `PreCompact` hook feeds nothing but liveness. Stated plainly so nobody plans a query
-against a marker the code does not maintain.)*
+against a marker the code does not maintain.)* *(Amended 2026-09-30, owner decision D19(a):
+the column's documented status is **reserved** — written as `0`, read by nothing, kept as a
+slot for a future persisted marker; repricing happens at analysis time.)*
 
 **Delegation savings** — the dollar amount saved by routing work to a cheaper model (e.g.
 Haiku) instead of pricing every token at the top-tier model's rate; part of the moat

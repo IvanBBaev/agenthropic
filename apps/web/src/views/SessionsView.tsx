@@ -57,6 +57,7 @@ import {
   quoteRawValue,
   shortId,
 } from '../format';
+import { ChangesPanel } from './ChangesPanel';
 import { describeAgentGraph } from './chart-summary';
 import { computeLayeredLayout, fallbackLayerNotice } from './layout/layered';
 import { edgeProvenance, EDGE_PROVENANCE_LEGEND } from './provenance';
@@ -64,6 +65,8 @@ import { SessionCostAnalysis } from './SessionCostAnalysis';
 import { snapshotAge } from './snapshot';
 import { statusMeta, UNRECOGNISED_STATUS_LABEL } from './status';
 import type { ViewProps } from './types';
+import { DroppedUsageNote, PartialBadge } from './session-honesty';
+import { sessionRejectionText, type SessionRejectionText } from './session-rejection';
 import { UnpricedNote, unpricedTitleSuffix } from './unpriced';
 
 /** Page size for the selectable session list. */
@@ -88,7 +91,12 @@ type ListState =
 type TreeState =
   | { readonly kind: 'idle' }
   | { readonly kind: 'loading' }
-  | { readonly kind: 'error'; readonly message: string }
+  | {
+      readonly kind: 'error';
+      readonly message: string;
+      /** Set when the 409 named an ingest rejection (see session-rejection.ts). */
+      readonly rejection?: SessionRejectionText;
+    }
   | { readonly kind: 'ready'; readonly tree: SessionTreeDto; readonly fetchedAtMs: number };
 
 function agentLabel(agent: AgentNodeDto): string {
@@ -359,6 +367,19 @@ function TreePanel({
       <p className="legend-inline muted" aria-label="edge provenance legend">
         {EDGE_PROVENANCE_LEGEND}
       </p>
+      {/* Owner decisions 1 and 2: the tree's totals (agents and unattributed
+          alike) are a lower bound when the main transcript was never read, and
+          exclude usage records that had no dedupe key. See
+          views/session-honesty.tsx. */}
+      {(tree.partial !== null || tree.usageRecordsDropped !== 0) && (
+        <p className="muted" data-testid="tree-honesty">
+          <PartialBadge partial={tree.partial} lead="" />
+          <DroppedUsageNote
+            count={tree.usageRecordsDropped}
+            lead={tree.partial === null ? '' : ' · '}
+          />
+        </p>
+      )}
       <p className="unattributed" data-testid="unattributed">
         Unattributed to any agent: {formatTokens(tree.unattributed.totalTokens)} tokens ·{' '}
         {formatUsd(tree.unattributed.costUsd)}
@@ -422,7 +443,11 @@ export function SessionsView({ token, onAuthRejected }: ViewProps) {
       if (result.kind === 'unauthorized') {
         onAuthRejected();
       } else if (result.kind === 'error') {
-        setTreeState({ kind: 'error', message: result.message });
+        setTreeState({
+          kind: 'error',
+          message: result.message,
+          rejection: sessionRejectionText(result),
+        });
       } else {
         setTreeState({ kind: 'ready', tree: result.data, fetchedAtMs: readNowMs() });
       }
@@ -545,6 +570,9 @@ export function SessionsView({ token, onAuthRejected }: ViewProps) {
                     </span>
                     {/* A3 (2026-09-23): see views/unpriced.tsx. */}
                     <UnpricedNote tokens={session.unpricedTokens} lead=" · " />
+                    {/* Owner decisions 1 and 2: see views/session-honesty.tsx. */}
+                    <PartialBadge partial={session.partial} lead=" · " />
+                    <DroppedUsageNote count={session.usageRecordsDropped} lead=" · " />
                   </button>
                   <button
                     type="button"
@@ -569,11 +597,16 @@ export function SessionsView({ token, onAuthRejected }: ViewProps) {
           {treeState.kind === 'error' && (
             <>
               <p className="empty-state">
-                <span className="status-error">✕</span> Could not load tree: {treeState.message}
+                <span className="status-error">✕</span>{' '}
+                {treeState.rejection === undefined
+                  ? `Could not load tree: ${treeState.message}`
+                  : treeState.rejection.text}
               </p>
-              <button type="button" onClick={refreshTree}>
-                Retry
-              </button>
+              {treeState.rejection?.retryable !== false && (
+                <button type="button" onClick={refreshTree}>
+                  Retry
+                </button>
+              )}
             </>
           )}
           {treeState.kind === 'ready' && (
@@ -586,6 +619,13 @@ export function SessionsView({ token, onAuthRejected }: ViewProps) {
           )}
         </div>
       </div>
+
+      {/* D11(a) (2026-09-30): the reader of GET /api/changes (Q5, "what
+          changed since X"). Opt-in like the cost analysis below - nothing is
+          requested until the reader submits a day, because the server has no
+          default lower bound and this page must not invent one. */}
+      <h2>Changed since</h2>
+      <ChangesPanel token={token} nowMs={nowMs} onAuthRejected={onAuthRejected} />
 
       <h2>Session cost analysis</h2>
       {analysedSessionId === null ? (
