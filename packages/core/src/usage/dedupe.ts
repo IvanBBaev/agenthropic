@@ -56,6 +56,19 @@ const BUCKET_KEYS = [
   'cacheWrite1h',
 ] as const satisfies ReadonlyArray<keyof TokenBuckets>;
 
+/**
+ * Buckets collapsed by an independent per-bucket maximum. The two cache-write
+ * buckets are excluded: they are one split of one total and collapse as a pair
+ * (see {@link dedupeUsageByMessageId}).
+ */
+const MAX_BUCKET_KEYS = ['input', 'output', 'cacheRead'] as const satisfies ReadonlyArray<
+  keyof TokenBuckets
+>;
+
+function cacheWriteTotal(usage: TokenBuckets): number {
+  return usage.cacheWrite5m + usage.cacheWrite1h;
+}
+
 function assertValidBuckets(row: UsageRow): void {
   for (const key of BUCKET_KEYS) {
     const value = row.usage[key];
@@ -71,7 +84,10 @@ function assertValidBuckets(row: UsageRow): void {
  * Collapses raw usage rows into exactly one entry per `messageId`, preserving
  * first-seen order and the first row's timestamp. Rows sharing a `messageId`
  * are streamed partials of one message, so their `usage` is collapsed to the
- * PER-BUCKET MAXIMUM (the final, complete usage) — never summed — and their
+ * PER-BUCKET MAXIMUM (the final, complete usage) — never summed — except the
+ * cache-write split, which is taken as a PAIR from the partial with the largest
+ * cache-write total (ties to the later partial), so a message's cache writes
+ * never exceed what any single record of it reports — and their
  * `model` is settled to the greatest-`output` row (early partials may carry a
  * transient fast-mode label; see the module doc).
  *
@@ -132,10 +148,20 @@ export function dedupeUsageByMessageId(rows: readonly UsageRow[]): DedupedUsage[
 
     // Streamed partials of one message: keep the per-bucket maximum, i.e. the
     // final complete usage (input/cache are constant; output grows to total).
-    for (const key of BUCKET_KEYS) {
+    for (const key of MAX_BUCKET_KEYS) {
       if (row.usage[key] > seen.usage[key]) {
         seen.usage[key] = row.usage[key];
       }
+    }
+
+    // The cache-write split is ONE fact reported in two shapes (flat-only maps
+    // to all-5m, NN2). A per-bucket max across shapes would add a flat partial's
+    // 5m to a split partial's 1h and report more cache writes than any single
+    // record does, so the pair moves as a unit: the partial with the larger
+    // total wins, and a tie goes to the later partial (final streamed state).
+    if (cacheWriteTotal(row.usage) >= cacheWriteTotal(seen.usage)) {
+      seen.usage.cacheWrite5m = row.usage.cacheWrite5m;
+      seen.usage.cacheWrite1h = row.usage.cacheWrite1h;
     }
   }
 

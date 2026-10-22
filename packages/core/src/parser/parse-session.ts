@@ -626,6 +626,19 @@ function extractTaskNotificationToolUseId(firstRecord: JsonRecord | undefined): 
   return TOOL_USE_ID_RE.exec(content.slice(TASK_NOTIFICATION_OPEN.length, closeAt))?.[1];
 }
 
+/**
+ * A parent candidate only if it is FOREIGN to the child. Every candidate is the
+ * agent id of the transcript that contains a spawn anchor; when that transcript
+ * is the child's own, the "parent" is the child itself — a self-edge
+ * (`ab -> ab`) the subagent tree cannot hold. Mirrors the gate-#7 index-time
+ * rule that a transcript's own `progress` lines never register it as its own
+ * spawner: a self-owned candidate counts as no owner at all, so resolution
+ * falls through to the next path exactly as if it had never been indexed.
+ */
+function foreignOwner(owner: string | undefined, childHex: string): string | undefined {
+  return owner === childHex ? undefined : owner;
+}
+
 function resolveParent(
   agentFile: AgentFile,
   sessionId: string,
@@ -637,7 +650,9 @@ function resolveParent(
   //    id, so no tool_use anchor exists. Parent is the dispatcher when known,
   //    else the main agent.
   if (agentFile.workflowId !== undefined) {
-    const parent = indices.workflowDispatcher.get(agentFile.workflowId) ?? sessionId;
+    const parent =
+      foreignOwner(indices.workflowDispatcher.get(agentFile.workflowId), agentFile.hex) ??
+      sessionId;
     return {
       parentAgentId: parent,
       subagentType: sidecar?.agentType ?? null,
@@ -659,7 +674,7 @@ function resolveParent(
     //    owning transcript is the parent (a depth-2 parent block lives inside a
     //    depth-1 agent transcript — gate #4).
     const owner = indices.toolUseOwner.get(anchor);
-    if (owner !== undefined) {
+    if (owner !== undefined && foreignOwner(owner.owner, agentFile.hex) !== undefined) {
       return {
         parentAgentId: owner.owner,
         subagentType: owner.subagentType ?? sidecar?.agentType ?? null,
@@ -670,7 +685,7 @@ function resolveParent(
 
     // 3. queue_operation: a run_in_background spawn whose parent block was never
     //    materialized as a tool_use; joined via the queue-operation record.
-    const queueOwner = indices.queueOps.get(anchor);
+    const queueOwner = foreignOwner(indices.queueOps.get(anchor), agentFile.hex);
     if (queueOwner !== undefined) {
       return {
         parentAgentId: queueOwner,
