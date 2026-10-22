@@ -58,7 +58,17 @@ function readTranscriptPath(payload: unknown): string | null {
     return null;
   }
   const record = payload as Record<string, unknown>;
-  for (const key of ['transcript_path', 'transcriptPath']) {
+  // HK-4 (2026-10-10). Since Claude Code 2.1.251 a SubagentStop carries the
+  // PARENT session's `transcript_path` and names the subagent's own file as
+  // `agent_transcript_path`. The subagent's file is the one whose basename
+  // carries the agent id, so it is read first; the plain key stays for older
+  // senders that put the subagent's file there.
+  for (const key of [
+    'agent_transcript_path',
+    'agentTranscriptPath',
+    'transcript_path',
+    'transcriptPath',
+  ]) {
     const value = record[key];
     if (typeof value === 'string' && value.length > 0) {
       return value;
@@ -234,6 +244,16 @@ export function applyHookLiveness(
  * best-effort recovery and must not be able to fail an ingest tick. A payload
  * that never carried a session_id is invisible to the session-scoped query —
  * accepted, because real Claude Code hook stdin always carries one.
+ *
+ * KNOWN LIMIT — the projection is prunable. Retention expires `events` rows
+ * (90 days under the signed policy), so a stop whose projection row expired
+ * BEFORE its agent first got a row is not replayed: the agent is inserted
+ * 'working' and the watchdog ages it to 'unknown'. That takes a session that
+ * stayed un-ingested for longer than the retention window, and the outcome is
+ * an honest 'unknown', never a wrong status. The verdict itself is still in
+ * `events_raw`; reading it there without a full scan needs an index on the
+ * append-only substrate, which is a schema act and an owner decision. Pinned
+ * in status-reconcile.test.ts so the limit is measured, not argued.
  */
 export function reconcilePendingSubagentStops(
   db: SqliteDatabase,

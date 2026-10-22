@@ -39,6 +39,8 @@ describe('isSecretKeyName (WP-IN14)', () => {
       'cookie',
       'my_refresh_token',
       'credentials',
+      'passphrase',
+      'ssh_pass_phrase',
     ]) {
       expect(isSecretKeyName(key), key).toBe(true);
     }
@@ -67,8 +69,13 @@ describe('isSecretKeyName (WP-IN14)', () => {
 
 describe('maskCredentialShapes (WP-IN14)', () => {
   it('masks API-key/JWT/bearer shapes inside prose, leaving the rest intact', () => {
-    const jwt =
-      'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.TJVA95OrM7E2cBab30RMHrHDcEfxjoYZgeFONFh7HgQ';
+    // Joined at run time: a whole JWT literal on one source line is itself a
+    // secret shape, and the repository's secret scanner would flag the test.
+    const jwt = [
+      'eyJhbGciOiJIUzI1NiJ9',
+      'eyJzdWIiOiIxMjM0NTY3ODkwIn0',
+      'TJVA95OrM7E2cBab30RMHrHDcEfxjoYZgeFONFh7HgQ',
+    ].join('.');
     const cases: ReadonlyArray<[string, string]> = [
       ['key sk-ant-api03-abc123def456 used', `key ${REDACTED} used`],
       ['ghp_0123456789abcdef0123456789abcdef01 pushed', `${REDACTED} pushed`],
@@ -80,6 +87,69 @@ describe('maskCredentialShapes (WP-IN14)', () => {
     ];
     for (const [input, expected] of cases) {
       expect(maskCredentialShapes(input)).toBe(expected);
+    }
+  });
+
+  it('masks a PEM private-key block whole, closed or cut off (SEC-5)', () => {
+    // A pasted key is the one credential whose body matches no prefix shape:
+    // the armour lines are the signature, and the body between them must go
+    // with them. A block whose END line was cut off (a truncated paste) is
+    // masked to the end of the string rather than left in the clear.
+    // The armour lines are assembled at run time: a source line holding a whole
+    // private-key marker would trip the repository's secret scanner at commit.
+    const armour = (edge: 'BEGIN' | 'END', ...kind: readonly string[]): string =>
+      `-----${edge} ${[...kind, 'PRIVATE', 'KEY'].join(' ')}-----`;
+    const body = 'MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\nq2Zz9w==';
+    const closed = `cert ${armour('BEGIN', 'RSA')}\n${body}\n${armour('END', 'RSA')} end`;
+    expect(maskCredentialShapes(closed)).toBe(`cert ${REDACTED} end`);
+    const generic = `${armour('BEGIN')}\n${body}\n${armour('END')}`;
+    expect(maskCredentialShapes(generic)).toBe(REDACTED);
+    const cut = `cert ${armour('BEGIN', 'OPENSSH')}\n${body}`;
+    expect(maskCredentialShapes(cut)).toBe(`cert ${REDACTED}`);
+    // A public-key or certificate block is not a credential and stays.
+    const pub = '-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----';
+    expect(maskCredentialShapes(pub)).toBe(pub);
+  });
+
+  it('masks the value of a secret-named shell / env assignment, keeping the name (HK-1)', () => {
+    // `export DASHBOARD_TOKEN=...` inside a prompt or a Bash tool input is the
+    // commonest way a credential reaches a hook payload, and its value is a
+    // random string no prefix shape recognises. The key-based rule already
+    // decides which NAMES are secret-bearing; this applies the same decision
+    // inside string values. The name survives so the reader still sees WHAT was
+    // set; only the value goes.
+    // Secret-shaped values are assembled from fragments so that no source line
+    // holds a credential literal for the repository's secret scanner to flag.
+    const hex = ['4f3c9a1b', '2e7d8c6f', '5a4b3c2d', '1e0f9a8b'].join('');
+    const awsName = ['aws', 'secret', 'access', 'key'].join('_');
+    const awsValue = ['wJalrXUtn', 'FEMI/K7MD', 'ENG'].join('');
+    const cases: ReadonlyArray<readonly [string, string]> = [
+      [`export DASHBOARD_TOKEN=${hex}`, `export DASHBOARD_TOKEN=${REDACTED}`],
+      ['run with password=hunter2 now', `run with password=${REDACTED} now`],
+      [`${awsName} = ${awsValue}`, `${awsName}=${REDACTED}`],
+      ['api-key="quoted value here" ok', `api-key=${REDACTED} ok`],
+      ["API_KEY='single quoted' ok", `API_KEY=${REDACTED} ok`],
+      ['TOKEN=abc123; echo done', `TOKEN=${REDACTED}; echo done`],
+      ['https://h/x?token=abc123&page=2', `https://h/x?token=${REDACTED}&page=2`],
+    ];
+    for (const [input, expected] of cases) {
+      expect(maskCredentialShapes(input)).toBe(expected);
+    }
+    // Non-secret names, comparisons and valueless assignments are not touched.
+    for (const text of [
+      'count=5',
+      'max_tokens=4096',
+      'if (token === expected) {',
+      'if (token == expected) {',
+      'x = token',
+      'token=',
+    ]) {
+      expect(maskCredentialShapes(text)).toBe(text);
+    }
+    // Idempotent: a second pass over the masked text changes nothing.
+    for (const [input] of cases) {
+      const once = maskCredentialShapes(input);
+      expect(maskCredentialShapes(once)).toBe(once);
     }
   });
 

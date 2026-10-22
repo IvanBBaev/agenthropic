@@ -12,8 +12,14 @@
  *     token-COUNT fields (`input_tokens`, `output_tokens`, ...) intact:
  *     token counts are observability data, not credentials.
  *  2. Value-based: string values are scanned for obvious credential shapes
- *     (sk-/ghp_/xox/AKIA-style API keys, JWTs, `Bearer <...>` fragments) and
- *     each match is masked in place.
+ *     (sk-/ghp_/xox/AKIA-style API keys, JWTs, `Bearer <...>` fragments, PEM
+ *     private-key blocks) and each match is masked in place.
+ *  3. Assignment-based (HK-1, 2026-10-10): inside string values, a shell / env /
+ *     config assignment `NAME=value` whose NAME rule 1 would call secret-bearing
+ *     keeps its name and loses its value (`export DASHBOARD_TOKEN=[REDACTED]`).
+ *     The value of such an assignment is a random string no shape in rule 2
+ *     recognises, and `export X=...` in a prompt or a Bash tool input is the
+ *     commonest way a credential reaches a hook payload at all.
  *
  * POLICY STATUS: this implements the RECOMMENDED resolution of OPEN-3
  * (redaction from Phase 1, at the ingest boundary - see
@@ -35,6 +41,8 @@ const SECRET_KEY_FRAGMENTS: readonly string[] = [
   'secret',
   'password',
   'passwd',
+  // SEC-5 (2026-10-10): the key-file idiom - `passphrase`, `ssh_pass_phrase`.
+  'passphrase',
   'credential',
   'apikey',
   'authorization',
@@ -77,7 +85,23 @@ const CREDENTIAL_SHAPES: readonly RegExp[] = [
   /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,
   // Inline bearer credentials inside header-ish strings.
   /\bBearer\s+[A-Za-z0-9._~+/=-]{6,}/gi,
+  // SEC-5 (2026-10-10): PEM private-key blocks (RSA, EC, OPENSSH, PKCS#8 ...),
+  // body included. The armour lines are the signature - the base64 body
+  // matches no prefix shape above. A block whose END line is missing (a
+  // truncated paste) is masked to the end of the string rather than left in
+  // the clear. PUBLIC KEY / CERTIFICATE blocks carry no secret and stay.
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g,
 ];
+
+/**
+ * HK-1: `NAME=value` (optional spaces around `=`; the value bare, double- or
+ * single-quoted). Only a single `=` counts - `==` / `===` are comparisons and a
+ * name followed by `!=` never reaches the `=` - and a bare value stops at
+ * whitespace, `&` or `;` so a query string or a `;`-chained shell line keeps
+ * everything after the credential. Whether NAME is secret-bearing is decided
+ * by {@link isSecretKeyName}, the same rule the object-key pass uses.
+ */
+const ENV_ASSIGNMENT = /\b([A-Za-z_][A-Za-z0-9_.-]*)\s*=(?!=)\s*("[^"]*"|'[^']*'|[^\s&;]+)/g;
 
 function normalizeKey(key: string): string {
   return key.toLowerCase().replace(/[-_ ]/g, '');
@@ -98,7 +122,10 @@ export function maskCredentialShapes(text: string): string {
   for (const shape of CREDENTIAL_SHAPES) {
     masked = masked.replace(shape, REDACTED);
   }
-  return masked;
+  // Idempotent by construction: `NAME=[REDACTED]` re-masks to itself.
+  return masked.replace(ENV_ASSIGNMENT, (match: string, name: string) =>
+    isSecretKeyName(name) ? `${name}=${REDACTED}` : match,
+  );
 }
 
 /**

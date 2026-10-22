@@ -18,9 +18,10 @@ const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost']);
 
 /**
  * Read the mandatory dashboard auth token from the environment. Throws when
- * `DASHBOARD_TOKEN` is unset, empty, or shorter than {@link MIN_TOKEN_LENGTH}
- * characters - a token that silently no-ops when unset is the exact
- * field-wide mistake this project walks away from.
+ * `DASHBOARD_TOKEN` is unset, empty, shorter than {@link MIN_TOKEN_LENGTH}
+ * characters, or padded with whitespace / carrying a control character (a
+ * value no HTTP header could ever match) - a token that silently no-ops when
+ * unset is the exact field-wide mistake this project walks away from.
  */
 export function requireDashboardToken(env: Record<string, string | undefined>): string {
   const token = env['DASHBOARD_TOKEN'];
@@ -36,7 +37,29 @@ export function requireDashboardToken(env: Record<string, string | undefined>): 
         `It must be at least ${MIN_TOKEN_LENGTH} characters.`,
     );
   }
+  // SEC-1: a padded or control-bearing value can never arrive in an HTTP
+  // header byte-for-byte (clients trim, Node refuses the bytes), so the
+  // server would start and then refuse every request. Fail at startup
+  // instead - and, as above, never echo the value.
+  if (/^\s|\s$/.test(token) || hasControlCharacter(token)) {
+    throw new Error(
+      'DASHBOARD_TOKEN contains leading/trailing whitespace or a control character. ' +
+        'No HTTP header can carry such a value, so no request could ever authenticate: ' +
+        'set a plain token without padding.',
+    );
+  }
   return token;
+}
+
+/** `true` when any UTF-16 unit is a C0 control (U+0000-U+001F) or DEL (U+007F). */
+function hasControlCharacter(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**

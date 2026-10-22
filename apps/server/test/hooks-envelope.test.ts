@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { Value } from '@sinclair/typebox/value';
 import {
   HookEnvelopeSchema,
+  MAX_HOOK_NAME_LENGTH,
   UNKNOWN_HOOK_NAME,
   buildHookEnvelope,
   canonicalJsonStringify,
@@ -119,6 +120,31 @@ describe('buildHookEnvelope + computeIdempotencyKey (WP-IN1)', () => {
 
     const fromNonString = buildHookEnvelope({ hook_event_name: 42 }, RECEIVED_AT);
     expect(fromNonString.envelope.hookName).toBe(UNKNOWN_HOOK_NAME);
+  });
+
+  it('treats a hook_event_name over the cap as unidentifiable, keeping the payload (HK-5)', () => {
+    // The name becomes the indexed `event_type` column of every events_raw and
+    // events row. Claude Code's longest real hook name is under 32 characters;
+    // a megabyte-long one is not a name, and storing it twice per row and once
+    // per index page is the only thing accepting it would achieve. The body
+    // itself is still stored verbatim, so nothing is lost - the row is simply
+    // filed as 'unknown', like any other body that does not self-identify.
+    const huge = 'x'.repeat(MAX_HOOK_NAME_LENGTH + 1);
+    const { envelope } = buildHookEnvelope(
+      { hook_event_name: huge, session_id: 's-1' },
+      RECEIVED_AT,
+    );
+    expect(envelope.hookName).toBe(UNKNOWN_HOOK_NAME);
+    expect(envelope.sessionId).toBe('s-1');
+    expect(envelope.payload).toEqual({ hook_event_name: huge, session_id: 's-1' });
+    expect(Value.Check(HookEnvelopeSchema, envelope)).toBe(true);
+    // The schema refuses what the builder would never produce.
+    expect(Value.Check(HookEnvelopeSchema, { ...envelope, hookName: huge })).toBe(false);
+    // Exactly at the cap is still a name.
+    const atCap = 'y'.repeat(MAX_HOOK_NAME_LENGTH);
+    expect(buildHookEnvelope({ hook_event_name: atCap }, RECEIVED_AT).envelope.hookName).toBe(
+      atCap,
+    );
   });
 
   it('computeIdempotencyKey ignores receivedAt directly', () => {

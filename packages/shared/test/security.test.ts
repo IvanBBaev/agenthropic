@@ -38,6 +38,39 @@ describe('requireDashboardToken', () => {
     }
   });
 
+  it('throws on leading whitespace (no header could ever carry it)', () => {
+    expect(() => requireDashboardToken({ DASHBOARD_TOKEN: ` ${VALID_TOKEN}` })).toThrow(
+      /whitespace or a control character/,
+    );
+  });
+
+  it('throws on a trailing newline (the classic `echo` without -n)', () => {
+    expect(() => requireDashboardToken({ DASHBOARD_TOKEN: `${VALID_TOKEN}\n` })).toThrow(
+      /whitespace or a control character/,
+    );
+  });
+
+  it('throws on an embedded control character', () => {
+    expect(() => requireDashboardToken({ DASHBOARD_TOKEN: 'a-valid\ttoken-of-19' })).toThrow(
+      /whitespace or a control character/,
+    );
+  });
+
+  it('never includes a padded token value in the error message either', () => {
+    const secret = `${VALID_TOKEN} `;
+    try {
+      requireDashboardToken({ DASHBOARD_TOKEN: secret });
+      expect.unreachable('should have thrown');
+    } catch (error) {
+      expect((error as Error).message).not.toContain(VALID_TOKEN);
+    }
+  });
+
+  it('accepts an inner space: only the edges and control bytes are refused', () => {
+    const spaced = 'a valid token of 19';
+    expect(requireDashboardToken({ DASHBOARD_TOKEN: spaced })).toBe(spaced);
+  });
+
   it(`returns the token when it is exactly ${MIN_TOKEN_LENGTH} characters`, () => {
     const token = 'x'.repeat(MIN_TOKEN_LENGTH);
     expect(requireDashboardToken({ DASHBOARD_TOKEN: token })).toBe(token);

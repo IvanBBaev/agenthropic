@@ -44,12 +44,25 @@
 import { createHash } from 'node:crypto';
 import { Type, type Static } from '@sinclair/typebox';
 
+/**
+ * HK-5 (2026-10-10). The longest hook name Claude Code emits is under 32
+ * characters; the name becomes the indexed `event_type` column of every
+ * events_raw and events row, so a megabyte-long one would be stored twice per
+ * row and once per index page for no reader. Past the cap the body is filed
+ * as `'unknown'`, exactly like a body that does not self-identify; the body
+ * itself is still stored verbatim, so nothing is lost.
+ */
+export const MAX_HOOK_NAME_LENGTH = 200;
+
 /** The storage/wire shape of a hook event envelope (WP-IN1). */
 export const HookEnvelopeSchema = Type.Object(
   {
     source: Type.Literal('hook'),
-    /** Claude Code hook name as self-reported; `'unknown'` when absent. */
-    hookName: Type.String({ minLength: 1 }),
+    /**
+     * Claude Code hook name as self-reported; `'unknown'` when absent, not a
+     * string, or longer than {@link MAX_HOOK_NAME_LENGTH}.
+     */
+    hookName: Type.String({ minLength: 1, maxLength: MAX_HOOK_NAME_LENGTH }),
     sessionId: Type.Optional(Type.String({ minLength: 1 })),
     /** ISO-8601 UTC receipt time. Excluded from the idempotency key. */
     receivedAt: Type.String({ minLength: 1 }),
@@ -181,7 +194,11 @@ export function buildHookEnvelope(
   deliveryId?: string,
 ): BuiltHookEnvelope {
   const record = isRecord(payload) ? payload : undefined;
-  const hookName = readStringField(record, ['hook_event_name', 'hookName']) ?? UNKNOWN_HOOK_NAME;
+  const selfReported = readStringField(record, ['hook_event_name', 'hookName']);
+  const hookName =
+    selfReported === undefined || selfReported.length > MAX_HOOK_NAME_LENGTH
+      ? UNKNOWN_HOOK_NAME
+      : selfReported;
   const sessionId = readStringField(record, ['session_id', 'sessionId']);
   const envelope: HookEnvelope = {
     source: 'hook',
