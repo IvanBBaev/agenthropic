@@ -47,6 +47,11 @@
  * the probe is repeated every `replayPollMs` until the server answers `ok` (the
  * user is let in) or anything else (that verdict is shown as before). An edit
  * to the field abandons the wait, like any other verdict about the old string.
+ *
+ * AMENDED 2026-10-05. "An edit abandons the wait" held only for an edit made
+ * DURING the wait. One made while the first probe was still in flight left the
+ * wait to start afterwards, for a token the field no longer held; the loop now
+ * checks the field before it starts waiting.
  */
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { checkHealth, REPLAY_POLL_MS, type HealthResult } from './api';
@@ -192,6 +197,16 @@ export function TokenScreen({
     let result = await checkHealth(token);
     while (result.kind === 'replaying') {
       if (waitRef.current !== wait) return;
+      // The field was edited while the FIRST probe was in flight (2026-10-05).
+      // That edit could not abandon a wait that had not started, and starting
+      // it now would print "the server accepted this token" beside a string
+      // nothing has judged, then let the user in with the one they replaced.
+      // It ends the way an edit during the wait does: the button is offered
+      // again. (Later rounds never get here - an edit bumps `waitRef`.)
+      if (inputRef.current!.value.trim() !== token) {
+        setBusy(false);
+        return;
+      }
       setReplaying(true);
       await new Promise<void>((resolve) => {
         timerRef.current = setTimeout(resolve, replayPollMs);

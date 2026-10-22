@@ -53,6 +53,8 @@ import {
   agentTypeLabel,
   formatTokens,
   formatUsd,
+  impossibleCountText,
+  isImpossibleCount,
   projectLabel,
   quoteRawValue,
   shortId,
@@ -182,6 +184,36 @@ export function outcomeCauseText(cause: unknown): string | null {
 }
 
 /** SVG tree of the persisted agents + edges; a pure render of the layout. */
+/**
+ * WEB-7 (2026-10-10): the persisted counts a tree payload carries, checked
+ * against the rows served beside them. The picture is drawn from the rows and
+ * the line under it quotes the counts, and nothing compared the two - the
+ * session list and the global DAG both name such a split, this pane did not.
+ * An unreadable count (`NaN` passes the guard's number check) is named as
+ * unreadable; a readable one that the rows do not match is quoted beside them.
+ * W-7 (2026-10-12): a negative is a count no read can produce and is named as
+ * one, the way every other count on these pages names it, rather than quoted
+ * as a measurement ("says -1 agents").
+ */
+export function treeCountDisagreement(tree: SessionTreeDto): string | null {
+  const clauses: string[] = [];
+  if (tree.agentCount !== tree.agents.length) {
+    clauses.push(countClause(tree.agentCount, tree.agents.length, 'agent'));
+  }
+  if (tree.edgeCount !== tree.edges.length) {
+    clauses.push(countClause(tree.edgeCount, tree.edges.length, 'edge'));
+  }
+  if (clauses.length === 0) return null;
+  return `The persisted ${clauses.join(', and the persisted ')}, so the served counts and the served rows disagree - the picture above is drawn from the rows, the counts are quoted as served.`;
+}
+
+function countClause(persisted: number, served: number, noun: string): string {
+  const servedText = `${String(served)} ${noun}${served === 1 ? ' was' : 's were'} served`;
+  return isImpossibleCount(persisted)
+    ? `${noun} count came back as ${impossibleCountText(persisted)}, while ${servedText}`
+    : `${noun} count says ${String(persisted)} ${noun}${persisted === 1 ? '' : 's'} while ${servedText}`;
+}
+
 function TreePanel({
   tree,
   fetchedAtMs,
@@ -202,6 +234,7 @@ function TreePanel({
     })),
   );
   const age = snapshotAge(fetchedAtMs, nowMs);
+  const countDisagreement = treeCountDisagreement(tree);
   // Appended to each node's hover text only once the snapshot is aged. A node
   // read a second ago needs no qualifier, and a qualifier on every node in
   // every state is the kind of uniform caveat that stops being read.
@@ -242,7 +275,18 @@ function TreePanel({
   // while the notice is rendered: an idref that resolves to nothing describes
   // nothing, and reads to an auditor as though the caveat had been given.
   const cycleNoticeId = `tree-cycle-notice-${tree.sessionId}`;
-  const chartDescribedBy = layout.cyclicNodes > 0 ? `${cycleNoticeId} ${summaryId}` : summaryId;
+  // W-5 (2026-10-12): the count-disagreement notice (WEB-7) says the picture
+  // is drawn from the rows and not from the counts - a statement about this
+  // chart, which hides its subtree - and it was rendered with no id, so a
+  // reader of the description never heard it. Same rule as DG-3: named only
+  // while rendered, and in document order, which puts it before the cycle
+  // notice.
+  const countDisagreementId = `tree-count-disagreement-${tree.sessionId}`;
+  const chartDescribedBy = [
+    ...(countDisagreement === null ? [] : [countDisagreementId]),
+    ...(layout.cyclicNodes > 0 ? [cycleNoticeId] : []),
+    summaryId,
+  ].join(' ');
   // L5 (2026-09-09): the observed outcomes as their own rows, one per agent
   // that has one. They are not drawn INSIDE the diagram: role="img" hides the
   // SVG subtree, so a cause that lived only in a node's <title> would be a fact
@@ -262,7 +306,13 @@ function TreePanel({
     return cause === null ? [] : [{ agent, cause }];
   });
   const outcomesId = `tree-outcomes-${tree.sessionId}`;
-  const describedBy = outcomes.length > 0 ? `${chartDescribedBy} ${outcomesId}` : chartDescribedBy;
+  const outcomesDescribedBy =
+    outcomes.length > 0 ? `${chartDescribedBy} ${outcomesId}` : chartDescribedBy;
+  // Owner decisions 1 and 2: the honesty line is below the outcomes, so it is
+  // named last, and - the DG-3 rule again - only while it is rendered.
+  const hasHonesty = tree.partial !== null || tree.usageRecordsDropped !== 0;
+  const honestyId = `tree-honesty-${tree.sessionId}`;
+  const describedBy = hasHonesty ? `${outcomesDescribedBy} ${honestyId}` : outcomesDescribedBy;
   return (
     <div>
       {/* The caveat escalates with the fact rather than sitting at one volume:
@@ -285,6 +335,11 @@ function TreePanel({
         {tree.agentCount} agent{tree.agentCount === 1 ? '' : 's'}, {tree.edgeCount} edge
         {tree.edgeCount === 1 ? '' : 's'} (persisted).
       </p>
+      {countDisagreement !== null && (
+        <p className="muted" id={countDisagreementId} data-testid="tree-count-disagreement">
+          {countDisagreement}
+        </p>
+      )}
       {layout.droppedEdges > 0 && (
         <p className="muted">
           {layout.droppedEdges} edge{layout.droppedEdges === 1 ? '' : 's'} reference agents outside
@@ -371,8 +426,8 @@ function TreePanel({
           alike) are a lower bound when the main transcript was never read, and
           exclude usage records that had no dedupe key. See
           views/session-honesty.tsx. */}
-      {(tree.partial !== null || tree.usageRecordsDropped !== 0) && (
-        <p className="muted" data-testid="tree-honesty">
+      {hasHonesty && (
+        <p className="muted" id={honestyId} data-testid="tree-honesty">
           <PartialBadge partial={tree.partial} lead="" />
           <DroppedUsageNote
             count={tree.usageRecordsDropped}
@@ -392,7 +447,7 @@ function TreePanel({
   );
 }
 
-export function SessionsView({ token, onAuthRejected }: ViewProps) {
+export function SessionsView({ token, onAuthRejected, replayEpoch }: ViewProps) {
   const [list, setList] = useState<ListState>({ kind: 'loading' });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [treeState, setTreeState] = useState<TreeState>({ kind: 'idle' });
@@ -429,7 +484,12 @@ export function SessionsView({ token, onAuthRejected }: ViewProps) {
       }
     });
     return () => controller.abort();
-  }, [token, listReload, onAuthRejected]);
+    // `replayEpoch`: a list read during the startup replay is missing the
+    // sessions not replayed yet, so it is re-read when the replay ends (see
+    // ViewProps). The tree effect below deliberately does not follow it: a
+    // session is ingested whole, so an open tree is not a partial read, and
+    // re-reading it would blank the pane under the reader.
+  }, [token, listReload, onAuthRejected, replayEpoch]);
 
   useEffect(() => {
     if (selectedId === null) {

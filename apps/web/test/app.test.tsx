@@ -288,6 +288,53 @@ describe('shell with a stored token', () => {
     expect(screen.getByRole('status').contains(chip)).toBe(true);
   });
 
+  // The health probe ran at mount, on Re-check and during a replay - never
+  // after a reconnect. A server restarted under an open tab comes back in its
+  // startup replay, and the page went on showing mid-replay figures with no
+  // notice, because nothing asked.
+  it('asks health again when the stream comes back, and shows a server restarted into a replay', async () => {
+    routeFetch();
+    render(<App />);
+    await screen.findByText('schema v3');
+    const source = MockEventSource.latest();
+    const probes = (): number =>
+      fetchMock.mock.calls.filter(([url]) => String(url) === '/api/health').length;
+
+    // The first open is not news: the mount probe has only just answered.
+    act(() => source.open());
+    expect(probes()).toBe(1);
+
+    routeFetch(
+      sessionList(),
+      healthResponse(200, { status: 'replaying', schemaVersion: 3, ingest: 'replaying' }),
+    );
+    act(() => source.fail());
+    expect(probes()).toBe(1);
+    act(() => source.open());
+    expect(probes()).toBe(2);
+
+    const notice = await screen.findByTestId('replaying-notice');
+    expect(notice.textContent).toContain('replaying the corpus, please wait');
+    expect(screen.getByTestId('connection-chip').textContent).toBe('● live');
+  });
+
+  it('lets a stream that came back withdraw a stale failed health check', async () => {
+    routeFetch(sessionList(), healthResponse(500, {}));
+    render(<App />);
+    await screen.findByTestId('recheck-health');
+    const source = MockEventSource.latest();
+    act(() => source.open());
+    expect(screen.getByTestId('connection-detail').textContent).toContain('until you re-check');
+
+    routeFetch();
+    act(() => source.fail());
+    act(() => source.open());
+
+    await screen.findByText('schema v3');
+    expect(screen.queryByTestId('recheck-health')).toBeNull();
+    expect(screen.queryByTestId('connection-detail')).toBeNull();
+  });
+
   it('drops the attempt count back to silence when the stream comes back', async () => {
     routeFetch();
     render(<App />);

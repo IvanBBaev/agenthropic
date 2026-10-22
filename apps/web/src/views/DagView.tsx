@@ -82,7 +82,7 @@ type DagState =
       readonly fetchedAtMs: number;
     };
 
-export function DagView({ token, onAuthRejected }: ViewProps) {
+export function DagView({ token, onAuthRejected, replayEpoch }: ViewProps) {
   const [state, setState] = useState<DagState>({ kind: 'loading' });
   const [reload, setReload] = useState(0);
   // The shared app clock (see clock.ts): the age label must keep moving while
@@ -103,7 +103,9 @@ export function DagView({ token, onAuthRejected }: ViewProps) {
       }
     });
     return () => controller.abort();
-  }, [token, reload, onAuthRejected]);
+    // `replayEpoch`: a graph read during the startup replay is re-read when
+    // the replay ends (see ViewProps).
+  }, [token, reload, onAuthRejected, replayEpoch]);
 
   if (state.kind === 'loading') {
     return (

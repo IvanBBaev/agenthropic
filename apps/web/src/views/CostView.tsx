@@ -38,6 +38,8 @@ import {
   formatTokens,
   formatUsd,
   hasVisibleText,
+  impossibleCountText,
+  isImpossibleCount,
   nameOrBlank,
   projectLabel,
   quoteRawValue,
@@ -96,6 +98,13 @@ const FLOW_BALANCE_ID = 'cost-flow-balance';
 const FLOW_UNDRAWABLE_ID = 'cost-flow-undrawable';
 
 /**
+ * Id of the partial-sessions / dropped-usage note under the totals row. It
+ * qualifies every total on the page, so each group, table and figure that
+ * prints one names it (F-18) - and only while it is rendered.
+ */
+const COST_HONESTY_ID = 'cost-honesty';
+
+/**
  * What describes the sankey, in document order (F-18).
  *
  * The two notices are ordinary prose above the picture, so a reader going
@@ -111,9 +120,13 @@ const FLOW_UNDRAWABLE_ID = 'cost-flow-undrawable';
  * than to restate them. Restating would have put the same paragraph on screen
  * twice for a sighted reader, and two copies of a caveat that can drift apart
  * are worse than one.
+ *
+ * The page-wide honesty note is first because it is first on the page, and it
+ * is listed only when the caller rendered it.
  */
-function flowDescribedBy(flow: CostFlowLayout): string {
+function flowDescribedBy(flow: CostFlowLayout, hasCostHonesty: boolean): string {
   const ids: string[] = [];
+  if (hasCostHonesty) ids.push(COST_HONESTY_ID);
   if (!flow.balance.balanced) ids.push(FLOW_BALANCE_ID);
   if (flow.undrawable.length > 0) ids.push(FLOW_UNDRAWABLE_ID);
   ids.push(FLOW_SUMMARY_ID);
@@ -354,6 +367,29 @@ function BurnersPanel({ dag }: { readonly dag: GlobalDagDto }) {
       </table>
     </>
   );
+}
+
+/**
+ * W-1 (2026-10-12): the quarantine clause of the ingest-coverage banner. `> 0`
+ * kept it silent for NaN and for a negative, printed "Infinity of those will
+ * not be retried" for an infinity, and "20 of those" beside an excluded count
+ * of 3 - a sentence that cannot be true. Each case is named; a measured zero
+ * stays silent because nothing is quarantined. Only reached from the arm that
+ * has already established a readable, positive `sessionsExcluded`.
+ */
+function quarantinedClause(coverage: {
+  readonly sessionsExcluded: number;
+  readonly sessionsQuarantined: number;
+}): string {
+  const { sessionsExcluded, sessionsQuarantined } = coverage;
+  if (isImpossibleCount(sessionsQuarantined)) {
+    return ` How many of those will not be retried came back as ${impossibleCountText(sessionsQuarantined)}.`;
+  }
+  if (sessionsQuarantined === 0) return '';
+  if (sessionsQuarantined > sessionsExcluded) {
+    return ` The quarantined count says ${String(sessionsQuarantined)} will not be retried until the corpus or the pricing table changes, which is more than the ${plural(sessionsExcluded, 'session')} excluded - the two served counts disagree.`;
+  }
+  return ` ${String(sessionsQuarantined)} of those will not be retried until the corpus or the pricing table changes (usually a model with no price row).`;
 }
 
 /** `1 session` / `2 sessions`. One branch, reused by all the scope copy. */
@@ -650,7 +686,7 @@ function AggregateSavingsPanel({
   );
 }
 
-export function CostView({ token, onAuthRejected }: ViewProps) {
+export function CostView({ token, onAuthRejected, replayEpoch }: ViewProps) {
   const [state, setState] = useState<CostState>({ kind: 'loading' });
   const [burners, setBurners] = useState<BurnersState>({ kind: 'loading' });
   const [savings, setSavings] = useState<SavingsState>({ kind: 'loading' });
@@ -665,6 +701,8 @@ export function CostView({ token, onAuthRejected }: ViewProps) {
   // effect below depends on it, so one bump re-reads all three endpoints and
   // each effect's cleanup aborts the read it supersedes. Deliberately not
   // driven by SSE - whether the fetch-once views go live is an owner call.
+  // `replayEpoch` rides beside it in all three: figures read during the
+  // startup replay are re-read when the replay ends (see ViewProps).
   const [reload, setReload] = useState(0);
   const refresh = () => setReload((value) => value + 1);
 
@@ -684,7 +722,7 @@ export function CostView({ token, onAuthRejected }: ViewProps) {
       }
     });
     return () => controller.abort();
-  }, [token, reload, onAuthRejected]);
+  }, [token, reload, onAuthRejected, replayEpoch]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -699,7 +737,7 @@ export function CostView({ token, onAuthRejected }: ViewProps) {
       }
     });
     return () => controller.abort();
-  }, [token, reload, onAuthRejected]);
+  }, [token, reload, onAuthRejected, replayEpoch]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -714,7 +752,7 @@ export function CostView({ token, onAuthRejected }: ViewProps) {
       }
     });
     return () => controller.abort();
-  }, [token, reload, onAuthRejected]);
+  }, [token, reload, onAuthRejected, replayEpoch]);
 
   if (state.kind === 'loading') {
     return (
@@ -806,7 +844,18 @@ export function CostView({ token, onAuthRejected }: ViewProps) {
   // CV-5: what the top-sessions table covers, in dollars, and what it does
   // not. Both are arithmetic on the served payload - no second endpoint is
   // consulted, so neither figure can be fresher or staler than the rows.
-  const shownSessionsUsd = summary.topSessions.reduce((sum, session) => sum + session.costUsd, 0);
+  // WEB-6 (2026-10-10): a row whose cost is not a finite number used to poison
+  // the reduce - the sentence then read "The rows account for cost unreadable
+  // of the $10.00 all-time total", and the remainder clause, which the same NaN
+  // silenced, vanished with it. Such rows are counted and named; the readable
+  // rows are summed; and no remainder is claimed over a sum that is not whole.
+  const unreadableCostRows = summary.topSessions.filter(
+    (session) => !Number.isFinite(session.costUsd),
+  ).length;
+  const shownSessionsUsd = summary.topSessions.reduce(
+    (sum, session) => (Number.isFinite(session.costUsd) ? sum + session.costUsd : sum),
+    0,
+  );
   const outsideTopSessionsUsd = summary.totals.costUsd - shownSessionsUsd;
   // CV-5 amendment (2026-09-09): the two counts the scope sentence needs. The
   // first is the size of the SLICE (the rows on screen), the second the size of
@@ -823,6 +872,11 @@ export function CostView({ token, onAuthRejected }: ViewProps) {
     summary.totals.tokens > 0 ||
     summary.totals.unpricedTokens > 0 ||
     summary.totals.costUsd > USD_EPSILON;
+  // Owner decisions 1 and 2. Derived once: the note and every description
+  // that names it have to agree about whether it is on the page, because an
+  // idref to a paragraph that was not rendered is a caveat that vanishes.
+  const hasCostHonesty = summary.partialSessions !== 0 || summary.usageRecordsDropped !== 0;
+  const costHonestyDescribedBy = hasCostHonesty ? COST_HONESTY_ID : undefined;
 
   return (
     <section aria-label="cost summary">
@@ -838,7 +892,14 @@ export function CostView({ token, onAuthRejected }: ViewProps) {
           {REFRESH_LABEL}
         </button>
       </p>
-      <div className="kpis" aria-label="totals">
+      {/* `role="group"`: a plain div exposes neither its label nor its
+          description, so the honesty note it names would reach nobody. */}
+      <div
+        className="kpis"
+        role="group"
+        aria-label="totals"
+        aria-describedby={costHonestyDescribedBy}
+      >
         <div className="kpi">
           <span className="kpi-label">Total cost</span>
           <span className="kpi-value">{formatUsd(summary.totals.costUsd)}</span>
@@ -904,17 +965,52 @@ export function CostView({ token, onAuthRejected }: ViewProps) {
         the session that really did produce nothing. The lower-bound conclusion
         is the part that holds for both cases, so it is the part asserted.
       */}
-      {summary.coverage !== undefined && summary.coverage.sessionsExcluded > 0 && (
+      {/* WEB-4 (2026-10-10): `> 0` is false of NaN and of a negative exactly as
+          it is of a measured zero, so an unreadable excluded count rendered the
+          page as if every session had ingested - the hole the unpriced KPI
+          closed in CV-3, in the banner next to it. Unreadable is its own case,
+          and it still ends on the lower-bound conclusion. */}
+      {summary.coverage !== undefined && isImpossibleCount(summary.coverage.sessionsExcluded) && (
         <p className="truncation-banner" data-testid="coverage-banner">
-          {`${plural(summary.coverage.sessionsExcluded, 'session')} could not be ingested on the latest pass, so ${
-            summary.coverage.sessionsExcluded === 1 ? 'its' : 'their'
-          } spend is incomplete or absent in every figure on this page - these totals are a lower bound, not a complete one.`}
-          {summary.coverage.sessionsQuarantined > 0 &&
-            ` ${String(summary.coverage.sessionsQuarantined)} of those will not be retried until the corpus or the pricing table changes (usually a model with no price row).`}
+          {`The excluded-session count came back as ${impossibleCountText(summary.coverage.sessionsExcluded)}, so how many sessions the latest pass left out is unknown - these totals are a lower bound, not a complete one.`}
+        </p>
+      )}
+      {/* W-1 (2026-10-12): the two arms were independent conditions, and an
+          infinity satisfies both - the page named the count unreadable and
+          then said "Infinity sessions could not be ingested" in a second
+          banner under the same test id. This arm is the complement of the
+          one above, so exactly one of them can render. */}
+      {summary.coverage !== undefined &&
+        !isImpossibleCount(summary.coverage.sessionsExcluded) &&
+        summary.coverage.sessionsExcluded > 0 && (
+          <p className="truncation-banner" data-testid="coverage-banner">
+            {`${plural(summary.coverage.sessionsExcluded, 'session')} could not be ingested on the latest pass, so ${
+              summary.coverage.sessionsExcluded === 1 ? 'its' : 'their'
+            } spend is incomplete or absent in every figure on this page - these totals are a lower bound, not a complete one.`}
+            {quarantinedClause(summary.coverage)}
+          </p>
+        )}
+      {/* Owner decisions 1 and 2: every total on this page is a lower bound
+          while any session is partial, and excludes usage records that had no
+          dedupe key. Corpus-wide, not per slice, so it sits with the totals
+          rather than under any one breakdown, and the groups, tables and
+          diagram below name it by id. See views/session-honesty.tsx. */}
+      {hasCostHonesty && (
+        <p className="muted" id={COST_HONESTY_ID} data-testid="cost-honesty">
+          <PartialAggregateNote count={summary.partialSessions} />
+          <DroppedUsageNote
+            count={summary.usageRecordsDropped}
+            lead={summary.partialSessions === 0 ? '' : ' '}
+          />
         </p>
       )}
 
-      <div className="kpis" aria-label="recent windows">
+      <div
+        className="kpis"
+        role="group"
+        aria-label="recent windows"
+        aria-describedby={costHonestyDescribedBy}
+      >
         <div className="kpi" data-testid="kpi-today">
           <span className="kpi-label">Today (UTC)</span>
           {windows.todayObserved ? (
@@ -1140,7 +1236,7 @@ export function CostView({ token, onAuthRejected }: ViewProps) {
             <svg
               role="img"
               aria-label="cost flow from models to sessions"
-              aria-describedby={flowDescribedBy(flow)}
+              aria-describedby={flowDescribedBy(flow, hasCostHonesty)}
               width={flow.width}
               height={flow.height}
               viewBox={`0 0 ${String(flow.width)} ${String(flow.height)}`}
@@ -1234,7 +1330,11 @@ export function CostView({ token, onAuthRejected }: ViewProps) {
       {summary.perModel.length === 0 ? (
         <p className="empty-state">No per-model usage recorded yet.</p>
       ) : (
-        <table className="data-table" aria-label="cost per model">
+        <table
+          className="data-table"
+          aria-label="cost per model"
+          aria-describedby={costHonestyDescribedBy}
+        >
           <thead>
             <tr>
               <th>Model</th>
@@ -1275,7 +1375,11 @@ export function CostView({ token, onAuthRejected }: ViewProps) {
       {summary.perDay.length === 0 ? (
         <p className="empty-state">No daily usage recorded yet.</p>
       ) : (
-        <table className="data-table" aria-label="cost per day">
+        <table
+          className="data-table"
+          aria-label="cost per day"
+          aria-describedby={costHonestyDescribedBy}
+        >
           <thead>
             <tr>
               <th>Day</th>
@@ -1396,23 +1500,27 @@ export function CostView({ token, onAuthRejected }: ViewProps) {
             : summary.hasMore
               ? `The ${String(listedSessionCount)} costliest of ${plural(summary.sessionCount, 'session')} with recorded usage.`
               : `Every session with recorded usage is listed here - all ${plural(summary.sessionCount, 'session')}.`}
-          {` The rows account for ${formatUsd(shownSessionsUsd)} of the ${formatUsd(summary.totals.costUsd)} all-time total.`}
-          {outsideTopSessionsUsd > USD_EPSILON &&
+          {/* W-4 (2026-10-12): "1 of the 1 rows carries" inflected the verb and
+              not the noun, and when every row was unreadable "the readable rows
+              account for $0.00" summed a set with nothing in it. The all-
+              unreadable case is its own sentence; the partial case always has
+              two or more rows, so "rows" is right there. */}
+          {unreadableCostRows > 0 && unreadableCostRows === listedSessionCount
+            ? ` ${
+                listedSessionCount === 1
+                  ? 'The only row carries'
+                  : `All ${String(listedSessionCount)} rows carry`
+              } an unreadable cost, so none of the ${formatUsd(summary.totals.costUsd)} all-time total can be placed.`
+            : unreadableCostRows > 0
+              ? ` ${String(unreadableCostRows)} of the ${String(listedSessionCount)} rows ${
+                  unreadableCostRows === 1 ? 'carries' : 'carry'
+                } an unreadable cost, so the readable rows account for ${formatUsd(shownSessionsUsd)} of the ${formatUsd(summary.totals.costUsd)} all-time total and where the rest of it went cannot be said.`
+              : ` The rows account for ${formatUsd(shownSessionsUsd)} of the ${formatUsd(summary.totals.costUsd)} all-time total.`}
+          {unreadableCostRows === 0 &&
+            outsideTopSessionsUsd > USD_EPSILON &&
             (summary.hasMore
               ? ` The other ${formatUsd(outsideTopSessionsUsd)} was spent in the ${plural(unlistedSessionCount, 'session')} this table does not list.`
               : ` The remaining ${formatUsd(outsideTopSessionsUsd)} is unaccounted for: this payload lists every session with recorded usage, so there is no unlisted session to attribute it to - the served total and the served rows disagree.`)}
-        </p>
-      )}
-      {/* Owner decisions 1 and 2: every total on this page is a lower bound
-          while any session is partial, and excludes usage records that had no
-          dedupe key. Corpus-wide, not per slice. See views/session-honesty.tsx. */}
-      {(summary.partialSessions !== 0 || summary.usageRecordsDropped !== 0) && (
-        <p className="muted" data-testid="cost-honesty">
-          <PartialAggregateNote count={summary.partialSessions} />
-          <DroppedUsageNote
-            count={summary.usageRecordsDropped}
-            lead={summary.partialSessions === 0 ? '' : ' '}
-          />
         </p>
       )}
       {listedSessionCount === 0 ? (
@@ -1424,7 +1532,11 @@ export function CostView({ token, onAuthRejected }: ViewProps) {
               : 'No sessions recorded yet.'}
         </p>
       ) : (
-        <table className="data-table" aria-label="top sessions by cost">
+        <table
+          className="data-table"
+          aria-label="top sessions by cost"
+          aria-describedby={costHonestyDescribedBy}
+        >
           <thead>
             <tr>
               <th>Session</th>

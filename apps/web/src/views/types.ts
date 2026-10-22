@@ -23,4 +23,12 @@ export interface ViewProps {
    * returns to the entry screen (same contract as the shell's health probe).
    */
   readonly onAuthRejected: () => void;
+  /**
+   * How many startup replays the shell has watched end (2026-10-05). It moves
+   * exactly when figures read during a replay stop being excusable: a view
+   * that fetches a corpus-wide answer once lists it among that fetch's
+   * dependencies and so re-reads, keeping what is on screen until the new
+   * answer lands. Optional: a view mounted on its own has no shell to count.
+   */
+  readonly replayEpoch?: number;
 }

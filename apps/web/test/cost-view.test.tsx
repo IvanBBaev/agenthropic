@@ -19,6 +19,7 @@ import {
   deferred,
   globalDag,
   jsonResponse,
+  sessionCost,
 } from './fixtures';
 import { MockEventSource } from './mock-event-source';
 // L-O1: the row marker reuses the shared gap vocabulary rather than a new glyph.
@@ -961,6 +962,74 @@ describe('CostView', () => {
       expect(screen.queryByTestId('coverage-banner')).toBeNull();
     });
 
+    it('names an unreadable excluded count instead of staying silent (WEB-4, 2026-10-10)', async () => {
+      // `> 0` is false of NaN exactly as it is of a measured zero, so an
+      // unreadable count rendered the page as if every session had ingested -
+      // the same hole the unpriced KPI closed in CV-3. Unreadable is its own
+      // case here too, and it still ends on the lower-bound conclusion.
+      await renderWithCoverage({ sessionsExcluded: Number.NaN, sessionsQuarantined: 0 });
+
+      const banner = screen.getByTestId('coverage-banner');
+      expect(banner.textContent).toContain('The excluded-session count came back as');
+      expect(banner.textContent).toContain('lower bound');
+      expect(banner.textContent).not.toContain('could not be ingested');
+    });
+
+    it('names a negative excluded count as one that cannot be right (WEB-4)', async () => {
+      await renderWithCoverage({ sessionsExcluded: -2, sessionsQuarantined: 0 });
+
+      const banner = screen.getByTestId('coverage-banner');
+      expect(banner.textContent).toContain('-2, a count that cannot be right');
+    });
+
+    it('renders exactly one banner for an infinite excluded count (W-1, 2026-10-12)', async () => {
+      // The impossible arm and the `> 0` arm were two independent conditions,
+      // and an infinity satisfies both: the page named the count unreadable
+      // and then, in a second banner, said "Infinity sessions could not be
+      // ingested" - two elements under one test id, one of them a figure.
+      await renderWithCoverage({
+        sessionsExcluded: Number.POSITIVE_INFINITY,
+        sessionsQuarantined: 0,
+      });
+
+      const banners = screen.getAllByTestId('coverage-banner');
+      expect(banners).toHaveLength(1);
+      expect(banners[0]!.textContent).toContain('came back as unreadable');
+      expect(banners[0]!.textContent).not.toContain('Infinity sessions');
+    });
+
+    it('names an unreadable quarantined count inside the excluded banner (W-1)', async () => {
+      // `> 0` kept the quarantine clause silent for NaN and for a negative,
+      // and printed "Infinity of those will not be retried" for an infinity.
+      await renderWithCoverage({ sessionsExcluded: 3, sessionsQuarantined: Number.NaN });
+
+      const banner = screen.getByTestId('coverage-banner');
+      expect(banner.textContent).toContain('3 sessions could not be ingested');
+      expect(banner.textContent).toContain(
+        'How many of those will not be retried came back as unreadable',
+      );
+      expect(banner.textContent).not.toContain('NaN');
+    });
+
+    it('names a negative quarantined count as one that cannot be right (W-1)', async () => {
+      await renderWithCoverage({ sessionsExcluded: 3, sessionsQuarantined: -1 });
+
+      const banner = screen.getByTestId('coverage-banner');
+      expect(banner.textContent).toContain('came back as -1, a count that cannot be right');
+      expect(banner.textContent).not.toContain('of those will not be retried until');
+    });
+
+    it('says so when more sessions are quarantined than were excluded (W-1)', async () => {
+      // "20 of those" beside an excluded count of 3 is a sentence that cannot
+      // be true; the two served counts disagree and the page says which.
+      await renderWithCoverage({ sessionsExcluded: 3, sessionsQuarantined: 20 });
+
+      const banner = screen.getByTestId('coverage-banner');
+      expect(banner.textContent).toContain('The quarantined count says 20 will not be retried');
+      expect(banner.textContent).toContain('more than the 3 sessions excluded');
+      expect(banner.textContent).not.toContain('20 of those');
+    });
+
     it('stays silent when the server published no coverage claim', async () => {
       // Absent means "no ingest seam wired", not "nothing excluded". Rendering
       // a reassurance here would invent a completeness nobody measured.
@@ -1585,6 +1654,83 @@ describe('CostView', () => {
       expect(screen.getByText('priced tokens only')).toBeDefined();
       expect(screen.queryByTestId('kpi-total-unpriced-unknown')).toBeNull();
     });
+
+    it.each([
+      [[Number.NaN], '1 of the 3 rows carries an unreadable cost'],
+      [[Number.NaN, Number.POSITIVE_INFINITY], '2 of the 3 rows carry an unreadable cost'],
+    ])(
+      'counts the rows whose cost is unreadable instead of printing an unreadable sum (WEB-6, 2026-10-10) %#',
+      async (unreadable, expected) => {
+        // One NaN row poisoned the reduce: the sentence then read "The rows
+        // account for cost unreadable of the $10.00 all-time total", and the
+        // remainder clause - which the same NaN silenced - vanished with it.
+        // The unreadable rows are now counted and named, the readable ones are
+        // summed, and no remainder is claimed over a sum that is not whole.
+        const rows = [
+          sessionCost({ sessionId: 'aaaaaaaa-1111-2222-3333-444444444444', costUsd: 6 }),
+          ...unreadable.map((costUsd, index) =>
+            sessionCost({
+              sessionId: `bbbbbbbb-5555-6666-7777-88888888888${String(index)}`,
+              costUsd,
+            }),
+          ),
+        ];
+        if (rows.length < 3) {
+          rows.push(sessionCost({ sessionId: 'cccccccc-5555-6666-7777-888888888888', costUsd: 1 }));
+        }
+        routeFetch({
+          summary: jsonResponse(
+            200,
+            costSummary({
+              sessionCount: 3,
+              totals: { tokens: 3000, costUsd: 10, unpricedTokens: 0 },
+              topSessions: rows,
+            }),
+          ),
+        });
+        renderView();
+
+        const scope = (await screen.findByTestId('top-sessions-scope')).textContent ?? '';
+        expect(scope).toContain(expected);
+        expect(scope).not.toContain('cost unreadable');
+        expect(scope).toContain('of the $10.00 all-time total');
+        expect(scope).not.toContain('The other');
+        expect(scope).not.toContain('unaccounted for');
+      },
+    );
+
+    it.each([
+      [1, 'The only row carries an unreadable cost'],
+      [2, 'All 2 rows carry an unreadable cost'],
+    ])(
+      'keeps the grammar when every listed row is unreadable (W-4, 2026-10-12) %#',
+      async (count, expected) => {
+        // "1 of the 1 rows carries" inflected the verb and not the noun, and
+        // "the readable rows account for $0.00" summed a set with nothing in it.
+        routeFetch({
+          summary: jsonResponse(
+            200,
+            costSummary({
+              sessionCount: count,
+              totals: { tokens: 1000, costUsd: 10, unpricedTokens: 0 },
+              topSessions: Array.from({ length: count }, (_, index) =>
+                sessionCost({
+                  sessionId: `dddddddd-5555-6666-7777-88888888888${String(index)}`,
+                  costUsd: Number.NaN,
+                }),
+              ),
+            }),
+          ),
+        });
+        renderView();
+
+        const scope = (await screen.findByTestId('top-sessions-scope')).textContent ?? '';
+        expect(scope).toContain(expected);
+        expect(scope).toContain('none of the $10.00 all-time total can be placed');
+        expect(scope).not.toContain('1 rows');
+        expect(scope).not.toContain('readable rows account for');
+      },
+    );
 
     it('names the top-sessions table as a slice and prices what it leaves out (CV-5)', async () => {
       // AMENDED 2026-09-09 (CV-5). The premise this test was written on - that

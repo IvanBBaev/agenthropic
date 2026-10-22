@@ -365,6 +365,31 @@ describe('SessionCostAnalysis', () => {
     expect(screen.queryByLabelText('compaction repricing')).toBeNull();
   });
 
+  it('does not claim a partial session was never compacted', async () => {
+    // W-F1. A partial read skipped the MAIN transcript, which is where a
+    // session's own compaction boundaries live. Zero boundaries in the
+    // subagent transcripts is a fact about what was read, not about the
+    // session, so "never compacted" is a claim this read cannot support.
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        200,
+        costAnalysis({
+          partial: { reason: 'main-transcript-oversize', skippedBytes: 70 * 1024 * 1024 },
+        }),
+      ),
+    );
+    renderPanel();
+    await screen.findByTestId('session-analysis');
+
+    const text = screen.getByTestId('no-compaction').textContent;
+    expect(text).not.toContain('never compacted');
+    expect(text).toContain('No compaction was found in the transcripts that were read');
+    expect(text).toContain('main transcript was skipped');
+    expect(text).toContain('may have been compacted');
+    expect(text).toContain('nothing can be repriced from this read');
+    expect(screen.queryByRole('table', { name: 'compaction segments' })).toBeNull();
+  });
+
   it('marks every delegation figure as an estimate and names the hypothetical model', async () => {
     fetchMock.mockResolvedValue(jsonResponse(200, richAnalysis()));
     renderPanel();
@@ -1030,6 +1055,62 @@ describe('SessionCostAnalysis', () => {
     renderPanel();
     await screen.findByTestId('session-analysis');
     expect(screen.queryByTestId('analysis-honesty')).toBeNull();
+  });
+
+  /**
+   * What each group and table of figures names as its description, in the
+   * order it names them: the two KPI groups and the two tables of the panel.
+   */
+  function figureDescriptions(): string[][] {
+    return [
+      screen.getByRole('group', { name: 'compaction repricing' }),
+      screen.getByRole('table', { name: 'compaction segments' }),
+      screen.getByRole('group', { name: 'delegation savings' }),
+      screen.getByRole('table', { name: 'delegation savings per agent' }),
+    ].map((element) =>
+      (element.getAttribute('aria-describedby') ?? '').split(' ').filter((id) => id.length > 0),
+    );
+  }
+
+  it('names the honesty line ahead of the caveats each figure already carries', async () => {
+    // W-F3. The line sits at the top of the panel, and a reader who jumps to a
+    // table or a KPI group never passes it (CA-4), so each one names it - in
+    // front of, never instead of, the caveats it named already.
+    fetchMock.mockResolvedValue(jsonResponse(200, richAnalysis()));
+    const whole = renderPanel();
+    await screen.findByTestId('session-analysis');
+    const before = figureDescriptions();
+    expect(before[0]).toEqual([]);
+    expect(before[1]).toEqual(['analysis-compaction-signal']);
+    expect(before[2]).toContain('analysis-delegation-basis');
+    whole.unmount();
+
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, {
+        ...richAnalysis(),
+        partial: { reason: 'main-transcript-oversize', skippedBytes: 70 * 1024 * 1024 },
+        usageRecordsDropped: 2,
+      }),
+    );
+    renderPanel();
+    const honesty = await screen.findByTestId('analysis-honesty');
+    expect(honesty.id).toBe('analysis-honesty');
+    const after = figureDescriptions();
+    expect(after).toEqual(before.map((ids) => [honesty.id, ...ids]));
+    for (const id of after.flat()) expect(document.getElementById(id)).not.toBeNull();
+  });
+
+  it('names no honesty line from any figure when none is rendered', async () => {
+    // A dangling idref is a caveat that silently disappears, so the id is
+    // listed only while its paragraph exists.
+    fetchMock.mockResolvedValue(jsonResponse(200, richAnalysis()));
+    renderPanel();
+    await screen.findByTestId('session-analysis');
+    expect(screen.queryByTestId('analysis-honesty')).toBeNull();
+    expect(figureDescriptions().flat()).not.toContain('analysis-honesty');
+    expect(
+      screen.getByRole('group', { name: 'compaction repricing' }).hasAttribute('aria-describedby'),
+    ).toBe(false);
   });
 
   it('retries a failed analysis for the same session and renders the result', async () => {

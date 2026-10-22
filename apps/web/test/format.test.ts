@@ -11,6 +11,8 @@ import {
   formatTokens,
   formatUsd,
   FUTURE_SKEW_TOLERANCE_MS,
+  impossibleCountText,
+  isImpossibleCount,
   projectLabel,
   shortId,
   UNREADABLE_TIMESTAMP,
@@ -245,5 +247,22 @@ describe('a name slot the server left blank (lane-P)', () => {
     // A blank in the preferred field must not hide a usable value in the
     // fallback field - that would turn a recorded fact into a gap.
     expect(agentTypeLabel('', 'general-purpose')).toBe('general-purpose');
+  });
+});
+
+describe('impossible counts (WEB-4 / WEB-5 / WEB-7, 2026-10-10)', () => {
+  it('rejects what no real read can count and accepts the rest', () => {
+    for (const count of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -1]) {
+      expect(isImpossibleCount(count), String(count)).toBe(true);
+    }
+    for (const count of [0, 1, 2.5, Number.MAX_SAFE_INTEGER]) {
+      expect(isImpossibleCount(count), String(count)).toBe(false);
+    }
+  });
+
+  it('names an unreadable count as such and quotes a negative one with the reason', () => {
+    expect(impossibleCountText(Number.NaN)).toBe('unreadable');
+    expect(impossibleCountText(Number.POSITIVE_INFINITY)).toBe('unreadable');
+    expect(impossibleCountText(-2)).toBe('-2, a count that cannot be right');
   });
 });

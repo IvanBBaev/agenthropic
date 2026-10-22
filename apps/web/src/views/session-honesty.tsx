@@ -13,11 +13,15 @@
  *
  * Like `unpriced.tsx`, the disclosure is the PRESENCE of the clause, so its
  * absence must mean "nothing to disclose" and nothing else: `null` / zero is
- * the only silent case. A negative count is impossible and is shown rather
- * than swallowed. The guards in `dto-guards.ts` refuse a payload that lacks
- * either field, so an old server never reaches here as "whole".
+ * the only silent case. A count no read can produce (NaN, an infinity, a
+ * negative) is named as such rather than swallowed or printed as a figure
+ * (W-3, 2026-10-12: it used to print "Includes NaN partial sessions", and every
+ * description on the page pointed a reader at that sentence). The guards in
+ * `dto-guards.ts` refuse a payload that lacks either field, so an old server
+ * never reaches here as "whole".
  */
 import type { SessionPartialDto } from '../dto';
+import { impossibleCountText, isImpossibleCount } from '../format';
 
 /** The owner-decided words for a partial session. */
 export const PARTIAL_SESSION_TEXT =
@@ -37,10 +41,23 @@ export function PartialBadge({
   readonly lead: string;
 }) {
   if (partial === null) return null;
+  // 2026-10-10: `toFixed(1)` printed "0.0 MiB not read" for anything under
+  // 52 KiB - a clause that says bytes were skipped and then names none - and
+  // "NaN MiB" for a size that could not be read. A small size is now bounded
+  // from above, an impossible one named.
+  // W-6 (2026-10-12): a served zero was still that clause, and beside a reason
+  // that says the transcript was too large to read it is a contradiction the
+  // payload carries - so it is named as one rather than rounded to "0.0".
   const size =
     partial.skippedBytes === null
       ? ''
-      : ` (${(partial.skippedBytes / BYTES_PER_MIB).toFixed(1)} MiB not read)`;
+      : isImpossibleCount(partial.skippedBytes)
+        ? ` (skipped size ${impossibleCountText(partial.skippedBytes)})`
+        : partial.skippedBytes === 0
+          ? ' (skipped size 0, which contradicts a transcript too large to read)'
+          : partial.skippedBytes < BYTES_PER_MIB / 10
+            ? ' (under 0.1 MiB not read)'
+            : ` (${(partial.skippedBytes / BYTES_PER_MIB).toFixed(1)} MiB not read)`;
   return (
     <span className="partial-badge">
       {lead}
@@ -59,8 +76,9 @@ export function DroppedUsageNote({
   readonly lead: string;
 }) {
   if (count === 0) return null;
-  const text =
-    count === 1
+  const text = isImpossibleCount(count)
+    ? `The dropped-usage count came back as ${impossibleCountText(count)}, so how many usage records were excluded is unknown.`
+    : count === 1
       ? '1 usage record could not be deduplicated and was excluded'
       : `${String(count)} usage records could not be deduplicated and were excluded`;
   return (
@@ -76,7 +94,9 @@ export function PartialAggregateNote({ count }: { readonly count: number }) {
   if (count === 0) return null;
   return (
     <span className="partial-badge">
-      {`Includes ${String(count)} partial ${count === 1 ? 'session' : 'sessions'} (lower bound).`}
+      {isImpossibleCount(count)
+        ? `The partial-session count came back as ${impossibleCountText(count)}, so how many of these sessions are partial is unknown - treat every total as a lower bound.`
+        : `Includes ${String(count)} partial ${count === 1 ? 'session' : 'sessions'} (lower bound).`}
     </span>
   );
 }

@@ -33,6 +33,7 @@ import {
   globalDag,
   jsonResponse,
   sessionList,
+  sessionSummary,
   sessionTree,
   textResponse,
 } from './fixtures';
@@ -728,6 +729,32 @@ describe('a server still replaying its corpus is a wait, not an error', () => {
       },
     );
 
+    it('does not start the wait for a token the field no longer holds', async () => {
+      // The FIRST probe is held open while the field is edited, so its
+      // `replaying` answer arrives for a string the user has already replaced.
+      // "The server accepted this token" beside the new text would be a
+      // verdict about a string nothing has judged - and the wait would end by
+      // letting the user in with the one they had walked away from.
+      const first = deferred<Response>();
+      fetchMock.mockReturnValueOnce(first.promise);
+      const onSuccess = vi.fn();
+      render(<TokenScreen onSuccess={onSuccess} replayPollMs={5} />);
+      submitToken('secret-token');
+      fireEvent.change(tokenInput(), { target: { value: 'another-token' } });
+
+      await act(async () => {
+        first.resolve(replaying());
+        await first.promise;
+      });
+      await settle(30);
+
+      expect(screen.queryByTestId('token-replaying')).toBeNull();
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(screen.getByRole('button', { name: 'Connect' })).toHaveProperty('disabled', false);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(onSuccess).not.toHaveBeenCalled();
+    });
+
     it('stops polling when it unmounts', async () => {
       fetchMock.mockImplementation(() => Promise.resolve(replaying()));
       const { unmount } = render(<TokenScreen onSuccess={() => undefined} replayPollMs={5} />);
@@ -791,6 +818,151 @@ describe('a server still replaying its corpus is a wait, not an error', () => {
 
       rejected = true;
       await waitFor(() => expect(onAuthRejected).toHaveBeenCalled());
+    });
+
+    function healthProbes(): number {
+      return fetchMock.mock.calls.filter(([url]) => String(url) === '/api/health').length;
+    }
+
+    it('keeps the notice up, and keeps asking, when a re-probe during the replay fails', async () => {
+      let phase: 'replaying' | 'failing' | 'done' = 'replaying';
+      routeWith(() => {
+        if (phase === 'failing') return healthResponse(503, { error: 'busy' });
+        return phase === 'done' ? ok() : replaying();
+      });
+      render(
+        <Shell token="secret-token" onLock={vi.fn()} onAuthRejected={vi.fn()} replayPollMs={5} />,
+      );
+      await screen.findByTestId('replaying-notice');
+
+      phase = 'failing';
+      await waitFor(() =>
+        expect(screen.getByTestId('replaying-notice').textContent).toContain(
+          'health check failed (HTTP 503)',
+        ),
+      );
+      // Still a wait, and still the reason the figures cannot be trusted yet:
+      // no error chip, and no button asking the reader to do the polling.
+      expect(screen.getByTestId('replaying-notice').textContent).toContain(
+        'figures are incomplete',
+      );
+      expect(screen.queryByTestId('recheck-health')).toBeNull();
+      expect(screen.getByTestId('connection-chip').textContent).not.toContain('server error');
+      expect(screen.getByText('schema v18')).toBeTruthy();
+
+      // The failed check is repeated without being asked...
+      const probes = healthProbes();
+      await waitFor(() => expect(healthProbes()).toBeGreaterThan(probes));
+
+      // ...a `replaying` answer withdraws the failure and keeps the wait...
+      phase = 'replaying';
+      await waitFor(() =>
+        expect(screen.getByTestId('replaying-notice').textContent).not.toContain('failed'),
+      );
+
+      // ...and `ok` ends it, as it always did.
+      phase = 'done';
+      await waitFor(() => expect(screen.queryByTestId('replaying-notice')).toBeNull());
+      expect(screen.getByText('schema v18')).toBeTruthy();
+    });
+
+    it('treats a failure after the replay has finished as an ordinary failure', async () => {
+      let phase: 'replaying' | 'done' | 'failing' = 'replaying';
+      routeWith(() => {
+        if (phase === 'failing') return healthResponse(503, { error: 'down' });
+        return phase === 'done' ? ok() : replaying();
+      });
+      render(
+        <Shell token="secret-token" onLock={vi.fn()} onAuthRejected={vi.fn()} replayPollMs={5} />,
+      );
+      await screen.findByTestId('replaying-notice');
+      phase = 'done';
+      await waitFor(() => expect(screen.queryByTestId('replaying-notice')).toBeNull());
+
+      // The stream drops and comes back, which asks health again - and this
+      // time nothing says a replay is under way, so the failure is not a wait.
+      phase = 'failing';
+      const source = MockEventSource.latest();
+      act(() => source.open());
+      act(() => source.fail());
+      act(() => source.open());
+
+      await screen.findByTestId('recheck-health');
+      expect(screen.queryByTestId('replaying-notice')).toBeNull();
+    });
+
+    function reads(endpoint: string): number {
+      return fetchMock.mock.calls.filter(([url]) => String(url).startsWith(endpoint)).length;
+    }
+
+    it.each([
+      ['#/dag', '/api/dag/global'],
+      ['#/cost', '/api/cost/summary'],
+      ['#/sessions', '/api/sessions'],
+    ] as const)(
+      're-reads the open %s view, once, when the replay is over',
+      async (hash, endpoint) => {
+        // These views fetch on mount and hold that answer. Read mid-replay it
+        // is a partial figure - and the notice that said so is the very thing
+        // that goes away when the replay ends.
+        window.location.hash = hash;
+        let replayDone = false;
+        routeWith(() => (replayDone ? ok() : replaying()));
+        render(
+          <Shell token="secret-token" onLock={vi.fn()} onAuthRejected={vi.fn()} replayPollMs={5} />,
+        );
+        await screen.findByTestId('replaying-notice');
+        // Several probes answer `replaying`; none of them is a reason to re-read.
+        await settle(30);
+        expect(reads(endpoint)).toBe(1);
+
+        replayDone = true;
+        await waitFor(() => expect(screen.queryByTestId('replaying-notice')).toBeNull());
+        await waitFor(() => expect(reads(endpoint)).toBe(2));
+        await settle(30);
+        expect(reads(endpoint)).toBe(2);
+      },
+    );
+
+    it('leaves an open session tree alone when the replay is over', async () => {
+      // The list is missing the sessions not replayed yet; an open tree is
+      // not, because a session is ingested whole. Re-reading it would blank
+      // the pane under the reader for an answer that cannot have changed.
+      window.location.hash = '#/sessions';
+      let replayDone = false;
+      fetchMock.mockImplementation((url: string) => {
+        if (url.startsWith('/api/health')) return Promise.resolve(replayDone ? ok() : replaying());
+        if (url.includes('/tree')) return Promise.resolve(jsonResponse(200, sessionTree()));
+        return Promise.resolve(jsonResponse(200, sessionList([sessionSummary()])));
+      });
+      const treeReads = (): number =>
+        fetchMock.mock.calls.filter(([url]) => String(url).includes('/tree')).length;
+      render(
+        <Shell token="secret-token" onLock={vi.fn()} onAuthRejected={vi.fn()} replayPollMs={5} />,
+      );
+      await screen.findByTestId('replaying-notice');
+      fireEvent.click(await screen.findByRole('button', { name: /agenthropic/ }));
+      await screen.findByTestId('tree-provenance');
+      expect(treeReads()).toBe(1);
+
+      replayDone = true;
+      await waitFor(() => expect(screen.queryByTestId('replaying-notice')).toBeNull());
+      // The list did re-read: one list read at mount, one for the epoch.
+      await waitFor(() => expect(reads('/api/sessions') - treeReads()).toBe(2));
+      await settle(30);
+      expect(treeReads()).toBe(1);
+      expect(screen.getByTestId('tree-provenance')).toBeDefined();
+    });
+
+    it('reads the view once when the server was never replaying', async () => {
+      window.location.hash = '#/dag';
+      routeWith(ok);
+      render(
+        <Shell token="secret-token" onLock={vi.fn()} onAuthRejected={vi.fn()} replayPollMs={5} />,
+      );
+      await screen.findByText('schema v18');
+      await settle(30);
+      expect(reads('/api/dag/global')).toBe(1);
     });
 
     it('stops re-probing when it unmounts', async () => {

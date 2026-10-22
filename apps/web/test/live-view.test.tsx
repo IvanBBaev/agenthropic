@@ -490,8 +490,9 @@ describe('LiveView', () => {
     });
     expect(sessionsCalls()).toHaveLength(1);
 
-    // Every transition that fired while disconnected is gone (SSE replays
-    // nothing), so the reopened stream must refetch the snapshot - exactly once.
+    // Every transition that fired while disconnected beyond the server's bounded
+    // replay buffer is gone, so the reopened stream must refetch the snapshot -
+    // exactly once.
     act(() => {
       MockEventSource.latest().fail();
       MockEventSource.latest().open();
@@ -1010,8 +1011,10 @@ describe('ingestedSessionId', () => {
  * AMENDED 2026-09-03 (LV-2): the board used to have no way to say "frames are
  * missing from this feed".
  *
- * The stream numbers every frame and replays nothing, so a reconnect - or any
- * server-side drop - leaves a hole that the board renders as continuity. The
+ * The stream numbers every frame and replays only a bounded recent window
+ * (AMENDED 2026-10-10, WEB-1: 256 frames since 2026-09-26; nothing before that),
+ * so a reconnect - or any server-side drop - can leave a hole that the board
+ * renders as continuity. The
  * refetch-on-recovery effect repairs the SNAPSHOT, which is why sessions and
  * buckets come back, but it cannot repair `ingest-failed`: the refetch either
  * does not carry the session at all, or carries it at the extent of its last
@@ -1302,6 +1305,22 @@ describe('LiveView banner refetch claims (MM3) and id-epoch honesty (MM2)', () =
     expect(seam.textContent).not.toContain('until another frame arrives');
     expect(seam.textContent).toContain('If the server restarted');
     expect(seam.textContent).toContain('cannot be detected by the frame-id sequence');
+  });
+
+  it('seam banner: calls the replay bounded, not absent (WEB-1, 2026-10-10)', async () => {
+    // Since 2026-09-26 the hub keeps its last 256 frames and replays those
+    // after the id the browser sends back, so "the server replays nothing" is
+    // a claim about a server that no longer exists. What is still true, and
+    // what the seam has to say, is that the replay is BOUNDED: frames beyond
+    // the buffer, or published across a restart, are the ones that never came.
+    fetchMock.mockResolvedValue(jsonResponse(200, sessionList([sessionSummary()])));
+    renderView();
+    await screen.findByRole('list', { name: 'sessions' });
+
+    reconnect();
+    const seam = screen.getByTestId('stream-seam');
+    expect(seam.textContent).not.toContain('replays nothing');
+    expect(seam.textContent).toContain("beyond the server's replay buffer");
   });
 
   it('gap count is exact with no seam observed', async () => {

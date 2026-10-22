@@ -175,6 +175,18 @@ const DELEGATION_BASIS_ID = 'analysis-delegation-basis';
 const DELEGATION_SCOPE_ID = 'analysis-delegation-scope';
 const DELEGATION_FLOOR_ID = 'analysis-delegation-floor';
 const DELEGATION_SKIPPED_ID = 'analysis-delegation-skipped';
+/** The partial / dropped-usage line at the top of the panel (owner decisions 1 and 2). */
+const ANALYSIS_HONESTY_ID = 'analysis-honesty';
+
+/**
+ * Puts the honesty line in front of whatever a figure already names - it is
+ * the first paragraph of the panel - and leaves the list exactly as it was
+ * when the line is not rendered, so the id never dangles.
+ */
+function withHonesty(hasHonesty: boolean, describedBy: string | undefined): string | undefined {
+  if (!hasHonesty) return describedBy;
+  return describedBy === undefined ? ANALYSIS_HONESTY_ID : `${ANALYSIS_HONESTY_ID} ${describedBy}`;
+}
 
 /**
  * The caveats in DOCUMENT order, which is the order a sighted reader meets
@@ -263,6 +275,13 @@ export function SessionCostAnalysis({
       }
     });
     return () => controller.abort();
+    // Deliberately NOT keyed on the shell's replay epoch (2026-10-08), unlike
+    // the session list and tree beside this panel. The analysis reads the
+    // transcripts live, so a replay ending does not move its figures; only its
+    // honesty fields (`partial`, `usageRecordsDropped`) come from the session
+    // row and can lag until that row lands - and the epoch-aware list and tree
+    // next to it refetch at that moment and make the lag visible. The panel is
+    // remounted on every new selection, so the lag never outlives one.
   }, [token, sessionId, onAuthRejected, requestKey]);
 
   if (state.kind === 'loading') {
@@ -293,6 +312,10 @@ export function SessionCostAnalysis({
 
   const { compaction, delegationSavings } = state.analysis;
 
+  // Owner decisions 1 and 2. Derived once, so the honesty line and every
+  // description that names it agree about whether it is on the page.
+  const hasHonesty = state.analysis.partial !== null || state.analysis.usageRecordsDropped !== 0;
+
   // Derived once: the banner and the table's accessible description have to
   // agree about whether there is a signal, and two copies of the comparison is
   // how they stop agreeing.
@@ -304,11 +327,10 @@ export function SessionCostAnalysis({
   // notice. A difference that cannot be read has no size, so only a finite one
   // can be a signal.
   const hasDeltaSignal = !deltaUnknown && Math.abs(compaction.deltaUsd) >= DELTA_SIGNAL_USD;
-  const compactionDescribedBy = hasDeltaSignal
-    ? COMPACTION_SIGNAL_ID
-    : deltaUnknown
-      ? COMPACTION_UNKNOWN_ID
-      : undefined;
+  const compactionDescribedBy = withHonesty(
+    hasHonesty,
+    hasDeltaSignal ? COMPACTION_SIGNAL_ID : deltaUnknown ? COMPACTION_UNKNOWN_ID : undefined,
+  );
 
   // THREE delegation states, not two, because the middle one is a lie when it
   // is rendered like the others. `perAgent` is empty either because no subagent
@@ -358,9 +380,9 @@ export function SessionCostAnalysis({
   const dearerAgentCount = comparableAgents.filter(
     (agent) => agent.hypotheticalUsd < agent.actualUsd,
   ).length;
-  const delegationDescription = delegationDescribedBy(
-    dearerAgentCount + uncomparableAgentCount,
-    skippedAgentCount,
+  const delegationDescription = withHonesty(
+    hasHonesty,
+    delegationDescribedBy(dearerAgentCount + uncomparableAgentCount, skippedAgentCount),
   );
 
   return (
@@ -368,8 +390,8 @@ export function SessionCostAnalysis({
       {/* Owner decisions 1 and 2: these figures come from a transcript read
           that may have skipped the main transcript (a lower bound) or dropped
           usage records with no dedupe key. See views/session-honesty.tsx. */}
-      {(state.analysis.partial !== null || state.analysis.usageRecordsDropped !== 0) && (
-        <p className="muted" data-testid="analysis-honesty">
+      {hasHonesty && (
+        <p className="muted" id={ANALYSIS_HONESTY_ID} data-testid="analysis-honesty">
           <PartialBadge partial={state.analysis.partial} lead="" />
           <DroppedUsageNote
             count={state.analysis.usageRecordsDropped}
@@ -379,12 +401,23 @@ export function SessionCostAnalysis({
       )}
       <h3>Compaction repricing</h3>
       {compaction.compactionCount === 0 ? (
+        // A partial read skipped the main transcript, which is where the
+        // session's own compaction boundaries are. Zero found is then a fact
+        // about what was read, not about the session, so "never compacted" is
+        // said only of a whole read.
         <p className="empty-state" data-testid="no-compaction">
-          This session was never compacted, so there is nothing to reprice.
+          {state.analysis.partial === null
+            ? 'This session was never compacted, so there is nothing to reprice.'
+            : 'No compaction was found in the transcripts that were read. The main transcript was skipped, so this session may have been compacted, and nothing can be repriced from this read.'}
         </p>
       ) : (
         <>
-          <div className="kpis" role="group" aria-label="compaction repricing">
+          <div
+            className="kpis"
+            role="group"
+            aria-label="compaction repricing"
+            aria-describedby={withHonesty(hasHonesty, undefined)}
+          >
             <div className="kpi">
               <span className="kpi-label">Naive</span>
               <span className="kpi-value">{formatUsd(compaction.naiveUsd)}</span>

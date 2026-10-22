@@ -27,7 +27,16 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { fetchChanges } from '../api';
 import { readNowMs } from '../clock';
 import type { ChangesDto } from '../dto';
-import { formatTokens, formatUsd, projectLabel, quoteRawValue, shortId } from '../format';
+import {
+  formatTokens,
+  formatUsd,
+  impossibleCountText,
+  isImpossibleCount,
+  nameOrBlank,
+  projectLabel,
+  quoteRawValue,
+  shortId,
+} from '../format';
 import { snapshotAge } from './snapshot';
 import { UNRECOGNISED_STATUS_LABEL } from './status';
 import { UnpricedNote } from './unpriced';
@@ -39,6 +48,23 @@ const DAY_MS = 86_400_000;
 
 /** Parenthetical naming a row that carried no `change` field at all. */
 export const ABSENT_CHANGE_REASON = 'no change word sent';
+
+/**
+ * WEB-5 (2026-10-10): the clock the window is over, or the fact that none was
+ * named. `basis` was interpolated bare and the DTO guard does not require it
+ * (it checks containers and load-bearing numbers, not labels), so an answer
+ * without it read "over : the end is ...".
+ *
+ * W-2 (2026-10-12): a present-but-blank basis (`''`, whitespace) passed the
+ * typeof check and was interpolated bare - the same "over : the end is" the
+ * paragraph above was written to remove. `nameOrBlank` quotes the blank the
+ * way every other served name on these pages is quoted.
+ */
+export const ABSENT_BASIS_REASON = 'no basis sent';
+export function basisText(basis: unknown): string {
+  if (typeof basis !== 'string') return `an unstated clock (${ABSENT_BASIS_REASON})`;
+  return nameOrBlank(basis, 'basis');
+}
 
 const CHANGE_KINDS: readonly string[] = ['new', 'updated', 'unknown'];
 
@@ -93,9 +119,9 @@ function ChangesResult({
     <div data-testid="changes-result">
       <p className="muted card-provenance" data-testid="changes-window">
         Changes read {age.label}. Window {data.interval} = ({data.since}, {data.until}] over{' '}
-        {data.basis}: the end is the newest instant the database can date, not the moment of this
-        read. A session whose activity predates the start but that was ingested afterwards is not in
-        it.
+        {basisText(data.basis)}: the end is the newest instant the database can date, not the moment
+        of this read. A session whose activity predates the start but that was ingested afterwards
+        is not in it.
       </p>
       <p className="muted" data-testid="changes-totals">
         {plural(total, 'session')} changed in the whole window: {totals.sessionsNew} new,{' '}
@@ -104,21 +130,41 @@ function ChangesResult({
         {formatTokens(totals.tokensAdded)} tokens · {formatUsd(totals.costAddedUsd)} added
         <UnpricedNote tokens={totals.unpricedTokensAdded} lead=" · " />.
       </p>
-      {totals.tokensAddedOutsideChangedSessions > 0 && (
+      {/* WEB-5 (2026-10-10): both `> 0` gates below are false of NaN and of a
+          negative exactly as of a measured zero, so an unreadable residue read
+          as "the rows add up" and an unreadable undated count as "every row is
+          dated". Each impossible count is now its own arm with its own words. */}
+      {isImpossibleCount(totals.tokensAddedOutsideChangedSessions) ? (
+        <p className="muted" data-testid="changes-residue">
+          The count of tokens used outside every changed session came back as{' '}
+          {impossibleCountText(totals.tokensAddedOutsideChangedSessions)}, so whether the rows below
+          add up to the total cannot be said.
+        </p>
+      ) : totals.tokensAddedOutsideChangedSessions > 0 ? (
         <p className="muted" data-testid="changes-residue">
           {formatTokens(totals.tokensAddedOutsideChangedSessions)} of those tokens were used in
           sessions whose own last activity falls outside this window, so the rows below do not add
           up to the total.
         </p>
-      )}
-      {undated > 0 && (
+      ) : null}
+      {[coverage.undatedSessions, coverage.undatedAgents, coverage.undatedUsageRows].some(
+        isImpossibleCount,
+      ) ? (
+        <p className="muted" data-testid="changes-coverage">
+          Outside every window: {plural(coverage.undatedSessions, 'session')},{' '}
+          {plural(coverage.undatedAgents, 'agent')} and{' '}
+          {plural(coverage.undatedUsageRows, 'usage row')} - at least one of these counts came back
+          unreadable or below zero, so how much of the corpus no &quot;changed since&quot; answer
+          can include is unknown.
+        </p>
+      ) : undated > 0 ? (
         <p className="muted" data-testid="changes-coverage">
           Outside every window: {plural(coverage.undatedSessions, 'session')},{' '}
           {plural(coverage.undatedAgents, 'agent')} and{' '}
           {plural(coverage.undatedUsageRows, 'usage row')} carry no usable timestamp, so no
           &quot;changed since&quot; answer can include them.
         </p>
-      )}
+      ) : null}
       {!Number.isFinite(total) ? (
         <p className="muted" data-testid="changes-truncation-unknown">
           The changed-session count served with this list came back unreadable, so whether these

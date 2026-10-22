@@ -292,6 +292,69 @@ describe('ChangesPanel', () => {
     expect(screen.queryByTestId('changes-residue')).toBeNull();
   });
 
+  it.each([
+    [Number.NaN, 'came back as unreadable'],
+    [-5, 'came back as -5, a count that cannot be right'],
+  ])(
+    'names a residue no real usage can produce instead of staying silent (WEB-5, 2026-10-10) %s',
+    async (residue, expected) => {
+      // `> 0` fails for NaN and for a negative count exactly as for a measured
+      // zero, so an unreadable residue rendered as "the rows add up".
+      const answer = changes();
+      fetchMock.mockResolvedValue(
+        jsonResponse(200, {
+          ...answer,
+          totals: { ...answer.totals, tokensAddedOutsideChangedSessions: residue },
+        }),
+      );
+      renderPanel();
+      await askAndWait('2026-09-28');
+      const notice = screen.getByTestId('changes-residue').textContent ?? '';
+      expect(notice).toContain('tokens used outside every changed session');
+      expect(notice).toContain(expected);
+    },
+  );
+
+  it('names an undated count no real corpus can produce instead of staying silent (WEB-5)', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        200,
+        changes({
+          coverage: { undatedSessions: Number.NaN, undatedAgents: 0, undatedUsageRows: -1 },
+        }),
+      ),
+    );
+    renderPanel();
+    await askAndWait('2026-09-28');
+    const notice = screen.getByTestId('changes-coverage').textContent ?? '';
+    expect(notice).toContain('Outside every window: NaN sessions, 0 agents and -1 usage rows');
+    expect(notice).toContain('at least one of these counts came back unreadable or below zero');
+  });
+
+  it('says that no clock was sent when the basis field is absent (WEB-5)', async () => {
+    // `basis` was interpolated bare, and the DTO guard does not require it,
+    // so an answer without it read "over : the end is ...".
+    const withoutBasis: Record<string, unknown> = { ...changes() };
+    delete withoutBasis['basis'];
+    fetchMock.mockResolvedValue(jsonResponse(200, withoutBasis));
+    renderPanel();
+    await askAndWait('2026-09-28');
+    expect(screen.getByTestId('changes-window').textContent).toContain(
+      'over an unstated clock (no basis sent)',
+    );
+  });
+
+  it('names a blank basis rather than printing nothing (W-2, 2026-10-12)', async () => {
+    // A present-but-blank `basis` passed the typeof check and was interpolated
+    // bare - exactly the "over : the end is" the WEB-5 fix was written to remove.
+    fetchMock.mockResolvedValue(jsonResponse(200, { ...changes(), basis: '' }));
+    renderPanel();
+    await askAndWait('2026-09-28');
+    const window = screen.getByTestId('changes-window').textContent ?? '';
+    expect(window).toContain('over blank basis (""): the end is');
+    expect(window).not.toContain('over : the end');
+  });
+
   it('surfaces a failure instead of an empty list, and retries the same day', async () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse(400, { error: 'since must be an ISO-8601 instant.' }))

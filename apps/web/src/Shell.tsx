@@ -4,7 +4,7 @@
  * chrome carries the uncertainty legend - the honesty vocabulary is never
  * hidden behind a tooltip.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { checkHealth, REPLAY_POLL_MS, type HealthUnreachableReason } from './api';
 import { useHashRoute, viewHash, VIEW_IDS } from './router';
 import {
@@ -96,8 +96,21 @@ type HealthState =
    * is still replaying its corpus at startup - figures are incomplete until it
    * finishes. A wait, not a failure: no re-check button, no error chip, and
    * the probe repeats by itself every `replayPollMs` until it says `ok`.
+   *
+   * AMENDED 2026-10-05: "until it says `ok`" was not what happened. A re-probe
+   * that FAILED (a 5xx from a busy server or a proxy, an unreadable body, a
+   * dropped connection) ended the polling and replaced this state with
+   * `unreachable` - which took the notice down while the replay, and the
+   * incomplete figures, carried on. A failed check is not news that the replay
+   * is over, so the state survives it: `failedCheck` carries what went wrong
+   * with the latest probe (null when it answered), the notice says so, and the
+   * probe keeps repeating. Only `ok` or a 401 ends the wait.
    */
-  | { readonly kind: 'replaying'; readonly schemaVersion: number }
+  | {
+      readonly kind: 'replaying';
+      readonly schemaVersion: number;
+      readonly failedCheck: string | null;
+    }
   | {
       readonly kind: 'unreachable';
       readonly message: string;
@@ -124,6 +137,17 @@ export interface ShellProps {
 /** Beside the header while the server replays its corpus at startup. */
 const REPLAYING_NOTICE =
   'replaying the corpus, please wait - figures are incomplete until it finishes';
+
+/**
+ * The same wait, when the latest check on it did not get an answer. It claims
+ * only what is known: the last thing the server SAID was "replaying", and the
+ * question is being asked again without the reader having to.
+ */
+function replayingNotice(failedCheck: string | null): string {
+  return failedCheck === null
+    ? REPLAYING_NOTICE
+    : `the server was replaying the corpus when it last answered - the latest check failed (${failedCheck}) and is being repeated; figures are incomplete until the replay finishes`;
+}
 
 interface Chip {
   /**
@@ -457,6 +481,29 @@ export function Shell({
    * longer exists and log out the session that replaced it.
    */
   const [probeNonce, setProbeNonce] = useState(0);
+  /**
+   * The schema version from the server's last `replaying` answer, or null when
+   * the last word on the replay was not "under way" (never said, or `ok`
+   * since). A ref and not a read of `health`: the probe effect must know it
+   * without re-running every time the health state changes.
+   *
+   * Latent (2026-10-08): not reset when `token` changes in place, so a
+   * "replaying" remembered under one token could be read as a replay ending
+   * under the next. Unreachable today - App remounts the shell on every token
+   * change, and a fresh mount starts at null. If that ever stops being so, the
+   * reset must be an effect keyed on `token` ALONE, not the probe effect's
+   * cleanup: that cleanup also runs on every nonce bump, which would forget a
+   * replay under way at exactly the re-probe that is meant to watch it end.
+   */
+  const replayingSchemaRef = useRef<number | null>(null);
+  /**
+   * How many replays this shell has watched END (2026-10-05). Three of the
+   * four views fetch once and hold the answer, so a view opened mid-replay
+   * went on showing its partial figures after the notice that excused them
+   * had been taken down. Handed to the view as a prop; a view that holds a
+   * corpus-wide read re-reads when it moves.
+   */
+  const [replayEpoch, setReplayEpoch] = useState(0);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -467,14 +514,31 @@ export function Shell({
     void checkHealth(token, controller.signal).then((result) => {
       if (controller.signal.aborted) return;
       if (result.kind === 'ok') {
+        // `ok` after `replaying` is the replay ending - the one moment the
+        // figures on screen are known to be stale. A plain `ok` is not.
+        if (replayingSchemaRef.current !== null) setReplayEpoch((epoch) => epoch + 1);
+        replayingSchemaRef.current = null;
         setHealth({ kind: 'ok', schemaVersion: result.schemaVersion });
       } else if (result.kind === 'replaying') {
         // No `checking` in between: the notice stays up until an answer
         // replaces it, rather than flickering on every re-probe.
-        setHealth({ kind: 'replaying', schemaVersion: result.schemaVersion });
+        replayingSchemaRef.current = result.schemaVersion;
+        setHealth({ kind: 'replaying', schemaVersion: result.schemaVersion, failedCheck: null });
         replayTimer = setTimeout(() => setProbeNonce((nonce) => nonce + 1), replayPollMs);
       } else if (result.kind === 'unauthorized') {
         onAuthRejected();
+      } else if (replayingSchemaRef.current !== null) {
+        // A check that failed DURING the replay (2026-10-05). The replay has
+        // not been reported over, so the wait - and the notice that the
+        // figures are incomplete - stands, and the question is asked again.
+        // Unbounded on purpose: giving up would leave the page claiming
+        // nothing about a replay nobody has seen finish.
+        setHealth({
+          kind: 'replaying',
+          schemaVersion: replayingSchemaRef.current,
+          failedCheck: result.message,
+        });
+        replayTimer = setTimeout(() => setProbeNonce((nonce) => nonce + 1), replayPollMs);
       } else {
         setHealth({ kind: 'unreachable', message: result.message, reason: result.reason });
       }
@@ -492,10 +556,22 @@ export function Shell({
     // one connection's losses to another.
     setDroppedFrames(0);
     setMissedFrames(0);
+    // Whether THIS client has been open before: the stream client never
+    // repeats an identical notification, so a second `open` is a reconnect.
+    let openedBefore = false;
     const unsubscribe = client.onStateChange((state, attempts) => {
       setStream(state);
       setStreamAttempts(attempts);
-      if (state === 'open') setStreamEverOpened(true);
+      if (state === 'open') {
+        setStreamEverOpened(true);
+        // A stream that came back may be talking to a server that restarted
+        // in between - and a restarted server is in its startup replay. Health
+        // is asked again (2026-10-05), without `checking` first: the standing
+        // verdict stays on screen until its replacement lands. The first open
+        // asks nothing, because the mount probe is its contemporary.
+        if (openedBefore) setProbeNonce((nonce) => nonce + 1);
+        openedBefore = true;
+      }
     });
     const unsubscribeDrops = client.onFrameDropped((frame) => setDroppedFrames(frame.total));
     const unsubscribeGaps = client.onFrameGap((gap) => setMissedFrames(gap.total));
@@ -600,7 +676,7 @@ export function Shell({
         )}
         {health.kind === 'replaying' && (
           <span className="chip chip-wait" role="status" data-testid="replaying-notice">
-            {REPLAYING_NOTICE}
+            {replayingNotice(health.failedCheck)}
           </span>
         )}
         {(health.kind === 'ok' || health.kind === 'replaying') && (
@@ -641,7 +717,12 @@ export function Shell({
               stillWorks="The navigation above still works, and the connection chip still reports the stream. The other views read the same server, so if this is a version mismatch they may be wrong in ways that do not crash."
               cause={SERVER_DATA_CAUSE}
             >
-              <active.Component token={token} sse={sse} onAuthRejected={onAuthRejected} />
+              <active.Component
+                token={token}
+                sse={sse}
+                onAuthRejected={onAuthRejected}
+                replayEpoch={replayEpoch}
+              />
             </ErrorBoundary>
           )}
         </main>

@@ -473,6 +473,80 @@ describe('SessionsView', () => {
  * A separate describe so nothing above is disturbed; the file-level
  * beforeEach/afterEach still apply.
  */
+describe('SessionsView - persisted counts versus served rows (WEB-7, 2026-10-10)', () => {
+  // The line under the tree prints `agentCount` / `edgeCount` "(persisted)"
+  // while the picture is drawn from the rows served next to them, and nothing
+  // compared the two - the session list and the global DAG both name such a
+  // split, this pane did not.
+  async function openTree(tree: ReturnType<typeof sessionTree>): Promise<void> {
+    routeFetch({ tree: jsonResponse(200, tree) });
+    renderView();
+    await screen.findByRole('list', { name: 'session list' });
+    fireEvent.click(screen.getByRole('button', { name: /agenthropic/ }));
+    await screen.findByRole('img', { name: `agent tree for session ${tree.sessionId}` });
+  }
+
+  it('names a persisted agent count that disagrees with the agents served', async () => {
+    await openTree(sessionTree({ agentCount: 5 }));
+    const notice = screen.getByTestId('tree-count-disagreement').textContent ?? '';
+    expect(notice).toContain('says 5 agents while 2 agents were served');
+    expect(notice).toContain('disagree');
+  });
+
+  it('keeps the singular when the persisted count is one', async () => {
+    await openTree(sessionTree({ agentCount: 1 }));
+    const notice = screen.getByTestId('tree-count-disagreement').textContent ?? '';
+    expect(notice).toContain('says 1 agent while 2 agents were served');
+  });
+
+  it('names a persisted edge count that disagrees with the edges served', async () => {
+    await openTree(sessionTree({ edgeCount: 3 }));
+    const notice = screen.getByTestId('tree-count-disagreement').textContent ?? '';
+    expect(notice).toContain('says 3 edges while 1 edge was served');
+  });
+
+  it('names an unreadable persisted count as such', async () => {
+    await openTree(sessionTree({ agentCount: Number.NaN }));
+    const notice = screen.getByTestId('tree-count-disagreement').textContent ?? '';
+    expect(notice).toContain(
+      'persisted agent count came back as unreadable, while 2 agents were served',
+    );
+  });
+
+  it('names a negative persisted count as one that cannot be right (W-7, 2026-10-12)', async () => {
+    // A negative was quoted as if it were a measurement - "says -1 agents
+    // while 2 agents were served" - where every other count on the page names
+    // such a value as impossible. Two clauses at once pins the join as well.
+    await openTree(sessionTree({ agentCount: -1, edgeCount: 4 }));
+    const notice = screen.getByTestId('tree-count-disagreement').textContent ?? '';
+    expect(notice).toContain(
+      'The persisted agent count came back as -1, a count that cannot be right, while 2 agents were served',
+    );
+    expect(notice).toContain(', and the persisted edge count says 4 edges while 1 edge was served');
+  });
+
+  it('names the disagreement in the description of the chart it qualifies (W-5, 2026-10-12)', async () => {
+    // The notice says the picture is drawn from the rows, not the counts - a
+    // statement about the role="img" chart, which hides its own subtree. The
+    // DG-3 rule in the view: a notice that qualifies the picture is named in
+    // its description, and only while rendered.
+    const tree = sessionTree({ agentCount: 5 });
+    await openTree(tree);
+    const notice = screen.getByTestId('tree-count-disagreement');
+    expect(notice.id).toBe(`tree-count-disagreement-${tree.sessionId}`);
+    const chart = screen.getByRole('img', { name: `agent tree for session ${tree.sessionId}` });
+    expect((chart.getAttribute('aria-describedby') ?? '').split(' ')).toEqual([
+      notice.id,
+      `tree-chart-summary-${tree.sessionId}`,
+    ]);
+  });
+
+  it('stays silent when the counts and the rows agree', async () => {
+    await openTree(sessionTree());
+    expect(screen.queryByTestId('tree-count-disagreement')).toBeNull();
+  });
+});
+
 describe('SessionsView - snapshot provenance (F-3)', () => {
   // Four clock ticks: two minutes, past the 90 s window inside which
   // `formatRelativeMs` still says "just now" (see src/views/snapshot.ts).

@@ -391,8 +391,10 @@ export function LiveView({ token, sse, onAuthRejected }: ViewProps) {
   }, [sse, applyBoard]);
 
   useEffect(() => {
-    // A dropped stream is a hole in the board's event feed: every transition
-    // that fired while disconnected is simply gone (SSE replays nothing), so
+    // A dropped stream is a hole in the board's event feed: the server replays
+    // only its bounded recent buffer on reconnect (WEB-1, 2026-10-10: 256
+    // frames since 2026-09-26, nothing before that), so every transition that
+    // fired beyond that buffer, or across a restart, is simply gone and
     // patched-in-place statuses go stale with no visual sign. Refetch persisted
     // truth once per recovery. The handler runs immediately with the CURRENT
     // state (see sse.ts), so a mount on an already-open stream sets no flag and
@@ -473,9 +475,10 @@ export function LiveView({ token, sse, onAuthRejected }: ViewProps) {
         <p className="truncation-banner" role="alert" data-testid="stream-seam">
           The event stream dropped and reconnected {interruptions}{' '}
           {interruptions === 1 ? 'time' : 'times'} while this board was open. The server replays
-          nothing, so whatever it published in the break never reached here. If the server
-          restarted, the frames it published during the outage and restart cannot be detected by the
-          frame-id sequence at all: the ids begin again at 1 on every boot.{' '}
+          only its recent frame buffer after a reconnect, so frames beyond the server's replay
+          buffer, or published across a restart, never reached here. If the server restarted, the
+          frames it published during the outage and restart cannot be detected by the frame-id
+          sequence at all: the ids begin again at 1 on every boot.{' '}
           {refetchClause(board, seamObservation)} An ingest failure announced in the break cannot be
           recovered by any refetch: a quarantined session is either missing from the read API or
           still showing its last good pass, and neither body says which.{' '}

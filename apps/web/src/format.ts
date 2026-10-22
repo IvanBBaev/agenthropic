@@ -269,3 +269,21 @@ export function agentTypeLabel(subagentType: string | null, type: string | null)
   const raw = subagentType ?? type;
   return raw === null ? 'type unrecorded' : nameOrBlank(raw, 'type');
 }
+
+/**
+ * WEB-4 / WEB-5 / WEB-7 (2026-10-10): a COUNT no real read can produce. The
+ * DTO guards check that a load-bearing field is a number and nothing more, so
+ * `NaN`, an infinity and a negative all reach the views as numbers - and every
+ * `count > 0` gate in them is false of all three exactly as it is of a measured
+ * zero. A page that keys its banner on `> 0` then renders an unreadable count
+ * as "nothing to report". The two helpers give such a count one test and one
+ * wording, so each view names it instead of staying silent.
+ */
+export function isImpossibleCount(count: number): boolean {
+  return !Number.isFinite(count) || count < 0;
+}
+
+/** The words for a count {@link isImpossibleCount} rejects: `unreadable`, or the figure and why. */
+export function impossibleCountText(count: number): string {
+  return Number.isFinite(count) ? `${String(count)}, a count that cannot be right` : 'unreadable';
+}
