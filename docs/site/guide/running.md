@@ -163,7 +163,7 @@ environment-only, and there is no config file to leave a secret in.
 
 | Variable | Meaning | Default | Required |
 |---|---|---|---|
-| `DASHBOARD_TOKEN` | Bearer token for every `/api/*` route and the SPA gate. Minimum **16 characters**. | none | **Yes — startup fails without it** |
+| `DASHBOARD_TOKEN` | Bearer token for every `/api/*` route and the SPA gate. Minimum **16 characters**; no leading/trailing whitespace, no control characters. | none | **Yes — startup fails without it** |
 | `DASHBOARD_PORT` | TCP port on the fixed loopback host. Integer 0–65535; an unparseable value is a startup error. | `4317` | No |
 | `DASHBOARD_WEB_ROOT` | Directory the built SPA is served from. | `apps/web/dist`, resolved from the server module's own location — **not** from the working directory | No |
 | `DASHBOARD_DB_PATH` | SQLite database file. Relative paths resolve against the server's working directory, which `pnpm start` makes `apps/server`. | `data/agenthropic.db` (so `apps/server/data/agenthropic.db`) | No |
@@ -205,13 +205,18 @@ discard every row at exit and put the backups under a working-directory-relative
 ### `DASHBOARD_TOKEN` is mandatory, and why there is no anonymous mode
 
 `loadConfig` calls `requireDashboardToken` before anything else, and that function
-throws — the process exits non-zero with the message, never a stack trace — in two
-cases:
+throws — the process exits non-zero with the message, never a stack trace — in three
+cases (update 2026-10-10: this page previously said two; the third check is new):
 
 - unset or empty:
   `DASHBOARD_TOKEN is not set. The dashboard refuses to start without an auth token: set DASHBOARD_TOKEN to a secret of at least 16 characters.`
 - shorter than 16 characters:
   `DASHBOARD_TOKEN is too short (N characters). It must be at least 16 characters.`
+- padded with leading or trailing whitespace, or carrying a control character (the classic
+  `echo` without `-n` into an env file):
+  `DASHBOARD_TOKEN contains leading/trailing whitespace or a control character. No HTTP header can carry such a value, so no request could ever authenticate: set a plain token without padding.`
+  Such a token used to pass the length check, start the server, and then refuse every
+  request. The value itself is never echoed.
 
 The reason there is no opt-out is the failure mode this project was built against: a
 dashboard whose auth "is optional" is a dashboard that ships unauthenticated, and this
@@ -397,9 +402,9 @@ If you move the port, **re-run the hooks installer with the matching `--port`** 
 generated `curl` command has the old port baked in and will otherwise post into a closed
 socket, silently, because the hooks are fail-silent by construction.
 
-### It refuses to start: no token, or too short a token
+### It refuses to start: no token, too short a token, or a padded token
 
-You get one of the two messages quoted above and a non-zero exit. This is the intended
+You get one of the three messages quoted above and a non-zero exit. This is the intended
 behaviour and there is no flag that relaxes it. Export a generated value
 (`openssl rand -hex 32`) and start again. A common variant on the operator path: the
 token was exported in the shell that ran `pnpm start` but a *different* value was pasted
@@ -445,7 +450,8 @@ Nothing has been ingested yet. In rough order of likelihood:
   `GET /api/health` reports `ingest: "replaying"` until it finishes, then `"idle"` —
   that field is how you tell "warming up" from "startup pass finished". `"idle"` does
   not mean the pass succeeded: a replay that could not read the corpus also ends in
-  `"idle"`, and says why in the log. With `DASHBOARD_INGEST=0` the field is absent.
+  `"idle"` — one poll interval later, if the corpus is still unreadable then — and says
+  why in the log. With `DASHBOARD_INGEST=0` the field is absent.
 - **Files were skipped.** A transcript that is oversize, unreadable or otherwise
   declined is counted and logged (`corpus ingest: skipped … - this file's records are
   NOT in the dashboard totals (the session's other files, if any, still are).`) and

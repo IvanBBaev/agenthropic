@@ -188,9 +188,13 @@ curl -s -H "Authorization: Bearer <token>" http://127.0.0.1:4317/api/health
 
 It is auth-gated like everything else, so a **401** means the token you sent is not the
 token the server started with — not that the server is broken. A **200** carries
-`status: "ok"`, a `schemaVersion`, and, while a first pass over the corpus is still
-running, `ingest: "replaying"` (it reads `"idle"` afterwards, which means the pass
-finished, not that it succeeded). Read a *missing* field as
+`status: "replaying"` while the startup replay is still running (the token is accepted;
+ask again shortly) and `status: "ok"` afterwards, plus a `schemaVersion`; the older
+`ingest: "replaying" | "idle"` field says the same thing for probes that already read it
+(`"idle"` means the pass finished, not that it succeeded). *(Amended 2026-10-08: until
+then this said "A **200** carries `status: "ok"`, a `schemaVersion`, and, while a first
+pass over the corpus is still running, `ingest: "replaying"`"; `status` has reported the
+replay itself since 2026-10-01.)* Read a *missing* field as
 missing, never as zero: the handler omits optional fields when it has nothing to report
 rather than emitting a fabricated `0`, so an absent `ingestSkips` means "ingest is not
 running" (`DASHBOARD_INGEST=0`), not "no files were skipped". [The API reference](api.md#liveness-and-ingest-visibility--get-apihealth)

@@ -317,8 +317,11 @@ fingerprints is how the poll tick decides a session is worth re-parsing. It is n
 offset and makes no claim about *where* a file changed — only that it did.
 
 **Checkpoint** — a persisted fingerprint in `ingest_checkpoints` (migration 9) that lets a
-restart skip sessions it has already projected. Opt-in; the default is a full replay,
-which is also the fail-safe path the double-replay proof exercises. Four rules keep it
+restart skip sessions it has already projected. Optional at the watcher constructor; the
+server always wires it, so a production boot is checkpointed. The full replay stays the
+fail-safe: the store degrades to an empty map (a full replay) on a revision mismatch, a
+missing `sessions` row or any error, and the double-replay proof runs without the store.
+*(Amended 2026-10-08: until then this said "Opt-in; the default is a full replay".)* Four rules keep it
 from turning speed into trust: it is **scoped** (a sha-256 of the resolved corpus root, so
 pointing at a different corpus cannot reuse another one's memory); it is **revisioned**
 (`REPLAY_CHECKPOINT_REVISION`, bumped when parser output changes meaning, invalidating

@@ -84,9 +84,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `isAgentStatusChangedEvent` refuses a frame missing any of them; a `SessionIngestedEvent`-typed
   frame pins the one field `ingestedSessionId` reads. Each pin was mutation-checked (a field
   added, `sessionId` renamed, the guard's `agentId` check removed): all three went red.
+- Tests: regression cases for the spawner-gate audit holes AU-1..AU-5 and the installer's
+  symlink-safe main-module check AU-6 (9 cases, red-proven against the pre-fix scripts).
+- Tests: package-root pruning in the spawner gate (AU-3; source, census and manifest walkers plus
+  a green control) and the installer's no-overwrite backup name (6 cases, red-proven against the
+  pre-fix scripts).
+- Tests: cache-write coherence across mixed partial shapes (C-4, 5 cases), the self-parent guard
+  on all three join paths (C-6, 3), instant-ordered timestamp merges (S-2, 8) and the auth
+  scheme's case (C-1, 6), all red-proven against the pre-fix code; one case documenting the S-1
+  late-ingest limitation. The P0 reconciliation's independent reader now applies NN2 and the C-4
+  pair rule too.
+- Tests: `apps/server/test/api-dag.test.ts` pins that a dangling `orchestration_edges` row, an
+  edge naming an agent id with no stored row, is counted in `totalEdges` but never returned, with
+  `truncated` still `false`; `api.md` says the same, so a client reads the edge gap from the two
+  edge counts and not from the flag, which speaks only for the node cap.
 
 ### Changed
 
+- Docs truth pass, second round: `README.md` and the site count twenty-one migrations everywhere
+  the count appears; the data-model pricing row names migrations 19 (`claude-opus-5-5`) and 20
+  (`claude-sonnet-5` re-priced to the official page); the padded-token startup refusal is on
+  `running.md`, `configuration.md`, `hooks-installer.md`, `security/model.md` and `SECURITY.md`
+  beside the two refusals it joined; `api.md`'s stream row lists the fields of `session-ingested`
+  and `agent-status-changed`; `SECURITY.md`, `security/model.md` and the CD-10 ADR describe the
+  three redaction rules and the gate's native-layer patterns; `hooks-installer.md` documents the
+  port and `~` refusals. Every change is a dated amendment.
+- A comment on the unscoped priced CTE in `apps/server/src/api/queries.ts` records the verified
+  `EXPLAIN QUERY PLAN` (the per-session index is used by all three callers, identical to an
+  explicitly scoped CTE), so the next reader does not re-open the question.
+- A startup replay that a corpus read error cut short now says in the log which scheduled poll
+  ended the replay phase, and on what. The poll that drains the sweep logs
+  `corpus replay: the scheduled poll finished the sweep a read error cut short - health now says 'ok'.`;
+  a poll that still cannot read the corpus logs an error naming the reason and saying that the
+  sessions the sweep did not reach are still owed and land through the scheduled poll, in capped
+  passes, once the corpus reads again. Until now the ending was silent: the boot log said the
+  corpus could not be read, `/api/health` later said `ok`, and nothing said which poll ended the
+  phase or how much of the corpus it ended on.
+- Docs truth pass: `api.md` lists `partial` and `usageRecordsDropped` on every payload that
+  carries them and describes the stream's frame order with the `Last-Event-ID` replay; the pages
+  that still called resumability "not implemented" now describe the bounded 256-frame replay; the
+  ingest pages describe the startup replay as capped watcher passes and the replay checkpoint store
+  as always wired by the server; the cost-analysis endpoint counts seven answers; `409` appears
+  on every page that lists the per-session read statuses; the honesty note counts five places; the
+  tick outcome table carries `pending`; and the migration count reads twenty-one. Every change is
+  a dated amendment that quotes the sentence it replaces.
 - **Docs record the 2026-09-30 owner decisions from the WP audit (D12–D19) as dated amendments.**
   The session tree stays a layered SVG refreshed on demand (WP-U7); an unknown model halts ingest,
   and `RELEASE.md` §6 gains a [HUMAN] pre-tag pricing-page re-read plus real-corpus boot instead of
@@ -215,9 +256,183 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   DAG's node cap (a parent older than its children falls outside the cap, and every returned edge
   has both ends among the returned nodes), and the `getGlobalDag` docstring now names the edge
   filter as the mechanism, not the cap.
+- Tests: the retention static guard (no DML against a protected table in any retention source)
+  now also runs as an allowlist over the live schema, so `ingest_checkpoints` and
+  `token_usage_rollup`, which sat in neither the prunable nor the protected list, are covered, and
+  a table added by a future migration is covered from that migration on. A behavioural test proves
+  a prune leaves the replay checkpoints byte-identical (a planted `DELETE FROM ingest_checkpoints`
+  in the delete path turned exactly the two new checks red).
+- Tests and docs: a known limit of the subagent-stop replay is written down and pinned. The replay
+  reads the prunable `events` projection, so a `SubagentStop` whose projection row expired (90
+  days) before its session was first ingested is not replayed; the agent is listed `working` and
+  then ages to `unknown`, never a wrong status, and the raw stop stays in `events_raw`. Closing it
+  needs an index on the append-only substrate, which is an owner decision.
 
 ### Fixed
 
+- The Cost view's ingest-coverage banner renders once for an infinite excluded-session count.
+  The two banner arms were independent conditions and an infinity satisfied both, so the page
+  named the count unreadable and then said "Infinity sessions could not be ingested" in a second
+  banner. The quarantined clause inside that banner now names its own impossible counts: an
+  unreadable or negative quarantined count was silent, an infinite one was printed as a figure,
+  and a quarantined count larger than the excluded count read as "20 of those" beside "3
+  sessions" - it is now reported as the two served counts disagreeing.
+- The Cost view's top-sessions note keeps its grammar when every listed row carries an unreadable
+  cost: "The only row carries an unreadable cost" or "All N rows carry an unreadable cost, so
+  none of the $X all-time total can be placed". It used to say "1 of the 1 rows carries" and
+  that "the readable rows account for $0.00", a sum over a set with nothing in it.
+- The dropped-usage and partial-session notes name a count no read can produce (`NaN`, an
+  infinity, a negative) as unreadable or as a count that cannot be right. They used to print
+  "Includes NaN partial sessions" or "-1 usage records could not be deduplicated", and every
+  description on the Cost and Sessions views pointed a reader at that sentence.
+- The partial-session badge names a served skipped size of zero as a contradiction ("skipped
+  size 0, which contradicts a transcript too large to read") instead of rounding it to
+  "(0.0 MiB not read)".
+- The "Changed since" window names a present-but-blank `basis` as `blank basis ("")` instead of
+  interpolating it bare, which read "over : the end is ...".
+- On the Sessions view the persisted-count disagreement notice now carries an id and is named
+  in the subagent chart's `aria-describedby` (in document order, only while rendered), the same
+  rule the cycle notice follows; a reader of the chart's description used to miss that the
+  picture is drawn from the rows and not from the persisted counts. A negative persisted count
+  is named as one that cannot be right rather than quoted as a measurement ("says -1 agents").
+- The no-spawner gate catches `process.execve` (dot and bracket form), which replaces the
+  running process with any executable and spelled no forbidden name, and a `Worker` started
+  with `eval: true`. Its dynamic-import rules accept a backtick specifier, and the `spawn`,
+  `fork` and `eval` call rules accept whitespace before the parenthesis.
+- The no-spawner gate tests an npm-aliased dependency (`"cs": "npm:cross-spawn@7"`) by the
+  package it installs, not only by its key, against the subprocess, WebSocket and HTTP-client
+  denylists. An alias used to pass all three.
+- `pnpm hooks:install` run through a symlinked path (a symlinked checkout, or macOS `/tmp`)
+  installs instead of exiting 0 having written and printed nothing: the installer uses the
+  same realpath entry-point check as the gate scripts.
+- The no-spawner gate prunes `node_modules`, `dist` and `coverage` only at a package root (next
+  to a `package.json`, or at the repo root). It used to prune them at any depth, so a source file
+  under `src/dist/` or `hooks/coverage/`, or a manifest under a nested `node_modules`, was never
+  read and the run still printed OK. Output on this repo is unchanged.
+- The hooks installer's backup copy never overwrites an existing entry: it refuses an existing
+  destination and takes the next free `-1` .. `-99` suffix instead, and stops before writing
+  anything when all are taken. It used to overwrite a same-millisecond backup and write through
+  a symlink planted at the backup name.
+- A message whose partial records mix the flat `cache_creation_input_tokens` shape and the split
+  `cache_creation` shape no longer double-counts its cache writes (C-4): the 5m/1h pair now comes
+  whole from the partial with the largest cache-write total (a tie goes to the later partial)
+  instead of a separate maximum per bucket, so the total never exceeds what any record reports.
+- No agent can be its own parent (C-6): a parent candidate found in the child's own transcript
+  (directory, tool_use or queue_operation join) is ignored, as the progress join already did, and
+  the agent falls through to the spec's existing re-anchor to main.
+- Session and agent timestamps merge by instant, not by text (S-2): `MIN`/`MAX` and the status
+  "newer activity" check compare with `julianday()`, so a legacy offset-spelled value
+  (`+02:00`) no longer beats an earlier or later canonical `Z` value. Canonical rows are
+  unchanged.
+- The `Authorization` scheme is matched case-insensitively (C-1, RFC 7235): `bearer` and
+  `BEARER` are accepted; the token compare is unchanged.
+- `/api/changes` no longer claims that chaining `since=until` is gap-free (S-1): the route and
+  shared-schema docs now say a session ingested after the previous call with older event times
+  is missed, and name the overlap-and-dedupe remedy. The gap itself needs an ingest-order cursor
+  (an owner decision).
+- Redaction masks a PEM `PRIVATE KEY` block whole, body included, and masks a block whose END
+  line was cut off to the end of the string; `passphrase` joined the secret-bearing field names.
+  A pasted private key used to pass through in the clear, because its body matches no prefix
+  shape and its key name was not on the list.
+- A secret-named shell, env or config assignment inside a string value keeps its name and loses
+  its value: `export DASHBOARD_TOKEN=...` becomes `export DASHBOARD_TOKEN=[REDACTED]`, and
+  `?token=...&page=2` keeps its `page`. The value of such an assignment is a random string no
+  credential shape recognises, and it is the commonest way a credential reaches a hook payload.
+- `hooks/install.mjs --remove` over a settings file whose `hooks` object, or whose foreign event
+  list, was already empty no longer takes a backup and rewrites the file as `{}`. Only a container
+  the removal itself emptied is dropped; an already-empty one is the operator's shape.
+- The hooks installer refuses a `--port` that is not a plain run of decimal digits (`0x1388`,
+  `5e3`, `+5000` and `' 5000'` all used to install as 5000) and an `--out` path that begins with
+  an unexpanded `~`, which used to create a directory literally named `~` under the working
+  directory and install into it.
+- A `SubagentStop` from Claude Code 2.1.251 and later carries the parent session's
+  `transcript_path` and names the subagent's own file as `agent_transcript_path`. The liveness
+  reader now takes the agent file first, so the stop is no longer resolved through the parent's
+  transcript. The plain key stays for older senders.
+- A hook name longer than 200 characters files the envelope as `unknown` instead of becoming the
+  indexed `event_type` of every stored row; the body itself is still stored verbatim.
+- The spawner gate flags `process.binding`, `internalBinding` and `process.dlopen`, in dot and
+  bracket form: the native layer `child_process` is built on, which spelled no forbidden module
+  name and so passed the gate.
+- The live board's stream-gap banner no longer says the server replays nothing on reconnect. It
+  says the server replays only its bounded recent buffer, so frames beyond that buffer, or
+  published across a restart, never reached the page. The resumable stream shipped 2026-09-26
+  and the banner still described the stream before it.
+- The cost view's coverage banner now fires on an excluded-session count that is unreadable or
+  below zero and names the value, calling the totals a lower bound. The `> 0` gate used to stay
+  silent on such a count, against the page's own rule for unreadable values.
+- A top-session row whose cost is unreadable is now counted and named ("1 of the 3 rows carries
+  an unreadable cost, so the readable rows account for ...") instead of poisoning the sum into
+  "The rows account for cost unreadable of the ... all-time total" and silently dropping the
+  remainder sentence.
+- The "changed since" panel names a residue count or an outside-every-window count that is
+  unreadable or below zero instead of hiding it behind a `> 0` gate, and renders an absent
+  `basis` as "an unstated clock (no basis sent)" instead of a blank.
+- The session tree says when the persisted `agentCount` or `edgeCount` disagrees with the rows
+  served, or comes back unreadable, and that the picture is drawn from the rows while the counts
+  are quoted as served. The counts used to be printed "(persisted)" with no comparison, the one
+  three-arm notice the dashboard lacked.
+- The partial-session badge no longer rounds a skipped size under 0.1 MiB to "0.0 MiB not read";
+  it reads "under 0.1 MiB not read", and an unreadable or negative skipped size is named instead
+  of rendered as `NaN`.
+- `DASHBOARD_TOKEN` padded with whitespace, or carrying a control character, now fails at
+  startup with a message that names the problem (and never the value). Such a token used to
+  pass the length check, start the server, and then refuse every request, because no HTTP
+  header can carry the value byte for byte.
+- `HEAD /api/stream` answers `405` with `Allow: GET` instead of hijacking a reply that could
+  never carry a body and holding the connection open until the client gave up.
+- The transcript tail cache now fingerprints a file by its modification time as well as its
+  size, so a same-size rewrite that lands entirely before the overlap window is re-read in
+  full instead of being served from the cache. Node's file port reports the time from the
+  same `fstat` as the size.
+- Backup-file pruning no longer follows symlinks: a link planted in the backup directory is
+  skipped, never counted toward the floor, and never deleted through, and a dangling one no
+  longer throws the retention pass down.
+- `session-ingested.costUsd` is net of the messages another session already owns: a fork that
+  replays its parent's history announces only the dollars it keeps, instead of the whole
+  substrate priced a second time. The halt gate still prices everything before any write.
+- The cost-summary cache now also keys on SQLite's `data_version`, which moves whenever
+  another connection commits, so a `token_usage` write made through a second handle (a manual
+  repair, a restore followed by a write) invalidates the cache on the next read. Previously
+  only this connection's own writes and `model_pricing` edits did.
+- A capped replay pass that threw after admitting its chunk, for instance when the corpus root
+  became unreadable between the watcher's own root resolution and the runner's, recorded the chunk
+  as read in the sweep. The retry skipped the unread chunk, reported the sweep drained, and the
+  chunk landed only on a later plain pass, after `/api/health` had said `ok`. The sweep is now
+  recorded only when the pass completes, so the retry admits the same chunk again.
+- Sessions ingested before the partial flag and the dropped-usage count existed never received
+  them: the replay checkpoint called their transcripts unchanged and skipped the re-read, so they
+  stayed "not partial, nothing dropped" for good. The checkpoint revision is now 2, which costs
+  one full corpus re-read on the first boot after the upgrade.
+- A startup replay interrupted by a corpus read error no longer finishes in one uncapped pass.
+  The failed pass keeps its 25-session cap for the retry, and `/api/health` stays `replaying`
+  until the scheduled poll has drained the rest; if the very next poll cannot read the corpus
+  either, the phase ends and the log carries the error.
+- `GET /api/sessions/:id/cost-analysis` answers `409` for a session ingest rejected, like every
+  other session read. The check ran only after the corpus said "not found", which a rejected
+  session, still on disk, never does; the route answered `422` or analysed it.
+- The dropped-usage count of a session no longer shrinks when its main transcript grows past the
+  read cap. A partial pass cannot see the main's id-less records, so it can only raise the count;
+  a whole read still overwrites it.
+- Dashboard: a health check that fails during the startup replay no longer takes the "replaying
+  the corpus" notice down and stops the polling. The notice stays, says the latest check failed,
+  and the check is repeated until the server answers `ok`.
+- Dashboard: the Cost, DAG and Sessions views re-read by themselves when the replay ends. They
+  fetch once, so a view opened mid-replay kept its partial figures after the notice had gone.
+- Dashboard: health is asked again when the event stream reconnects, so a server restarted under
+  an open tab shows the replaying notice, and a stale failed check is withdrawn without a click.
+- Token screen: editing the field while the first check is in flight no longer starts the
+  "accepted, replaying" wait for the token that was replaced, nor lets the user in with it.
+- Session cost analysis: a partial session in which no compaction was found is no longer told
+  "This session was never compacted". The main transcript, where the session's own boundaries
+  are, was skipped, so the panel says none was found in the transcripts that were read.
+- Cost view: the partial-sessions and dropped-usage note sits with the totals instead of under
+  "Top sessions", and the totals, the recent windows, the per-model, per-day and top-session
+  tables and the flow diagram name it as their description. The two KPI rows gained
+  `role="group"`, without which neither their label nor the description is exposed.
+- Session analysis and session tree: the partial / dropped-usage line is named by
+  `aria-describedby` on the figures it qualifies (compaction and delegation KPI groups, their
+  tables, the tree chart), and only while it is rendered.
 - Sessions whose main transcript is larger than the 64 MiB read cap were served as complete.
   They are now flagged **partial**: the dashboard shows a "partial — main transcript too large
   to read; totals are a lower bound" badge with the unread size, and cost totals say how many

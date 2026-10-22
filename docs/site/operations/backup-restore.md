@@ -237,6 +237,11 @@ Four properties of this scheduler matter before you rely on it:
   `/api/health` reports neither backup nor retention state.
 - **A failed retention pass logs and never crashes.** `retention failed: <message>`
   on stderr; the backup of that cycle is already on disk, and the next tick retries.
+- **Symlinks in the backup directory are skipped, never followed** (since 2026-10-10).
+  The pruner `lstat`s each `agenthropic-*.db` entry and keeps only regular files: a link
+  is neither counted toward the floor of the newest 7 nor deleted through, and a dangling
+  link no longer throws the pass down (it used to, via `stat`). Only files the backup
+  scheduler itself wrote are ever expired.
 - **Overlapping runs are refused, not queued.** The online backup yields between pages,
   so a manual `runOnce()` could otherwise collide with a timer-fired one; a
   re-entrancy flag makes the second call a no-op, so there are never two writers in the

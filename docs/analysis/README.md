@@ -87,6 +87,10 @@ while the app itself stays **loopback-only**.
 > 3060 tests, the 100 thresholds held in all five packages, 406 packages / 428 installed
 > versions under the license gate with one documented exception (the earlier 412 was a
 > double count, corrected 2026-09-24). Pages not re-checked in that session.
+>
+> **Re-measured 2026-10-08** (third R1 rehearsal, on `2d85a71` plus the working tree): 180 test
+> files / 3398 tests, the 100 thresholds held in all five packages, 407 packages / 429 installed
+> versions under the license gate with one documented exception. Pages not re-checked.
 
 ---
 

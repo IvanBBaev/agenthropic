@@ -21,11 +21,14 @@ it is untested.
 **Redaction — shipped, in the strong position.** `apps/server/src/hooks/redact.ts`
 scrubs hook payloads at the **ingest boundary**, before persistence and — critically
 — **before the idempotency key is computed**, so a redelivered event redacts
-identically and still dedupes. Two independent rules run: key-based (any field whose
+identically and still dedupes. Three independent rules run: key-based (any field whose
 normalized name matches `token`, `secret`, `password`, `apikey`, `authorization`,
 `bearer`, `privatekey`, `accesskey`, … is replaced wholesale, whatever its value
 type) and value-based (string values are scanned for credential shapes — `sk-`,
-`ghp_`, `xox`, `AKIA`, JWTs, `Bearer <…>` — and each match is masked in place). An
+`ghp_`, `xox`, `AKIA`, JWTs, `Bearer <…>`, PEM `PRIVATE KEY` blocks — and each match is
+masked in place), and, since 2026-10-10, assignment-based (a `NAME=value` assignment
+inside a string value whose NAME the key-based rule calls secret-bearing keeps its name
+and loses its value: `export DASHBOARD_TOKEN=[REDACTED]`). An
 explicit allowlist keeps **token-count** fields (`input_tokens`, `output_tokens`, …)
 intact, because token counts are observability data, not credentials — the one place
 where a naive "redact anything called `*token*`" rule would have destroyed the

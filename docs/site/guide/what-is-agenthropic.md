@@ -19,7 +19,7 @@ is no longer true — see the update immediately below.)*
 >
 > **What runs today**, all verified against the repository: the Fastify server bound to
 > `127.0.0.1:4317` and gated by a mandatory `DASHBOARD_TOKEN`; the SQLite/WAL substrate
-> with a forward-only migration runner (eighteen migrations) and a daily backup timer;
+> with a forward-only migration runner (eighteen migrations; 21 as of 2026-10-08) and a daily backup timer;
 > JSONL corpus ingest with replay-on-startup and tail-follow polling that re-reads only
 > new bytes; the persisted subagent DAG (`orchestration_edges`, **five** structural join
 > provenances since migration 13 — `tool_use`, `directory`, `task_notification`,
@@ -34,7 +34,7 @@ is no longer true — see the update immediately below.)*
 > never published, run from a checkout.
 >
 > **Test figures, re-measured 2026-09-18:** **131 test files / 2428 tests** *(re-measured
-> again 2026-09-23: **140 test files / 2621 tests**; 2026-09-26: **167 test files / 3060 tests**)*, with **100%
+> again 2026-09-23: **140 test files / 2621 tests**; 2026-09-26: **167 test files / 3060 tests**; 2026-10-08: **180 test files / 3398 tests**; 2026-10-10: **180 test files / 3438 tests**; 2026-10-22: **184 test files / 3487 tests**)*, with **100%
 > statements, branches, functions and lines** enforced in **all five** packages —
 > `packages/test-fixtures` was folded into the gate rather than left outside it. Two
 > things that does not mean. It is not *unconditionally* merge-blocking: `main` has been
@@ -258,7 +258,7 @@ As of this writing, agenthropic is in the **bootstrap phase**:
   `packages/test-fixtures`, `hooks/`, on Node 22, with **131 test files / 2428 tests
   passing** and **100%** statements/branches/functions/lines enforced in all five
   packages, re-measured 2026-09-18 *(re-measured again 2026-09-23: **140 test files /
-  2621 tests**; 2026-09-26: **167 test files / 3060 tests**, same 100%)*. What has *not* happened is a release: no tag, no
+  2621 tests**; 2026-09-26: **167 test files / 3060 tests**; 2026-10-08: **180 test files / 3398 tests**; 2026-10-10: **180 test files / 3438 tests**; 2026-10-22: **184 test files / 3487 tests**, same 100%)*. What has *not* happened is a release: no tag, no
   published package — version `0.3.0`, publishable (`publishConfig.access: public`)
   but never published.)*
 - **A Phase 0 feasibility spike gates everything.** Before any production code is

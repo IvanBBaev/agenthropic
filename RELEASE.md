@@ -71,8 +71,8 @@ Run each gate locally on the release commit; the six below plus the web producti
 - [ ] `pnpm run typecheck`
 - [ ] `pnpm run lint`
 - [ ] `pnpm run format:check`
-- [ ] `pnpm run test` — the full workspace suite (**167 test files / 3060 tests** on a
-      local run of 2026-09-26, up from 140 / 2621 on 2026-09-23 and 131 / 2428 on 2026-09-18; the figure moves as the
+- [ ] `pnpm run test` — the full workspace suite (**184 test files / 3487 tests** on a
+      local run of 2026-10-22, up from 180 / 3438 on 2026-10-10, 180 / 3398 on 2026-10-08, 167 / 3060 on 2026-09-26, 140 / 2621 on 2026-09-23 and 131 / 2428 on 2026-09-18; the figure moves as the
       tree does, so re-measure on the release commit rather than trusting this line). Coverage: **all five** packages —
       `@agenthropic/server`, `@agenthropic/web`, `@agenthropic/core`,
       `@agenthropic/shared` and `@agenthropic/test-fixtures` — run `vitest run --coverage`
@@ -180,7 +180,7 @@ them. Test bodies live under `apps/server/test/p0/`.
 > **Status honesty (updated 2026-08-25; counts re-measured 2026-09-18):** the three P0
 > test bodies exist and pass, and a fourth proof — CD-10's five daily questions answered
 > over real HTTP, `p0-five-daily-questions.test.ts` — sits beside them
-> (`apps/server/test/p0/`, 4 files / 19 tests green). The half that makes them *blockers*
+> (`apps/server/test/p0/`, 4 files / 20 tests green on 2026-10-08; 19 on 2026-09-26). The half that makes them *blockers*
 > arrived on 2026-08-25: `main` now requires the `ci` check (§0), so a red P0 does
 > withhold a contributor's merge button. It does not withhold the sole maintainer's push —
 > `enforce_admins` is off by design — so "blocker" here means "blocking for anyone who is
@@ -401,5 +401,12 @@ migrated to schema 20 rather than the owner's, printed `restore drill OK` - whic
 command, not the live drill. `apps/web/vitest.config.ts` is unchanged since `2f8d103` (exclude
 list two entries, thresholds 100 ×4). Not re-checked: branch protection and Pages (no `gh` in
 that session); CI's latest `main` run was `success` on `4b3cd2d`, and the branch commits have no
-CI run because `ci.yml` fires on pushes to `main` and on pull requests only.)* A rehearsal ticks no box: every box on this page
+CI run because `ci.yml` fires on pushes to `main` and on pull requests only.)* *(Third rehearsal
+2026-10-08 on `2d85a71` plus the uncommitted working tree: all seven CI commands plus `gate:node`
+exited 0 at 180 test files / 3398 tests with 100% in all five packages (`format:check` failed once on
+one test file written in that session and passed after `prettier --write`); the spawner gate scanned
+333 files with only the policy file allowlisted and 97 server-process files checked for outbound
+network calls; the license gate read 407 packages / 429 installed versions, 406 allowlisted, 1
+documented exception. §2 greps as on 2026-09-26; §3 P0 4 files / 20 tests green; §5 `backup.test.ts`
+4/4. Not re-checked: the live drill, branch protection, Pages. Schema is 21 since 2026-10-01.)* A rehearsal ticks no box: every box on this page
 is ticked on the release commit only. The record is on the `TODO.md` Wave 4 row.

@@ -596,13 +596,14 @@ It shows two things that must not be read the same way:
   top-tier model are **excluded** from the estimate rather than guessed at, and their
   count is shown next to it.
 
-The panel's failure text is likewise not interchangeable. A 503, a 404 and a 422 each
-imply a different action by the reader, so each keeps its own sentence, and the 503/422
+The panel's failure text is likewise not interchangeable. A 503, a 404, a 409 and a 422 each
+imply a different action by the reader, so each keeps its own sentence (the 409, ingest
+having rejected the session, uses the same sentence as the Sessions view's tree pane), and the 503/422
 cases quote the server's own message instead of restating a single hard-coded cause —
 an earlier version told readers "this server has no corpus configured" about a machine
 whose corpus was merely missing. Naming the wrong cause is worse than naming none: it
 sends the reader to fix something that is not broken. The full list of answers that
-endpoint can give is on [the API reference](api.md#the-six-answers-of-the-cost-analysis-endpoint).
+endpoint can give is on [the API reference](api.md#the-seven-answers-of-the-cost-analysis-endpoint).
 
 ## Partial sessions and excluded usage records
 
@@ -614,10 +615,14 @@ whole and had nothing excluded.
   the size that was not read when it is known. The session's main transcript was over the
   per-file read cap (64 MiB, PROVISIONAL), so only its subagent transcripts were read. It
   appears on the live board card, the session list row, above the subagent tree's
-  unattributed line, and on the session's row in the cost view's top-sessions table.
+  unattributed line, on the session's row in the cost view's top-sessions table, and in
+  the per-session cost-analysis panel. *(Amended 2026-10-08: until then this list had four
+  places and omitted the cost-analysis panel.)*
 - **"N usage records could not be deduplicated and were excluded"**. That many usage
   records in the session had no `message.id`. They are left out of every total rather than
-  risk double-counting. It appears in the same four places.
+  risk double-counting. It appears in the same five places, and additionally at the cost
+  view's summary, as the corpus-wide count described next. *(Amended 2026-10-08: until then
+  this said "the same four places".)*
 
 The cost view adds a corpus-wide line above the top-sessions table:
 *"Includes N partial sessions (lower bound)."* and the corpus-wide count of excluded usage
@@ -679,11 +684,16 @@ Two things follow directly from "no token → no data/stream":
 >   `session-ingested`, `agent-status-changed` and `ingest-failed` (the shared list
 >   in `packages/shared/src/realtime/event-types.ts` is authoritative for both ends).
 > - **"Resilient" resolved to the browser's built-in `EventSource` reconnect**, hinted
->   by a server-sent `retry:` field — there is no custom backoff schedule, and there
->   is **no replay**: a reconnect re-subscribes to the live feed, it does not
->   redeliver frames missed while disconnected. `WP-U5`'s "resumable" wording is
->   therefore not satisfied in the literal sense; the views compensate by refetching
->   their snapshot on reconnect.
+>   by a server-sent `retry:` field — there is no custom backoff schedule. Since WP-U1
+>   (2026-09-26) a reconnect is also a **bounded replay**: the reconnecting `EventSource`
+>   sends `Last-Event-ID` and the server replays the frames it still holds after that id
+>   (a 256-frame window per process, `DEFAULT_REPLAY_CAPACITY` in
+>   `apps/server/src/realtime/hub.ts`). Frames beyond the window, or across a server
+>   restart, are lost, so the views still refetch their snapshot on reconnect. *(Amended
+>   2026-10-08: until then this said "there is **no replay**: a reconnect re-subscribes
+>   to the live feed, it does not redeliver frames missed while disconnected. `WP-U5`'s
+>   "resumable" wording is therefore not satisfied in the literal sense; the views
+>   compensate by refetching their snapshot on reconnect.")*
 
 The full endpoint and stream reference — routes, payload shapes field by field, the
 health payload, and the reconnection semantics — lives on
@@ -725,7 +735,11 @@ resolution inline.)*
 - **The SSE reconnect/backoff mechanics** behind "resilient" (`WP-U5`) are named as a
   requirement, not yet specified in detail. *(As built: **resolved by choosing the
   minimum** — `EventSource`'s own reconnect plus a server `retry:` hint. No custom
-  backoff, and no replay of frames missed while disconnected.)*
+  backoff. Since WP-U1 (2026-09-26) a reconnect replays the frames the hub still holds
+  after the client's `Last-Event-ID` — a 256-frame window per process; frames beyond
+  that window or across a restart are lost, and the views refetch their snapshot on
+  reconnect. Amended 2026-10-08: until then this said "No custom backoff, and no replay
+  of frames missed while disconnected.")*
 - **The exact D3 layout** for the global DAG (§3) beyond "queried from persisted
   edges" — `DESIGN.md` §6 names ELK/Graphviz as the first extension "when needed," with
   no committed timing or library choice. *(As built: **still open.** The DAG ships on a

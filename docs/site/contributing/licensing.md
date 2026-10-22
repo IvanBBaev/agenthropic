@@ -48,7 +48,8 @@ important limit of what that CI gate can and cannot prove
 >   it appeared under; counted as unique names the same tree reads `OK (407 packages / 429
 >   installed versions; 406 allowlisted, 1 under a documented exception)`. Re-measured 2026-09-26:
 >   `OK (406 packages / 428 installed versions; 405 allowlisted, 1 under a documented
->   exception)`.)* An exception that matches nothing in the
+>   exception)`; re-measured 2026-10-08: `OK (407 packages / 429 installed versions; 406
+>   allowlisted, 1 under a documented exception)`.)* An exception that matches nothing in the
 >   installed tree is named on every run rather than failing it — deliberately, so a
 >   dependency bump that retires the package does not go red — which is how a dropped
 >   package cannot leave a standing permission behind unnoticed. The
@@ -62,7 +63,8 @@ important limit of what that CI gate can and cannot prove
 >   again 2026-09-23: **282 files**, still 1 allowlisted and 6 manifests, still exit 0;
 >   since 2026-09-24 the line ends `...checked for forbidden direct dependencies and
 >   wide-bind scripts)`, at 308 files; re-measured 2026-09-26: **313 files**, same shape, exit
->   0)*.
+>   0; re-measured 2026-10-08: **333 files**, the line now also ending `; 97 server-process
+>   files checked for outbound network calls)`, exit 0)*.
 >   Its scope is wider than the work-package title suggests — it walks `apps/`,
 >   `packages/`, `scripts/` and `hooks/` in full (source, tests, and package-root
 >   config such as `vite.config.ts`, which is exactly where a dev-server bind would be
@@ -375,7 +377,7 @@ the same per-artifact scoping discipline that CD-9 describes.
 outbound-network pattern family to server-process source — `apps/server/src/` and
 `packages/*/src/` — and refuses an HTTP client package in those manifests; browser code
 and tests are out of scope by path. Its OK line gained `; N server-process files checked
-for outbound network calls`, 93 on 2026-09-26.)*
+for outbound network calls`, 93 on 2026-09-26 and 97 on 2026-10-08.)*
 
 The shipped gate is broader than that Done-when in both scope and coverage. It scans
 `apps/`, `packages/`, `scripts/` and `hooks/` rather than `apps/server` alone, it

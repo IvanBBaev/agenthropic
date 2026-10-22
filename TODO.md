@@ -106,7 +106,7 @@ Binding once Step 0 is signed; dates from roadmap §4. Every failure branch is t
 | **KC-0** | **2026-07-13** | All Step-0 boxes above checked | Archive — **DATE PASSED UNMET (2 of 5 boxes open); default overridden by owner instruction, see above** |
 | **KC-1** | **2026-07-27** | WP-S7 verdict written **+** the THROWAWAY DAG-with-dollars render exists **+** the friction log has not crowned a rival (≥4/5 questions) | Archive — **DATE PASSED UNMET: clauses 1 and 2 green, clause 3 unsatisfiable (log never opened); default overridden by owner instruction, see above** |
 | **KC-2** | **2026-09-14** | Phase 1–2 exit gates green; at most **one** velocity rebase applied — **MET; ticked 2026-09-18, four days after the date** (the session that owns the tick was inactive 2026-09-10 → 09-18, so the bookkeeping is late, not the condition: nothing in the tree changed after 2026-09-10). Phase 1 and Phase 2 exit gates ✅ (their rows below), all eight gates green on 2026-09-18 over that unchanged tree (2,428 tests, 100% coverage ×5), CI `success` on the pushed SHA `39e565a`, **zero** velocity rebases applied. The descope ladder was not pulled. | Descope ladder (roadmap §5) or archive |
-| **KC-3** | **2026-10-12** | The three P0 moat proofs green & merge-blocking — _the merge-blocking half became satisfiable on **2026-08-25**, when `main` started requiring the `ci` check; it blocks a contributor, not the owner (`enforce_admins: false`). Not yet due; do not tick early._ | Archive |
+| **KC-3** | **2026-10-12** | The three P0 moat proofs green & merge-blocking — _the merge-blocking half became satisfiable on **2026-08-25**, when `main` started requiring the `ci` check; it blocks a contributor, not the owner (`enforce_admins: false`)._ **Condition MET on the date; tick still Ivan's (late bookkeeping, as KC-2).** Re-verified 2026-10-22: the last pushed `main` SHA before the date, `2d85a71` (2026-10-05), has CI run `37306525655` = `success`, with `p0-token-reconciliation` (6), `p0-double-replay` (4), `p0-dag-rebuild` (4) and the fourth proof `p0-five-daily-questions` (6) green in its log; `gh api …/branches/main/protection` → `contexts: ["ci"]`, `enforce_admins: false`. The uncommitted working tree is green on all eight gates under Node 22.23.2 (3,449 tests). | Archive |
 | **KC-4** | **2026-12-01** | **v1.0 tagged. The date does not move.** | Archive + public write-up |
 | **KC-5** | earned, not dated | 14 consecutive days of real daily v1.0 use + ≥3 friction-log entries wanting alerts | v2.0 cancelled; maintenance mode |
 
@@ -1032,6 +1032,30 @@ exit and proof live in the plan. Dated one-word answers under D1…D8 are the si
     unit tests whatsoever"; `apps/server/test/scripts-gates.test.ts` (41 tests, in `4b3cd2d`)
     drives each gate's pure core against fixture trees. Amended with a dated note; what still
     holds (scripts outside every coverage denominator, CLI wrappers unexecuted) is kept.
+  - **R1 rehearsed again 2026-10-08** on `2d85a71` plus the uncommitted working tree: all seven
+    CI commands plus `gate:node` exit 0 — 180 test files / 3,398 tests, 100% ×4 in five
+    packages (`format:check` failed once on a test file of that session, green after
+    `prettier --write`); spawner 333 files, the policy file the only allowlisted one, 97
+    server-process files checked for outbound calls; licences 407 packages / 429 installed
+    versions, one documented exception. §2 greps clean; §3 P0 4 files / 20 tests; §5
+    `backup.test.ts` 4/4 (the live drill stays Ivan's). Branch protection and Pages not
+    re-checked. No box ticked. **R2 figures refreshed the same day:** a dated 2026-10-08
+    "180 / 3398" beside the 2026-09-26 reading in `README.md`, `RELEASE.md` §1 and §7, the site
+    README, `testing.md` (per package), `contributing/index.md`, `comparison.md` ×2, `faq.md`,
+    `roadmap.md` ×2, `what-is-agenthropic.md` ×2 and the analysis README; gate outputs re-dated
+    in `testing.md` and `licensing.md`; P0 19 → 20 in `RELEASE.md`. Historical readings kept.
+    **Docs-truth pass #7 the same day** (one agent over 14 verified findings, every change a
+    dated amendment quoting the old sentence): `api.md` carries `partial` /
+    `usageRecordsDropped` on all four payloads and the `Last-Event-ID` frame order; the
+    "resumability is not implemented" claims on `api.md`, `dashboard.md` ×2 and `overview.md`
+    now describe the bounded 256-frame replay; `ingest-reconciliation.md` describes the startup
+    replay as capped watcher passes and (with `glossary.md`) the checkpoint store as always
+    wired by the server; seven cost-analysis answers (anchor renamed, `dashboard.md` link
+    followed); `409` on `dashboard.md` and `hooks-installer.md`; five honesty places on
+    `dashboard.md` / `data-model.md`; `pending` in the outcome table; twenty-one migrations in
+    `README.md`, `comparison.md`, `faq.md`, `what-is-agenthropic.md`, `roadmap.md`.
+    `configuration.md`'s eleven variables and `dag-moat.md`'s "three P0 tests" verified true
+    and left. Row stays open.
 - [ ] **Wave 5 · by 2026-12-01 (KC-4)** — release commit, `v1.0.0` tag, push (Ivan) ·
   post-tag CI/Pages/badges green, `DONE.md` closed, this board reduced to the KC-5 items
   (orchestrator). One week of buffer; the critical path is D1 → Wave 3's 14 days → R3.
@@ -1167,11 +1191,53 @@ one-word answer; the recommended default is first.
     replay (25 sessions/pass) with health `replaying`; parser-spec §5.2 amended.
   - **Open (owner):** NN2 remainder → 5m (lower bound if 1h)? Should an `unreadable` main
     transcript also mark a session partial? An oversize main with no subagents creates no
-    session row (invisible, not partial). Partial counts on DAG/changes aggregates? Replay cap
-    25 — constant or env var?
+    session row (invisible, not partial). Partial counts on DAG/changes aggregates, and on
+    `/api/cost/delegation-savings` (API-2, 2026-10-10: the aggregate carries no
+    `partialSessions`/`usageRecordsDropped`, so a partial session's savings are a lower bound
+    the payload cannot say)? Replay cap 25 — constant or env var?
 - [x] **RR2 — second web review pass** (the 2026-09-26 RR coverage gap). Done 2026-10-01: four
   defects fixed test-first (LiveView refetch race, week tile unmeasured $0.00, aggregate savings
   floor note, infinite delta double banner); the two carried candidates refuted.
+
+> **Hooks/scripts audit 2026-10-22** (Wave 3 defect lane; read-only audit, findings verified
+> against the code). Fixes in `scripts/check-no-spawner.mjs` and `hooks/install.mjs`; the
+> red-first tests live in `apps/server/test/` (apps lane).
+
+- [x] **AU-1 / AU-2 / AU-4 / AU-5 / AU-6 — gate and installer holes.** The spawner gate now
+  catches `process.execve` (dot and bracket form), npm-aliased forbidden / HTTP-client
+  dependencies (`aliasedPackageName`), the Worker `eval` option, backtick `data:` and
+  concatenated dynamic imports, and whitespace before `(` in the spawn/fork/eval call rules.
+  The installer recognises itself when run through a symlinked path (`isMainModule`, the same
+  fix the three gate scripts already carry).
+  - **Done 2026-10-22:** nine cases in `scripts-gates.test.ts` / `hooks-installer.test.ts`;
+    six fail against the pre-fix scripts (the three AU-6 guard cases pass on the old URL
+    compare too), all nine pass after. Server 121 files / 1789 tests, 100% × 4; workspace
+    180 / 3458; `gate:spawner` OK on the real tree.
+- [x] **AU-3 — `PRUNE_DIRS` (`dist`, `coverage`, `node_modules`) are pruned silently at any
+  depth** in the spawner gate's walkers and census, so a source file under e.g.
+  `apps/server/src/dist/` is never scanned and never reported as skipped.
+  - **Done 2026-10-22:** `isPrunedAt` prunes only next to a `package.json` (or at the scan
+    root) in all three walkers; real-tree output unchanged (333 files, 6 manifests, 0
+    offenders). Four cases in `scripts-gates.test.ts`, three red against the old gate.
+- [ ] **AU nits (recorded, not defects on their own):** the licence gate trusts the whole
+  `@agenthropic/*` scope by name; ~~the installer's backup `copyFileSync` has no
+  `COPYFILE_EXCL`~~ (fixed 2026-10-22: `COPYFILE_EXCL` + `-1`..`-99` suffix, two red-proven
+  cases); a hand-formatted `settings.json` is reformatted (with a backup) on the
+  first re-install.
+- [~] **Packages / API audit 2026-10-22 (read-only, handed to the apps lane):**
+  - **Done 2026-10-22:** C-4 (cache-write pair, `usage/dedupe.ts`), C-6 (self-parent guard,
+    `parse-session.ts`), S-2 (`julianday()` merges, `db/instant-order.ts`), C-1 (case-insensitive
+    scheme) — red-proven tests; P0 independent reader aligned (NN2 + C-4). S-1: docs over-claims
+    fixed + a limitation test; the gap itself needs an **owner decision** (additive `ingest_seq`
+    cursor via migration + `after=`/`cursor` — recommended; or an ingest-time basis; or docs only).
+    Workspace 184 files / 3487 tests, all gates green. S-1 (medium)
+  `/api/changes` `until` is an event-time high-water mark, so a late-ingested older session is
+  skipped by chained `since=until` callers · S-2 (low) text `MIN`/`MAX` on legacy
+  offset-spelled timestamps · C-1 (low) case-sensitive `Bearer` · C-4 per-bucket 5m/1h max can
+  double-count cache writes on mixed partial shapes · C-6 no self-parent guard on edges.
+  **Owner decisions:** C-2 Origin check built from the socket `localPort` may 403 behind a
+  remapped tunnel / `tailscale serve` (needs a real-browser repro) · C-3 `transcriptTimespan`
+  uses file order, not min/max · C-5 an equal-output model tie rejects the session.
 
 ### Post-1.0 / v2.0 · Alerting core _(off the v1.0 critical path — best-path §6.1; **entered only via KC-5**: 14 consecutive days of real daily v1.0 use + ≥3 friction-log entries wanting alerts — roadmap §6. If that evidence never materializes, v2.0 never starts, and that is a success of the roadmap, not a failure.)_
 - [ ] **WP-A2** alert/webhook schema · **A3** secret `token_ref` resolver · **A4** no-SSRF

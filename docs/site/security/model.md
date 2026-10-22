@@ -189,7 +189,10 @@ packages and Definition-of-Done that turn each rule into CI-blocking code).
   > second check exists because "mandatory, not opt-in" is only half the property
   > worth having; `DASHBOARD_TOKEN=x` satisfies "set" while offering no more real
   > protection than the no-op the rule was written against. Sixteen characters is a
-  > chosen floor, not a measured one. One deliberate accommodation:
+  > chosen floor, not a measured one. A third refusal covers a token with leading or
+  > trailing whitespace or a control character: no HTTP header can carry such a value,
+  > so the process would start and then reject every request it ever received. One
+  > deliberate accommodation:
   > `/api/stream` also accepts the token as `?token=` because the browser
   > `EventSource` API cannot set headers — and the server redacts that query value
   > from its own logs (`redactTokenInUrl`). The two blocks below are kept as the
@@ -289,7 +292,9 @@ packages and Definition-of-Done that turn each rule into CI-blocking code).
   > design here promised: it scans all of `apps/*`, `packages/*`, `scripts/`,
   > `hooks/`, and the repo-root config files — source *and* tests — for the whole
   > subprocess API family, wide binds (`0.0.0.0`/`::`), WebSocket-server patterns,
-  > and dynamic code evaluation (indirect eval, `data:`/concatenated dynamic import).
+  > dynamic code evaluation (indirect eval, `data:`/concatenated dynamic import), and,
+  > since 2026-10-10, the native layer `child_process` is built on (`process.binding` /
+  > `internalBinding`, `process.dlopen`, dot or bracket form).
   > Since 2026-09-07 it also reads the direct dependencies of the root and every
   > workspace `package.json` by name, so a subprocess or WebSocket package is refused
   > at `pnpm add`; transitive dependencies stay with lockfile review. Its two escape
@@ -619,7 +624,7 @@ bar**: none of the nine rules was relaxed, and the KC kill-checkpoint calendar i
 As built today:
 
 - **Running and test-proven:** loopback-or-fail bind, mandatory-token-or-fail-startup
-  (including the 16-character minimum), the global timing-safe token gate on every
+  (including the 16-character minimum and the no-padding, no-control-character check), the global timing-safe token gate on every
   `/api/*` route, same-origin-before-auth on `/api/stream` (SSE per CD-5), WAL +
   `foreign_keys` asserted on every connection, online backup with an
   integrity-checked restore path *and* a daily in-process schedule that fires it,

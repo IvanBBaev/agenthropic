@@ -30,11 +30,11 @@ paired-capture corpus. See [the Phase-0 corpus probe](../../analysis/phase0-prob
 > Short version of what is true today: implementation began **2026-07-11**, by explicit
 > owner override of the CD-8 no-code-before-GO gate — **not** because the gate opened.
 > Running now: the loopback-bound, token-gated server; SQLite/WAL with eighteen migrations
-> and a daily backup timer; JSONL ingest with replay-on-startup and tail-follow polling;
+> (21 as of 2026-10-08) and a daily backup timer; JSONL ingest with replay-on-startup and tail-follow polling;
 > the persisted subagent DAG; the cost engine; the hook receiver and its installer; the
 > status watchdog; the SSE hub; the read API; and all four dashboard views plus a
 > per-session cost-analysis panel. **131 test files / 2428 tests pass** (re-measured
-> 2026-09-18; re-measured again 2026-09-23 as **140 test files / 2621 tests**; 2026-09-26: **167 test files / 3060 tests**), with
+> 2026-09-18; re-measured again 2026-09-23 as **140 test files / 2621 tests**; 2026-09-26: **167 test files / 3060 tests**; 2026-10-08: **180 test files / 3398 tests**; 2026-10-10: **180 test files / 3438 tests**; 2026-10-22: **184 test files / 3487 tests**), with
 > **100%** statements/branches/functions/lines enforced in all five packages. The three P0 moat proofs (plus a fourth P0 proof that answers the five daily questions over real HTTP) are green in CI on every push and pull request,
 > and since **2026-08-25** they are **merge-blocking for anyone who is not the repository
 > owner**: `main` requires the `ci` check, so a red run withholds a contributor's merge
@@ -552,7 +552,7 @@ a dated, versioned price.
 > `cost-analysis` endpoint had shipped without a consumer and "all five daily questions
 > answerable from the UI" was therefore true of the server and false of the dashboard.
 > `apps/web` carries 283 tests across 17 files (2026-08-15; 697 across 22 files on
-> 2026-09-18) and — since 2026-07-30 — actually runs them under a coverage gate, now set
+> 2026-09-18; 1,015 across 27 files on 2026-10-08) and — since 2026-07-30 — actually runs them under a coverage gate, now set
 > at 100%.
 >
 > Two of the exit-gate clauses hold literally. The tree and global DAG are served by

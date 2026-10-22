@@ -38,8 +38,14 @@
 > - **The stream carries three typed event types, not generic projection deltas:**
 >   `session-ingested`, `agent-status-changed` and `ingest-failed` (the third
 >   documented 2026-08, when the SPA gained a listener for it — a quarantined session
->   is now a visible banner, not a silent absence). Resumability is **not** implemented
->   as replay — see the "Resumability" note in the realtime-feed section below.
+>   is now a visible banner, not a silent absence). Resumability is a **bounded replay**
+>   since WP-U1 (2026-09-26): a reconnecting `EventSource` sends `Last-Event-ID` and the
+>   hub replays the frames it still holds after that id (a 256-frame window per process,
+>   `DEFAULT_REPLAY_CAPACITY` in `apps/server/src/realtime/hub.ts`); frames beyond the
+>   window or across a restart are lost, and the views also refetch their snapshot on
+>   reconnect — see the "Resumability" row and the "Amended 2026-09-26" note in the
+>   realtime-feed section below. *(Amended 2026-10-08: until then this said "Resumability
+>   is **not** implemented as replay".)*
 >
 > The design-era prose and tables are kept below as the record, with `As built` notes
 > where the shipped system settled a question the page left open.
@@ -113,7 +119,7 @@ six optional ones:
 | `status` | `"ok"` or `"replaying"` | yes | The process is serving. `"replaying"` while the startup replay pass has not finished (the server binds first and replays after, so health answers during the replay); `"ok"` from then on. A replaying server is healthy, just not yet current - the SPA shows "replaying the corpus, please wait" rather than an error. *(Amended 2026-10-01: until then `status` was always `"ok"` and only the optional `ingest` field said the replay was running.)* |
 | `schemaVersion` | integer | yes | The migration version the open database is at. |
 | `ingestSkips` | object of `{ reason: count }` | no | Cumulative count of skip events per skip reason since boot; a file declined again on a later pass counts again, so it is not a count of distinct files. |
-| `ingest` | `"replaying"` or `"idle"` | no | `"replaying"` between the loopback bind and the end of the startup replay pass; `"idle"` after, whether or not that pass could read the corpus. |
+| `ingest` | `"replaying"` or `"idle"` | no | `"replaying"` between the loopback bind and the end of the startup replay; `"idle"` after, for the life of the process. A replay that a read error cut short is not over: the scheduled poll finishes it in the same capped passes, and the phase lasts until that sweep drains. If the next poll cannot read the corpus either, the phase ends there, so `"idle"` still does not mean the corpus could be read; the sessions the sweep did not reach are still owed and land through the scheduled poll, in capped passes, once the corpus reads again - under `"ok"`. Whichever way the phase ends, the server logs it (`corpus replay: the scheduled poll finished the sweep ...` or `corpus replay: the corpus still could not be read on the next poll ...`). *(Amended 2026-10-05: a read error used to end the phase at once, and the first good poll then read the whole remainder in one pass under an `"ok"` status. Amended 2026-10-08: the ending was silent until then, and a pass that threw after admitting its chunk counted the chunk as read, so the retry skipped it and it landed only on a later plain pass.)* |
 | `lastTickDurationMs` | number | no | Wall-clock duration of the **last completed** corpus pass. |
 | `crossSessionUsageCollisions` | integer | no | Usage messages skipped since boot because another session had already claimed them. |
 | `sessionsExcluded` | integer | no | Sessions whose latest ingest attempt failed — each is either absent from every stored total or present in it only at an older extent than the corpus now holds (a session quarantined after a clean ingest keeps its last good pass), so dollar totals are a lower bound while this is non-zero. `status` stays `"ok"`: the server is surviving correctly, it is just not complete. *(Amended 2026-09-25 (OO): this used to say "counted nowhere".)* |
@@ -173,7 +179,8 @@ literal one — see the [Read endpoints](#read-endpoints) table below. *(As buil
 path is now literal — see the table's "As built" column.)*
 
 > **As built:** `/api/stream` is a hijacked Fastify reply that writes a `retry: <ms>`
-> field, a `: connected` comment, then hub frames, with a `: heartbeat` comment every
+> field, any frames replayed for the request's `Last-Event-ID`, a `: connected` comment,
+> then live hub frames, with a `: heartbeat` comment every
 > 15 s. Heartbeats are SSE **comment** frames and therefore never surface to
 > `EventSource` — client liveness is the connection state, not a heartbeat count. Three
 > typed frames are emitted: `session-ingested`, `agent-status-changed` and
@@ -185,7 +192,9 @@ path is now literal — see the table's "As built" column.)*
 > be presented as `?token=` here (and only here) because `EventSource` cannot set
 > headers; the server's request-log serializer redacts it. The same-origin check runs
 > **before** the token check, so a foreign `Origin` gets 403 whether or not it holds a
-> valid token.
+> valid token. A `HEAD /api/stream` answers `405` with `Allow: GET` (since 2026-10-10):
+> the handler hijacks the reply to stream, and a hijacked HEAD, which can carry no body,
+> used to hold the connection open until the client gave up.
 
 | Property | Value | Source |
 |---|---|---|
@@ -202,7 +211,7 @@ path is now literal — see the table's "As built" column.)*
 | Property | As built |
 |---|---|
 | Resumability | **Reconnect with bounded replay (since 2026-09-26; until then reconnect only).** The server sends a `retry:` hint and the browser's `EventSource` auto-reconnects, sending the last frame id it saw as `Last-Event-ID`; the hub keeps the last 256 frames and replays those after that id, in order, before live frames resume (and before the `: connected` comment). A header that is not a plain decimal id is ignored. Frames older than the window, and frames lost across a server restart (ids restart at 1), are still **lost**, and the dashboard reports them as a stream gap. The SPA compensates by treating any stream event as a cue to refetch persisted truth, so the displayed state re-converges — but a client that needs a gapless event log must read `GET /api/sessions/:id/events`, not the stream. |
-| What it pushes | Three typed frames only — `session-ingested` (a session was persisted; refetch), `agent-status-changed` (one agent moved between status buckets, including into `unknown` via the missing-Stop watchdog), and `ingest-failed` (a session's ingest failed; a typed arm of the closed shared union since 2026-09-09 — until then it rode a generic catch-all arm, now deleted — shaped `{ "type": "ingest-failed", "payload": { sessionId, reason, attempt, willRetry, occurredAt } }` with a sanitized, single-line, path-free reason, `attempt` a 1-based integer and `willRetry` false once the session is quarantined. The `payload` envelope is the documented wire shape and is deliberately kept although the other two frames carry `occurredAt` at the top level: the SPA carries no schema library and narrows this frame by hand, so the bytes are the contract. It narrows the other two frames by hand as well; all three narrowings are pinned to the shared TypeScript types in `apps/web/test/realtime-wire-shape.test.ts` (since 2026-09-26 for `agent-status-changed` and `session-ingested`), so a server-side field change fails the web typecheck instead of failing silently in the browser. The SPA renders it as a dismissible banner on the live board, because a quarantined session never reaches the read API and would otherwise be invisible). **The union is closed (D5):** an unknown `event:` name is not a fourth kind the client should tolerate; the browser's `EventSource` never delivers a named event with no registered listener, so such a frame is never rendered, and because every frame carries the hub's `id:` sequence it still surfaces as a gap at the next frame that is heard, where the live board counts it — dropped and counted, never rendered. Not a generic row-delta feed over `sessions`/`agents`/`orchestration_edges`/`token_usage`. |
+| What it pushes | Three typed frames only — `session-ingested` (a session was persisted; refetch — shaped `{ type, sessionId, projectSlug, agentCount, edgesInserted, usageRowsInserted, costUsd, occurredAt }`, with `projectSlug` and `costUsd` nullable), `agent-status-changed` (one agent moved between status buckets, including into `unknown` via the missing-Stop watchdog — shaped `{ type, sessionId, agentId, status, previousStatus, occurredAt }`, with `previousStatus` nullable), and `ingest-failed` (a session's ingest failed; a typed arm of the closed shared union since 2026-09-09 — until then it rode a generic catch-all arm, now deleted — shaped `{ "type": "ingest-failed", "payload": { sessionId, reason, attempt, willRetry, occurredAt } }` with a sanitized, single-line, path-free reason, `attempt` a 1-based integer and `willRetry` false once the session is quarantined. The `payload` envelope is the documented wire shape and is deliberately kept although the other two frames carry `occurredAt` at the top level: the SPA carries no schema library and narrows this frame by hand, so the bytes are the contract. It narrows the other two frames by hand as well; all three narrowings are pinned to the shared TypeScript types in `apps/web/test/realtime-wire-shape.test.ts` (since 2026-09-26 for `agent-status-changed` and `session-ingested`), so a server-side field change fails the web typecheck instead of failing silently in the browser. The SPA renders it as a dismissible banner on the live board, because a quarantined session never reaches the read API and would otherwise be invisible). **The union is closed (D5):** an unknown `event:` name is not a fourth kind the client should tolerate; the browser's `EventSource` never delivers a named event with no registered listener, so such a frame is never rendered, and because every frame carries the hub's `id:` sequence it still surfaces as a gap at the next frame that is heard, where the live board counts it — dropped and counted, never rendered. Not a generic row-delta feed over `sessions`/`agents`/`orchestration_edges`/`token_usage`. |
 
 **The event-push model.** `/api/stream` is a fan-out off already-committed projection
 state, not a raw firehose of `events_raw` — the same "single-writer pipeline, read-only
@@ -290,8 +299,8 @@ so a new route is gated by construction rather than by remembering.)*
 - **Event timestamps are receipt time.** The hook envelope carries no event-originated
   timestamp, so every row reports `occurredAtSource: "receipt"` — the DTO says so on
   every row rather than letting a reader assume the time is when the thing happened.
-- **`GET /api/sessions/:id/cost-analysis` distinguishes six different ways to fail, and
-  the distinctions are the product** — see [the failure table](#the-six-answers-of-the-cost-analysis-endpoint)
+- **`GET /api/sessions/:id/cost-analysis` distinguishes seven different ways to fail, and
+  the distinctions are the product** — see [the failure table](#the-seven-answers-of-the-cost-analysis-endpoint)
   below. Corpus paths and offending lines are never echoed to the client.
 - **The `agents.status` enumeration is five values:** `working`, `waiting`, `completed`,
   `error`, `unknown`. `unknown` is what the missing-Stop watchdog assigns and is a
@@ -336,7 +345,7 @@ so a new route is gated by construction rather than by remembering.)*
   restart (the startup replay refills it) and cleared per session on a successful
   ingest.
 
-### The six answers of the cost-analysis endpoint
+### The seven answers of the cost-analysis endpoint
 
 `GET /api/sessions/:id/cost-analysis` is the only route that reads the JSONL substrate
 live rather than the projected tables, so it has more ways to come up empty than any
@@ -348,16 +357,19 @@ other — and it answers each one differently, on purpose:
 | `503` | `no corpus root is present on this machine, so nothing can be analysed` | The provider exists but there is no corpus root here. Retryable: the root is re-resolved per call, so a corpus that appears later fixes this without a restart. |
 | `503` | `the corpus root exists but could not be read; retry shortly` | The root is there; this process could not read it on this attempt. Also retryable, and deliberately a different sentence from the one above. |
 | `404` | `Session not found.` | The corpus was read and this session id is genuinely not in it. |
-| `409` | `The corpus holds this session, but ...` | Since 2026-10-01: ingest rejected the session (`code` `quarantined` or `ingest-failing`, plus a path-free `reason`). Shared with the other three per-session reads - see above. |
+| `409` | `The corpus holds this session, but ...` | Since 2026-10-01: ingest rejected the session (`code` `quarantined` or `ingest-failing`, plus a path-free `reason`). Shared with the other three per-session reads - see above. Decided **before** the corpus is read, so it takes precedence over every row below for a session the database does not hold. *(Amended 2026-10-05: until then the check ran only after the corpus said "not found", which a rejected session - still on disk - never does; the route answered `422`, or analysed a session every other read refused.)* |
 | `422` | `Session transcripts could not be parsed.` | A poisoned transcript — a data problem, not a server bug. |
 | `422` | `the session transcript holds no analysable records` | The session was found and read, and holds nothing to analyse. |
 
 A seventh shape shares the `422` status: an unpriced model raises `PricingError`, and its
-message (model and message ids only, never a path) is returned verbatim. The route's
+message (model and message ids only, never a path) is returned verbatim. That is the
+answer for a session the database holds (one quarantined *after* a clean ingest keeps its
+last good pass, and the live read then speaks for itself); a session ingest never
+accepted gets the `409` above instead. The route's
 declared schema additionally covers `400` for a malformed request and a detail-free `500`
 for anything unexpected.
 
-The reason this table is six rows rather than one is written into the route itself: these
+The reason this table is seven rows rather than one is written into the route itself: these
 cases used to share a single `404 Session not found.`, which the code comment records as
 *"untrue in most cases"*. With no corpus root — or one that cannot be read — nothing in
 the process knows whether the session exists, so answering `404` would be stating a fact
@@ -368,19 +380,25 @@ now" and invite a retry; the `404` says "the answer is no" and means it.
 
 The TypeBox schemas in `packages/shared/src/schemas` are the contract — every response
 sets `additionalProperties: false`, so a field not listed here cannot appear.
+*(Amended 2026-10-08: the honesty fields landed 2026-10-05 and were missing from these
+lists.)*
 
 **`GET /api/sessions`** → `{ sessions, total, limit, offset }`. Each session summary is
 `id`, `projectSlug`, `status`, `startedAt`, `lastActivityAt` (the last four nullable),
 `agentCount`, `totalTokens`, `totalCostUsd`, `unpricedTokens`, and `statusCounts` — an
 object carrying **all five** buckets (`working`, `waiting`, `completed`, `error`,
 `unknown`) every time, so a bucket at zero is a stated zero rather than a gap the client
-has to interpret.
+has to interpret. Every summary also carries the two honesty fields
+(`SessionHonestyFields` in `packages/shared/src/schemas/cost.ts`): `partial` (`null`, or
+`{ reason: "main-transcript-oversize", skippedBytes }` when only the session's subagent
+transcripts could be read; `skippedBytes` is nullable) and `usageRecordsDropped` (an
+integer: usage records excluded because they had no `message.id`).
 
 **`GET /api/sessions/:id`** → the same summary shape plus `edgeCount` and `models`, a
 per-model array of `{ model, tokens, costUsd, unpricedTokens }`.
 
 **`GET /api/sessions/:id/tree`** → `{ sessionId, agents, edges, agentCount, edgeCount,
-unattributed }`. Each agent node carries `id`, `sessionId`, `type`, `subagentType`,
+unattributed, partial, usageRecordsDropped }`. Each agent node carries `id`, `sessionId`, `type`, `subagentType`,
 `status`, `outcomeCause`, `parentAgentId`, `firstSeenAt`, `lastSeenAt`, `totalTokens`,
 `costUsd`, `unpricedTokens` — `outcomeCause` (nullable) names *why* a terminal status
 was assigned, so a watchdog `unknown` and a hook-reported one are distinguishable in the
@@ -399,12 +417,16 @@ every row instead of letting a reader assume it is when the thing happened. If a
 event time is ever wired, the union widens and old rows stay honestly labelled.
 
 **`GET /api/cost/summary`** → `{ totals, perModel, perDay, topSessions, sessionCount,
-hasMore, coverage? }`. `perDay` uses `YYYY-MM-DD` keys, with the literal string `"unknown"` for usage
+hasMore, partialSessions, usageRecordsDropped, coverage? }`. `perDay` uses `YYYY-MM-DD` keys, with the literal string `"unknown"` for usage
 rows that carry no timestamp — again a named bucket rather than a silent omission.
 `topSessions` is the `topN` costliest sessions, a slice; `sessionCount` is the number of
 sessions with any usage that the slice was cut from, and `hasMore` is `true` when the
 slice is shorter than that count — so a client can print "5 of 51" instead of hedging
-that five might be the whole corpus (added 2026-09-09, closing-plan L1). `coverage` is
+that five might be the whole corpus (added 2026-09-09, closing-plan L1). Each
+`topSessions` row also carries `partial` and `usageRecordsDropped`, as the session
+summary does. The top-level `partialSessions` and `usageRecordsDropped` are corpus-wide
+counts, covering every session and not only the slice; a non-zero value means `totals`
+is a lower bound. `coverage` is
 `{ sessionsExcluded, sessionsQuarantined }`: sessions the ingest could not read or price
 on its latest attempt. Each is either absent from `totals` or present in it only at an
 older extent than the corpus now holds — a session that ingested cleanly and was later
@@ -460,7 +482,8 @@ per-session rows may not sum to `tokensAdded`; `coverage` counts the rows no win
 ever contain (`undatedSessions`, `undatedAgents`, `undatedUsageRows`). `limit`/`offset`
 reuse the house caps (default 50 / max 200; offset max 1000000).
 
-**`GET /api/sessions/:id/cost-analysis`** → `{ compaction, delegationSavings }`.
+**`GET /api/sessions/:id/cost-analysis`** → `{ compaction, delegationSavings, partial,
+usageRecordsDropped }` (the last two are the session's honesty fields, as on the summary).
 `compaction` is `{ naiveUsd, repricedUsd, deltaUsd, compactionCount, segments }`; a
 materially nonzero `deltaUsd` is a mispricing signal and is served as-is rather than
 averaged away. `delegationSavings` is `{ actualUsd, hypotheticalUsd, savingsUsd,
@@ -476,7 +499,11 @@ because a guess would be worse than a gap.
 `{ totalSessions, totalAgents, totalEdges, returnedAgents, returnedEdges, truncated }`.
 Returned-versus-total is reported separately, and `truncated` flips when the node cap cut
 the response short — a client that renders the DAG without surfacing that flag is showing
-a partial graph as if it were the whole one.
+a partial graph as if it were the whole one. `totalEdges` is a count over the whole
+`orchestration_edges` table, which carries no foreign key: an edge naming an agent id with
+no stored row is counted but can never be returned, so `returnedEdges` can fall short of
+`totalEdges` while `truncated` is `false`. The flag speaks only for the node cap; the edge
+gap is read from the two edge counts.
 
 Each node carries the same fields as a session-tree node - `id`, `sessionId`, `type`,
 `subagentType`, `status`, `outcomeCause`, `parentAgentId`, `firstSeenAt`, `lastSeenAt`,

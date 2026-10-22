@@ -77,7 +77,7 @@ resolver.
 
 | Variable | Required? | Default | What it controls | Validation |
 |---|---|---|---|---|
-| `DASHBOARD_TOKEN` | **Mandatory** | none — the process **throws at startup** if unset | Bearer token for every `/api/*` route and the SSE stream; hashed to SHA-256 then compared with `timingSafeEqual` | Must be present and **≥ 16 characters**; shorter is a startup error naming the actual length |
+| `DASHBOARD_TOKEN` | **Mandatory** | none — the process **throws at startup** if unset | Bearer token for every `/api/*` route and the SSE stream; hashed to SHA-256 then compared with `timingSafeEqual` | Must be present, **≥ 16 characters**, and free of leading/trailing whitespace and control characters (no HTTP header can carry such a value); each failure is a startup error, the short-token one naming the actual length |
 | `DASHBOARD_PORT` | optional | `4317` | TCP port on the loopback bind | Integer 0–65535; anything else is a startup error |
 | `DASHBOARD_DB_PATH` | optional | `data/agenthropic.db` | Path to the WAL-mode SQLite file | Free-form path |
 | `DASHBOARD_INGEST` | optional | on | Master switch for corpus ingest. Tests boot with `0` so they never touch the real corpus | `1`/`true`/`0`/`false` only; anything else is a startup error |
@@ -127,7 +127,7 @@ resolved or withdrawn; see the `As built` column.*
 | WAL mode / `foreign_keys` | **Fixed**, not a toggle | asserted `ON` on every connection open | Journal mode and FK enforcement pragma-checked at connect time, not merely configured once | `WP-D2`; DESIGN §8 | Holds — both pragmas are set *and* read back on every open, and a mismatch throws rather than warns |
 | Backup directory | _(planned)_ | _(planned)_ | Where `WP-F8`'s online-backup artifacts (`agenthropic-<ts>.db`) land | `WP-F8`; [backup & restore](../operations/backup-restore.md) §2 | Derived, not configured: `<dirname(DASHBOARD_DB_PATH)>/backups`. The naming convention shipped as designed |
 | Backup retention window | _(planned — no default days fixed)_ | _(planned)_ | How long backup files are kept before the pruning step deletes them | `WP-D10`; [backup & restore](../operations/backup-restore.md) §4 | Decided (D3, 2026-09-08): 30 days behind a floor of 7, as the defaults of `DASHBOARD_RETENTION_BACKUP_DAYS` / `DASHBOARD_RETENTION_BACKUP_KEEP_MIN`. Row-level retention is signed too: `events` at 90 days (`DASHBOARD_RETENTION_EVENTS_DAYS`), `token_usage` never |
-| `model_pricing` source | Fixed requirement; seed content/refresh mechanism _(planned)_ | seeded, versioned, dated (`effective_from`, `verified_on`) | Per-token rates keyed by `model` × `service_tier` × `speed` × `inference_geo`, driving every dollar figure shown | `WP-C1`; DESIGN §4; [data model](../architecture/data-model.md) | Table exists and is seeded by migrations 7/11 (five models, cache buckets derived) and 18 (`claude-opus-5`, `claude-fable-5-1`, all five buckets explicit, 2026-09-10), keyed `(model, bucket, effective_from)`. **There is no `verified_on` column**, and the seeded rates are marked as awaiting ratification. There is no refresh mechanism and no configuration for one; since 2026-09-30 the cadence is a pre-tag [HUMAN] re-read of the pricing page plus a real-corpus boot (`RELEASE.md` §6) |
+| `model_pricing` source | Fixed requirement; seed content/refresh mechanism _(planned)_ | seeded, versioned, dated (`effective_from`, `verified_on`) | Per-token rates keyed by `model` × `service_tier` × `speed` × `inference_geo`, driving every dollar figure shown | `WP-C1`; DESIGN §4; [data model](../architecture/data-model.md) | Table exists and is seeded by migrations 7/11 (five models, cache buckets derived) 18 (`claude-opus-5`, `claude-fable-5-1`, all five buckets explicit, 2026-09-10), 19 (`claude-opus-5-5`, after the 2026-09-26 real-corpus boot refused 27 of 61 sessions on it) and 20 (`claude-sonnet-5` re-priced to the official page, fetched 2026-09-26), keyed `(model, bucket, effective_from)`. **There is no `verified_on` column**, and the seeded rates are marked as awaiting ratification. There is no refresh mechanism and no configuration for one; since 2026-09-30 the cadence is a pre-tag [HUMAN] re-read of the pricing page plus a real-corpus boot (`RELEASE.md` §6) |
 | Alert rules (`alert_rules`) | Operator-configured | none by default | Cost-threshold, stuck-agent, and error trigger conditions | `WP-A2`, `WP-A5`; Phase 5, roadmap | **Does not exist** — v2.0, KC-5-gated |
 | Webhook targets (`webhook_targets`) | Operator-configured | none by default | Outbound delivery destinations (Telegram today); dialed **only** from this operator-set table, never from an event payload | `WP-A2`, `WP-A4`; [Telegram alerts](telegram.md) | **Does not exist** — v2.0, KC-5-gated |
 | Telegram bot token | **Mandatory when Telegram alerting is enabled** | none — held by reference only | The `@baev_bot_bot` bot token, resolved through `token_ref` (`launchd` env or a `chmod 600` dotfile), never a raw column value | `WP-A3`, `WP-A6`; CD-10 | **Does not exist** — no `token_ref` resolver, no Telegram code path, nothing to enable |
@@ -217,12 +217,15 @@ file — always a placeholder, never a real value:
 DASHBOARD_TOKEN=<token>
 ```
 
-> **As built:** all of this holds, with two additions the design did not state. The
+> **As built:** all of this holds, with three additions the design did not state. The
 > token must be **at least 16 characters** — a shorter value is rejected at startup with
 > an error naming its length, so a one-character "token" is not a valid deployment.
 > And the comparison hashes *both* sides to SHA-256 digests before `timingSafeEqual`,
 > so differing input lengths leak nothing through timing and cannot trip
-> `timingSafeEqual`'s equal-length precondition. The token is held in a closure, never
+> `timingSafeEqual`'s equal-length precondition. And a token with leading or trailing
+> whitespace or a control character is refused at startup like a short one: no HTTP
+> header can carry such a value, so no request could ever have authenticated. The token
+> is held in a closure, never
 > persisted, and the request-log serializer strips it from the SSE `?token=` URL before
 > any log line is written.
 
@@ -526,7 +529,7 @@ only restates the subset that is directly configuration-shaped.
 | SQLite database path | **Planned** — undecided | Decided: `DASHBOARD_DB_PATH`, default `data/agenthropic.db` |
 | Backup directory + retention window (days) | **Planned** — requirement fixed (CD-10, `WP-F8`/`WP-D10`), numbers undecided | Backups run daily into `<dirname(DASHBOARD_DB_PATH)>/backups`. Retention is **signed** (D3, 2026-09-08) and wired after each successful backup: backup files expire at 30 days behind a floor of 7, `events` rows at 90 days, `token_usage` never — `DASHBOARD_RETENTION_BACKUP_DAYS` / `_BACKUP_KEEP_MIN` / `_EVENTS_DAYS` |
 | `~/.claude/projects` override mechanism | **Planned** — conventional path assumed fixed, override undecided | Decided: `CLAUDE_PROJECTS_DIR` (plus `DASHBOARD_INGEST` as a master off switch) |
-| `model_pricing` seed refresh cadence | **Planned** — versioning columns fixed (CD-4), cadence undecided | Still no cadence and no refresh mechanism; `verified_on` was never added and the seeded rates are PROVISIONAL. Coverage widens by migration only — 18 added `claude-opus-5` and `claude-fable-5-1` on 2026-09-10 — and that is the one refresh path that exists |
+| `model_pricing` seed refresh cadence | **Planned** — versioning columns fixed (CD-4), cadence undecided | Still no cadence and no refresh mechanism; `verified_on` was never added and the seeded rates are PROVISIONAL. Coverage widens by migration only — 18 added `claude-opus-5` and `claude-fable-5-1` on 2026-09-10, 19 added `claude-opus-5-5` and 20 re-priced `claude-sonnet-5` to the official page after 2026-09-26 — and that is the one refresh path that exists |
 | Stack underneath all of the above (Fastify, better-sqlite3, pnpm monorepo) | **Leaning — unconfirmed** (the project `CLAUDE.md`) | Confirmed and shipped |
 | Poll interval / watchdog window | *(not in the design-era table)* | `DASHBOARD_POLL_INTERVAL_MS` = 3000 and `DASHBOARD_WATCHDOG_MINUTES` = 10, both **PROVISIONAL (LABEL-ME)** — chosen, not ratified |
 | Instance label | *(not in the design-era table)* | `DASHBOARD_INSTANCE`, defaulting to the machine hostname — the non-null `instance` column that makes the global DAG queryable per instance |

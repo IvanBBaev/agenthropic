@@ -278,8 +278,14 @@ recording it in full lives under [decisions](../contributing/decisions/README.md
 (ADR-0007). As built, `/api/stream` is exactly this: SSE via a hijacked reply, a
 same-origin check that rejects a foreign `Origin` with 403 *before* auth, the mandatory
 token (Bearer header, or `?token=` for `EventSource`, redacted from logs), a `retry:`
-reconnect hint and comment heartbeats. There is **no resume protocol** — event ids are a
-per-process counter and a reconnecting client re-fetches state from the read API.
+reconnect hint and comment heartbeats. Resume is a **bounded replay** (WP-U1, 2026-09-26):
+a reconnecting `EventSource` sends `Last-Event-ID` and the hub replays the frames it still
+holds after that id — a 256-frame window per process (`DEFAULT_REPLAY_CAPACITY` in
+`apps/server/src/realtime/hub.ts`). Event ids are still a per-process counter, so frames
+beyond the window or across a restart are lost, and a reconnecting client also re-fetches
+state from the read API. *(Amended 2026-10-08: until then this said "There is **no resume
+protocol** — event ids are a per-process counter and a reconnecting client re-fetches
+state from the read API.")*
 
 ## Visualization surface: DAG + Sankey
 

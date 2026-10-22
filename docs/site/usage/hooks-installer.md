@@ -190,12 +190,18 @@ exactly why this page is design-target, not a runbook you can follow today.
 > Other flags: `--port <n>` (default `4317`, matching the server default),
 > `--token-env <NAME>` (default `DASHBOARD_TOKEN`) — the *name* of the env var the
 > generated command expands, never its value — and `--help` / `-h`, which prints the
-> usage and exits. Two argument rules are deliberately strict rather than forgiving:
-> an **unrecognised flag is a hard error**, not a warning, because silently ignoring
+> usage and exits. Four argument rules are deliberately strict rather than forgiving.
+> An **unrecognised flag is a hard error**, not a warning, because silently ignoring
 > `--to-ken-env` would install hooks that reference an environment variable nobody
-> sets; and `--token-env` accepts only an UPPER_SNAKE_CASE name
+> sets. `--token-env` accepts only an UPPER_SNAKE_CASE name
 > (`/^[A-Z_][A-Z0-9_]*$/`), because anything else would be shell metacharacters
-> landing inside a generated command string.
+> landing inside a generated command string. `--port` accepts only a plain run of
+> decimal digits (since 2026-10-10): `0x1388`, `5e3`, `+5000` and `' 5000'` all
+> evaluate to 5000 under `Number()`, so a typo used to install as if it had been
+> typed correctly. And `--out` refuses a path that begins with a literal `~` (since
+> 2026-10-10): a quoted `'~/.claude/settings.json'` reaches the process unexpanded,
+> and the installer would have created a directory named `~` in the current directory
+> and written the settings file there.
 >
 > Three behaviors worth knowing before you run it: the merge is **non-destructive**
 > (unrelated settings keys and foreign hook entries are preserved verbatim, and
@@ -366,9 +372,12 @@ receiver, **accept-any-event**. Never-seen `event_type` → 202 + a row lands
 >
 > 1. **Redaction first** (`WP-IN14`, `apps/server/src/hooks/redact.ts`) — secret-named
 >    fields (`token`, `authorization`, `api_key`, `secret`, `password`, `bearer`,
->    `credential`, `private_key`, `access_key`, `cookie`…) become `[REDACTED]`, and
->    string values are scanned for credential shapes (`sk-`/`ghp_`/`xox`/`AKIA`, JWTs,
->    `Bearer …`) and masked in place. An explicit allowlist keeps token-**count**
+>    `credential`, `private_key`, `access_key`, `passphrase`, `cookie`…) become
+>    `[REDACTED]`, and string values are scanned for credential shapes
+>    (`sk-`/`ghp_`/`xox`/`AKIA`, JWTs, `Bearer …`, PEM `PRIVATE KEY` blocks) and masked
+>    in place; since 2026-10-10 a secret-named assignment inside a string value
+>    (`export DASHBOARD_TOKEN=…`, `password=…`, `?token=…`) keeps its name and loses its
+>    value too. An explicit allowlist keeps token-**count**
 >    fields (`input_tokens`, `output_tokens`, …) intact — counts are observability
 >    data, not credentials. Redaction runs *before* the idempotency key is computed,
 >    so a redelivered event redacts identically and still dedupes.
@@ -543,15 +552,17 @@ marked _(planned)_ since no installer or receiver exists yet:
 >
 > 1. `node hooks/install.mjs --out <project>/.claude/settings.json` (add `--dry-run`
 >    first to see the diff).
-> 2. Export `DASHBOARD_TOKEN` (**≥16 characters** — the server refuses to start
->    otherwise) and start the server; it binds `127.0.0.1` on port `4317`.
+> 2. Export `DASHBOARD_TOKEN` (**≥16 characters**, no padding or control characters —
+>    the server refuses to start otherwise) and start the server; it binds `127.0.0.1` on port `4317`.
 > 3. Run a real Claude Code session. Submitting a prompt fires `UserPromptSubmit`;
 >    finishing fires `Stop`; a subagent finishing fires `SubagentStop`.
 > 4. `curl -H "Authorization: Bearer $DASHBOARD_TOKEN"
 >    http://127.0.0.1:4317/api/sessions/<id>/events` — a **200 with an empty array**
->    means the session is known but produced no hook events; only an unknown session
->    id gives a **404**. The API never conflates those two facts, and no raw
->    `sqlite3` query is needed.
+>    means the session is known but produced no hook events; an unknown session id
+>    gives a **404**, or a **409** when ingest refused that session (`code`
+>    `quarantined` or `ingest-failing`). The API never conflates those facts, and no raw
+>    `sqlite3` query is needed. *(Amended 2026-10-08: until then this said "only an
+>    unknown session id gives a **404**"; the 409 arm landed 2026-10-01.)*
 >
 > **Step 5 does not apply.** A hook event and a JSONL line describing the same fact
 > do **not** collapse into one `events_raw` row, because they never meet: hooks land

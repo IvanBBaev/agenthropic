@@ -42,10 +42,13 @@ tests that gate every merge from Phase 3 onward.
 >   and is append-only (trigger-enforced) — for the hook leg.
 > - **Change detection is an lstat fingerprint** (`size:mtime` for the main transcript
 >   plus one `rel:size:mtime` entry per subagent artifact), not a durable byte/line tail
->   offset (§6). It is in-memory by default, with an **opt-in persisted checkpoint**
->   (`ingest_checkpoints`, migration 9) that shortens a restart without being allowed to
+>   offset (§6). It is in-memory, with a **persisted checkpoint**
+>   (`ingest_checkpoints`, migration 9; optional at the watcher constructor, always wired
+>   by the server) that shortens a restart without being allowed to
 >   change what a restart produces (§6.1). Any change triggers an **idempotent
->   whole-session re-ingest**; a restart's first watcher tick *is* the replay (§7).
+>   whole-session re-ingest**; a restart's replay is a sweep of capped watcher ticks (§7).
+>   *(Amended 2026-10-08: until then this said "in-memory by default, with an **opt-in
+>   persisted checkpoint**" and "a restart's first watcher tick *is* the replay".)*
 >   Determinism comes from the parse being pure and the writes being
 >   upserts/INSERT-OR-IGNORE, not from a persisted offset.
 > - **CD-1 is intact**: hooks contribute **liveness only, never structure** — no hook
@@ -315,7 +318,10 @@ restart, for sessions whose bytes have not moved in months.
 > / 141 sessions** — run A **39.92 s** (283 ms/session, 25.0 MB/s, 1-min load 7.07 → 10.52),
 > run B **34.87 s** (247 ms/session, 28.6 MB/s, 1-min load 10.28 → 9.59). In both, the sampled
 > event-loop max is about the wall time: cold replay blocks the loop as **one synchronous
-> stall**, not as many small ones.
+> stall**, not as many small ones. *(Amended 2026-10-08: the measurement stands as a reading
+> of the replay as it was then. Since 2026-10-01 the startup replay is chunked — 25 sessions
+> per pass, with an event-loop yield between passes — so the stall is now per pass, not one
+> for the whole corpus.)*
 >
 > **Resolved 2026-09-01 — the ≈137 s is retired as wrong, not carried as "unverified".**
 > This paragraph used to say the two figures "must not be rescaled into each other", the
@@ -368,20 +374,27 @@ restart, for sessions whose bytes have not moved in months.
 > `--records` / `--record-bytes` at the real shape; that is not done here, because a
 > benchmark rerun changes a number the owner has to stand behind. Tracked as **BENCH-SHAPE**.
 
-Migration 9 added `ingest_checkpoints` and the watcher grew an **optional** `checkpoints`
-dependency: supply it and the fingerprint map is hydrated from the database on the first
-tick, so an unchanged session is not merely ingested-and-ignored — it is never read from
-disk at all, because the runner applies its session filter before building any substrate.
-Omit it, and the watcher behaves exactly as it always did.
+Migration 9 added `ingest_checkpoints` and the watcher grew a `checkpoints` dependency that
+is optional at the watcher constructor; the server always wires it
+(`createReplayCheckpointStore(db)` in `apps/server/src/index.ts`, whenever ingest is
+enabled), so a production boot is checkpointed. Supply it and the fingerprint map is
+hydrated from the database on the first tick, so an unchanged session is not merely
+ingested-and-ignored — it is never read from disk at all, because the runner applies its
+session filter before building any substrate. Omit it (as the tests do), and the watcher
+behaves exactly as it always did. *(Amended 2026-10-08: until then this said the dependency
+was "**optional**" without saying the server always wires it.)*
 
-The optionality is the design, not a hedge. **The unconditional full replay is the fail-safe
-path and stays the default**, and it is the path the P0 double-replay proof exercises. Around
+The optionality at the constructor is the design, not a hedge. **The full replay stays the
+fail-safe**: the store degrades to an empty map — a full replay — on a revision mismatch, a
+missing `sessions` row or any error, and the P0 double-replay proof runs without the store.
+*(Amended 2026-10-08: until then this said "The unconditional full replay is the fail-safe
+path and stays the default".)* Around
 that, four rules keep the cache from ever becoming an answer:
 
 - **Scope.** Checkpoints are keyed by a sha-256 of the *resolved* corpus root, so a different
   root can never be mistaken for the same corpus — and no absolute path (which on this
   machine encodes the user's home directory and project names) is persisted.
-- **Revision.** Every row carries `REPLAY_CHECKPOINT_REVISION` (currently `1`), a stamp of
+- **Revision.** Every row carries `REPLAY_CHECKPOINT_REVISION` (currently `2`), a stamp of
   the ingest semantics that produced the projection. Bumping it when the parser, the cost
   engine or the projected schema changes invalidates every checkpoint at once, instead of
   letting a code change quietly leave stale rows in place. It is a constant in code precisely
@@ -505,17 +518,25 @@ achievable at all: **"replay-from-fixtures needs a deterministic durable source"
 (concept-analysis-v2 §2, LB1) — the golden fixture corpus (see
 [testing](../contributing/testing.md)) is replayed against exactly this mechanism.
 
-> **As built: replay-on-startup *is* the watcher's first tick.** There is no separate replay
-> mode — on process start the corpus watcher scans every session file, every fingerprint is
-> new to the fresh in-memory map, and every session is re-ingested through the same
-> parse → cost halt-gate → one-transaction path as live changes; a replay summary is logged.
-> Because the parse is pure and every write is an upsert/`INSERT OR IGNORE`, running it twice
-> leaves the projected tables identical — the double-replay P0 test (§10) asserts exactly
-> this. Determinism is delivered by purity + idempotent writes rather than by
-> replaying an `events_raw` log of JSONL envelopes (which does not exist, §4). With
-> checkpoints enabled (§6.1) the *work* of that first tick shrinks to the sessions whose
-> bytes moved; the *result* is identical either way, which is the whole reason the
-> checkpoint is allowed to exist.
+> **As built: replay-on-startup is a sweep of capped watcher ticks.** There is no separate
+> replay mode — `runStartupReplay` (`apps/server/src/index.ts`) runs the watcher's own tick
+> in passes of at most 25 sessions (`REPLAY_MAX_SESSIONS_PER_PASS` in `corpus-watcher.ts`),
+> yielding to the event loop between passes, after the loopback bind and before the
+> scheduled poll starts; `/api/health` answers `status: "replaying"` until the sweep drains.
+> Every session a pass reads goes through the same parse → cost halt-gate → one-transaction
+> path as a live change; a replay summary is logged. With the checkpoint store wired (§6.1;
+> the server always wires it) only the sessions whose fingerprint changed, or that have no
+> trusted checkpoint, are re-read; the *result* is identical either way, which is the whole
+> reason the checkpoint is allowed to exist. A read error hands the rest of the sweep to the
+> scheduled poll, which finishes it in the same capped passes. Because the parse is pure and
+> every write is an upsert/`INSERT OR IGNORE`, running it twice leaves the projected tables
+> identical — the double-replay P0 test (§10) asserts exactly this. Determinism is delivered
+> by purity + idempotent writes rather than by replaying an `events_raw` log of JSONL
+> envelopes (which does not exist, §4). *(Amended 2026-10-08: until then this block was
+> headed "replay-on-startup *is* the watcher's first tick" and described one tick that
+> scanned every session file against a fresh in-memory map, with checkpoints as an opt-in
+> that shrank that tick's work. The chunked sweep landed 2026-10-01, the read-error handover
+> 2026-10-05.)*
 
 ### 7.1 The order inside one session is itself a decision
 
@@ -555,7 +576,7 @@ all but are six *different* facts:
 
 | Outcome | What it means |
 |---|---|
-| `ingested` | A pass ran and ingested the changed sessions (carries the summary). |
+| `ingested` | A pass ran and ingested the changed sessions (carries the summary, plus `pending: boolean` — `true` when a `maxSessions` cap left sessions for a continuation pass of the same sweep). |
 | `unchanged` | A pass ran; every session on disk matched its committed fingerprint. |
 | `no-corpus-root` | No corpus root resolved — not configured, or gone. Fingerprints reset. |
 | `overlapped` | A re-entrant call arrived while a pass was in flight; this call did nothing. |
@@ -800,8 +821,10 @@ dependency edge in the build graph, not a note in a README (development-plan §1
 > holds for the **hook leg** (a duplicate hook delivery lands zero new rows, §5); and
 > "resumes at the persisted offset" was replaced by **fingerprint change → idempotent
 > whole-session re-ingest** (§6) — same zero-loss/zero-dup outcome, different mechanism, with
-> the optional `ingest_checkpoints` table (§6.1) recovering the *speed* the persisted offset
-> was meant to buy without inheriting its trust assumptions. The
+> the `ingest_checkpoints` table (§6.1; optional at the watcher constructor, always wired by
+> the server) recovering the *speed* the persisted offset
+> was meant to buy without inheriting its trust assumptions *(amended 2026-10-08: until then
+> this said "the optional `ingest_checkpoints` table")*. The
 > unknown-`event_type`-stored-not-crashed gate holds as written. Three of the Phase-3 row's
 > four items are built: the three P0 tests exist (§10), the missing-`Stop` watchdog is live
 > (§8), and compaction repricing (boundaries read from the transcript's `compactMetadata`,

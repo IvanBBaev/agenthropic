@@ -15,7 +15,7 @@ Every answer below links to the deeper reference page for the full detail.
 >
 > - **agenthropic is no longer pre-code — and it is also not released.** Implementation
 >   began **2026-07-11**. Running today: the loopback-bound, token-gated server; SQLite/WAL
->   with eighteen migrations and a daily backup timer; JSONL ingest with replay-on-startup
+>   with eighteen migrations (21 as of 2026-10-08) and a daily backup timer; JSONL ingest with replay-on-startup
 >   and tail-follow polling that re-reads only new bytes; the persisted subagent DAG; the
 >   cost engine; the hook receiver and its installer; the status watchdog that ages an
 >   unobserved agent to `unknown`; the SSE hub; the read API; and all four dashboard views
@@ -23,7 +23,7 @@ Every answer below links to the deeper reference page for the full detail.
 >   the root is at `0.3.0` with no npm release and every workspace package is
 >   `private: true`, so a checkout is the only way to run it.
 >   Test figures, re-measured **2026-09-18**: **131 test files / 2428 tests** *(re-measured
->   again 2026-09-23: **140 test files / 2621 tests**; 2026-09-26: **167 test files / 3060 tests**)*, with **100%
+>   again 2026-09-23: **140 test files / 2621 tests**; 2026-09-26: **167 test files / 3060 tests**; 2026-10-08: **180 test files / 3398 tests**; 2026-10-10: **180 test files / 3438 tests**; 2026-10-22: **184 test files / 3487 tests**)*, with **100%
 >   statements, branches, functions and lines** enforced in **all five** packages. Two
 >   things that figure does not mean. It is not *unconditionally* merge-blocking — it blocks
 >   a merge only for someone who is not the repository owner: `main` has been

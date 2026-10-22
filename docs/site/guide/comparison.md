@@ -31,7 +31,7 @@ this page (full grading rationale: [the moat §3](the-moat.md)).
 > `timingSafeEqual`, no spawner, no SSRF (the server makes no outbound network request at
 > all). Test figures, re-measured 2026-09-18: **131 test files / 2428 tests**, with **100%
 > statements, branches, functions and lines** enforced in **all five** packages
-> *(re-measured again 2026-09-23: **140 test files / 2621 tests**; 2026-09-26: **167 test files / 3060 tests**, same 100%)* —
+> *(re-measured again 2026-09-23: **140 test files / 2621 tests**; 2026-09-26: **167 test files / 3060 tests**; 2026-10-08: **180 test files / 3398 tests**; 2026-10-10: **180 test files / 3438 tests**; 2026-10-22: **184 test files / 3487 tests**, same 100%)* —
 > `packages/test-fixtures` is inside the gate, not excluded from it. Three P0 moat
 > proofs run green in CI on every push and pull request — Σ tokens against an
 > independently written reader, a byte-identical double replay, and the DAG rebuilt from
@@ -289,11 +289,11 @@ governs what is copied-with-attribution versus clean-room reimplemented all live
 > pages link to this section. **The bootstrap phase is over.** Implementation began
 > **2026-07-11**, by explicit owner override of the CD-8 no-code-before-spike gate — not
 > because the gate was cleared. What runs: the loopback-bound, token-gated server; the
-> SQLite/WAL substrate and eighteen migrations; JSONL ingest with replay-on-startup and
+> SQLite/WAL substrate and eighteen migrations (21 as of 2026-10-08); JSONL ingest with replay-on-startup and
 > tail-follow polling; the persisted subagent DAG; the cost engine; the hook receiver and
 > its installer; the status watchdog; the SSE hub; the read API; and all four dashboard
 > views plus a per-session cost-analysis panel. Re-measured 2026-09-18: **131 test files /
-> 2428 tests** *(and again 2026-09-23: **140 test files / 2621 tests**; 2026-09-26: **167 test files / 3060 tests**)*, with **100%
+> 2428 tests** *(and again 2026-09-23: **140 test files / 2621 tests**; 2026-09-26: **167 test files / 3060 tests**; 2026-10-08: **180 test files / 3398 tests**; 2026-10-10: **180 test files / 3438 tests**; 2026-10-22: **184 test files / 3487 tests**)*, with **100%
 > statements, branches, functions and lines** enforced in **all five** packages — `packages/test-fixtures` was folded inside the gate rather than left
 > out of it. Retention runs under a signed policy as of 2026-09-10: `events` rows older
 > than 90 days and backup files older than 30 days (never below the newest 7) are pruned

@@ -18,7 +18,7 @@ and price rates are illustrative pending those migrations; every bucket dimensio
 constraint, and invariant named in the tables is sourced.
 
 > **Update — 2026-07 (as built).** The paragraph above described the pre-code state.
-> Implementation began 2026-07-11, and the schema is now **real**: **twenty** ordered,
+> Implementation began 2026-07-11, and the schema is now **real**: **twenty-one** ordered,
 > idempotent, in-code migrations in `apps/server/src/db/migrations.ts` (thirteen when this
 > note was first written; the ledger table below is current as of 2026-09-26), each applied inside
 > a transaction that also records its id, name and a **sha-256 content checksum** in the
@@ -47,7 +47,7 @@ constraint, and invariant named in the tables is sourced.
 | `orchestration_edges` | Projection (moat) | **Built** (migration 5; rebuilt by migration 13, indexed by 12) | Persisted, per-instance parent→child edges; the source every tree/DAG view queries; as built derived from JSONL via **five** provenance-tagged join paths | DESIGN §4/§6, CD-4, `WP-D7`, `WP-IN8` |
 | `token_usage` | Projection | **Built** (migration 6; attribution repaired by 8, indexed by 10, `occurred_at` canonicalized and guarded by 15) | Ground-truth token rows — as built one row per `(message_id, bucket)` over five priced buckets; never pruned | DESIGN §4, CD-3/CD-4, `WP-D8` |
 | `token_usage_rollup` | Derived (work already done) | **Built** (migration 16) | Persisted rollup of `token_usage` at grain `(session_id, model, bucket, day, rate_effective_from)` — tokens and the resolved pricing row, never dollars — kept exact by triggers on both `token_usage` and `model_pricing`; the table `GET /api/cost/summary` reads; equal to a direct grouped scan by construction and pinned to it by an equivalence suite | review M-19, `WP-U4` |
-| `model_pricing` | Reference | **Built** (migration 7, converged by 11, `effective_from` canonicalized and guarded by 14, ten rows for two models added by 18; `PROVISIONAL` seed) | Versioned per-token rates, dated, per `(model, bucket)` | CD-4, `WP-C1` |
+| `model_pricing` | Reference | **Built** (migration 7, converged by 11, `effective_from` canonicalized and guarded by 14, ten rows for two models added by 18, `claude-opus-5-5` added by 19 and `claude-sonnet-5` re-priced to the official page by 20; `PROVISIONAL` seed) | Versioned per-token rates, dated, per `(model, bucket)` | CD-4, `WP-C1` |
 | `ingest_checkpoints` | Operational cache | **Built** (migration 9) | Opt-in durable replay memory: which sessions' bytes have not moved since the last run. A cache of work already done — never dashboard truth | `WP-IN10` |
 | `schema_version` | Runner bookkeeping | **Built** (the runner itself) | One row per applied migration: id, name, applied-at, sha-256 content checksum | `WP-D3` |
 | `alert_rules` | Alerting (post-1.0, KC-5 gated) | Designed, **not built** | Operator-defined trigger conditions | DESIGN §4/§7, `WP-A2` |
@@ -362,13 +362,18 @@ usage_records_dropped INTEGER NOT NULL DEFAULT 0  -- >= 0
 - `usage_records_dropped` counts the usage records in the session that carried no
   `message.id`. Without an id there is no dedupe key, and counting such a record could
   double-count a streamed retry, so it is excluded from the totals - never quarantined and
-  never given a synthetic key. The dedupe key (`message.id`) is unchanged.
+  never given a synthetic key. The dedupe key (`message.id`) is unchanged. A whole read
+  overwrites the count; a **partial** pass can only raise it *(since 2026-10-05)*, because it
+  did not read the main transcript and the records it cannot see there are still left out
+  of totals that keep the main's earlier usage.
 
 Session rows created by the hook path, before any transcript ingest, keep the defaults
 (`NULL`, `NULL`, `0`). The API carries the columns as `partial` (`null` or
 `{ reason, skippedBytes }`) and `usageRecordsDropped` on every DTO that shows a session total
-(session list, detail, tree, and the cost summary's top sessions); the cost summary also
-carries the corpus-wide `partialSessions` and `usageRecordsDropped` aggregates.
+(session list, detail, tree, the cost summary's top sessions, and the cost-analysis
+response); the cost summary also
+carries the corpus-wide `partialSessions` and `usageRecordsDropped` aggregates. *(Amended
+2026-10-08: until then this list omitted the cost-analysis response.)*
 
 ## `agents` — the self-referential subagent tree
 
@@ -880,7 +885,7 @@ Three column decisions carry the reasoning:
   A different corpus root hashes to a different scope and therefore replays in full, which
   is the correct behavior anyway.
 - **`ingest_revision` is a code-side semantics stamp** (`REPLAY_CHECKPOINT_REVISION`,
-  currently `1`). Bumping it invalidates every checkpoint at once. That is the intended
+  currently `2`). Bumping it invalidates every checkpoint at once. That is the intended
   mechanism by which a parser, cost-engine, or schema change forces the corpus to be
   re-read, instead of letting stale projections survive behind a fingerprint that still
   matches. Reuse is only ever claimed for the current revision.

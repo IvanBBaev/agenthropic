@@ -137,7 +137,9 @@ a process, and no path from request input to a shell. The refusal is guarded sta
 rather than left to review: `scripts/check-no-spawner.mjs` fails the build on
 `child_process`, `execa`, `.spawn(`, `spawnSync`, `execSync`, `execFile*`, `fork(`,
 bracket-form access to any of those, `eval(`, indirect eval, `Function(`, the `vm`
-module, `data:` dynamic imports, concatenated dynamic-import specifiers, and imports of
+module, `process.binding` / `internalBinding` / `process.dlopen` (the native layer
+`child_process` is built on; since 2026-10-10), `data:` dynamic imports, concatenated
+dynamic-import specifiers, and imports of
 subprocess-wrapper packages (`cross-spawn`, `cross-spawn-async`, `shelljs`, `node-pty`,
 `tinyexec`, `zx`, `nano-spawn`, `spawndamnit`). It scans `apps/`,
 `packages/`, `scripts/`, `hooks/` and the repo-root config files, sources and tests
@@ -173,8 +175,10 @@ them as dead markers and does not fail on them.
 ### 3. Mandatory token, timing-safe, on every route
 
 `requireDashboardToken` in `packages/shared/src/security/index.ts` throws when
-`DASHBOARD_TOKEN` is unset, empty, or shorter than `MIN_TOKEN_LENGTH` (16 characters),
-so the server refuses to start rather than defaulting to open. Comparison is
+`DASHBOARD_TOKEN` is unset, empty, shorter than `MIN_TOKEN_LENGTH` (16 characters), or
+padded with leading/trailing whitespace or a control character (no HTTP header can carry
+such a value, so no request could ever authenticate), so the server refuses to start
+rather than defaulting to open. Comparison is
 `timingSafeTokenEqual`: both sides are hashed to fixed-length SHA-256 digests before
 `crypto.timingSafeEqual`, so neither the value nor its length leaks through timing or
 through that function's equal-length precondition.
@@ -243,14 +247,21 @@ whatever an agent session happened to write. Corpus-driven parsing findings are 
 Hook payloads are scrubbed by `redactSecrets` (`apps/server/src/hooks/redact.ts`)
 *before* the envelope is built and before the idempotency key is computed
 (`apps/server/src/hooks/routes.ts`), so a raw secret never reaches the stored envelope or
-its hash, and a redelivered event redacts identically and still dedupes. Two independent
+its hash, and a redelivered event redacts identically and still dedupes. Three independent
 rules apply. Field names that normalize to a secret-bearing fragment (`token`, `secret`,
-`password`, `passwd`, `credential`, `apikey`, `authorization`, `bearer`, `privatekey`,
-`accesskey`, `sessionkey`, `cookie`) are replaced wholesale, with an explicit allowlist so
-token *count* fields such as `input_tokens` survive as the observability data they are.
-String values are then scanned for credential shapes - `sk-` keys, GitHub `ghp_`/`gho_`/
-`ghu_`/`ghs_`/`ghr_` and `github_pat_` tokens, `xox`-prefixed Slack tokens, `AKIA` access
-key ids, JWTs, and inline `Bearer` fragments - and each match is masked in place.
+`password`, `passwd`, `passphrase`, `credential`, `apikey`, `authorization`, `bearer`,
+`privatekey`, `accesskey`, `sessionkey`, `cookie`) are replaced wholesale, with an explicit
+allowlist so token *count* fields such as `input_tokens` survive as the observability data
+they are. String values are then scanned for credential shapes - `sk-` keys, GitHub
+`ghp_`/`gho_`/`ghu_`/`ghs_`/`ghr_` and `github_pat_` tokens, `xox`-prefixed Slack tokens,
+`AKIA` access key ids, JWTs, inline `Bearer` fragments, and PEM `PRIVATE KEY` blocks
+(body included; a block cut off before its END line is masked to the end of the string) -
+and each match is masked in place. Last (since 2026-10-10), a shell / env / config
+assignment `NAME=value` inside a string value whose NAME the first rule calls
+secret-bearing keeps its name and loses its value (`export DASHBOARD_TOKEN=[REDACTED]`,
+`?token=[REDACTED]&page=2`): the value of such an assignment is a random string no shape
+recognises, and `export X=...` in a prompt or a Bash tool input is the commonest way a
+credential reaches a hook payload at all.
 
 Redaction is defence in depth, not a promise that your database holds no sensitive text:
 the JSONL corpus is ingested for token counts and structure, and it is your own prompt

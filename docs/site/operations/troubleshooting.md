@@ -416,7 +416,7 @@ replay pass finishes and `"ok"` after it, and `schemaVersion`. Everything else i
 | Field | Present when | What it means |
 |---|---|---|
 | `ingestSkips` | the server was built with ingest wiring and ingest is on | Cumulative per-reason counts of skip *events* since boot (§6): every time the corpus reader declined a file, so a file declined again on a later pass counts again (a live transcript over the size cap is re-skipped each time its session is re-read; `oversize: 3` can be one file). An empty object means "wired, and nothing has been skipped". |
-| `ingest` | the server was built with ingest wiring and ingest is on | `"replaying"` between the loopback bind and the end of the startup replay pass, `"idle"` afterwards — whether or not that pass could read the corpus. |
+| `ingest` | the server was built with ingest wiring and ingest is on | `"replaying"` between the loopback bind and the end of the startup replay, `"idle"` afterwards. A replay that a read error cut short is finished by the scheduled poll and stays `"replaying"` until that drains; if the next poll cannot read the corpus either, the phase ends there — so `"idle"` does not mean the corpus could be read. |
 | `lastTickDurationMs` | at least one watcher pass has *finished* | Wall-clock duration of the last completed corpus pass. |
 | `crossSessionUsageCollisions` | the ownership-rule seam is wired (ingest is on) | Messages skipped since boot because another session had already ingested them. A genuine `0` **is** reported here. |
 | `sessionsExcluded` | the ingest-exclusions seam is wired | Sessions whose latest ingest attempt failed — each is either absent from every stored total or present in it only at an older extent than the corpus now holds (a session quarantined after a clean ingest keeps its last good pass), so dollar totals are a lower bound while this is non-zero. `status` stays `"ok"`: the server is surviving correctly, it is just not complete. *(Amended 2026-09-25 (OO): this used to say "counted nowhere".)* |
@@ -444,6 +444,33 @@ current. The token screen says *"the server accepted this token and is replaying
 corpus, please wait"* and lets you in when the replay finishes; the header shows a
 *replaying the corpus, please wait* chip and re-probes until it clears. Nothing to do
 but wait; if it never clears, check the server log for the replay pass.
+
+*(Since 2026-10-05.)* A re-probe that fails during the replay does not take the chip
+down: it reads *the server was replaying the corpus when it last answered - the latest
+check failed (...) and is being repeated*, and the page keeps asking until the server
+answers `"ok"` (or rejects the token). When the replay ends, the open Cost, DAG and
+Sessions views re-read by themselves, so figures fetched mid-replay do not outlive the
+chip; an open session tree is left alone, because a session is ingested whole. The
+page also asks health again whenever the event stream reconnects, so a server that was
+restarted under an open tab shows the chip without a reload.
+
+A replay that a read error interrupts *(since 2026-10-05)* keeps the status at
+`"replaying"`: the log says `corpus replay: the corpus could not be read`, and the
+scheduled poll picks the sweep up where it stopped, one capped pass per poll interval,
+so the rest arrives more slowly than the boot loop would have delivered it. The status
+turns `"ok"` when that sweep drains. If the very next poll cannot read the corpus
+either, the status turns `"ok"` anyway — the wait must not become a lock-out — and the
+dashboard opens on what did land; the log line is then the only sign that the corpus is
+unreadable, so read it before trusting a total after a boot that printed it. The sessions
+the sweep did not reach are still owed: they land through the scheduled poll, in the same
+capped passes, once the corpus reads again — under an `"ok"` status, so the totals keep
+growing after the status settled. Either ending is logged *(since 2026-10-08; until then
+it was silent)*: `corpus replay: the scheduled poll finished the sweep a read error cut
+short - health now says 'ok'.` when the sweep drains, or `corpus replay: the corpus still
+could not be read on the next poll (<reason>) - the phase ends here and health says 'ok'
+on what landed; ...` when the read error persists. A pass that threw after admitting its
+chunk used to count that chunk as read *(fixed 2026-10-08)*: the retry skipped it, reported
+the sweep drained, and the chunk landed only on a later plain pass.
 
 **A per-session read answering `409`** (since 2026-10-01) means the corpus holds that
 session but ingest rejected it. The body's `code` says which way: `ingest-failing` is

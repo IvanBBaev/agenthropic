@@ -63,7 +63,10 @@ and the quantified acceptance criteria in
 >   7/84. Coverage still 100% on all four axes in every package. Re-measured 2026-09-26:
   **167 test files / 3060 tests**, still green — `apps/server` 115/1629, `apps/web` 23/860,
   `packages/core` 17/338, `packages/test-fixtures` 5/139, `packages/shared` 7/94; 100% on
-  all four axes in every package.)*
+  all four axes in every package. Re-measured 2026-10-08: **180 test files / 3398 tests**; 2026-10-10: **180 test files / 3438 tests**; 2026-10-22: **184 test files / 3487 tests**, still
+  green — `apps/server` 121/1762, `apps/web` 27/1015, `packages/core` 18/351,
+  `packages/test-fixtures` 6/167, `packages/shared` 8/103; 100% on all four axes in every
+  package.)*
 > - **The coverage gate is no longer ">90%" anywhere in the repo. It is 100.** All five
 >   packages run `vitest run --coverage` and all five pin `lines`/`branches`/`functions`/
 >   `statements` at `100`, and all five are currently at 100 on every one of those four
@@ -618,7 +621,12 @@ config; 1 allowlisted; 5 line(s) inline-exempt; 6 package.json manifests checked
 direct dependencies and wide-bind scripts)` and `check-licenses: OK (406 packages / 428 installed
 versions; 405 allowlisted, 1 under a documented exception)`. Both exit 0; the package count moved
 with the dependency tree, not with the gate. Later the same day the spawner line gained the
-no-SSRF clause `; 93 server-process files checked for outbound network calls)`.)*
+no-SSRF clause `; 93 server-process files checked for outbound network calls)`. Re-measured
+2026-10-08: `check-no-spawner: OK (333 files scanned across 4 roots + repo-root config; 1
+allowlisted; 5 line(s) inline-exempt; 6 package.json manifests checked for forbidden direct
+dependencies and wide-bind scripts; 97 server-process files checked for outbound network calls)`
+and `check-licenses: OK (407 packages / 429 installed versions; 406 allowlisted, 1 under a
+documented exception)`, both exit 0.)*
 
 And the standing caveat that no coverage number escapes: 100% line and branch coverage
 records that every line and branch **executed**, not that every behaviour was
