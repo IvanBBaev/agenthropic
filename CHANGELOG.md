@@ -94,6 +94,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scheme's case (C-1, 6), all red-proven against the pre-fix code; one case documenting the S-1
   late-ingest limitation. The P0 reconciliation's independent reader now applies NN2 and the C-4
   pair rule too.
+- Tests: `packages/core/test/transcript-timespan.test.ts` pins the C-3 min/max span (out-of-order,
+  backwards, offset spellings, instant tie, unparsable in any position; 5 cases, red-proven).
 - Tests: `apps/server/test/api-dag.test.ts` pins that a dangling `orchestration_edges` row, an
   edge naming an agent id with no stored row, is counted in `totalEdges` but never returned, with
   `truncated` still `false`; `api.md` says the same, so a client reads the edge gap from the two
@@ -326,6 +328,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unchanged.
 - The `Authorization` scheme is matched case-insensitively (C-1, RFC 7235): `bearer` and
   `BEARER` are accepted; the token compare is unchanged.
+- An agent's `startedAt` / `endedAt` are the earliest and latest instants among its records, not
+  the first and last records in file order (C-3): 48 of 3777 real transcripts were out of order,
+  so the span could shrink or invert. Timestamps compare as instants, and since every timestamp
+  is now a span candidate, an unparsable one anywhere fails the session (parser-spec §6.4).
 - `/api/changes` no longer claims that chaining `since=until` is gap-free (S-1): the route and
   shared-schema docs now say a session ingested after the previous call with older event times
   is missed, and name the overlap-and-dedupe remedy. The gap itself needs an ingest-order cursor

@@ -510,6 +510,18 @@ exists there); **do not manufacture a total order the substrate does not carry.*
 `agent → workflow → ROOT` with time-ordered waves. (This is "honest uncertainty over
 confident nonsense" made concrete — see `ux0-design.md`.)
 
+### 6.4 Agent timespan — min/max by instant (C-3, owner decision 2026-10-23)
+An agent's `startedAt` / `endedAt` are the **earliest and latest instants** among its
+transcript's timestamped records — **not** the first and last records in file order. File
+order is not instant order: on 2026-10-23, **48 of 3777** real transcripts had a first or last
+record that was not the min or max (resumed / compacted transcripts append records stamped
+before earlier lines), so file order shrank or could invert the span. Timestamps are compared
+as instants (an offset spelling orders correctly against `Z`); the winning value is kept
+verbatim and canonicalized at ingest; an instant tie keeps the first spelling. Every timestamp
+is a candidate boundary, so an unparsable one **anywhere** is a `SubstrateError` (skipping it
+could silently narrow the span; 0 such timestamps in the 1.28 M on the real corpus). The §6.3 "first-record timestamp" reads as this
+earliest instant.
+
 ---
 
 ## 7. Edits to fold into the site docs — the gate has opened

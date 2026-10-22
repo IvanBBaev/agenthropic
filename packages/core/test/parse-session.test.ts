@@ -880,7 +880,9 @@ describe('parseSession — tolerates unknown records and non-transcript files', 
             jline({
               sessionId: SESSION,
               type: 'totally-unknown-event',
-              timestamp: 'x',
+              // Its timestamp is a real instant: every timestamp is a span
+              // candidate (C-3), so junk here would fail the transcript.
+              timestamp: '2026-03-01T00:00:01.000Z',
               foo: 'bar',
             }),
             jline({

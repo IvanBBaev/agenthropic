@@ -33,6 +33,7 @@
  */
 import type { AgentOutcomeCause } from '@agenthropic/shared';
 import type { DedupedUsage, TokenBuckets, UsageRow } from '../types';
+import { parseTimestampMs } from '../time';
 import { dedupeUsageByMessageId } from '../usage/dedupe';
 import { classifyAgentOutcomeCause } from './agent-outcome';
 import { LEGACY_EXPLORE_EDGE_SOURCE } from './types';
@@ -762,21 +763,40 @@ interface Timespan {
   endedAt: string;
 }
 
-/** First/last timestamped record of a transcript (parser-spec: started/ended = first/last record ts). */
+/**
+ * Earliest/latest timestamped record of a transcript, compared as instants
+ * (C-3). File order is not instant order — a resumed or compacted transcript
+ * can append records stamped before earlier lines — so first/last-in-file
+ * could shrink or invert the span. Each winning value is returned verbatim
+ * (canonicalized downstream); an instant tie keeps the first spelling. Every
+ * timestamp is a candidate boundary, so an unparsable one anywhere is a
+ * {@link SubstrateError}: skipping it could silently narrow the span.
+ */
 function transcriptTimespan(records: readonly unknown[], context: string): Timespan {
-  const timestamps: string[] = [];
+  let earliest: { value: string; ms: number } | undefined;
+  let latest: { value: string; ms: number } | undefined;
   for (const rawRecord of records) {
-    const timestamp = asString(asRecord(rawRecord)?.['timestamp']);
-    if (timestamp !== undefined) {
-      timestamps.push(timestamp);
+    const value = asString(asRecord(rawRecord)?.['timestamp']);
+    if (value === undefined) {
+      continue;
+    }
+    let ms: number;
+    try {
+      ms = parseTimestampMs(value, context);
+    } catch (error) {
+      throw new SubstrateError((error as Error).message);
+    }
+    if (earliest === undefined || ms < earliest.ms) {
+      earliest = { value, ms };
+    }
+    if (latest === undefined || ms > latest.ms) {
+      latest = { value, ms };
     }
   }
-  const first = timestamps[0];
-  const last = timestamps[timestamps.length - 1];
-  if (first === undefined || last === undefined) {
+  if (earliest === undefined || latest === undefined) {
     throw new SubstrateError(`${context}: transcript has no timestamped record`);
   }
-  return { startedAt: first, endedAt: last };
+  return { startedAt: earliest.value, endedAt: latest.value };
 }
 
 // --- Usage extraction -------------------------------------------------------
