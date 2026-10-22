@@ -29,12 +29,13 @@ describe('/api/stream with RealtimeHub', () => {
     app = undefined;
   });
 
-  async function listen(hub: RealtimeHub): Promise<string> {
+  async function listen(hub: RealtimeHub, allowedOrigins?: readonly string[]): Promise<string> {
     app = buildServer({
       token: TEST_TOKEN,
       schemaVersion: 7,
       heartbeatIntervalMs: 60_000,
       hub,
+      allowedOrigins,
     });
     await app.listen({ host: '127.0.0.1', port: 0 });
     const address = app.addresses()[0];
@@ -163,6 +164,23 @@ describe('/api/stream with RealtimeHub', () => {
     });
     expect(response.status).toBe(403);
     expect(hub.subscriberCount).toBe(0);
+  });
+
+  it('admits an operator-allowlisted Origin and still 403s any other (C-2)', async () => {
+    const hub = new RealtimeHub();
+    const baseUrl = await listen(hub, ['https://mini.tailnet.ts.net']);
+    const foreign = await fetch(`${baseUrl}/api/stream`, {
+      headers: { authorization: `Bearer ${TEST_TOKEN}`, origin: 'https://evil.example' },
+    });
+    expect(foreign.status).toBe(403);
+
+    const controller = new AbortController();
+    const allowed = await fetch(`${baseUrl}/api/stream`, {
+      headers: { authorization: `Bearer ${TEST_TOKEN}`, origin: 'https://mini.tailnet.ts.net' },
+      signal: controller.signal,
+    });
+    expect(allowed.status).toBe(200);
+    controller.abort();
   });
 
   it('resumes from Last-Event-ID: the frames missed while away arrive first', async () => {

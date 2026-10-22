@@ -27,6 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reconnects with `Last-Event-ID` (which `EventSource` sends by itself), replays the frames it
   missed before live frames resume. A longer absence, or a reconnect across a server restart,
   can still miss frames; the dashboard keeps reporting those as a stream gap.
+- `DASHBOARD_ALLOWED_ORIGINS` (C-2): an opt-in, comma-separated list of exact origins the
+  `/api/stream` same-origin check admits next to the loopback origin, for a `tailscale serve`
+  front end or an SSH forward onto a different local port, which otherwise get a `403` on the
+  stream. Empty by default, so the check is unchanged; every entry must be an exact `http`/`https`
+  origin or the server refuses to start (`*` and `null` never pass). The token and the loopback
+  bind are untouched.
 - The parser reports which Claude Code versions wrote a session (`claudeCodeVersions`), for
   provenance only; parsing still branches on directory shape, never on the version.
 - Security gate: `pnpm run gate:spawner` now enforces no-SSRF, the half of `WP-F5` that was
@@ -96,6 +102,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pair rule too.
 - Tests: `packages/core/test/transcript-timespan.test.ts` pins the C-3 min/max span (out-of-order,
   backwards, offset spellings, instant tie, unparsable in any position; 5 cases, red-proven).
+- Tests: the C-2 origin allowlist — exact-match semantics in `isAllowedOrigin` (4 cases), the
+  `DASHBOARD_ALLOWED_ORIGINS` parser (3 cases, 11 refused spellings) and an allowlisted origin
+  opening a real stream while a foreign one still gets `403`; all red-proven.
 - Tests: `apps/server/test/api-dag.test.ts` pins that a dangling `orchestration_edges` row, an
   edge naming an agent id with no stored row, is counted in `totalEdges` but never returned, with
   `truncated` still `false`; `api.md` says the same, so a client reads the edge gap from the two

@@ -985,6 +985,8 @@ export async function start(
     // is NOT a boot failure - the API serves normally and '/' explains how to
     // build the UI.
     webRoot: config.webRoot,
+    // C-2: exact extra origins for a tunnel front end; empty = loopback only.
+    allowedOrigins: config.allowedOrigins,
     // WP-C4/C5: compaction repricing and delegation savings need the raw
     // substrate (boundaries are not persisted), so the cost-analysis route gets
     // a read-only corpus seam. Same env hygiene as the watcher - config is the

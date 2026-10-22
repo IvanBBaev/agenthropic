@@ -144,12 +144,23 @@ export function redactTokenInUrl(url: string): string {
  * Same-origin check for the SSE stream. `undefined` means no Origin header -
  * a non-browser client (curl, EventSource polyfill in Node) - and is allowed
  * because the auth token still gates the request. A present Origin must be
- * exactly the loopback origin of this server; anything else is rejected (403
- * at the caller). No wildcard CORS, ever.
+ * exactly the loopback origin of this server, or exactly one of the
+ * operator's `allowedOrigins` (C-2: a tunnel or `tailscale serve` front end
+ * whose browser-visible origin is not the socket's loopback port); anything
+ * else is rejected (403 at the caller). The list is validated at startup and
+ * matched verbatim - no wildcard CORS, no prefix or case leniency, ever.
  */
-export function isAllowedOrigin(origin: string | undefined, port: number): boolean {
+export function isAllowedOrigin(
+  origin: string | undefined,
+  port: number,
+  allowedOrigins: readonly string[] = [],
+): boolean {
   if (origin === undefined) {
     return true;
   }
-  return origin === `http://127.0.0.1:${port}` || origin === `http://localhost:${port}`;
+  return (
+    origin === `http://127.0.0.1:${port}` ||
+    origin === `http://localhost:${port}` ||
+    allowedOrigins.includes(origin)
+  );
 }

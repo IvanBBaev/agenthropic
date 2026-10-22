@@ -184,6 +184,15 @@ access is no longer needed, turn the forward off (`tailscale serve --bg off`, or
 equivalent reset for whatever mode you started) — the dashboard keeps running,
 loopback-bound, unaffected either way.
 
+**The live stream and the browser-visible origin.** The realtime stream's same-origin
+check compares the browser's `Origin` header against the server's own loopback origin.
+Behind `tailscale serve` the browser sends `https://<tailscale-host>`, and behind an SSH
+forward onto a different local port it sends `http://127.0.0.1:<local-port>`; either way
+the stream answers `403` while the rest of the dashboard works. Name that origin in
+`DASHBOARD_ALLOWED_ORIGINS` (exact, comma-separated, empty by default — see
+[configuration](../usage/configuration.md)); nothing else about the check, the token or
+the bind changes. An SSH forward that keeps the same port number needs nothing.
+
 ## The token requirement does not relax over a tunnel
 
 Whichever carrier you use, the tunnel is transport only. It does not touch, weaken, or

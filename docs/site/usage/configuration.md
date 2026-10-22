@@ -18,7 +18,7 @@
 > - **Configuration is environment variables and nothing else.** There is no config
 >   file, no JSON/YAML/`.env` loader, and therefore **no precedence question** — the
 >   `(planned)` precedence discussion below describes a layering that was never built.
->   `loadConfig(env)` reads eleven variables and throws on anything unparseable rather
+>   `loadConfig(env)` reads twelve variables and throws on anything unparseable rather
 >   than falling back to a default.
 > - **The full env surface:** `DASHBOARD_TOKEN` (mandatory, **minimum 16 characters**),
 >   `DASHBOARD_PORT` (default **4317**), `DASHBOARD_DB_PATH` (default
@@ -28,7 +28,8 @@
 >   `DASHBOARD_WATCHDOG_MINUTES` (default 10), `DASHBOARD_WEB_ROOT` (the built SPA
 >   directory the single-port server serves next to `/api`; default `apps/web/dist`,
 >   resolved from the server module's own location rather than the working directory),
->   and the three retention knobs
+>   `DASHBOARD_ALLOWED_ORIGINS` (extra exact origins for the stream's same-origin check;
+>   empty by default), and the three retention knobs
 >   `DASHBOARD_RETENTION_EVENTS_DAYS` (default 90), `DASHBOARD_RETENTION_BACKUP_DAYS`
 >   (default 30) and `DASHBOARD_RETENTION_BACKUP_KEEP_MIN` (default 7). One more
 >   variable, **`DASHBOARD_INSTANCE`**, reaches the server outside `loadConfig` — the
@@ -71,7 +72,7 @@ though there is no `.env` file support; they must be actual environment variable
 ## Reference table
 
 **As built — the environment the server reads today.** There is no config file and no
-other variable; anything not in this table cannot be configured. The first eleven rows are
+other variable; anything not in this table cannot be configured. The first twelve rows are
 what `loadConfig` parses; `DASHBOARD_INSTANCE` is read separately, by the corpus identity
 resolver.
 
@@ -88,6 +89,7 @@ resolver.
 | `DASHBOARD_RETENTION_BACKUP_DAYS` | optional | `30` — signed v1.0 policy | Age window for backup files in `<dirname(DASHBOARD_DB_PATH)>/backups` | Non-negative integer up to `36500` (100 years); `0` disables the rule; empty counts as unset |
 | `DASHBOARD_RETENTION_BACKUP_KEEP_MIN` | optional | `7` — signed v1.0 policy | Keep-minimum floor for backup files: the newest N survive whatever the window says; the floor wins over the age | Positive integer (never below 1) |
 | `DASHBOARD_WEB_ROOT` | optional | `apps/web/dist`, resolved from the server module's own location (`import.meta.url`), not from the working directory | Directory of the built SPA that the single-port server serves alongside `/api`; when the bundle is absent every non-`/api` path answers `503` with a "not built yet, run `pnpm start`" message | Free-form path; empty string counts as unset |
+| `DASHBOARD_ALLOWED_ORIGINS` | optional | empty — the stream admits only `http://127.0.0.1:<port>` and `http://localhost:<port>` | Extra browser origins the `/api/stream` same-origin check admits, for a tunnel whose browser-visible origin is not the server's own loopback port (C-2, 2026-10-23). Never changes the bind host and never relaxes the token | Comma-separated; each entry must be an exact serialized `http`/`https` origin (lower-case host, no default port, no path or trailing slash, no credentials) — anything else, including `*` and `null`, is a startup error; empty counts as unset |
 | `DASHBOARD_INSTANCE` | optional | the machine's hostname | The `instance` label stamped on every persisted agent and orchestration edge | Free-form string; unset falls back to `hostname()` |
 
 **What "integer" means in those rows (parsing hardened 2026-09).** Every numeric variable
@@ -249,6 +251,26 @@ If you need to reach the dashboard from off the host, that is a tunnel problem, 
 bind-address problem — see [remote access](../security/remote-access.md): SSH
 port-forward or Tailscale only, terminating at `127.0.0.1`, never a reverse proxy to a
 widened bind.
+
+### `DASHBOARD_ALLOWED_ORIGINS` — exact extra origins for the stream, empty by default
+
+The SSE stream refuses (`403`) any request whose `Origin` header is present and is not
+the server's own loopback origin, built from the port the request arrived on. A tunnel
+that changes what the browser sees breaks that equality: an SSH forward onto a different
+local port (`ssh -L 8080:127.0.0.1:4317` → `Origin: http://127.0.0.1:8080`) or a
+`tailscale serve` HTTPS front end (`Origin: https://<tailscale-host>`) gets a `403` on
+the stream while every other route works. `DASHBOARD_ALLOWED_ORIGINS` names those
+front-end origins, comma-separated, and the check admits exactly them as well — a
+verbatim string match, no wildcard, no prefix or case leniency. Unset or empty, the
+check is unchanged. Entries are validated at startup: an entry that is not already the
+exact origin a browser sends (`https://host.example`, not `https://host.example/` or
+`https://Host.example:443`) would silently never match, so it is a startup error instead;
+`*` and `null` can never pass. The variable only widens which browser pages may *open*
+the stream: the token is still required, and the bind host is still `127.0.0.1`.
+
+```
+DASHBOARD_ALLOWED_ORIGINS=https://<tailscale-host>
+```
 
 ### `token_ref` — secrets held by reference, never by value
 

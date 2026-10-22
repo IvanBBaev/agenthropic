@@ -43,6 +43,7 @@ describe('config (WP-U0)', () => {
       pollIntervalMs: DEFAULT_POLL_INTERVAL_MS,
       watchdogMinutes: DEFAULT_WATCHDOG_MINUTES,
       webRoot: DEFAULT_WEB_ROOT,
+      allowedOrigins: [],
       retention: {
         eventsDays: DEFAULT_RETENTION_EVENTS_DAYS,
         backupDays: DEFAULT_RETENTION_BACKUP_DAYS,
@@ -239,5 +240,42 @@ describe('retention keys (WP-D10, D3 signed 2026-09-08)', () => {
     expect(() =>
       loadConfig({ DASHBOARD_TOKEN: TEST_TOKEN, DASHBOARD_RETENTION_TOKEN_USAGE_DAYS: '30' }),
     ).toThrow(/DASHBOARD_RETENTION_TOKEN_USAGE_DAYS is set, but token_usage is never pruned/);
+  });
+});
+
+describe('DASHBOARD_ALLOWED_ORIGINS (C-2, owner decision 2026-10-23)', () => {
+  function originsOf(raw: string | undefined): readonly string[] {
+    return loadConfig({ DASHBOARD_TOKEN: TEST_TOKEN, DASHBOARD_ALLOWED_ORIGINS: raw })
+      .allowedOrigins;
+  }
+
+  it("is empty when unset or empty - the default is today's loopback-only check", () => {
+    expect(originsOf(undefined)).toEqual([]);
+    expect(originsOf('')).toEqual([]);
+  });
+
+  it('reads a comma-separated list, trimming whitespace around entries', () => {
+    expect(originsOf('https://mini.tailnet.ts.net, http://127.0.0.1:8080')).toEqual([
+      'https://mini.tailnet.ts.net',
+      'http://127.0.0.1:8080',
+    ]);
+  });
+
+  it('refuses every entry that is not exactly a serialized http(s) origin', () => {
+    for (const bad of [
+      '*',
+      'null',
+      'https://mini.tailnet.ts.net/',
+      'https://mini.tailnet.ts.net/path',
+      'https://MINI.tailnet.ts.net',
+      'https://mini.tailnet.ts.net:443',
+      'https://user@mini.tailnet.ts.net',
+      'ftp://mini.tailnet.ts.net',
+      'mini.tailnet.ts.net',
+      'https://a.example,',
+      'https://a.example,,https://b.example',
+    ]) {
+      expect(() => originsOf(bad), bad).toThrow(/Invalid DASHBOARD_ALLOWED_ORIGINS/);
+    }
   });
 });

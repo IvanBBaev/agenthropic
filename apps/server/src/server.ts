@@ -129,6 +129,12 @@ export interface BuildServerOptions {
    * composition root always passes it (see config.webRoot).
    */
   readonly webRoot?: string;
+  /**
+   * Extra exact origins the /api/stream same-origin check admits (C-2,
+   * `DASHBOARD_ALLOWED_ORIGINS`, validated by loadConfig). Absent or empty is
+   * the loopback-only check.
+   */
+  readonly allowedOrigins?: readonly string[];
 }
 
 const STREAM_PATH = '/api/stream';
@@ -285,7 +291,7 @@ export function buildServer(options: BuildServerOptions) {
       // Same-origin check first: a foreign Origin is rejected outright (403),
       // token or not - the browser attack surface is closed before auth.
       const localPort = request.raw.socket.localPort ?? 0;
-      if (!isAllowedOrigin(request.headers.origin, localPort)) {
+      if (!isAllowedOrigin(request.headers.origin, localPort, options.allowedOrigins)) {
         return reply
           .code(403)
           .send({ error: 'Cross-origin access to the event stream is forbidden.' });

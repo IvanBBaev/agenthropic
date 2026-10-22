@@ -81,6 +81,14 @@ export interface ServerConfig {
    */
   readonly webRoot: string;
   /**
+   * Extra browser origins admitted by the /api/stream same-origin check
+   * (`DASHBOARD_ALLOWED_ORIGINS`, C-2). Empty by default, which is exactly the
+   * loopback-only check. It exists for a tunnel or `tailscale serve` front end
+   * whose browser-visible origin differs from the socket's loopback port; it
+   * never changes the bind host and never relaxes the token gate.
+   */
+  readonly allowedOrigins: readonly string[];
+  /**
    * The signed retention numbers (`DASHBOARD_RETENTION_EVENTS_DAYS`,
    * `DASHBOARD_RETENTION_BACKUP_DAYS`, `DASHBOARD_RETENTION_BACKUP_KEEP_MIN`).
    * There is no `token_usage` window: v1.0 never prunes cost ground truth.
@@ -111,6 +119,7 @@ export function loadConfig(env: Record<string, string | undefined>): ServerConfi
     DEFAULT_WATCHDOG_MINUTES,
   );
   const webRoot = parseWebRoot(env['DASHBOARD_WEB_ROOT']);
+  const allowedOrigins = parseAllowedOrigins(env['DASHBOARD_ALLOWED_ORIGINS']);
   const retention = loadRetentionValues(env);
   return {
     token,
@@ -121,6 +130,7 @@ export function loadConfig(env: Record<string, string | undefined>): ServerConfi
     pollIntervalMs,
     watchdogMinutes,
     webRoot,
+    allowedOrigins,
     retention,
   };
 }
@@ -169,6 +179,40 @@ function parseCorpusRoot(raw: string | undefined): string | null {
  */
 function parseWebRoot(raw: string | undefined): string {
   return raw === undefined || raw === '' ? DEFAULT_WEB_ROOT : raw;
+}
+
+/**
+ * Comma-separated origins, whitespace around entries trimmed; empty counts as
+ * unset (no extra origins). Every entry must already be the exact serialized
+ * origin a browser sends - an http: or https: scheme, lower-case host, no default port,
+ * no path, no trailing slash, no credentials - because the stream check
+ * compares strings verbatim: an entry that is not canonical would never match
+ * and fail silently, so it fails the boot instead. `*` and `null` cannot pass.
+ */
+function parseAllowedOrigins(raw: string | undefined): readonly string[] {
+  if (raw === undefined || raw === '') {
+    return [];
+  }
+  return raw.split(',').map((part) => {
+    const entry = part.trim();
+    if (!isSerializedHttpOrigin(entry)) {
+      throw new Error(
+        `Invalid DASHBOARD_ALLOWED_ORIGINS entry "${entry}": expected a comma-separated list of ` +
+          'exact http(s) origins such as https://host.example (no path, no trailing slash).',
+      );
+    }
+    return entry;
+  });
+}
+
+function isSerializedHttpOrigin(entry: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(entry);
+  } catch {
+    return false;
+  }
+  return (url.protocol === 'http:' || url.protocol === 'https:') && url.origin === entry;
 }
 
 /**

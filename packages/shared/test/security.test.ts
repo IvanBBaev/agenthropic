@@ -238,4 +238,35 @@ describe('isAllowedOrigin', () => {
   it('rejects the empty string origin', () => {
     expect(isAllowedOrigin('', PORT)).toBe(false);
   });
+
+  describe('operator allowlist (C-2, DASHBOARD_ALLOWED_ORIGINS)', () => {
+    const TUNNEL = 'https://mini.tailnet.ts.net';
+
+    it('allows an origin that is exactly on the allowlist', () => {
+      expect(isAllowedOrigin(TUNNEL, PORT, [TUNNEL])).toBe(true);
+    });
+
+    it('still allows the loopback origins next to an allowlist', () => {
+      expect(isAllowedOrigin(`http://127.0.0.1:${PORT}`, PORT, [TUNNEL])).toBe(true);
+      expect(isAllowedOrigin(undefined, PORT, [TUNNEL])).toBe(true);
+    });
+
+    it('matches exactly - no prefix, suffix, path or case leniency', () => {
+      for (const origin of [
+        `${TUNNEL}.evil.example`,
+        `${TUNNEL}/`,
+        'https://MINI.tailnet.ts.net',
+        'http://mini.tailnet.ts.net',
+        'https://mini.tailnet.ts.net:8443',
+      ]) {
+        expect(isAllowedOrigin(origin, PORT, [TUNNEL])).toBe(false);
+      }
+    });
+
+    it('rejects foreign origins, "null" and "" with an allowlist set', () => {
+      expect(isAllowedOrigin('http://evil.example.com', PORT, [TUNNEL])).toBe(false);
+      expect(isAllowedOrigin('null', PORT, [TUNNEL])).toBe(false);
+      expect(isAllowedOrigin('', PORT, [TUNNEL])).toBe(false);
+    });
+  });
 });
