@@ -54,3 +54,5 @@ export declare function scanTree(rootDir: string): SpawnerFindings;
 export declare function formatReport(findings: SpawnerFindings): GateReport;
 /** True when `argv1` resolves to the same file as `moduleUrl` (II1: symlink-safe). */
 export declare function isMainModule(argv1: string | undefined, moduleUrl: string): boolean;
+/** The package an npm alias spec installs (`npm:<name>@<range>` or `npm:<name>`), or undefined when the spec is not an alias (AU-2). */
+export declare function aliasedPackageName(spec: unknown): string | undefined;

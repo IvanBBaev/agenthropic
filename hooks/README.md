@@ -61,7 +61,7 @@ stop hooks carry the entire ending signal the dashboard has:
 
 | Hook | Status it applies | To which agent |
 |---|---|---|
-| `SubagentStop` | `completed` | the subagent named by `agent_id`, else the one derived from an `agent-<hex>.jsonl` `transcript_path` |
+| `SubagentStop` | `completed` | the subagent named by `agent_id`, else the one derived from an `agent-<hex>.jsonl` path in `agent_transcript_path` (read first since 2026-10-10: Claude Code ≥ 2.1.251 puts the *parent's* file in `transcript_path`) or `transcript_path` |
 | `Stop` | `waiting` | the session's main agent — **not** `completed`, because `Stop` fires at the end of every *turn* (see below), so it means "idle right now" |
 
 **If you do not install these hooks, nothing in the dashboard will ever say
@@ -154,8 +154,8 @@ Options:
 
 | Flag | Meaning |
 | --- | --- |
-| `--out <path>` | Settings file to create/update. Without it, print to stdout. |
-| `--port <n>` | Dashboard port (default `4317`, matching the server default). |
+| `--out <path>` | Settings file to create/update. Without it, print to stdout. A path beginning with a literal `~` is refused (see HK-6 below). |
+| `--port <n>` | Dashboard port (default `4317`, matching the server default). Decimal digits only (see HK-6 below). |
 | `--token-env <NAME>` | Env var name the command reads the token from (default `DASHBOARD_TOKEN`). |
 | `--dry-run` | Show what would be written; write nothing. |
 | `--remove` | Strip previously installed agenthropic entries, keep everything else. |
@@ -186,6 +186,20 @@ behaviour stronger than the one the installer had.
   `Created directory ...` and `Wrote ...`. Removing hooks from a file that was
   never there brought a settings file into existence. `--remove` against a
   missing file is now a reported no-op: no directory, no file, exit 0.
+
+AMENDED 2026-10-10 (finding HK-6). Two values the table above accepted were
+not the values the operator typed.
+
+- `--port` went through `Number()`, and `Number('0x1388')`, `Number('5e3')`,
+  `Number(' 5000')` and `Number('+5000')` are all `5000`, so a mistyped port
+  passed the integer check and was installed as if it had been typed correctly.
+  A port is now a plain run of decimal digits and nothing else; `04317` is
+  still `4317`.
+- `--out '~/.claude/settings.json'` (quoted, so the shell did not expand the
+  `~`) reached the installer unexpanded, and the write path created a directory
+  literally named `~` in the current directory and installed into it. A path
+  that begins with `~` is now refused with a message that says why; unquote it
+  or write the absolute path.
 
 ## Merge behavior and rollback
 
@@ -234,6 +248,14 @@ the file into the installer's two-space shape, and printed `Backed up existing
 file to ...` plus `Wrote ...` about a removal that removed nothing. Removal is
 now decided on meaning rather than on bytes, which is the case the H-2 wording
 above was already reaching for.
+
+AMENDED 2026-10-10 (finding HK-3). The L-3 rule had one gap left: a file holding
+an EMPTY `hooks` object (`{"hooks": {}}`) or an empty foreign event list
+(`{"hooks": {"Stop": []}}`). Removal dropped every empty container whoever had
+emptied it, so the result differed in meaning from the file, the L-3 check saw
+a change, and `--remove` backed up and rewrote the file as `{}` about a removal
+that removed nothing. Only a container that THIS removal emptied is dropped
+now; one that was already empty is the operator's shape and stays as found.
 
 AMENDED 2026-09-07 (findings H-2, H-3). The two bullets above are new, and both
 correct something this section used to imply rather than say. On the first: the

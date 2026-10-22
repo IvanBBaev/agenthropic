@@ -91,6 +91,7 @@
  */
 import {
   chmodSync,
+  constants as fsConstants,
   copyFileSync,
   existsSync,
   lstatSync,
@@ -105,7 +106,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 /** The four real Claude Code lifecycle hooks this project consumes. */
 export const HOOK_EVENTS = Object.freeze([
@@ -574,8 +575,16 @@ export function mergeHooksIntoSettings(settings, hooksConfig) {
 
 /**
  * Remove previously installed agenthropic entries from a settings object,
- * preserving everything else. Events left with no entries are dropped; a
- * `hooks` object left empty is dropped.
+ * preserving everything else. An event list THIS removal emptied is dropped,
+ * and a `hooks` object THIS removal emptied is dropped; a list or object that
+ * was already empty is the operator's shape and is left as found.
+ *
+ * HK-3 (2026-10-10). The containers used to be dropped whenever they were
+ * empty, whoever emptied them: `--remove` over `{"hooks": {}}` (or over an
+ * empty foreign event list) removed nothing, yet the serialised result
+ * differed from the file, so the L-3 "nothing to remove" check in `runInstall`
+ * saw a change, took a backup, and rewrote the file as `{}` - a removal that
+ * removed nothing, announced as `Backed up ...` + `Wrote ...`.
  */
 export function removeAgenthropicHooks(settings) {
   const cleaned = normalizeSettings(settings);
@@ -583,18 +592,20 @@ export function removeAgenthropicHooks(settings) {
     return cleaned;
   }
   const hooks = cleaned.hooks;
+  let droppedAnEvent = false;
   for (const [event, entries] of Object.entries(hooks)) {
     if (!Array.isArray(entries)) {
       continue; // never touch malformed foreign data on removal
     }
     const pruned = pruneEventEntries(entries, event);
-    if (pruned.length === 0) {
+    if (pruned.length === 0 && entries.length > 0) {
       delete hooks[event];
+      droppedAnEvent = true;
     } else {
       hooks[event] = pruned;
     }
   }
-  if (Object.keys(hooks).length === 0) {
+  if (droppedAnEvent && Object.keys(hooks).length === 0) {
     delete cleaned.hooks;
   }
   return cleaned;
@@ -634,11 +645,30 @@ export function parseArgs(argv) {
       return value;
     };
     switch (arg) {
-      case '--out':
-        options.out = takeValue();
+      case '--out': {
+        const out = takeValue();
+        // HK-6 (2026-10-10). A quoted '~/.claude/settings.json' reaches the
+        // process unexpanded; the write path would then create a directory
+        // literally named "~" in the current directory and install into it.
+        if (out.startsWith('~')) {
+          throw new Error(
+            `Invalid --out path ${out}: it begins with an unexpanded ~. Unquote it so the ` +
+              `shell expands it, or pass the absolute path.\n\n${USAGE}`,
+          );
+        }
+        options.out = out;
         break;
+      }
       case '--port': {
-        const port = Number(takeValue());
+        const raw = takeValue();
+        // HK-6 (2026-10-10). Number('0x1388'), Number('5e3'), Number(' 5000')
+        // and Number('+5000') are all 5000, so a typo reached assertValidPort
+        // as a valid integer and was installed as if the operator had typed it.
+        // A port is a plain run of decimal digits and nothing else.
+        if (!/^\d{1,5}$/.test(raw)) {
+          throw new Error(`Invalid port ${raw}: expected an integer between 1 and 65535.`);
+        }
+        const port = Number(raw);
         assertValidPort(port);
         options.port = port;
         break;
@@ -799,6 +829,34 @@ function backupTimestamp(now) {
   return now.toISOString().replace(/[:.]/g, '-');
 }
 
+const BACKUP_NAME_ATTEMPTS = 100;
+
+/**
+ * Copy `out` to `base`, or to `base-1` .. `base-99` when that name is taken,
+ * and return the name used. AU nit (2026-10-22): the plain `copyFileSync` used
+ * to overwrite whatever already held the backup name - an earlier backup taken
+ * in the same millisecond, or a planted symlink it would write THROUGH.
+ * `COPYFILE_EXCL` refuses an existing destination, a symlink included, so no
+ * existing file is ever touched; when every name is taken the run throws before
+ * anything is written.
+ *
+ * @param {string} out
+ * @param {string} base
+ * @returns {string}
+ */
+function copyToFreeBackupName(out, base) {
+  for (let attempt = 0; attempt < BACKUP_NAME_ATTEMPTS; attempt += 1) {
+    const candidate = attempt === 0 ? base : `${base}-${attempt}`;
+    try {
+      copyFileSync(out, candidate, fsConstants.COPYFILE_EXCL);
+      return candidate;
+    } catch (error) {
+      if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'EEXIST') throw error;
+    }
+  }
+  throw new Error(`no free backup name for ${out} after ${BACKUP_NAME_ATTEMPTS} attempts`);
+}
+
 /**
  * Run the installer. Pure orchestration over the exported pure functions;
  * the ONLY file it ever writes are `out` and `out`'s backup. Returns a
@@ -877,8 +935,7 @@ export function runInstall({
 
   let backupPath;
   if (fileExisted) {
-    backupPath = `${out}.backup-${backupTimestamp(now())}`;
-    copyFileSync(out, backupPath);
+    backupPath = copyToFreeBackupName(out, `${out}.backup-${backupTimestamp(now())}`);
   }
   // H-3 (2026-09-07). `recursive: true` materialises the WHOLE parent tree, so a
   // typo (`--out .clade/settings.json`) succeeded, reported `Wrote ...`, and left
@@ -893,9 +950,29 @@ export function runInstall({
   return { action: 'written', outPath: out, backupPath, createdDirectory, settingsText };
 }
 
+/**
+ * Is `moduleUrl` the script Node was asked to run? Kept in step with the copy
+ * in `scripts/check-no-spawner.mjs`.
+ *
+ * @param {string | undefined} argv1
+ * @param {string} moduleUrl
+ * @returns {boolean}
+ */
+export function isMainModule(argv1, moduleUrl) {
+  if (argv1 === undefined) return false;
+  try {
+    return realpathSync(argv1) === realpathSync(fileURLToPath(moduleUrl));
+  } catch {
+    return moduleUrl === pathToFileURL(argv1).href;
+  }
+}
+
 /* c8 ignore start - CLI entry, exercised only when run as a script */
-const isMain =
-  process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+// AU-6 (2026-10-22): the realpath comparison the gate scripts got in II1. Node
+// resolves symlinks in `import.meta.url` but not in `argv[1]`, so the plain URL
+// comparison was false from a symlinked checkout (or macOS `/tmp`) and the
+// installer exited 0 having written nothing.
+const isMain = isMainModule(process.argv[1], import.meta.url);
 if (isMain) {
   try {
     const options = parseArgs(process.argv.slice(2));

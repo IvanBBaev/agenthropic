@@ -18,7 +18,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   DEFAULT_PORT,
@@ -31,6 +31,7 @@ import {
   classifyHookCommand,
   formatSettings,
   isAgenthropicHookCommand,
+  isMainModule,
   mergeHooksIntoSettings,
   parseArgs,
   removeAgenthropicHooks,
@@ -400,6 +401,13 @@ describe('removeAgenthropicHooks (WP-X8)', () => {
   it('leaves settings without hooks untouched', () => {
     expect(removeAgenthropicHooks({ theme: 'dark' })).toEqual({ theme: 'dark' });
   });
+
+  it('leaves containers that were already empty as found (HK-3)', () => {
+    // Only a container THIS removal emptied is dropped. An empty `hooks` object
+    // or an empty foreign event list is the operator's shape, not ours to tidy.
+    expect(removeAgenthropicHooks({ hooks: {} })).toEqual({ hooks: {} });
+    expect(removeAgenthropicHooks({ hooks: { Stop: [] } })).toEqual({ hooks: { Stop: [] } });
+  });
 });
 
 describe('parseArgs (WP-X8)', () => {
@@ -432,6 +440,24 @@ describe('parseArgs (WP-X8)', () => {
   it('recognizes --help', () => {
     expect(parseArgs(['--help']).help).toBe(true);
     expect(parseArgs(['-h']).help).toBe(true);
+  });
+
+  it('refuses a port that is not a plain decimal integer (HK-6)', () => {
+    // Number('0x1388'), Number('5e3'), Number(' 5000') and Number('+5000') are
+    // all 5000, so a typo reached assertValidPort as a valid integer and was
+    // installed as if the operator had typed it.
+    for (const raw of ['0x1388', '5e3', ' 5000', '+5000', '5000.0', '']) {
+      expect(() => parseArgs(['--port', raw])).toThrow(/Invalid port/);
+    }
+    expect(parseArgs(['--port', '04317']).port).toBe(4317);
+  });
+
+  it('refuses an --out path with a literal, unexpanded ~ (HK-6)', () => {
+    // A quoted '~/.claude/settings.json' reaches the installer unexpanded, and
+    // the write path would create a directory literally named "~" in the cwd.
+    expect(() => parseArgs(['--out', '~/.claude/settings.json'])).toThrow(/unexpanded ~/);
+    expect(() => parseArgs(['--out', '~'])).toThrow(/unexpanded ~/);
+    expect(parseArgs(['--out', '/home/u/~/settings.json']).out).toBe('/home/u/~/settings.json');
   });
 });
 
@@ -604,6 +630,34 @@ describe('runInstall file workflow (WP-X8)', () => {
     expect(readFileSync(out, 'utf8')).toBe(FOREIGN_ONLY_FOUR_SPACE);
   });
 
+  it('--remove over a file holding an empty hooks object writes nothing (HK-3)', () => {
+    // `{"hooks": {}}` held nothing of ours, yet removal dropped the empty
+    // object, the serialised text differed, and the file was backed up and
+    // rewritten as `{}` - a removal that removed nothing, announced as a write.
+    runInstall({ out, now: fixedNow }); // only to materialise the parent tree
+    const EMPTY_HOOKS_FOUR_SPACE = '{\n    "hooks": {}\n}\n';
+    writeFileSync(out, EMPTY_HOOKS_FOUR_SPACE, 'utf8');
+
+    const result = runInstall({ out, remove: true, now: fixedNow });
+
+    expect(result.action).toBe('nothing-to-remove');
+    expect(result.backupPath).toBeUndefined();
+    expect(readFileSync(out, 'utf8')).toBe(EMPTY_HOOKS_FOUR_SPACE);
+    expect(readdirSync(join(dir, '.claude'))).toEqual(['settings.json']);
+  });
+
+  it('--remove over an empty foreign event list writes nothing (HK-3)', () => {
+    runInstall({ out, now: fixedNow });
+    const EMPTY_EVENT = '{\n  "hooks": {\n    "Stop": []\n  }\n}\n';
+    writeFileSync(out, EMPTY_EVENT, 'utf8');
+
+    const result = runInstall({ out, remove: true, now: fixedNow });
+
+    expect(result.action).toBe('nothing-to-remove');
+    expect(result.backupPath).toBeUndefined();
+    expect(readFileSync(out, 'utf8')).toBe(EMPTY_EVENT);
+  });
+
   it('--remove still writes when there IS something of ours to remove (L-3 guard-rail)', () => {
     runInstall({ out, now: fixedNow });
     const result = runInstall({ out, remove: true, now: fixedNow });
@@ -769,5 +823,100 @@ describe('runInstall file workflow (WP-X8)', () => {
     // Left behind and intact: the installer never recursively deletes a
     // directory it did not create.
     expect(statSync(tempPath).isDirectory()).toBe(true);
+  });
+
+  // AU nit (2026-10-22). The backup copy used to overwrite whatever held its
+  // name - an earlier backup from the same millisecond, or a planted symlink it
+  // wrote THROUGH. It now never touches an existing entry and takes -1, -2, ...
+  it('never overwrites an existing backup or writes through a planted symlink', () => {
+    mkdirSync(join(dir, '.claude'));
+    writeFileSync(out, formatSettings({ theme: 'dark' }), 'utf8');
+    const base = `${out}.backup-2026-07-18T10-00-00-000Z`;
+    writeFileSync(base, 'EARLIER', 'utf8');
+    const victim = join(dir, 'victim.txt');
+    writeFileSync(victim, 'VICTIM', 'utf8');
+    symlinkSync(victim, `${base}-1`);
+
+    const result = runInstall({ out, now: fixedNow });
+
+    expect(result.action).toBe('written');
+    expect(result.backupPath).toBe(`${base}-2`);
+    expect(readFileSync(`${base}-2`, 'utf8')).toBe(formatSettings({ theme: 'dark' }));
+    expect(readFileSync(base, 'utf8')).toBe('EARLIER');
+    expect(readFileSync(victim, 'utf8')).toBe('VICTIM');
+    expect(lstatSync(`${base}-1`).isSymbolicLink()).toBe(true);
+  });
+
+  it('refuses before writing anything when every backup name is taken', () => {
+    mkdirSync(join(dir, '.claude'));
+    const original = formatSettings({ theme: 'dark' });
+    writeFileSync(out, original, 'utf8');
+    const base = `${out}.backup-2026-07-18T10-00-00-000Z`;
+    writeFileSync(base, 'TAKEN', 'utf8');
+    for (let n = 1; n < 100; n += 1) writeFileSync(`${base}-${String(n)}`, 'TAKEN', 'utf8');
+
+    expect(() => runInstall({ out, now: fixedNow })).toThrow(
+      /no free backup name for .* after 100 attempts/,
+    );
+    expect(readFileSync(out, 'utf8')).toBe(original);
+    expect(existsSync(`${base}-100`)).toBe(false);
+    expect(readFileSync(`${base}-99`, 'utf8')).toBe('TAKEN');
+  });
+});
+
+// AU-6 (2026-10-22). Node resolves symlinks in `import.meta.url` but leaves
+// `process.argv[1]` as typed, so the installer run through a symlinked path
+// (a symlinked checkout, macOS `/tmp`) did not recognise itself as the entry
+// point and exited 0 having written nothing. Same helper as the gate scripts
+// got in II1; the cases mirror theirs.
+describe('installer isMainModule (AU-6)', () => {
+  function symlinkedModule(): { real: string; link: string; other: string; dir: string } {
+    const base = mkdtempSync(join(tmpdir(), 'agenthropic-installer-main-'));
+    mkdirSync(join(base, 'real'));
+    const real = join(base, 'real', 'install.mjs');
+    const other = join(base, 'real', 'other.mjs');
+    writeFileSync(real, 'export {};\n', 'utf8');
+    writeFileSync(other, 'export {};\n', 'utf8');
+    const link = join(base, 'linked');
+    symlinkSync(join(base, 'real'), link, 'dir');
+    return { real, link: join(link, 'install.mjs'), other, dir: base };
+  }
+
+  const created: string[] = [];
+  afterEach(() => {
+    for (const path of created) rmSync(path, { recursive: true, force: true });
+    created.length = 0;
+  });
+
+  it('recognises itself when run through a symlinked path', () => {
+    const { real, link, dir } = symlinkedModule();
+    created.push(dir);
+    const moduleUrl = pathToFileURL(real).href;
+    expect(isMainModule(link, moduleUrl)).toBe(true);
+    expect(isMainModule(real, moduleUrl)).toBe(true);
+  });
+
+  it('rejects an unrelated entry point', () => {
+    const { real, other, dir } = symlinkedModule();
+    created.push(dir);
+    expect(isMainModule(other, pathToFileURL(real).href)).toBe(false);
+  });
+
+  it('rejects a missing or nonexistent argv[1]', () => {
+    const { real, dir } = symlinkedModule();
+    created.push(dir);
+    const moduleUrl = pathToFileURL(real).href;
+    expect(isMainModule(undefined, moduleUrl)).toBe(false);
+    expect(isMainModule(join(dir, 'real', 'absent.mjs'), moduleUrl)).toBe(false);
+  });
+
+  it('falls back to the URL comparison when a path cannot be resolved', () => {
+    // Neither side exists on disk, so realpath fails and the plain string
+    // comparison decides.
+    const base = mkdtempSync(join(tmpdir(), 'agenthropic-installer-ghost-'));
+    created.push(base);
+    const ghost = join(base, 'ghost.mjs');
+    expect(isMainModule(ghost, pathToFileURL(ghost).href)).toBe(true);
+    expect(isMainModule(ghost, pathToFileURL(join(base, 'other.mjs')).href)).toBe(false);
   });
 });

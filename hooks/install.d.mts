@@ -96,3 +96,5 @@ export interface RunInstallResult {
 }
 
 export declare function runInstall(options?: RunInstallOptions): RunInstallResult;
+/** True when `argv1` resolves to the same file as `moduleUrl` (AU-6: symlink-safe, same check as the gate scripts). */
+export declare function isMainModule(argv1: string | undefined, moduleUrl: string): boolean;

@@ -30,6 +30,7 @@ import { pathToFileURL } from 'node:url';
 
 import {
   INLINE_ALLOW,
+  aliasedPackageName,
   formatReport as formatSpawnerReport,
   isMainModule as isSpawnerGateMain,
   scanTree,
@@ -334,6 +335,38 @@ describe('check-no-spawner: scanTree / formatReport', () => {
     expect(findings.offenders).toEqual([
       `apps/server/src/evil.ts:1  [vm module]  ${bare}`,
       `apps/server/src/evil.ts:2  [vm module]  ${prefixed}`,
+    ]);
+    expect(formatSpawnerReport(findings).exitCode).toBe(1);
+  });
+
+  // CI-1 (2026-10-10). The two native-binding entry points on `process` (the
+  // `binding` member and the internal-binding global) reach the native layer
+  // underneath the child-process module (`spawn_sync`, `pipe_wrap`), and the dynamic
+  // loader member (`dlopen`) loads an arbitrary shared object, so each is a
+  // subprocess or native-code surface that spells no forbidden module name.
+  // The header's "no subprocess surface" claim did not cover them. Every token
+  // below is assembled so the gate scanning THIS file does not trip on the
+  // test itself - not even in this comment.
+  it('flags the native-binding and dlopen surfaces, dot or bracket form (CI-1)', () => {
+    const { root } = makeFixture();
+    const bindingLabel = `${['process', 'binding'].join('.')} / ${['internal', 'Binding'].join('')}`;
+    const dlopenLabel = ['process', 'dlopen'].join('.');
+    const dotBinding = `const wrap = ${['process', 'binding'].join('.')}('spawn_sync');`;
+    const bracketBinding = `const w2 = ${['process', "['binding']"].join('')}('pipe_wrap');`;
+    const internal = `const b = ${['internal', 'Binding'].join('')}('pipe_wrap');`;
+    const dlopen = `${['process', 'dlopen'].join('.')}(module, '/tmp/evil.node');`;
+    write(
+      root,
+      'apps/server/src/evil.ts',
+      `${dotBinding}\n${bracketBinding}\n${internal}\n${dlopen}\nconst bindingCount = 1;\n`,
+    );
+
+    const findings = scanTree(root);
+    expect(findings.offenders).toEqual([
+      `apps/server/src/evil.ts:1  [${bindingLabel}]  ${dotBinding}`,
+      `apps/server/src/evil.ts:2  [${bindingLabel}]  ${bracketBinding}`,
+      `apps/server/src/evil.ts:3  [${bindingLabel}]  ${internal}`,
+      `apps/server/src/evil.ts:4  [${dlopenLabel}]  ${dlopen}`,
     ]);
     expect(formatSpawnerReport(findings).exitCode).toBe(1);
   });
@@ -776,4 +809,188 @@ describe('gate scripts: isMainModule', () => {
       expect(isMain(ghost, pathToFileURL(ghost).href)).toBe(true);
     },
   );
+});
+
+// --- AU-1..AU-5 (2026-10-22): holes the hooks/scripts audit found in the gate --
+// Every forbidden token below is assembled at run time - see the header - so
+// the gate scanning THIS file does not trip on its own test.
+describe('check-no-spawner: audit holes AU-1..AU-5 (2026-10-22)', () => {
+  const sp = ['sp', 'awn'].join('');
+  const ev = ['ev', 'al'].join('');
+  const fk = ['fo', 'rk'].join('');
+  const imp = ['imp', 'ort'].join('');
+  const xv = ['exec', 've'].join('');
+
+  // AU-1: the exec-ve member of `process` (Node 22+) replaces the running
+  // process with any executable - a subprocess launch that spells no module
+  // name. The dot and bracket forms are both flagged; a look-alike member on
+  // another object and the bare word are not.
+  it('flags the process exec-ve member in dot and bracket form, not a look-alike (AU-1)', () => {
+    const { root } = makeFixture();
+    const label = ['process', xv].join('.');
+    const dot = `${['process', xv].join('.')}('/bin/sh', ['-c', 'id']);`;
+    const spaced = `${['process', xv].join(' . ')}('/bin/sh');`;
+    const bracket = `${['process', `['${xv}']`].join('')}('/bin/sh');`;
+    const clean = [`const myprocess = { ${xv}: 1 };`, `const ${xv}Count = 2;`];
+    write(root, 'apps/server/src/evil.ts', `${[dot, spaced, bracket, ...clean].join('\n')}\n`);
+
+    const findings = scanTree(root);
+    expect(findings.offenders).toEqual([
+      `apps/server/src/evil.ts:1  [${label}]  ${dot}`,
+      `apps/server/src/evil.ts:2  [${label}]  ${spaced}`,
+      `apps/server/src/evil.ts:3  [${label}]  ${bracket}`,
+    ]);
+    expect(formatSpawnerReport(findings).exitCode).toBe(1);
+  });
+
+  // AU-2: an npm alias installs the real package under an innocent key, so the
+  // aliased name is tested against the same denylists as the key.
+  it('resolves the package behind an npm alias spec (AU-2)', () => {
+    expect(aliasedPackageName('npm:@scope/pkg@1')).toBe('@scope/pkg');
+    expect(aliasedPackageName('npm:@scope/pkg')).toBe('@scope/pkg');
+    expect(aliasedPackageName('npm:pkg')).toBe('pkg');
+    expect(aliasedPackageName('npm:pkg@^2.0.0')).toBe('pkg');
+    expect(aliasedPackageName(' npm:pkg@1 ')).toBe('pkg');
+    expect(aliasedPackageName('^1.0.0')).toBeUndefined();
+    expect(aliasedPackageName('npm:')).toBeUndefined();
+    expect(aliasedPackageName('file:../pkg')).toBeUndefined();
+    expect(aliasedPackageName(42)).toBeUndefined();
+    expect(aliasedPackageName(undefined)).toBeUndefined();
+    expect(aliasedPackageName(null)).toBeUndefined();
+  });
+
+  it('flags a forbidden package hidden behind an npm alias, naming both names (AU-2)', () => {
+    const { root } = makeFixture();
+    const crossSpawn = `cross-${sp}`;
+    write(
+      root,
+      'packages/core/package.json',
+      JSON.stringify({
+        name: 'core',
+        dependencies: { cs: `npm:${crossSpawn}@7`, x: 'npm:ws@8', 'left-pad': '^1.0.0' },
+      }),
+    );
+    write(
+      root,
+      'apps/server/package.json',
+      JSON.stringify({ dependencies: { h: 'npm:axios@1' }, devDependencies: { ok: 'npm:zod@3' } }),
+    );
+    // The web manifest is out of scope for the HTTP-client rule, alias or not.
+    write(root, 'apps/web/package.json', JSON.stringify({ dependencies: { h: 'npm:axios@1' } }));
+
+    const findings = scanTree(root);
+    expect([...findings.offenders].sort()).toEqual([
+      'apps/server/package.json  [HTTP client package]  dependencies.h (alias of axios)',
+      `packages/core/package.json  [subprocess package]  dependencies.cs (alias of ${crossSpawn})`,
+      'packages/core/package.json  [ws / socket.io package]  dependencies.x (alias of ws)',
+    ]);
+    expect(findings.scannedManifests).toBe(3);
+    expect(formatSpawnerReport(findings).exitCode).toBe(1);
+  });
+
+  // AU-4: a backtick specifier is the same import as a quoted one, and a
+  // Worker constructed with the ev-al option set to true runs a string as code
+  // on a thread.
+  it('flags backtick dynamic imports and the Worker eval option (AU-4)', () => {
+    const { root } = makeFixture();
+    const dataImport = `const m = await ${imp}(\`data:text/javascript,1\`);`;
+    const concatImport = `const p = await ${imp}(\`./plugins/\` + name);`;
+    const worker = `const w = new Worker(source, { ${ev}: true });`;
+    const spacedWorker = `const w2 = new Worker(source, { ${ev} :true });`;
+    const clean = [`const o = { ${ev}uate: true };`, `const q = await ${imp}(\`./plugins/x\`);`];
+    write(
+      root,
+      'apps/server/src/evil.ts',
+      `${[dataImport, concatImport, worker, spacedWorker, ...clean].join('\n')}\n`,
+    );
+
+    const findings = scanTree(root);
+    expect(findings.offenders).toEqual([
+      `apps/server/src/evil.ts:1  [dynamic ${imp} of data: URI]  ${dataImport}`,
+      `apps/server/src/evil.ts:2  [dynamic ${imp} with concatenated specifier]  ${concatImport}`,
+      `apps/server/src/evil.ts:3  [Worker ${ev} option]  ${worker}`,
+      `apps/server/src/evil.ts:4  [Worker ${ev} option]  ${spacedWorker}`,
+    ]);
+    expect(formatSpawnerReport(findings).exitCode).toBe(1);
+  });
+
+  // AU-5: whitespace before the paren is the same call.
+  it('flags spawn, fork and eval calls with whitespace before the paren (AU-5)', () => {
+    const { root } = makeFixture();
+    const spawn = `const c = cp.${sp} ('ls');`;
+    const fork = `const f = ${fk} ('./child.js');`;
+    const evalCall = `const r = ${ev} ('1 + 1');`;
+    const tabbed = `const t = cp.${sp}\t('ls');`;
+    write(root, 'apps/server/src/evil.ts', `${[spawn, fork, evalCall, tabbed].join('\n')}\n`);
+
+    const findings = scanTree(root);
+    expect(findings.offenders).toEqual([
+      `apps/server/src/evil.ts:1  [.${sp}( call]  ${spawn}`,
+      `apps/server/src/evil.ts:2  [${fk}( call]  ${fork}`,
+      `apps/server/src/evil.ts:3  [${ev}( call]  ${evalCall}`,
+      `apps/server/src/evil.ts:4  [.${sp}( call]  ${tabbed}`,
+    ]);
+    expect(formatSpawnerReport(findings).exitCode).toBe(1);
+  });
+});
+
+// AU-3 (2026-10-22). `node_modules`, `dist` and `coverage` used to be pruned at
+// ANY depth, so a source file under a directory that merely borrowed one of
+// those names was never read and the run still printed OK. They are now pruned
+// only next to a package.json (the scan root always counts as a package root).
+describe('check-no-spawner: build/vendor dirs pruned only at a package root (AU-3)', () => {
+  it('scans a dist / coverage directory that is not at a package root', () => {
+    const { root } = makeFixture();
+    write(root, 'apps/x/package.json', JSON.stringify({ name: 'x' }));
+    write(root, 'apps/x/src/dist/evil.ts', `${FORBIDDEN_LINE}\n`);
+    write(root, 'hooks/coverage/evil.mjs', `${FORBIDDEN_LINE}\n`);
+
+    const findings = scanTree(root);
+    expect(findings.stage).toBe('scanned');
+    expect([...findings.offenders].sort()).toEqual([
+      `apps/x/src/dist/evil.ts:1  [${SUBPROCESS_LABEL}]  ${FORBIDDEN_LINE}`,
+      `hooks/coverage/evil.mjs:1  [${SUBPROCESS_LABEL}]  ${FORBIDDEN_LINE}`,
+    ]);
+    expect(formatSpawnerReport(findings).exitCode).toBe(1);
+  });
+
+  it('still prunes them at a package root and at the scan root', () => {
+    const { root } = makeFixture();
+    write(root, 'apps/x/package.json', JSON.stringify({ name: 'x' }));
+    write(root, 'apps/x/node_modules/dep/index.js', `${FORBIDDEN_LINE}\n`);
+    write(root, 'apps/x/dist/index.js', `${FORBIDDEN_LINE}\n`);
+    write(root, 'node_modules/dep/index.js', `${FORBIDDEN_LINE}\n`);
+    write(root, 'coverage/report.js', `${FORBIDDEN_LINE}\n`);
+
+    const findings = scanTree(root);
+    expect(findings.stage).toBe('scanned');
+    expect(findings.offenders).toEqual([]);
+    expect(findings.unregisteredTopLevel).toEqual([]);
+  });
+
+  it('counts a nested node_modules in the top-level census', () => {
+    const { root } = makeFixture();
+    write(root, 'foo/node_modules/a.ts', 'export const a = 1;\n');
+
+    const findings = scanTree(root);
+    expect(findings.stage).toBe('unregistered-top-level');
+    expect(findings.unregisteredTopLevel).toEqual([['foo', 1]]);
+  });
+
+  it('reads a manifest under a node_modules that is not at a package root', () => {
+    const { root } = makeFixture();
+    const crossSpawn = `cross-${['sp', 'awn'].join('')}`;
+    write(root, 'apps/x/package.json', JSON.stringify({ name: 'x' }));
+    write(
+      root,
+      'apps/x/src/node_modules/pkg/package.json',
+      JSON.stringify({ name: 'pkg', dependencies: { [crossSpawn]: '7' } }),
+    );
+
+    const findings = scanTree(root);
+    expect(findings.offenders).toEqual([
+      `apps/x/src/node_modules/pkg/package.json  [subprocess package]  dependencies.${crossSpawn}`,
+    ]);
+    expect(findings.scannedManifests).toBe(2);
+  });
 });

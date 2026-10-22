@@ -155,6 +155,23 @@ const SCAN_ROOTS = ['apps', 'packages', 'scripts', 'hooks'];
 const SOURCE_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.mts', '.cts']);
 const PRUNE_DIRS = new Set(['node_modules', 'dist', 'coverage']);
 
+/**
+ * AU-3 (2026-10-22). Is `name`, found directly inside `parentDir`, a pruned
+ * build/vendor directory? Only at a package root: `PRUNE_DIRS` used to apply at
+ * any depth, so `apps/x/src/dist/evil.ts` or `hooks/coverage/evil.mjs` was never
+ * read and the run still printed OK. Every real `node_modules`/`dist`/`coverage`
+ * sits next to a package.json (the scan root counts as one, see the top-level
+ * callers), so pruning there and nowhere else changes nothing for this repo and
+ * closes the hole for any directory that merely borrows one of these names.
+ *
+ * @param {string} parentDir
+ * @param {string} name
+ * @returns {boolean}
+ */
+function isPrunedAt(parentDir, name) {
+  return PRUNE_DIRS.has(name) && existsSync(join(parentDir, 'package.json'));
+}
+
 // Files exempt from scanning, keyed by repo-relative path. Logged every run.
 // Only this policy file is whole-file exempt (it DEFINES every forbidden
 // pattern as a literal). check-licenses.mjs is intentionally NOT here: its
@@ -257,11 +274,12 @@ const FORBIDDEN_PATTERNS = [
         `(?:${SUBPROCESS_WRAPPERS.join('|')})(?:/[^'"]*)?['"]`,
     ),
   ],
-  ['.spawn( call', /\.spawn\(/],
+  // AU-5 (2026-10-22): `\s*` before the paren - `cp.spawn ('x')` is the same call.
+  ['.spawn( call', /\.spawn\s*\(/],
   ['spawnSync call', /\bspawnSync\b/],
   ['execSync call', /\bexecSync\b/],
   ['execFile / execFileSync call', /\bexecFile/],
-  ['fork( call', /\bfork\(/],
+  ['fork( call', /\bfork\s*\(/],
   // Bracket-form access to a subprocess method - `cp['spawn'](...)` - a common
   // half-hearted way to dodge a dot-form matcher.
   [
@@ -269,16 +287,33 @@ const FORBIDDEN_PATTERNS = [
     /\[\s*['"](spawn|spawnSync|exec|execSync|execFile|execFileSync|fork)['"]\s*\]/,
   ],
   // --- Dynamic code evaluation -------------------------------------------
-  ['eval( call', /\beval\(/],
+  ['eval( call', /\beval\s*\(/],
   ['indirect eval ((0, eval))', /\(\s*0\s*,\s*eval\s*\)/],
   // Bare `Function(` (not only `new Function(`) - `Function('return ...')()` is
   // an eval by another name.
   ['Function( constructor', /\bFunction\s*\(/],
-  ['dynamic import of data: URI', /import\(\s*['"]data:/],
-  ['dynamic import with concatenated specifier', /import\(\s*['"][^'"]*['"]\s*\+/],
+  // AU-4 (2026-10-22): a backtick specifier is the same import as a quoted one.
+  ['dynamic import of data: URI', /import\(\s*['"`]data:/],
+  ['dynamic import with concatenated specifier', /import\(\s*['"`][^'"`]*['"`]\s*\+/],
+  // AU-4: `new Worker(source, { eval: true })` runs a string as code on a thread.
+  ['Worker eval option', /\beval\s*:\s*true/],
   // GG5: the vm module compiles and runs strings as code. Matched as a quoted
   // specifier (bare or `node:`-prefixed), so `vm` as an ordinary word is fine.
   ['vm module', /['"`](node:)?vm['"`]/],
+  // CI-1 (2026-10-10): the native layer underneath. `process.binding` /
+  // `internalBinding` hand out the C++ bindings child_process is built on
+  // (`spawn_sync`, `pipe_wrap`, `process_wrap`) and `process.dlopen` loads an
+  // arbitrary shared object - each a subprocess or native-code surface that
+  // spells no forbidden module name. Dot and bracket forms, like the
+  // subprocess family above.
+  [
+    'process.binding / internalBinding',
+    /\bprocess\s*(?:\.\s*binding\b|\[\s*['"]binding['"]\s*\])|\binternalBinding\b/,
+  ],
+  ['process.dlopen', /\bprocess\s*(?:\.\s*dlopen\b|\[\s*['"]dlopen['"]\s*\])/],
+  // AU-1 (2026-10-22): `process.execve` (Node 22+) replaces the running process
+  // with any executable - a subprocess launch that spells no module name.
+  ['process.execve', /\bprocess\s*(?:\.\s*execve\b|\[\s*['"]execve['"]\s*\])/],
   // --- Wide network bind --------------------------------------------------
   // Wide-bind forms: literal 0.0.0.0, `host: true`, `host: ''`, and the IPv6
   // all-interfaces binds `host: '::'` / `host: '::0'` all bind every interface.
@@ -357,6 +392,19 @@ const SERVER_PROCESS_MANIFESTS = [
 ];
 const HTTP_CLIENT_DEPENDENCY = new RegExp(`^(${HTTP_CLIENTS.join('|')})$`);
 
+/**
+ * The real package name behind an npm alias spec (`npm:<name>@<range>` or
+ * `npm:<name>`), or `undefined` when the spec is not an alias.
+ *
+ * @param {unknown} spec
+ * @returns {string | undefined}
+ */
+export function aliasedPackageName(spec) {
+  if (typeof spec !== 'string') return undefined;
+  const match = /^npm:(@[^/@]+\/[^@]+|[^@]+)(?:@.*)?$/.exec(spec.trim());
+  return match === null ? undefined : match[1];
+}
+
 const DEPENDENCY_FIELDS = [
   'dependencies',
   'devDependencies',
@@ -376,7 +424,7 @@ function collectSourceFiles(dir, unreadable) {
   const files = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (entry.isDirectory()) {
-      if (PRUNE_DIRS.has(entry.name)) continue;
+      if (isPrunedAt(dir, entry.name)) continue;
       files.push(...collectSourceFiles(join(dir, entry.name), unreadable));
     } else if (entry.isFile()) {
       if (SOURCE_EXTENSIONS.has(extname(entry.name))) {
@@ -418,7 +466,7 @@ function countSourceFiles(dir, unreadable) {
   }
   for (const entry of entries) {
     if (entry.isDirectory()) {
-      if (PRUNE_DIRS.has(entry.name)) continue;
+      if (isPrunedAt(dir, entry.name)) continue;
       found += countSourceFiles(join(dir, entry.name), unreadable);
     } else if (entry.isFile()) {
       if (SOURCE_EXTENSIONS.has(extname(entry.name))) found += 1;
@@ -446,7 +494,8 @@ function collectManifests(dir, atTopLevel, manifests) {
   if (existsSync(manifest)) manifests.push(manifest);
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
-    if (PRUNE_DIRS.has(entry.name)) continue;
+    // The scan root is always a package root, with or without a package.json.
+    if (atTopLevel ? PRUNE_DIRS.has(entry.name) : isPrunedAt(dir, entry.name)) continue;
     if (atTopLevel && UNSCANNED_TOP_LEVEL.has(entry.name)) continue;
     collectManifests(join(dir, entry.name), false, manifests);
   }
@@ -616,7 +665,7 @@ export function scanTree(rootDir) {
   // dependency in `apps/server/package.json` failed the run, which is what makes
   // it a coverage hole rather than a policy gap. The collector now walks the tree
   // instead of guessing its shape, under exactly the rules the rest of the gate
-  // uses: `PRUNE_DIRS` at any depth, `UNSCANNED_TOP_LEVEL` at the top level (so
+  // uses: `PRUNE_DIRS` at a package root (AU-3), `UNSCANNED_TOP_LEVEL` at the top level (so
   // `.claude/worktrees/*` stays out, as its exemption already says), and any new
   // top-level directory still has to pass the C-1 census first.
   const manifests = [];
@@ -639,15 +688,23 @@ export function scanTree(rootDir) {
     for (const field of DEPENDENCY_FIELDS) {
       const block = parsed[field];
       if (block === null || typeof block !== 'object') continue;
-      for (const name of Object.keys(block)) {
-        for (const [label, pattern] of FORBIDDEN_DEPENDENCIES) {
-          if (pattern.test(name)) {
-            findings.offenders.push(`${rel}  [${label}]  ${field}.${name}`);
+      for (const [name, spec] of Object.entries(block)) {
+        // AU-2 (2026-10-22): an npm alias (`"cs": "npm:cross-spawn@7"`) installs
+        // the real package under an innocent key, so the aliased name is tested
+        // against the same denylists as the key.
+        const aliased = aliasedPackageName(spec);
+        const names = aliased === undefined ? [name] : [name, aliased];
+        const shown = aliased === undefined ? name : `${name} (alias of ${aliased})`;
+        for (const candidate of names) {
+          for (const [label, pattern] of FORBIDDEN_DEPENDENCIES) {
+            if (pattern.test(candidate)) {
+              findings.offenders.push(`${rel}  [${label}]  ${field}.${shown}`);
+            }
           }
-        }
-        // WP-F5 no-SSRF: an HTTP client in a server-process package.
-        if (serverProcessManifest && HTTP_CLIENT_DEPENDENCY.test(name)) {
-          findings.offenders.push(`${rel}  [HTTP client package]  ${field}.${name}`);
+          // WP-F5 no-SSRF: an HTTP client in a server-process package.
+          if (serverProcessManifest && HTTP_CLIENT_DEPENDENCY.test(candidate)) {
+            findings.offenders.push(`${rel}  [HTTP client package]  ${field}.${shown}`);
+          }
         }
       }
     }
