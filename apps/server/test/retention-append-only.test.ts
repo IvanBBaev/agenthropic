@@ -8,12 +8,16 @@
  *
  * The last block is a static guard: no retention source may contain DML
  * against a protected table at all, so a future edit cannot quietly gain the
- * ability while the behavioural tests keep passing.
+ * ability while the behavioural tests keep passing. It is checked twice: once
+ * against the published `RETENTION_PROTECTED_TABLES` list, and once as an
+ * allowlist over the live schema, so a table that is in NEITHER list is
+ * guarded as well.
  */
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { SqliteDatabase } from '../src/db/connection';
+import type { PrunableTable } from '../src/db/retention-queries';
 import {
   NO_RETENTION,
   RETENTION_PROTECTED_TABLES,
@@ -30,6 +34,31 @@ const PRUNE_EVERYTHING_PRUNABLE: RetentionPolicy = {
   events: { maxAgeDays: 1 },
   tokenUsage: { maxAgeDays: 1, acknowledgeCostLoss: true },
 };
+
+/**
+ * The only tables a retention source may issue DML against. Typed against
+ * `PrunableTable`, so widening that union without revisiting this list is a
+ * compile error rather than a silently wider allowlist.
+ */
+const PRUNABLE_TABLES: readonly PrunableTable[] = ['events', 'token_usage'];
+
+/** Every table of the fully migrated schema that retention may NOT write to. */
+function tablesRetentionMayNotWrite(): string[] {
+  const temp = createMigratedTempDb();
+  try {
+    return (
+      temp.db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+        )
+        .all() as { name: string }[]
+    )
+      .map((row) => row.name)
+      .filter((name) => !(PRUNABLE_TABLES as readonly string[]).includes(name));
+  } finally {
+    temp.cleanup();
+  }
+}
 
 function dump(db: SqliteDatabase, table: string): unknown[] {
   const columns = (db.prepare(`PRAGMA table_info("${table}")`).all() as { name: string }[]).map(
@@ -141,6 +170,25 @@ describe('retention respects the append-only substrate and the persisted DAG (WP
     ).toBe('a-main');
   });
 
+  it('leaves the replay checkpoints byte-identical, so a prune cannot force a corpus re-read', () => {
+    // `ingest_checkpoints` is in neither the prunable nor the protected list.
+    // Losing a row is not data loss, but it makes the next boot re-read that
+    // session from disk, and a prune that did it for every session would turn
+    // the daily maintenance pass into a full corpus replay.
+    temp.db
+      .prepare(
+        `INSERT INTO ingest_checkpoints (scope, session_id, fingerprint, ingest_revision, recorded_at)
+         VALUES ('test-scope', 's1', 'fp-1', 1, ?)`,
+      )
+      .run(OLD);
+    const before = dump(temp.db, 'ingest_checkpoints');
+    expect(before).toHaveLength(1);
+
+    prune(temp.db, PRUNE_EVERYTHING_PRUNABLE, { now: NOW });
+
+    expect(dump(temp.db, 'ingest_checkpoints')).toEqual(before);
+  });
+
   it('leaves the database consistent: integrity_check ok, foreign keys still on', () => {
     prune(temp.db, PRUNE_EVERYTHING_PRUNABLE, { now: NOW });
 
@@ -158,6 +206,30 @@ describe('retention respects the append-only substrate and the persisted DAG (WP
     });
 
     it.each(RETENTION_PROTECTED_TABLES)('contains no DML against `%s`', (table) => {
+      const dml = new RegExp(
+        `(DELETE\\s+FROM|UPDATE|INSERT\\s+INTO|DROP\\s+TRIGGER|DROP\\s+TABLE)\\s+["']?${table}\\b`,
+        'i',
+      );
+      for (const [name, source] of sources) {
+        expect(`${name}: ${dml.test(source) ? 'MATCH' : 'clean'}`).toBe(`${name}: clean`);
+      }
+    });
+
+    // The list above is what retention PUBLISHES as protected. A table in
+    // neither list (`ingest_checkpoints`, `token_usage_rollup`) was covered
+    // by nothing, so this is the same check in allowlist form: every table of
+    // the live schema except the prunable two. A table added by a future
+    // migration is guarded from the migration that creates it.
+    const guarded = tablesRetentionMayNotWrite();
+
+    it('guards every table of the live schema, not only the published list', () => {
+      expect(guarded).toEqual(expect.arrayContaining([...RETENTION_PROTECTED_TABLES]));
+      expect(guarded).toEqual(expect.arrayContaining(['ingest_checkpoints', 'token_usage_rollup']));
+      expect(guarded).not.toContain('events');
+      expect(guarded).not.toContain('token_usage');
+    });
+
+    it.each(guarded)('contains no DML against `%s` (allowlist over the live schema)', (table) => {
       const dml = new RegExp(
         `(DELETE\\s+FROM|UPDATE|INSERT\\s+INTO|DROP\\s+TRIGGER|DROP\\s+TABLE)\\s+["']?${table}\\b`,
         'i',

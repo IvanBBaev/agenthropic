@@ -233,6 +233,13 @@ describe('nodeCorpusFs.readFileTailConfined', () => {
     expect(new TextDecoder().decode(tail.data)).toBe('{"type":"user"}\n');
   });
 
+  it('reports the modification time from the same fstat as the size', () => {
+    const path = join(root, 'session.jsonl');
+    const tail = fs.readFileTailConfined(path, 0, CAP);
+    expect(tail.mtimeMs).toBe(fs.lstat(path).mtimeMs);
+    expect(tail.mtimeMs).toBeGreaterThan(0);
+  });
+
   it('returns exactly the bytes past fromByte', () => {
     const tail = fs.readFileTailConfined(join(root, 'session.jsonl'), 8, CAP);
     expect(tail.sizeBytes).toBe(16);

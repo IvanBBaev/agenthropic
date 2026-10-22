@@ -341,7 +341,7 @@ describe('/api/changes (WP-U11)', () => {
     expect((zoned.json() as ChangesDto).since).toBe(SINCE);
   });
 
-  it('chains without a gap or a repeat when the caller passes back `until`', async () => {
+  it('chains without a gap or a repeat over an unchanged corpus when the caller passes back `until`', async () => {
     const first = (
       await app.inject({ method: 'GET', url: url('since=2026-01-01'), headers: AUTH })
     ).json() as ChangesDto;
@@ -366,6 +366,32 @@ describe('/api/changes (WP-U11)', () => {
     // The coverage disclosure is about the CORPUS, not the window, so it
     // still reports the undated rows.
     expect(second.coverage.undatedSessions).toBe(1);
+  });
+
+  it('documents S-1: a chained call misses a session ingested late with older event times', async () => {
+    const first = (
+      await app.inject({ method: 'GET', url: url('since=2026-01-01'), headers: AUTH })
+    ).json() as ChangesDto;
+
+    // Ingested AFTER the first call, but its activity predates that call's
+    // `until`. The window is over event time and no ingest order is stored,
+    // so neither window ever contains it.
+    temp.db.exec(`
+      INSERT INTO sessions (id, project_slug, started_at, last_activity_at, status) VALUES
+        ('s-late', 'proj-g', '2026-07-11T10:00:00Z', '2026-07-11T11:00:00Z', 'completed');
+    `);
+
+    const second = (
+      await app.inject({ method: 'GET', url: url(`since=${first.until}`), headers: AUTH })
+    ).json() as ChangesDto;
+    expect(first.sessions.map((s) => s.id)).not.toContain('s-late');
+    expect(second.sessions.map((s) => s.id)).not.toContain('s-late');
+
+    // The documented remedy - re-query with an overlap - does find it.
+    const overlap = (
+      await app.inject({ method: 'GET', url: url('since=2026-01-01'), headers: AUTH })
+    ).json() as ChangesDto;
+    expect(overlap.sessions.map((s) => s.id)).toContain('s-late');
   });
 
   it('never reaches past the newest instant it can actually see', async () => {

@@ -15,7 +15,10 @@ import { Type, type Static } from '@sinclair/typebox';
 export const HealthSchema = Type.Object(
   {
     // 'replaying' from the loopback bind until the startup replay has finished,
-    // then 'ok' for the life of the process (owner decision, 2026-10-01). The
+    // then 'ok' for the life of the process (owner decision, 2026-10-01). A
+    // replay that a read error cut short has NOT finished: the scheduled poll
+    // completes it, and the phase lasts until that sweep drains - or until the
+    // next poll cannot read the corpus either, so it never lasts forever. The
     // server IS up and the token IS accepted in both states - a client must not
     // treat 'replaying' as an error, only as "the figures are still being
     // read in; ask again shortly". Every other condition (excluded sessions,

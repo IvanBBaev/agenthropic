@@ -55,6 +55,12 @@ export interface IngestDeps {
 export interface IngestOutcome {
   readonly ok: boolean;
   readonly sessionId: string | null;
+  /**
+   * Dollars for the messages this session OWNS after the M-12 cross-session
+   * exclusions (PAR-3): a fork's replayed history is priced once, under its
+   * owner, and never announced a second time here. The halt gate still prices
+   * the WHOLE substrate first, so an unknown model id halts before any write.
+   */
   readonly costUsd: number | null;
   readonly agentsUpserted: number;
   readonly edgesInserted: number;
@@ -101,7 +107,7 @@ export function ingestSession(substrate: SessionSubstrate, deps: IngestDeps): In
     // HALT GATE: price BEFORE opening a transaction. An unknown model id throws
     // PricingError here, so no partial rows are ever written for a substrate we
     // cannot cost. Moving this call inside the transaction breaks that invariant.
-    const costUsd = computeCostUsd(parsed.usage, deps.pricing);
+    const gateCostUsd = computeCostUsd(parsed.usage, deps.pricing);
 
     const now = deps.now ?? ((): string => new Date().toISOString());
     const normalized = normalizeSession(parsed, {
@@ -111,6 +117,19 @@ export function ingestSession(substrate: SessionSubstrate, deps: IngestDeps): In
       partial: deps.partial ?? null,
     });
     const counts = projectSession(deps.db, normalized, now);
+
+    // PAR-3: the projection may have refused messages another session owns
+    // (M-12). Announce only the dollars this session keeps. The gate above
+    // already priced every model id in the substrate, so this narrower call
+    // cannot throw; it is skipped entirely when nothing was excluded.
+    const skipped = new Set(counts.crossSessionUsageMessageIds);
+    const costUsd =
+      skipped.size === 0
+        ? gateCostUsd
+        : computeCostUsd(
+            parsed.usage.filter((u) => !skipped.has(u.messageId)),
+            deps.pricing,
+          );
 
     return {
       ok: true,

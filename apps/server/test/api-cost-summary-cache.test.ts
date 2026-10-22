@@ -123,6 +123,31 @@ describe('getCostSummary cache (M-19)', () => {
     expect(after.totals.costUsd).toBeCloseTo(40, 9);
   });
 
+  it('invalidates on a token_usage INSERT made by ANOTHER connection (API-6)', () => {
+    // total_changes() is per-connection, so a foreign ledger write would be
+    // invisible to it; PRAGMA data_version moves on any other connection's
+    // commit and is what carries this invalidation.
+    const { probe, scans } = makeProbe();
+    expect(getCostSummary(temp.db, 10, probe).totals.costUsd).toBeCloseTo(30, 9);
+    const changesBefore = (temp.db.prepare('SELECT total_changes() AS n').get() as { n: number }).n;
+
+    const operator = openDatabase(temp.path);
+    operator
+      .prepare(
+        `INSERT INTO token_usage (session_id, agent_id, message_id, model, bucket, tokens, is_compaction_baseline, occurred_at)
+         VALUES ('s1', NULL, 'c6', 'claude-fable-5', 'input', 1000000, 0, '2026-07-11T04:00:00Z')`,
+      )
+      .run();
+    operator.close();
+
+    const changesAfter = (temp.db.prepare('SELECT total_changes() AS n').get() as { n: number }).n;
+    expect(changesAfter).toBe(changesBefore);
+
+    const after = getCostSummary(temp.db, 10, probe);
+    expect(scans()).toBe(2);
+    expect(after.totals.costUsd).toBeCloseTo(40, 9);
+  });
+
   it('recomputes when topN differs, then caches the new shape', () => {
     const { probe, scans } = makeProbe();
     expect(getCostSummary(temp.db, 10, probe).topSessions).toHaveLength(2);

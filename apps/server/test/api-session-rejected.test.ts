@@ -132,13 +132,16 @@ describe('per-session reads: rejected (409) vs unknown (404)', () => {
     temp = undefined;
   });
 
-  function server(rejection: (id: string) => IngestRejection | undefined) {
+  function server(
+    rejection: (id: string) => IngestRejection | undefined,
+    substrateProvider: SubstrateProvider = notFoundProvider,
+  ) {
     temp = createMigratedTempDb();
     const app = buildServer({
       token: TEST_TOKEN,
       schemaVersion: 0,
       db: temp.db,
-      substrateProvider: notFoundProvider,
+      substrateProvider,
       ingestRejection: rejection,
     });
     const lines: string[] = [];
@@ -225,6 +228,77 @@ describe('per-session reads: rejected (409) vs unknown (404)', () => {
     },
   );
 
+  // The cost analysis is the one read that goes to the CORPUS, where a
+  // rejected session is still sitting. Left to the live read, the same session
+  // the other three reads call a 409 got a 422 for the very price ingest was
+  // already reporting - or a 200, when the reason for the rejection is one the
+  // analysis does not trip over.
+  it.each([
+    ['would have analysed it', { kind: 'no-substrate' }],
+    ['would not have found it', { kind: 'session-not-found' }],
+  ] as const)(
+    '/cost-analysis answers 409 before the corpus is read (the live read %s)',
+    async (_label, lookup) => {
+      const loadSession = vi.fn(() => lookup);
+      const { app } = server(() => ({ code: 'quarantined', reason: 'no price' }), {
+        loadSession,
+      });
+      try {
+        const response = await app.inject({
+          method: 'GET',
+          url: '/api/sessions/SID/cost-analysis',
+          headers: AUTH,
+        });
+
+        expect(response.statusCode).toBe(409);
+        expect(response.json()).toMatchObject({ code: 'quarantined', reason: 'no price' });
+        expect(loadSession).not.toHaveBeenCalled();
+      } finally {
+        await app.close();
+      }
+    },
+  );
+
+  it('/cost-analysis reads the corpus for a rejected session the database still holds', async () => {
+    // Quarantined AFTER a clean ingest: the rule is "rejection replaces a 404,
+    // never an answer", so the live read speaks for itself - here it finds
+    // nothing to analyse and says so.
+    const loadSession = vi.fn(() => ({ kind: 'no-substrate' }) as const);
+    const { app } = server(() => ({ code: 'quarantined', reason: 'no price' }), { loadSession });
+    insertSession(temp!.db, 'SID');
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/sessions/SID/cost-analysis',
+        headers: AUTH,
+      });
+
+      expect(response.statusCode).toBe(422);
+      expect(loadSession).toHaveBeenCalledTimes(1);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('/cost-analysis answers 409, not 404, when that session has since left the corpus', async () => {
+    // In the database, rejected, and no longer on disk: "Session not found."
+    // would contradict the three reads that still serve its last good pass.
+    const { app } = server(() => ({ code: 'quarantined', reason: 'no price' }));
+    insertSession(temp!.db, 'SID');
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/sessions/SID/cost-analysis',
+        headers: AUTH,
+      });
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({ code: 'quarantined' });
+    } finally {
+      await app.close();
+    }
+  });
+
   it('keeps 404 when no rejection seam is wired at all', async () => {
     temp = createMigratedTempDb();
     const app = buildServer({ token: TEST_TOKEN, schemaVersion: 0, db: temp.db });
@@ -299,6 +373,12 @@ describe('end to end: a corpus session that cannot be priced', () => {
       expect(failingBody.reason).toContain('synthetic-model-a');
       // Corpus-relative at most: the temp directory never reaches the body.
       expect(JSON.stringify(failingBody)).not.toContain(dir);
+
+      // The cost analysis reads the corpus, where the session IS: it must give
+      // the same answer, not its own 422 for the price ingest already reports.
+      const analysis = await get(`/api/sessions/${sessionId}/cost-analysis`);
+      expect(analysis.statusCode).toBe(409);
+      expect(analysis.json<SessionRejectedErrorDto>().code).toBe('ingest-failing');
 
       // An id nobody has ever seen is still simply not found.
       expect((await get('/api/sessions/00000000-0000-0000-0000-000000000000')).statusCode).toBe(

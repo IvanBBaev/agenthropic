@@ -15,6 +15,8 @@ import { SqliteEventStore } from '../src/db/event-store';
 import { reconcilePendingSubagentStops } from '../src/hooks/liveness-status';
 import type { NormalizedSession } from '../src/ingest/normalize-session';
 import { projectSession } from '../src/ingest/project-session';
+import { NO_RETENTION } from '../src/retention/policy';
+import { prune } from '../src/retention/prune';
 import { createMigratedTempDb, insertAgent, insertSession, type TempDb } from './helpers';
 
 const SESSION_ID = 'aaaaaaaa-0000-4000-8000-00000000000a';
@@ -265,6 +267,66 @@ describe('reconcilePendingSubagentStops (M-13 hook-before-row replay)', () => {
     expect(counts.statusReconciliations).toEqual([]);
     expect(statusOf('agents', SESSION_ID)).toBe('working');
     expect(statusOf('sessions', SESSION_ID)).toBe('active');
+  });
+
+  describe('retention seam', () => {
+    // 101 days after the stop was received: past the signed 90-day window.
+    const AFTER_THE_WINDOW = new Date('2026-10-20T00:00:00Z');
+    const SIGNED_EVENTS_WINDOW = { ...NO_RETENTION, events: { maxAgeDays: 90 } };
+
+    function storedStops(table: 'events' | 'events_raw'): number {
+      const row = temp.db
+        .prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE event_type = 'SubagentStop'`)
+        .get() as { n: number };
+      return row.n;
+    }
+
+    it('KNOWN LIMIT: a stop whose projection row was pruned before the agent row appeared is not replayed', () => {
+      // The replay reads the prunable `events` projection. A session that
+      // stays un-ingested past the retention window (rejected until its
+      // cause is cured, say) loses the projection row first, so its fast
+      // subagent is inserted 'working' and left for the watchdog to age into
+      // 'unknown'. Honest, but weaker than the evidence: the raw stop is
+      // still in the substrate. Closing this needs an index on `events_raw`
+      // (owner decision); when that lands, this test flips to 'completed'.
+      appendHook('stop-old', 'SubagentStop', {
+        hook_event_name: 'SubagentStop',
+        session_id: SESSION_ID,
+        agent_id: SUB_ID,
+      });
+      expect(storedStops('events')).toBe(1);
+
+      const report = prune(temp.db, SIGNED_EVENTS_WINDOW, { now: AFTER_THE_WINDOW });
+      expect(report.applied).toBe(true);
+      expect(storedStops('events')).toBe(0);
+
+      const counts = projectSession(temp.db, normalizedWith([MAIN_AGENT, SUB_AGENT]), NOW);
+
+      expect(counts.statusReconciliations).toEqual([]);
+      expect(statusOf('agents', SUB_ID)).toBe('working');
+      // The evidence is unreplayed, not lost.
+      expect(storedStops('events_raw')).toBe(1);
+    });
+
+    it('still replays a stop inside the retention window after a prune ran', () => {
+      // The other side of the same seam: a prune that finds the row young
+      // must leave the replay exactly as it was.
+      appendHook('stop-young', 'SubagentStop', {
+        hook_event_name: 'SubagentStop',
+        session_id: SESSION_ID,
+        agent_id: SUB_ID,
+      });
+
+      const report = prune(temp.db, SIGNED_EVENTS_WINDOW, {
+        now: new Date('2026-07-12T00:00:00Z'),
+      });
+      expect(report.applied).toBe(false);
+
+      const counts = projectSession(temp.db, normalizedWith([MAIN_AGENT, SUB_AGENT]), NOW);
+
+      expect(counts.statusReconciliations).toHaveLength(1);
+      expect(statusOf('agents', SUB_ID)).toBe('completed');
+    });
   });
 
   describe('direct calls', () => {

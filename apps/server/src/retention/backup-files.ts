@@ -17,6 +17,10 @@
  *  - Only files matching the backup naming convention are considered; anything
  *    else in the directory is invisible to this module, so pointing the rule at
  *    a wrong directory deletes nothing rather than something.
+ *  - A symlink is never followed: it is `lstat`ed, fails `isFile()` and is
+ *    skipped, so a link planted in the backup directory can neither be deleted
+ *    nor pull an outside file into the count, and a dangling one cannot throw
+ *    the pass down (STO-6).
  *  - A missing directory is reported, not thrown and not created: "no backups
  *    yet" is a normal state.
  *  - `dryRun` lists exactly what would go, and removes nothing.
@@ -27,7 +31,7 @@
  *    and names those files in its message, so a caller that only logs the
  *    message still records the loss.
  */
-import { existsSync, readdirSync, statSync, unlinkSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import type { BackupFileRule } from './policy';
 
@@ -167,7 +171,8 @@ function listBackups(directory: string): readonly BackupFileCandidate[] {
       continue;
     }
     const path = join(directory, name);
-    const stats = statSync(path);
+    // lstat, not stat: a symlink must be seen AS a symlink and skipped.
+    const stats = lstatSync(path);
     if (!stats.isFile()) {
       continue;
     }

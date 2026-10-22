@@ -264,6 +264,35 @@ describe('ingestSession (WP-IN9)', () => {
     expect(outcome.costUsd as number).toBeGreaterThan(0);
   });
 
+  it('reports costUsd net of the M-12 cross-session exclusions (PAR-3)', () => {
+    // A CLI fork copies the owner's history lines verbatim under a new session
+    // id. The fork's replayed messages are skipped at the write (M-12), so the
+    // dollars this outcome announces must be the dollars the fork actually
+    // OWNS - never the owner's spend reported a second time.
+    const ORIGINAL_ID = '11111111-2222-4333-8444-555555555555';
+    const FORK_ID = 'ffffffff-2222-4333-8444-555555555555';
+    const fixture = getFixture('flat-tool-use');
+    const owner = ingestSession(fixture, makeDeps());
+    expect(owner.ok).toBe(true);
+    expect(owner.crossSessionUsageCollisions).toBe(0);
+    expect(owner.costUsd as number).toBeGreaterThan(0);
+
+    const fork = {
+      files: fixture.files.map((f) => ({
+        relativePath: f.relativePath,
+        lines: f.lines.map((l) => l.split(ORIGINAL_ID).join(FORK_ID)),
+      })),
+    };
+    const replay = ingestSession(fork, makeDeps());
+    expect(replay.ok).toBe(true);
+    expect(replay.sessionId).toBe(FORK_ID);
+    expect(replay.crossSessionUsageCollisions).toBeGreaterThan(0);
+    expect(replay.usageRowsInserted).toBe(0);
+    // Every message in the fork is the owner's, so nothing is left to price.
+    expect(replay.costUsd).toBe(0);
+    expect(replay.costUsd as number).toBeLessThan(owner.costUsd as number);
+  });
+
   it('defaults the edge clock and project slug when the caller omits them', () => {
     const outcome = ingestSession(
       getFixture('flat-tool-use'),

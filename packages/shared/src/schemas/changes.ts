@@ -6,7 +6,9 @@
  * it covers - and about being explicit where a window cannot be honest:
  *
  * - the window is HALF-OPEN, `(since, until]`. A client chains the next call
- *   with `since=until` and neither misses nor double-counts an instant. The
+ *   with `since=until` and never double-counts an instant; it misses nothing
+ *   that was already ingested when the previous call ran (see `basis` below
+ *   for what arrives later). The
  *   spelling is served in `interval` rather than left to documentation,
  *   because an off-by-one on the boundary is exactly the class of error that
  *   is invisible in a payload of plausible numbers.
@@ -19,6 +21,9 @@
  *   database stores no ingest timestamp, so a session whose activity predates
  *   `since` but which was ingested afterwards is NOT in the window. That is a
  *   real limitation of the answer; it is named here rather than papered over.
+ *   A chaining client that needs completeness re-queries with an overlap
+ *   (`since` earlier than the previous `until` by its ingest lag) and
+ *   dedupes by session id.
  * - `coverage` counts the rows that no window can ever contain, because they
  *   carry no usable timestamp at all. They are disclosed, never dropped
  *   silently and never folded into the window as if they had been dated.
@@ -130,7 +135,11 @@ export const ChangesResponseSchema = Type.Object(
   {
     /** The requested `since`, normalized to the canonical spelling. */
     since: Type.String(),
-    /** The server's boundary for this answer; chain the next call with `since=until`. */
+    /**
+     * The server's boundary for this answer; chain the next call with `since=until`.
+     * Event time: a session ingested after this call with older events is not
+     * picked up by the chained call (see the module header).
+     */
     until: Type.String(),
     /** The window's half-open spelling, served so it cannot be misread. */
     interval: Type.Literal('(since, until]'),

@@ -33,6 +33,8 @@ export interface ProjectionCounts {
   readonly usageRowsInserted: number;
   /** Messages skipped by the M-12 first-ingested-session ownership rule. */
   readonly crossSessionUsageCollisions: number;
+  /** Their message ids, so the integrator can price only what this session owns (PAR-3). */
+  readonly crossSessionUsageMessageIds: readonly string[];
   /**
    * Status transitions produced by replaying stored SubagentStop hooks onto
    * agents FIRST INSERTED by this projection (M-13). Returned rather than
@@ -56,6 +58,7 @@ export function projectSession(
   let edgesInserted = 0;
   let usageRowsInserted = 0;
   let crossSessionUsageCollisions = 0;
+  let crossSessionUsageMessageIds: readonly string[] = [];
   let statusReconciliations: readonly AgentStatusChangedEvent[] = [];
 
   db.transaction((): void => {
@@ -87,6 +90,7 @@ export function projectSession(
     const usageResult = insertTokenUsageRows(db, normalized.sessionId, normalized.usage);
     usageRowsInserted = usageResult.inserted;
     crossSessionUsageCollisions = usageResult.crossSessionCollisions;
+    crossSessionUsageMessageIds = usageResult.crossSessionMessageIds;
   })();
 
   return {
@@ -94,6 +98,7 @@ export function projectSession(
     edgesInserted,
     usageRowsInserted,
     crossSessionUsageCollisions,
+    crossSessionUsageMessageIds,
     statusReconciliations,
   };
 }

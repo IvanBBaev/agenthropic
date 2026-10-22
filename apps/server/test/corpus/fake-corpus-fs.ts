@@ -181,6 +181,7 @@ export function makeFakeCorpusFs(
       return {
         data: bytes.slice(Math.min(fromByte, bytes.length)),
         sizeBytes: node.size ?? bytes.length,
+        mtimeMs: node.mtimeMs ?? 0,
       };
     },
   };

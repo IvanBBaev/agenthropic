@@ -33,8 +33,13 @@ interface ByteFsHarness {
   readonly tailCalls: TailCall[];
   /** Every readDirNames call (delegation proof). */
   readonly dirCalls: string[];
-  /** Replace a file's bytes wholesale (a rewrite / truncation). */
-  set(path: string, content: string | Uint8Array): void;
+  /**
+   * Replace a file's bytes wholesale (a rewrite / truncation). Moves the mtime
+   * like a real writer does; `keepMtime` models a rewrite that lands inside
+   * the clock's granularity, so the mtime cannot tell and the overlap compare
+   * has to catch it alone.
+   */
+  set(path: string, content: string | Uint8Array, options?: { keepMtime?: boolean }): void;
   /** Append bytes — what a live transcript writer does between polls. */
   append(path: string, extra: string | Uint8Array): void;
   /** What the bare adapter would answer right now — the equivalence oracle. */
@@ -57,6 +62,17 @@ function makeByteFs(initial: Record<string, string | Uint8Array>): ByteFsHarness
   const dirCalls: string[] = [];
   let served = 0;
   let fullReads = 0;
+  // Modification times: a monotonic tick bumped by every write, so an append
+  // or a rewrite moves the file's mtime the way a real writer does.
+  let tick = 0;
+  const mtimes = new Map<string, number>();
+  function touch(path: string): void {
+    tick += 1;
+    mtimes.set(path, tick);
+  }
+  for (const path of files.keys()) {
+    touch(path);
+  }
 
   /** Confined lookup shared by both reads: ENOENT when absent, oversize by TOTAL size. */
   function bytesOf(absPath: string, maxBytes: number): Uint8Array {
@@ -90,7 +106,7 @@ function makeByteFs(initial: Record<string, string | Uint8Array>): ByteFsHarness
       const bytes = bytesOf(absPath, maxBytes);
       const data = bytes.slice(Math.min(fromByte, bytes.length));
       served += data.length;
-      return { data, sizeBytes: bytes.length };
+      return { data, sizeBytes: bytes.length, mtimeMs: mtimes.get(absPath) ?? 0 };
     },
   };
 
@@ -98,8 +114,11 @@ function makeByteFs(initial: Record<string, string | Uint8Array>): ByteFsHarness
     fs,
     tailCalls,
     dirCalls,
-    set(path: string, content: string | Uint8Array): void {
+    set(path: string, content: string | Uint8Array, options?: { keepMtime?: boolean }): void {
       files.set(path, toBytes(content));
+      if (options?.keepMtime !== true) {
+        touch(path);
+      }
     },
     append(path: string, extra: string | Uint8Array): void {
       const current = files.get(path) ?? new Uint8Array(0);
@@ -108,6 +127,7 @@ function makeByteFs(initial: Record<string, string | Uint8Array>): ByteFsHarness
       next.set(current, 0);
       next.set(added, current.length);
       files.set(path, next);
+      touch(path);
     },
     truth(path: string): string {
       return decoder.decode(files.get(path));
@@ -210,9 +230,28 @@ describe('createTailCachingFs (review M-15)', () => {
     const fs = createTailCachingFs(h.fs, { overlapBytes: 8 });
     expect(fs.readFileConfined(PATH, CAP)).toBe(original);
 
-    h.set(PATH, rewritten);
+    // keepMtime: the rewrite lands inside the mtime clock's granularity, so the
+    // overlap compare is the only signal left - and it must be enough.
+    h.set(PATH, rewritten, { keepMtime: true });
     expect(fs.readFileConfined(PATH, CAP)).toBe(rewritten);
     expect(h.tailCalls.map((call) => call.fromByte)).toEqual([0, 8, 0]);
+  });
+
+  it('an in-place rewrite before the overlap window is caught by the modification time', () => {
+    const PATH = '/corpus/slug/rewritten-early.jsonl';
+    // Same size, and every byte the 8-byte overlap window re-reads is
+    // identical: only the bytes BEFORE the window changed, which the compare
+    // cannot see. The file's mtime moved, and that is the signal.
+    const original = 'AAAAAAAA\nTAILTAIL\n'; // 18 bytes
+    const rewritten = 'BBBBBBBB\nTAILTAIL\n';
+    const h = makeByteFs({ [PATH]: original });
+    const fs = createTailCachingFs(h.fs, { overlapBytes: 8 });
+    expect(fs.readFileConfined(PATH, CAP)).toBe(original);
+
+    h.set(PATH, rewritten);
+    expect(fs.readFileConfined(PATH, CAP)).toBe(rewritten);
+    // One probe at the overlap offset, then a distrust-everything restart.
+    expect(h.tailCalls.map((call) => call.fromByte)).toEqual([0, 10, 0]);
   });
 
   it('the entry cap evicts the oldest file, which then needs a full read again', () => {
@@ -291,6 +330,7 @@ describe('createTailCachingFs (review M-15)', () => {
     expect(fs.realpath('/x')).toBe('real:/x');
     const tail = fs.readFileTailConfined(PATH, 1, CAP);
     expect(tail.sizeBytes).toBe(2);
+    expect(tail.mtimeMs).toBe(1);
     expect(tail.data).toEqual(encoder.encode('\n'));
   });
 

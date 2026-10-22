@@ -17,6 +17,7 @@
 import type { AgentOutcomeCause, AgentStatus, AgentType } from '@agenthropic/shared';
 import type { AgentStatusChangedEvent } from '../ingest/ingest-events';
 import type { SqliteDatabase } from './connection';
+import { earlierInstantSql, isLaterInstantSql, laterInstantSql } from './instant-order';
 
 export interface AgentUpsert {
   readonly id: string;
@@ -131,7 +132,8 @@ const AGENT_STATUS_CASE = `CASE
          WHEN agents.status IS NULL THEN excluded.status
          WHEN excluded.status = 'error' THEN 'error'
          WHEN excluded.last_seen_at IS NOT NULL
-          AND (agents.last_seen_at IS NULL OR excluded.last_seen_at > agents.last_seen_at)
+          AND (agents.last_seen_at IS NULL
+               OR ${isLaterInstantSql('excluded.last_seen_at', 'agents.last_seen_at')})
            THEN excluded.status
          ELSE agents.status
        END`;
@@ -170,22 +172,21 @@ export function upsertAgent(db: SqliteDatabase, row: AgentUpsert): AgentUpsertRe
        -- that reads a LATER first record (compaction evicted the head, a
        -- skipped file, duplicate-slug dedupe picking a copy that starts
        -- later) must not move the first sighting forward. A NULL is absence
-       -- of evidence, so the COALESCE tail keeps whichever side is known.
-       first_seen_at   = COALESCE(MIN(excluded.first_seen_at, agents.first_seen_at),
-                                  excluded.first_seen_at, agents.first_seen_at),
+       -- of evidence, so the known side wins. Ordered as instants, not text
+       -- (db/instant-order.ts): a legacy offset-spelled row must not misorder.
+       first_seen_at   = ${earlierInstantSql('excluded.first_seen_at', 'agents.first_seen_at')},
        -- Monotonic non-decreasing, never overwrite: a pass that reads FEWER
        -- records for an agent (a skipped file, or duplicate-slug dedupe picking
        -- a shorter copy) must not move the anchor backwards. A regressed
        -- anchor misorders the recent-activity lists and breaks the status
        -- CASE's "strictly advance" rule: the next unchanged replay would read
-       -- as new activity. Scalar MAX() returns NULL if either side is NULL, so
-       -- the COALESCE tail keeps whichever side is known (a NULL is absence of
-       -- evidence). Every SET expression sees the PRE-update row, so the
+       -- as new activity. A NULL is absence of evidence, so the known side
+       -- wins; the pair is ordered as instants, not text (db/instant-order.ts).
+       -- Every SET expression sees the PRE-update row, so the
        -- status CASE above still compares against the stored anchor. An
        -- identical replay writes an identical value, which keeps the P0
        -- byte-identical double-replay proof intact.
-       last_seen_at    = COALESCE(MAX(excluded.last_seen_at, agents.last_seen_at),
-                                  excluded.last_seen_at, agents.last_seen_at),
+       last_seen_at    = ${laterInstantSql('excluded.last_seen_at', 'agents.last_seen_at')},
        -- COALESCE, not overwrite: an outcome is a one-time OBSERVATION of a
        -- parent-side spawn result. That result lives in the PARENT transcript,
        -- which compaction can evict while the child transcript survives, so a

@@ -67,8 +67,17 @@ import type { SqliteDatabase } from './connection';
  * projection writes. Forgetting to bump is the one way this cache can go stale,
  * so it is a constant in code (reviewable in a diff) rather than a value
  * derived at runtime from something that only looks related.
+ *
+ * HISTORY.
+ *  - 1: the first persisted checkpoint.
+ *  - 2: migration 21 added `sessions.partial_reason`, `skipped_bytes` and
+ *    `usage_records_dropped`, and the parser began counting id-less usage
+ *    records and pricing a flat cache-write value. Only an ingest pass writes
+ *    those facts, so a revision-1 checkpoint would have kept every finished
+ *    session at "not partial, nothing dropped" for good. The bump costs one
+ *    full corpus re-read on the first boot after the upgrade.
  */
-export const REPLAY_CHECKPOINT_REVISION = 1;
+export const REPLAY_CHECKPOINT_REVISION = 2;
 
 export interface ReplayCheckpointStore {
   /**

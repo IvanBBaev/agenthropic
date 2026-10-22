@@ -439,6 +439,37 @@ describe('WP-IN10 replay checkpoint', () => {
       expect(calls.sort()).toEqual([SESSION_A, SESSION_B]);
     });
 
+    it('re-reads sessions checkpointed under revision 1, before the honesty columns existed', () => {
+      // Revision 1 predates migration 21 (`partial_reason`, `skipped_bytes`,
+      // `usage_records_dropped`) and the flat-usage fallback. Those facts are
+      // written only by an ingest pass, and a finished transcript never
+      // changes, so a build that still trusted revision-1 checkpoints would
+      // serve "not partial, nothing dropped" for every historical session
+      // forever. The literal 1 is deliberate: this pins that the SHIPPED
+      // revision has moved past it, which no test did while the constant and
+      // the parser drifted apart.
+      const tree = twoSessions();
+      createCorpusWatcher(
+        makeDeps(tree, {
+          ingest: projectingIngest(temp, []),
+          checkpoints: createReplayCheckpointStore(temp.db, { revision: 1 }),
+        }),
+      ).tick();
+
+      const calls: string[] = [];
+      createCorpusWatcher(makeDeps(tree, { ingest: projectingIngest(temp, calls) })).tick();
+      expect(calls.sort()).toEqual([SESSION_A, SESSION_B]);
+
+      // The re-read restamps the rows, so the one-off replay happens once.
+      const revisions = temp.db
+        .prepare('SELECT DISTINCT ingest_revision AS revision FROM ingest_checkpoints')
+        .all() as { revision: number }[];
+      expect(revisions).toEqual([{ revision: REPLAY_CHECKPOINT_REVISION }]);
+      const third: string[] = [];
+      createCorpusWatcher(makeDeps(tree, { ingest: projectingIngest(temp, third) })).tick();
+      expect(third).toEqual([]);
+    });
+
     it('replays everything when the corpus root changes', () => {
       const tree = twoSessions();
       createCorpusWatcher(makeDeps(tree, { ingest: projectingIngest(temp, []) })).tick();

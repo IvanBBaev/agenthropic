@@ -234,6 +234,35 @@ describe('buildServer (WP-U0)', () => {
     controller.abort();
   });
 
+  /**
+   * Fastify registers a HEAD route for every GET by default and runs the GET
+   * handler for it. On the stream that handler hijacks the reply, so a HEAD
+   * request got no response at all, held its socket open and left a hub
+   * subscriber behind for every probe (an uptime checker, a browser preflight).
+   * A stream has no body to HEAD: answer 405 before the hijack and subscribe
+   * nothing.
+   */
+  it('rejects HEAD on the stream with 405 and subscribes nothing', async () => {
+    const hub = new RealtimeHub();
+    app = buildServer({ token: TEST_TOKEN, schemaVersion: 7, hub });
+    const response = await app.inject({
+      method: 'HEAD',
+      url: '/api/stream',
+      headers: { authorization: `Bearer ${TEST_TOKEN}` },
+    });
+    expect(response.statusCode).toBe(405);
+    expect(response.headers.allow).toBe('GET');
+    expect(hub.subscriberCount).toBe(0);
+  });
+
+  it('still gates HEAD on the stream behind the token', async () => {
+    const hub = new RealtimeHub();
+    app = buildServer({ token: TEST_TOKEN, schemaVersion: 7, hub });
+    const response = await app.inject({ method: 'HEAD', url: '/api/stream' });
+    expect(response.statusCode).toBe(401);
+    expect(hub.subscriberCount).toBe(0);
+  });
+
   it('does not gate non-API paths with auth (they 404 instead)', async () => {
     const baseUrl = await listen({ token: TEST_TOKEN, schemaVersion: 7 });
     const response = await fetch(`${baseUrl}/not-api`);

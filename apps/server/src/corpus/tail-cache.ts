@@ -17,8 +17,11 @@
  *    torn remainder after the last newline — including a partial multi-byte
  *    character — is decoded fresh every call and NEVER cached, so it re-decodes
  *    together with its completion once the writer finishes the line.
- *  - Any divergence signal (file shrank, overlap bytes differ) drops the entry
- *    and falls back to a full read — the cache can cost speed, never answers.
+ *  - Any divergence signal (file shrank, same size but a new modification
+ *    time, overlap bytes differ) drops the entry and falls back to a full
+ *    read — the cache can cost speed, never answers. The mtime check covers
+ *    the one rewrite the byte compare is blind to: a same-size rewrite that
+ *    lands entirely BEFORE the overlap window (STO-2).
  *  - Any error from the inner fs drops the entry and propagates untouched, so
  *    the decorator is invisible to every error-handling arm above it.
  */
@@ -47,6 +50,13 @@ interface CacheEntry {
    * re-read and compared on the next call to detect in-place rewrites.
    */
   tailBytes: Uint8Array;
+  /**
+   * The file's size / mtime pair as the fstat of the LAST read saw it. An
+   * equal size with a moved mtime is a rewrite the overlap compare may not
+   * see (it may lie wholly before the window), so it drops the entry too.
+   */
+  sizeBytes: number;
+  mtimeMs: number;
 }
 
 /** Index-wise comparison of two equal-length views (lengths are equal by construction at both call sites). */
@@ -117,7 +127,7 @@ export function createTailCachingFs(inner: CorpusFs, options: TailCacheOptions =
   }
 
   function fullRead(absPath: string, maxBytes: number): string {
-    const { data } = inner.readFileTailConfined(absPath, 0, maxBytes);
+    const { data, sizeBytes, mtimeMs } = inner.readFileTailConfined(absPath, 0, maxBytes);
     const completeEnd = lastNewline(data) + 1; // -1 → 0: nothing cacheable
     const contentComplete = decoder.decode(data.subarray(0, completeEnd));
     const remainder = decoder.decode(data.subarray(completeEnd));
@@ -127,6 +137,8 @@ export function createTailCachingFs(inner: CorpusFs, options: TailCacheOptions =
       // slice, not subarray: a subarray view would pin the WHOLE file buffer
       // in memory for the lifetime of the cache entry.
       tailBytes: data.slice(Math.max(0, completeEnd - overlapBytes), completeEnd),
+      sizeBytes,
+      mtimeMs,
     });
     return contentComplete + remainder;
   }
@@ -139,9 +151,18 @@ export function createTailCachingFs(inner: CorpusFs, options: TailCacheOptions =
     // Re-read from the start of the overlap window so the cached bytes can be
     // verified before any new byte is trusted.
     const start = entry.offsetBytes - entry.tailBytes.length;
-    const { data, sizeBytes } = inner.readFileTailConfined(absPath, start, maxBytes);
+    const { data, sizeBytes, mtimeMs } = inner.readFileTailConfined(absPath, start, maxBytes);
     if (sizeBytes < entry.offsetBytes) {
       // The file SHRANK below the cached region — a rewrite, not an append.
+      dropEntry(absPath);
+      return fullRead(absPath, maxBytes);
+    }
+    if (sizeBytes === entry.sizeBytes && mtimeMs !== entry.mtimeMs) {
+      // Same size but touched since the last read: an in-place rewrite that
+      // may lie entirely BEFORE the overlap window, where the byte compare
+      // below cannot see it (STO-2). Residual blind spot: a grow-and-rewrite
+      // whose overlap bytes happen to match, and rewrites inside the mtime
+      // clock's granularity — the overlap compare stays as the second line.
       dropEntry(absPath);
       return fullRead(absPath, maxBytes);
     }
@@ -168,6 +189,8 @@ export function createTailCachingFs(inner: CorpusFs, options: TailCacheOptions =
       // can only dip below `start` when overlapBytes shrank the window to the
       // whole cached region already, so the Math.max clamps to 0 safely.
       tailBytes: data.slice(Math.max(offsetBytes - overlapBytes, 0) - start, offsetBytes - start),
+      sizeBytes,
+      mtimeMs,
     });
     return contentComplete + remainder;
   }

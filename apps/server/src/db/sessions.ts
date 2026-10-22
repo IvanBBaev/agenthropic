@@ -9,6 +9,7 @@
  */
 import type { AgentStatus } from '@agenthropic/shared';
 import type { SqliteDatabase } from './connection';
+import { earlierInstantSql, isLaterInstantSql, laterInstantSql } from './instant-order';
 
 export interface SessionUpsert {
   readonly id: string;
@@ -43,7 +44,7 @@ const SESSION_STATUS_CASE = `CASE
          WHEN sessions.status IS NULL THEN excluded.status
          WHEN excluded.last_activity_at IS NOT NULL
           AND (sessions.last_activity_at IS NULL
-               OR excluded.last_activity_at > sessions.last_activity_at)
+               OR ${isLaterInstantSql('excluded.last_activity_at', 'sessions.last_activity_at')})
            THEN excluded.status
          ELSE sessions.status
        END`;
@@ -60,28 +61,37 @@ export function upsertSession(db: SqliteDatabase, row: SessionUpsert): void {
        -- session read whole again stops claiming to be partial.
        partial_reason        = excluded.partial_reason,
        partial_skipped_bytes = excluded.partial_skipped_bytes,
-       usage_records_dropped = excluded.usage_records_dropped,
+       -- One exception to "overwritten". A partial pass did not read the main,
+       -- so its count misses the main's id-less records - while the totals
+       -- still hold the main's usage from the passes that did read it, with
+       -- those records still left out. The count is a lower bound and must not
+       -- shrink: a partial pass can only raise it. A whole read is exact and
+       -- overwrites as before. (An identical replay writes an identical value.)
+       usage_records_dropped = CASE
+         WHEN excluded.partial_reason IS NOT NULL
+           THEN MAX(sessions.usage_records_dropped, excluded.usage_records_dropped)
+         ELSE excluded.usage_records_dropped
+       END,
        -- Monotonic non-increasing, the mirror of last_activity_at below: a
        -- pass whose earliest agent starts LATER (compaction evicted the head,
        -- a skipped file, duplicate-slug dedupe picking a copy that starts
        -- later) must not move the session start forward. A NULL is absence
-       -- of evidence, so the COALESCE tail keeps whichever side is known.
-       started_at       = COALESCE(MIN(excluded.started_at, sessions.started_at),
-                                   excluded.started_at, sessions.started_at),
+       -- of evidence, so the known side wins. Ordered as instants, not text
+       -- (db/instant-order.ts): a legacy offset-spelled row must not misorder.
+       started_at       = ${earlierInstantSql('excluded.started_at', 'sessions.started_at')},
        -- Monotonic non-decreasing, never overwrite: the anchor is the MAX
        -- endedAt over the agents a pass emitted, so a pass that reads LESS (a
        -- skipped subagent transcript, or duplicate-slug dedupe picking a
        -- shorter copy) would move it backwards. A regressed anchor misorders
        -- the session lists and breaks the status CASE's "strictly advance"
-       -- rule: the next unchanged replay would read as new activity. Scalar
-       -- MAX() returns NULL if either side is NULL, so the COALESCE tail keeps
-       -- whichever side is known (a NULL is absence of evidence). Every SET
+       -- rule: the next unchanged replay would read as new activity. A NULL is
+       -- absence of evidence, so the known side wins; the pair is ordered as
+       -- instants, not text (db/instant-order.ts). Every SET
        -- expression sees the PRE-update row, so the status CASE below still
        -- compares against the stored anchor even though this column is
        -- assigned first. An identical replay writes an identical value, which
        -- keeps the P0 byte-identical double-replay proof intact.
-       last_activity_at = COALESCE(MAX(excluded.last_activity_at, sessions.last_activity_at),
-                                   excluded.last_activity_at, sessions.last_activity_at),
+       last_activity_at = ${laterInstantSql('excluded.last_activity_at', 'sessions.last_activity_at')},
        status          = ${SESSION_STATUS_CASE}`,
   ).run({
     id: row.id,

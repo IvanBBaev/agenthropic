@@ -3,13 +3,14 @@
  * event-loop turn before each, so a large corpus no longer holds the event loop
  * for the whole replay. While it runs /api/health says 'replaying' and the data
  * endpoints serve what has landed so far; the phase turns 'idle' only once the
- * sweep has drained.
+ * sweep has drained - including a sweep that a read error cut short and the
+ * scheduled poll had to finish.
  *
  * The end-to-end half drives the REAL composition root with the per-pass cap
  * lowered to 1 (a module mock - the production default is exercised by every
  * other start() test) and observes the server between passes.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
@@ -239,7 +240,8 @@ describe('start(): the chunked replay end to end', () => {
     }
   });
 
-  it("answers between passes: health says 'replaying' and reads serve the rows landed so far", async () => {
+  /** A priced database and a corpus of three sessions, one pass each at cap 1. */
+  function seedCorpus(): { dir: string; dbPath: string; corpusRoot: string } {
     const dir = mkdtempSync(join(tmpdir(), 'agenthropic-chunked-'));
     dirs.push(dir);
     const dbPath = join(dir, 'agent.db');
@@ -272,8 +274,50 @@ describe('start(): the chunked replay end to end', () => {
         writeFileSync(abs, f.lines.map((l) => l.split(originalId).join(id)).join('\n') + '\n');
       }
     }
+    return { dir, dbPath, corpusRoot };
+  }
 
-    const auth = { authorization: `Bearer ${TEST_TOKEN}` };
+  const auth = { authorization: `Bearer ${TEST_TOKEN}` };
+
+  async function observe(app: FastifyInstance): Promise<{ health: unknown; sessions: number }> {
+    const [health, sessions] = await Promise.all([
+      app.inject({ method: 'GET', url: '/api/health', headers: auth }),
+      app.inject({ method: 'GET', url: '/api/sessions', headers: auth }),
+    ]);
+    return {
+      health: health.json(),
+      sessions: (sessions.json() as { sessions: unknown[] }).sessions.length,
+    };
+  }
+
+  /**
+   * Makes the corpus root unreadable just before pass `atPass`: the real root
+   * is parked aside and a symlink loop takes its place, so realpath() fails
+   * with ELOOP (a read error) instead of ENOENT (an absent root, which ends a
+   * sweep by design). `mend` puts the same root back under the same path.
+   */
+  function breakRootBeforePass(dir: string, corpusRoot: string, atPass: number): () => void {
+    const parked = join(dir, 'projects-parked');
+    const loopTarget = join(dir, 'loop-target');
+    let pass = 0;
+    hooks.beforeTick = () => {
+      pass += 1;
+      if (pass === atPass) {
+        renameSync(corpusRoot, parked);
+        symlinkSync(loopTarget, corpusRoot);
+        symlinkSync(corpusRoot, loopTarget);
+      }
+    };
+    return () => {
+      rmSync(corpusRoot, { force: true });
+      rmSync(loopTarget, { force: true });
+      renameSync(parked, corpusRoot);
+    };
+  }
+
+  it("answers between passes: health says 'replaying' and reads serve the rows landed so far", async () => {
+    const { dbPath, corpusRoot } = seedCorpus();
+
     // A request is issued just before each pass. When the NEXT pass begins,
     // it must already have been answered: that is the server answering
     // between passes, mid-replay, with whatever has landed so far.
@@ -286,15 +330,8 @@ describe('start(): the chunked replay end to end', () => {
       answeredBeforePass.push(answered.at(-1) ?? null);
       const slot = answered.length;
       answered.push(null);
-      const app = hooks.app as FastifyInstance;
-      void Promise.all([
-        app.inject({ method: 'GET', url: '/api/health', headers: auth }),
-        app.inject({ method: 'GET', url: '/api/sessions', headers: auth }),
-      ]).then(([health, sessions]) => {
-        answered[slot] = {
-          health: health.json(),
-          sessions: (sessions.json() as { sessions: unknown[] }).sessions.length,
-        };
+      void observe(hooks.app as FastifyInstance).then((observation) => {
+        answered[slot] = observation;
       });
     };
 
@@ -337,6 +374,118 @@ describe('start(): the chunked replay end to end', () => {
       );
     } finally {
       await server.close();
+    }
+  });
+
+  it("stays 'replaying' while the scheduled poll finishes a replay a read error cut short", async () => {
+    const { dir, dbPath, corpusRoot } = seedCorpus();
+    const mend = breakRootBeforePass(dir, corpusRoot, 2);
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    // Only setInterval is faked: start() still listens and replays over the
+    // real event loop, and the scheduled passes are then driven by hand.
+    vi.useFakeTimers({ toFake: ['setInterval'] });
+    try {
+      const server = await start({
+        DASHBOARD_TOKEN: TEST_TOKEN,
+        DASHBOARD_PORT: '0',
+        DASHBOARD_DB_PATH: dbPath,
+        CLAUDE_PROJECTS_DIR: corpusRoot,
+        DASHBOARD_POLL_INTERVAL_MS: '1000',
+      });
+      try {
+        // One session landed, then the root could not be read: the replay
+        // loop is over, the replay is not. Two sessions are still owed, so
+        // health must not say the figures are complete.
+        expect(console.error).toHaveBeenCalledWith(
+          expect.stringContaining('corpus replay: the corpus could not be read'),
+        );
+        expect(await observe(server.app)).toEqual({
+          health: expect.objectContaining({ status: 'replaying', ingest: 'replaying' }),
+          sessions: 1,
+        });
+
+        // The root is back. Each scheduled pass admits ONE session - the cap
+        // the replay was given - not the whole remainder in one go.
+        mend();
+        vi.advanceTimersByTime(1000);
+        expect(await observe(server.app)).toEqual({
+          health: expect.objectContaining({ status: 'replaying', ingest: 'replaying' }),
+          sessions: 2,
+        });
+
+        // The pass that drains the sweep is the one that ends the phase, and
+        // the ending is said in the log (2026-10-08): until then the boot line
+        // said "could not be read" and nothing said which poll finished it.
+        expect(console.log).not.toHaveBeenCalledWith(
+          expect.stringContaining('corpus replay: the scheduled poll finished the sweep'),
+        );
+        vi.advanceTimersByTime(1000);
+        expect(await observe(server.app)).toEqual({
+          health: expect.objectContaining({ status: 'ok', ingest: 'idle' }),
+          sessions: 3,
+        });
+        expect(console.log).toHaveBeenCalledWith(
+          'corpus replay: the scheduled poll finished the sweep a read error cut short - ' +
+            "health now says 'ok'.",
+        );
+      } finally {
+        await server.close();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not hold 'replaying' forever when the read error persists", async () => {
+    const { dir, dbPath, corpusRoot } = seedCorpus();
+    breakRootBeforePass(dir, corpusRoot, 2);
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.useFakeTimers({ toFake: ['setInterval'] });
+    try {
+      const server = await start({
+        DASHBOARD_TOKEN: TEST_TOKEN,
+        DASHBOARD_PORT: '0',
+        DASHBOARD_DB_PATH: dbPath,
+        CLAUDE_PROJECTS_DIR: corpusRoot,
+        DASHBOARD_POLL_INTERVAL_MS: '1000',
+      });
+      try {
+        expect(await observe(server.app)).toEqual({
+          health: expect.objectContaining({ status: 'replaying', ingest: 'replaying' }),
+          sessions: 1,
+        });
+
+        // The next poll cannot read the corpus either. Nothing is going to
+        // drain, and the token screen waits on this phase with no timeout, so
+        // the phase ends here: the dashboard opens on what did land - and the
+        // log says so (2026-10-08), with the two sessions still owed named as
+        // the scheduled poll's to land once the corpus reads again.
+        vi.advanceTimersByTime(1000);
+        expect(await observe(server.app)).toEqual({
+          health: expect.objectContaining({ status: 'ok', ingest: 'idle' }),
+          sessions: 1,
+        });
+        expect(console.error).toHaveBeenCalledWith(
+          expect.stringMatching(
+            /^corpus replay: the corpus still could not be read on the next poll \(.+\) - the phase ends here and health says 'ok' on what landed; the sessions the sweep did not reach land through the scheduled poll in capped passes once the corpus reads again\.$/,
+          ),
+        );
+        expect(console.error).toHaveBeenCalledTimes(2);
+
+        // It ended for good ('ok' for the life of the process): a later poll
+        // that still fails does not bring it back.
+        vi.advanceTimersByTime(1000);
+        expect(await observe(server.app)).toEqual({
+          health: expect.objectContaining({ status: 'ok', ingest: 'idle' }),
+          sessions: 1,
+        });
+      } finally {
+        await server.close();
+      }
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

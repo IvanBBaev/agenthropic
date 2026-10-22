@@ -71,21 +71,27 @@ function listJsonlFiles(root: string): string[] {
   return files;
 }
 
-/** Raw-field bucket mapping per parser-spec section 5.3 (NOT the production mapper). */
+/**
+ * Raw-field bucket mapping per parser-spec section 5.3 (NOT the production mapper).
+ * NN2: a breakdown that covers only part of the flat cache-write total keeps its
+ * split, and the uncovered remainder goes to the unsplit 5m bucket.
+ */
 function bucketsOfRawUsage(usage: JsonRecord): Record<DbBucket, number> {
   const cacheCreation = asRecord(usage['cache_creation']);
+  const flat = asCount(usage['cache_creation_input_tokens']);
+  const split5m = cacheCreation !== null ? asCount(cacheCreation['ephemeral_5m_input_tokens']) : 0;
+  const split1h = cacheCreation !== null ? asCount(cacheCreation['ephemeral_1h_input_tokens']) : 0;
   return {
     input: asCount(usage['input_tokens']),
     output: asCount(usage['output_tokens']),
     cache_read: asCount(usage['cache_read_input_tokens']),
-    cache_write_5m:
-      cacheCreation !== null
-        ? asCount(cacheCreation['ephemeral_5m_input_tokens'])
-        : asCount(usage['cache_creation_input_tokens']),
-    cache_write_1h:
-      cacheCreation !== null ? asCount(cacheCreation['ephemeral_1h_input_tokens']) : 0,
+    cache_write_5m: cacheCreation !== null ? split5m + Math.max(0, flat - split5m - split1h) : flat,
+    cache_write_1h: split1h,
   };
 }
+
+/** Per-bucket maxima apply to these; the two cache-write buckets move as one pair (C-4). */
+const MAX_BUCKETS: readonly DbBucket[] = ['input', 'output', 'cache_read'];
 
 /** The independent expected side: raw JSONL -> deduped messages, plus the raw line count. */
 function readCorpusIndependently(corpusRoot: string): {
@@ -129,8 +135,18 @@ function readCorpusIndependently(corpusRoot: string): {
         continue;
       }
       // Spec 5.2: per-bucket MAXIMUM across partials, never a sum.
-      for (const bucket of DB_BUCKETS) {
+      for (const bucket of MAX_BUCKETS) {
         existing.buckets[bucket] = Math.max(existing.buckets[bucket], buckets[bucket]);
+      }
+      // C-4: the cache-write pair comes whole from the partial with the largest
+      // 5m+1h total (a tie goes to the later partial), so mixed flat/split
+      // shapes are never counted twice.
+      if (
+        buckets.cache_write_5m + buckets.cache_write_1h >=
+        existing.buckets.cache_write_5m + existing.buckets.cache_write_1h
+      ) {
+        existing.buckets.cache_write_5m = buckets.cache_write_5m;
+        existing.buckets.cache_write_1h = buckets.cache_write_1h;
       }
       // Spec 5.2: the message's model settles to the greatest-output row.
       if (buckets.output > existing.settledOutput) {

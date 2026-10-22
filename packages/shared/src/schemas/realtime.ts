@@ -16,7 +16,10 @@ export const SessionIngestedEventSchema = Type.Object(
     agentCount: Type.Integer({ minimum: 0 }),
     edgesInserted: Type.Integer({ minimum: 0 }),
     usageRowsInserted: Type.Integer({ minimum: 0 }),
-    /** Ground-truth cost of the whole session, or null when not yet priced. */
+    /**
+     * Ground-truth cost of the messages this session owns (net of the M-12
+     * cross-session exclusions, PAR-3), or null when not yet priced.
+     */
     costUsd: nullable(Type.Number({ minimum: 0 })),
     occurredAt: Type.String(),
   },

@@ -85,6 +85,12 @@ export interface TokenUsageInsertResult {
    * is never silently swallowed.
    */
   readonly crossSessionCollisions: number;
+  /**
+   * The message ids behind `crossSessionCollisions`, in input order, so the
+   * caller can price what this session actually OWNS (PAR-3). Returned, never
+   * logged: the warn below stays counts-only.
+   */
+  readonly crossSessionMessageIds: readonly string[];
 }
 
 /** The five priced buckets, paired with their `token_usage.bucket` snake-case names. */
@@ -232,6 +238,7 @@ export function insertTokenUsageRows(
     let inserted = 0;
     let corrected = 0;
     let crossSessionCollisions = 0;
+    const crossSessionMessageIds: string[] = [];
     for (const entry of entries) {
       const storedOutput = storedOutputStatement.get(entry.messageId) as
         { tokens: number; sessionId: string } | undefined;
@@ -240,6 +247,7 @@ export function insertTokenUsageRows(
         // The spend is already counted once under its owner - skip the whole
         // message, count the collision, and move on.
         crossSessionCollisions += 1;
+        crossSessionMessageIds.push(entry.messageId);
         continue;
       }
       const settles = storedOutput === undefined || entry.usage.output > storedOutput.tokens;
@@ -267,7 +275,7 @@ export function insertTokenUsageRows(
         corrected += changes;
       }
     }
-    return { inserted, corrected, crossSessionCollisions };
+    return { inserted, corrected, crossSessionCollisions, crossSessionMessageIds };
   });
 
   const result = writeAll(deduped);

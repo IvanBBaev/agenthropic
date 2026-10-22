@@ -1596,7 +1596,12 @@ describe('migration 16 - token_usage_rollup equals a direct grouped scan', () =>
         agentId: null,
       };
       const first = insertTokenUsageRows(db, SESSION, [entry]);
-      expect(first).toEqual({ inserted: 5, corrected: 0, crossSessionCollisions: 0 });
+      expect(first).toEqual({
+        inserted: 5,
+        corrected: 0,
+        crossSessionCollisions: 0,
+        crossSessionMessageIds: [],
+      });
       const before = readRollup(db);
       expect(before).toHaveLength(5); // guard the guard: five bucket groups to keep
       expectRollupMatchesScan(db);
@@ -1606,7 +1611,12 @@ describe('migration 16 - token_usage_rollup equals a direct grouped scan', () =>
       // Identical tokens, model and timestamp, so `settles` is false and the
       // token/model/occurred_at arms of the guard cannot have fired: five
       // UPDATEs, driven by attribution alone.
-      expect(again).toEqual({ inserted: 0, corrected: 5, crossSessionCollisions: 0 });
+      expect(again).toEqual({
+        inserted: 0,
+        corrected: 5,
+        crossSessionCollisions: 0,
+        crossSessionMessageIds: [],
+      });
       expect(countRows(db, `token_usage WHERE agent_id = 'agent-arm-node'`)).toBe(5);
 
       expectRollupMatchesScan(db);
@@ -1647,7 +1657,12 @@ describe('migration 16 - token_usage_rollup equals a direct grouped scan', () =>
         ]);
         // Larger token counts on purpose: the MAX convergence rule is a
         // WITHIN-session repair, so a cross-session copy must not win with it.
-        expect(replay).toEqual({ inserted: 0, corrected: 0, crossSessionCollisions: 1 });
+        expect(replay).toEqual({
+          inserted: 0,
+          corrected: 0,
+          crossSessionCollisions: 1,
+          crossSessionMessageIds: ['shared-msg'],
+        });
         expect(warn).toHaveBeenCalledTimes(1);
       } finally {
         warn.mockRestore();

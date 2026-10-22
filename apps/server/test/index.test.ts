@@ -11,6 +11,7 @@ import {
   openDatabase,
   RealtimeHub,
   replayOutcomeLine,
+  replayPhaseEndLine,
   reportIngestFailure,
   runMigrations,
   start,
@@ -496,8 +497,19 @@ describe('composition root (src/index)', () => {
           );
           error.mockClear();
 
+          // The poll says ONE thing at error level, and it is not the entry
+          // line: it is the phase ending on a read error that persisted
+          // (2026-10-08), a different fact from "the corpus could not be read".
           vi.advanceTimersByTime(1000);
-          expect(error).not.toHaveBeenCalled();
+          expect(error).toHaveBeenCalledTimes(1);
+          expect(error).toHaveBeenCalledWith(
+            expect.stringContaining(
+              'corpus replay: the corpus still could not be read on the next poll',
+            ),
+          );
+          expect(error).not.toHaveBeenCalledWith(
+            expect.stringContaining('corpus watcher: the corpus could not be read'),
+          );
         } finally {
           await server.close();
         }
@@ -744,6 +756,74 @@ describe('composition root (src/index)', () => {
           line: null,
         });
       }
+    });
+  });
+
+  describe('replayPhaseEndLine (which poll ended the replay a read error left open)', () => {
+    const SUMMARY: CorpusIngestSummary = {
+      sessionsDiscovered: 1,
+      sessionsOk: 1,
+      sessionsFailed: 0,
+      sessionsSkipped: 0,
+      agentsUpserted: 1,
+      edgesInserted: 0,
+      usageRowsInserted: 1,
+      filesSkipped: 0,
+      totalCostUsd: 0,
+      failures: [],
+    };
+
+    it('a capped pass with more to drain is the one outcome that does not end the phase', () => {
+      expect(replayPhaseEndLine({ kind: 'ingested', summary: SUMMARY, pending: true })).toBeNull();
+    });
+
+    it('the pass that drains the sweep ends it at log level', () => {
+      expect(replayPhaseEndLine({ kind: 'ingested', summary: SUMMARY, pending: false })).toEqual({
+        level: 'log',
+        text:
+          'corpus replay: the scheduled poll finished the sweep a read error cut short - ' +
+          "health now says 'ok'.",
+      });
+      expect(replayPhaseEndLine({ kind: 'unchanged' })).toEqual({
+        level: 'log',
+        text:
+          'corpus replay: the corpus reads again and no session changed since the last ' +
+          "checkpoint - health now says 'ok'.",
+      });
+    });
+
+    it('a persisting read error ends it at error level and says the remainder is still owed', () => {
+      expect(
+        replayPhaseEndLine({ kind: 'read-error', reason: 'corpus root unreadable (EACCES)' }),
+      ).toEqual({
+        level: 'error',
+        text:
+          'corpus replay: the corpus still could not be read on the next poll (corpus root ' +
+          "unreadable (EACCES)) - the phase ends here and health says 'ok' on what landed; " +
+          'the sessions the sweep did not reach land through the scheduled poll in capped ' +
+          'passes once the corpus reads again.',
+      });
+    });
+
+    it('a vanished root ends it at log level', () => {
+      expect(replayPhaseEndLine({ kind: 'no-corpus-root' })).toEqual({
+        level: 'log',
+        text:
+          "corpus replay: the corpus root is gone - the phase ends here and health says 'ok' " +
+          'on what landed; a root that reappears is picked up by the scheduled poll.',
+      });
+    });
+
+    it("'stopped', 'overlapped' and 'containment-halt' end it at error level (total, like replayOutcomeLine)", () => {
+      for (const kind of ['stopped', 'overlapped', 'containment-halt'] as const) {
+        expect(replayPhaseEndLine({ kind })).toMatchObject({
+          level: 'error',
+          text: expect.stringMatching(/^corpus replay: .*health says 'ok' on what landed\.$/),
+        });
+      }
+      expect(replayPhaseEndLine({ kind: 'containment-halt' })?.text).toContain(
+        'see the FATAL line above',
+      );
     });
   });
 });

@@ -65,7 +65,7 @@
  * `pending` on the 'ingested' outcome. The composition root uses it for the
  * startup replay only, yielding to the event loop between passes so the
  * server answers requests (and /api/health says 'replaying') while a large
- * corpus is read; the scheduled poll never passes a cap. A deferred session is
+ * corpus is read; the scheduled poll passes no cap of its own. A deferred session is
  * simply not settled, so its fingerprint stays uncommitted and a later pass
  * picks it up - no new bookkeeping is needed for that half. What IS needed is
  * the SWEEP: the passes that drain one capped working set count as ONE pass
@@ -76,6 +76,14 @@
  * apart, and every re-read schedule would come due during the replay - the
  * chunking would change which sessions are quarantined, not just when the
  * event loop breathes.
+ *
+ * A CAP OUTLIVES THE CALL THAT GAVE IT. It stays in force until a pass drains
+ * the working set, or the root is lost or replaced. A replay that a read error
+ * cuts short is finished by the scheduled poll, which passes no cap: without
+ * the carry-over its first good pass would admit the whole remainder at once
+ * (or the whole corpus, when the fault hit the first pass) - the single
+ * synchronous pass the chunking exists to avoid, run after the replay loop
+ * has already stopped yielding. An explicit cap on a later call still wins.
  *
  * Concurrency: better-sqlite3 makes a tick fully synchronous, so two passes
  * can only overlap through re-entrancy (a callback calling `tick()`); a simple
@@ -291,8 +299,9 @@ export interface TickOptions {
   /**
    * Admit at most this many changed sessions in this pass; the rest are left
    * for a continuation pass and the outcome says `pending: true`. Absent (the
-   * scheduled poll), every changed session is admitted, exactly as before.
-   * Must be a positive integer.
+   * scheduled poll), every changed session is admitted - unless an earlier
+   * capped pass has not drained yet, in which case its cap still applies (see
+   * the module doc). Must be a positive integer.
    */
   readonly maxSessions?: number;
 }
@@ -438,9 +447,15 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
   let pass = 0;
   /**
    * Sessions already admitted by the capped sweep in progress, or null when no
-   * sweep is pending (always null for the uncapped scheduled poll).
+   * sweep is pending.
    */
   let sweep: Set<string> | null = null;
+  /**
+   * The cap in force for a pass that names none: the last cap given, until a
+   * pass drains the working set or the root is lost or replaced. Undefined in
+   * steady state, so the scheduled poll is uncapped exactly as before.
+   */
+  let carriedCap: number | undefined;
   /** Corpus root the persisted checkpoint was hydrated from; null = not yet. */
   let hydratedRoot: string | null = null;
   /** Pricing content seen by the previous pass; null = no pass yet. */
@@ -604,6 +619,9 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
   function ingestChanged(
     maxSessions: number | undefined,
   ): Extract<TickOutcome, { kind: 'ingested' | 'unchanged' | 'no-corpus-root' | 'read-error' }> {
+    // Before anything that can throw: a pass that fails to read the corpus has
+    // drained nothing, so its cap must still be there for the retry.
+    carriedCap = maxSessions ?? carriedCap;
     const corpusRoot = resolveCorpusRoot(deps.env, fs, deps.homedir);
     if (corpusRoot === null) {
       // No corpus (yet / any more): forget every fingerprint and retry budget so
@@ -615,6 +633,7 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
       slugs.clear();
       hydratedRoot = null;
       sweep = null;
+      carriedCap = undefined;
       return { kind: 'no-corpus-root' };
     }
 
@@ -628,6 +647,12 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
       attempts.clear();
       slugs.clear();
       sweep = null;
+      if (hydratedRoot !== null) {
+        // A REPLACED root abandons the sweep and its cap with it; this call's
+        // own cap stands. A first adoption abandons nothing: the cap of a
+        // replay pass that failed before it could hydrate is still owed.
+        carriedCap = maxSessions;
+      }
       for (const [sessionId, fingerprint] of deps.checkpoints.load(corpusRoot)) {
         fingerprints.set(sessionId, fingerprint);
       }
@@ -692,15 +717,31 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
     // rest unsettled - their fingerprints stay uncommitted, so the next pass of
     // this sweep sees them as changed again.
     let pending = false;
-    if (maxSessions !== undefined && changed.size > maxSessions) {
+    if (carriedCap !== undefined && changed.size > carriedCap) {
       pending = true;
-      for (const sessionId of [...changed].slice(maxSessions)) {
+      for (const sessionId of [...changed].slice(carriedCap)) {
         changed.delete(sessionId);
       }
     }
-    sweep = pending ? new Set([...(continuing ?? []), ...changed]) : null;
+    // Recorded LAST (2026-10-08), on each of the two ways out of this pass -
+    // never before the runner below has run. This used to be settled right
+    // here, so a throw anywhere below it (the runner resolves the root a second
+    // time and enumerates again; both can fail) left the sweep already holding
+    // the chunk this pass had admitted but never read. The retry then skipped
+    // that chunk as "done in this sweep", reported the sweep drained with the
+    // chunk still unread, and the chunk only landed on a later plain pass
+    // (its fingerprints were never settled) - after health had said 'ok' on
+    // the drained sweep. A pass that throws now leaves the sweep and its cap
+    // exactly as it found them, and the retry admits the same chunk again.
+    const settleSweep = (): void => {
+      sweep = pending ? new Set([...(continuing ?? []), ...changed]) : null;
+      if (!pending) {
+        carriedCap = undefined; // drained: the next uncapped pass is a plain one
+      }
+    };
 
     if (changed.size === 0) {
+      settleSweep();
       return { kind: 'unchanged' };
     }
     // Which sessions this pass actually PROJECTED — the only ones a checkpoint
@@ -763,6 +804,7 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
     // `present`, not the enumerated set: a session hidden by an unreadable slug
     // keeps its persisted checkpoint, as it keeps its in-memory fingerprint.
     deps.checkpoints?.commit(corpusRoot, checkpointable, present);
+    settleSweep();
     return { kind: 'ingested', summary, pending };
   }
 

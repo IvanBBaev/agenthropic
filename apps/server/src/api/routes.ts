@@ -54,6 +54,7 @@ import {
   getSessionTree,
   listSessions,
   normalizeSinceInstant,
+  sessionExists,
 } from './queries';
 
 export interface ApiRoutesOptions {
@@ -332,6 +333,19 @@ export const apiRoutes: FastifyPluginAsync<ApiRoutesOptions> = async (app, optio
         return reply.code(503).send({ error: 'corpus access is not configured' });
       }
 
+      // The rule of the three database reads, applied BEFORE the corpus is
+      // touched: not in the database + a failure on record at ingest = 409.
+      // This route is the only one that reads the corpus, where a rejected
+      // session is still sitting - so, left to the live read, it answered for
+      // that session on its own terms: a 422 for the very price ingest was
+      // already reporting, or a 200 for a session every other read refuses.
+      if (!sessionExists(db, request.params.id)) {
+        const rejected = rejectedSession(request.params.id, request.log);
+        if (rejected !== undefined) {
+          return reply.code(409).send(rejected);
+        }
+      }
+
       let lookup: SubstrateLookup;
       try {
         lookup = substrateProvider.loadSession(request.params.id);
@@ -391,6 +405,9 @@ export const apiRoutes: FastifyPluginAsync<ApiRoutesOptions> = async (app, optio
         });
       }
       if (lookup.kind === 'session-not-found') {
+        // Reached with a rejection only by a session the database still holds
+        // from an earlier good pass and that has since left the corpus: 409
+        // again, because "not found" would contradict the reads that serve it.
         const rejected = rejectedSession(request.params.id, request.log);
         if (rejected !== undefined) {
           return reply.code(409).send(rejected);
@@ -544,8 +561,11 @@ export const apiRoutes: FastifyPluginAsync<ApiRoutesOptions> = async (app, optio
   // answer had missed anything.
   //
   // The reply names its own window - `since`, `until`, and the half-open
-  // `interval` between them - so chaining `since=until` walks the corpus
-  // without a gap and without double-counting. `until` comes from the DATA,
+  // `interval` between them - so chaining `since=until` never double-counts
+  // and misses nothing that was already ingested when the previous call ran.
+  // A session ingested LATER with event times at or before that `until` is
+  // missed (S-1; the window is over event time and no ingest order is
+  // stored - see the shared schema). `until` comes from the DATA,
   // never the clock (see getChanges), because ingest lags event time and a
   // clock boundary would promise rows that have not arrived.
   //

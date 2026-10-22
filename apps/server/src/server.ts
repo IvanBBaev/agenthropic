@@ -184,6 +184,10 @@ export function buildLoggerOptions(logger: boolean): FastifyServerOptions['logge
   return { serializers: { req: redactedRequestSerializer } };
 }
 
+/** `Bearer ` followed by the token; the scheme name matches in any case. */
+const BEARER_PREFIX = /^bearer /i;
+const BEARER_SCHEME_LENGTH = 'Bearer '.length;
+
 /**
  * Extract the presented token: `Authorization: Bearer <token>` everywhere;
  * the SSE stream may also use `?token=` because EventSource cannot set
@@ -191,8 +195,11 @@ export function buildLoggerOptions(logger: boolean): FastifyServerOptions['logge
  */
 function extractToken(request: FastifyRequest, allowQueryToken: boolean): string | undefined {
   const header = request.headers.authorization;
-  if (typeof header === 'string' && header.startsWith('Bearer ')) {
-    return header.slice('Bearer '.length);
+  // RFC 7235 section 2.1: the auth-scheme name is case-insensitive, so
+  // `bearer`, `Bearer` and `BEARER` all name the same scheme. Only the scheme
+  // is folded; the token itself is still compared byte-exact (timing-safe).
+  if (typeof header === 'string' && BEARER_PREFIX.test(header)) {
+    return header.slice(BEARER_SCHEME_LENGTH);
   }
   if (allowQueryToken) {
     // Fastify's `request.url` is a getter over `request.raw.url` - the SAME
@@ -320,6 +327,13 @@ export function buildServer(options: BuildServerOptions) {
   const activeStreams = new Set<() => void>();
 
   typed.get(STREAM_PATH, (request, reply) => {
+    // Fastify serves HEAD for every GET through the GET handler. A hijacked
+    // stream has no response to HEAD: it would hang the probe, hold its socket
+    // and leak a hub subscriber per request. Refuse before the hijack; the
+    // `/api/*` auth hook has already run, so this leaks nothing to a stranger.
+    if (request.method === 'HEAD') {
+      return reply.code(405).header('allow', 'GET').send();
+    }
     // SSE (CD-5: the canonical realtime transport - never WebSocket).
     reply.hijack();
     const raw = reply.raw;

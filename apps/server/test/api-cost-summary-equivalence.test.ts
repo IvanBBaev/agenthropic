@@ -1788,26 +1788,23 @@ describe('cost summary equals an uncached scan (M-19)', () => {
       ).not.toBeNull();
     });
 
-    it('goes stale when the ledger is written from ANOTHER connection', () => {
-      // THE MEMO'S BLIND SPOT, measured rather than argued.
+    it("sees a ledger write from ANOTHER connection (API-6 closed the memo's blind spot)", () => {
+      // THE MEMO'S FORMER BLIND SPOT, measured rather than argued.
       //
       // `costSummaryStateKey` mixes `total_changes()`, which counts only THIS
       // connection's writes, with the full content of `model_pricing`, which is
-      // read fresh. So a `model_pricing` write from a second connection moves
-      // the key (that is the documented operator path, and the suite above
-      // exercises it), while a `token_usage` write from a second connection
-      // does not - even though the rollup on disk has already followed it.
-      //
-      // This is the single-writer assumption `getCostSummary` states in prose,
-      // pinned here as a measurement so that a future change which quietly
-      // widens or narrows it is noticed. It is NOT a cutover regression: the
-      // memo and this key predate the rollup read (git: `costSummaryStateKey`
-      // arrives in 71f6878, `token_usage_rollup` appears in this file only in
-      // the uncommitted cutover), and the pre-cutover read was memoized behind
-      // the identical key. The pre-cutover code is not in the tree, so that
-      // last clause is read from history, not run.
+      // read fresh. Until API-6 that left a `token_usage` write from a second
+      // connection invisible: the rollup on disk had already followed it, and
+      // the memo answered anyway. This test pinned that staleness as a
+      // measurement so a change to the single-writer assumption would be
+      // noticed. API-6 is that change: `PRAGMA data_version` now rides in the
+      // key, SQLite bumps it on this connection when ANY other connection
+      // commits, and the same write is served fresh. Pinned again, in its new
+      // direction, so a key that quietly drops the pragma fails here.
       const { temp } = seedRichDatabase();
       const before = getCostSummary(temp.db, TOP_N);
+      const changesBefore = (temp.db.prepare('SELECT total_changes() AS n').get() as { n: number })
+        .n;
 
       const other = openDatabase(temp.path);
       try {
@@ -1833,12 +1830,19 @@ describe('cost summary equals an uncached scan (M-19)', () => {
           )
           .all(),
       ).toEqual([{ tokens: 3_000_000 }]);
-      // ...and the served value is STALE anyway: the memo answered.
-      expect(getCostSummary(temp.db, TOP_N)).toBe(before);
-      // A fresh handle - no memo - reads the truth, so the staleness is the
-      // cache and not the rollup.
-      expect(uncachedScan(temp.path).totals.tokens).toBe(before.totals.tokens + 3_000_000);
-      // Any write on THIS connection resyncs it.
+      // THIS connection's change counter did not move, so `total_changes()`
+      // alone would still have served the memo...
+      expect((temp.db.prepare('SELECT total_changes() AS n').get() as { n: number }).n).toBe(
+        changesBefore,
+      );
+      // ...and the served value is FRESH anyway: a new object, the ledger's
+      // truth, and the same answer a handle with no memo at all reads.
+      const after = getCostSummary(temp.db, TOP_N);
+      expect(after).not.toBe(before);
+      expect(after.totals.tokens).toBe(before.totals.tokens + 3_000_000);
+      expect(after).toEqual(ledgerOracle(temp.db));
+      expect(uncachedScan(temp.path).totals.tokens).toBe(after.totals.tokens);
+      // A write on THIS connection still resyncs it, as before API-6.
       temp.db.prepare("DELETE FROM token_usage WHERE message_id = 'fals-cross-conn'").run();
       expect(getCostSummary(temp.db, TOP_N)).toEqual(ledgerOracle(temp.db));
     });

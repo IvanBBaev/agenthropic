@@ -125,6 +125,42 @@ describe('/api/dag/global (WP-U4)', () => {
     });
   });
 
+  it('counts a dangling edge in totalEdges but never returns it, without claiming truncation (API-4)', async () => {
+    // `orchestration_edges` carries no FK, so an edge can name an agent id
+    // with no stored row (ingest keeps the spawn relation when a cycle forces
+    // a parent to be nulled). Such an edge is counted - `totalEdges` is a
+    // COUNT over the whole table - but can never be returned, because no
+    // node set contains its endpoint. `truncated` is about the NODE cap and
+    // must stay false: the client reads the edge gap from the two edge counts
+    // (SA-Z4), not from the flag.
+    temp.db
+      .prepare(
+        `INSERT INTO orchestration_edges (session_id, parent_agent_id, child_agent_id, source, instance, host_id, created_at)
+         VALUES ('s2', 'h-main', 'ghost', 'tool_use', 'default', 'host-1', '2026-07-12T00:20:00Z')`,
+      )
+      .run();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/dag/global?limit=100',
+      headers: AUTH,
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.nodes).toHaveLength(4);
+    expect(body.edges.map((e: { childAgentId: string }) => e.childAgentId)).toEqual([
+      'g-sub1',
+      'h-sub1',
+    ]);
+    expect(body.counts).toEqual({
+      totalSessions: 2,
+      totalAgents: 4,
+      totalEdges: 3,
+      returnedAgents: 4,
+      returnedEdges: 2,
+      truncated: false,
+    });
+  });
+
   it('rejects a limit above the cap (400)', async () => {
     const response = await app.inject({
       method: 'GET',

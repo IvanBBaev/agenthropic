@@ -1,9 +1,11 @@
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs';
@@ -108,6 +110,32 @@ describe('backup-file retention (WP-D10 mechanism; day counts await OPEN-1)', ()
       'agenthropic.db',
       'notes.txt',
     ]);
+  });
+
+  it('skips symlinks, dangling ones included, and never deletes through one (STO-6)', () => {
+    // A link planted in the backup directory under a backup-shaped name must
+    // be invisible: not counted, not deleted, and its target never touched.
+    // The dangling one is the sharper case - a stat that FOLLOWS it throws
+    // ENOENT and takes the whole pass down with it.
+    const target = join(dir, 'real-target.db');
+    writeFileSync(target, 'precious', 'utf8');
+    const old = daysAgo(300);
+    utimesSync(target, old, old);
+    symlinkSync(target, join(dir, 'agenthropic-2026-01-01.db'));
+    symlinkSync(join(dir, 'missing'), join(dir, 'agenthropic-2026-01-02.db'));
+    writeBackup('agenthropic-2026-01-03.db', 300);
+    writeBackup('agenthropic-2026-08-06.db', 1);
+
+    const report = pruneBackupFiles(rule({ maxAgeDays: 1, keepMinimum: 1 }), { now: NOW });
+
+    expect(report.found.map((f) => f.name)).toEqual([
+      'agenthropic-2026-08-06.db',
+      'agenthropic-2026-01-03.db',
+    ]);
+    expect(report.deleted.map((f) => f.name)).toEqual(['agenthropic-2026-01-03.db']);
+    expect(lstatSync(join(dir, 'agenthropic-2026-01-01.db')).isSymbolicLink()).toBe(true);
+    expect(lstatSync(join(dir, 'agenthropic-2026-01-02.db')).isSymbolicLink()).toBe(true);
+    expect(existsSync(target)).toBe(true);
   });
 
   it('a dry run lists what would go and removes nothing', () => {

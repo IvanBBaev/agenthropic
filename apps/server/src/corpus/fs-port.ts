@@ -31,12 +31,18 @@ export interface LstatInfo {
   readonly mtimeMs: number;
 }
 
-/** The product of {@link CorpusFs.readFileTailConfined}: a byte range plus the file's total size. */
+/**
+ * The product of {@link CorpusFs.readFileTailConfined}: a byte range plus the
+ * size / mtime pair of the file as the SAME `fstat` saw it, so a caller can
+ * fingerprint the read it actually got rather than a separate `lstat`.
+ */
 export interface TailRead {
   /** The bytes `[min(fromByte, size), EOF)` — empty when `fromByte` is at or past EOF. */
   readonly data: Uint8Array;
   /** Total size of the file at read time (what the oversize cap was checked against). */
   readonly sizeBytes: number;
+  /** Modification time at read time, from the same fstat (epoch ms). */
+  readonly mtimeMs: number;
 }
 
 /**

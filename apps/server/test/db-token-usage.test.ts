@@ -50,6 +50,7 @@ describe('insertTokenUsageRows (WP-D8 / LONG token_usage matrix)', () => {
       inserted: 10,
       corrected: 0,
       crossSessionCollisions: 0,
+      crossSessionMessageIds: [],
     });
     const count = temp.db.prepare('SELECT COUNT(*) AS n FROM token_usage').get() as { n: number };
     expect(count.n).toBe(10);
@@ -60,11 +61,13 @@ describe('insertTokenUsageRows (WP-D8 / LONG token_usage matrix)', () => {
       inserted: 10,
       corrected: 0,
       crossSessionCollisions: 0,
+      crossSessionMessageIds: [],
     });
     expect(insertTokenUsageRows(temp.db, sessionId, messages)).toEqual({
       inserted: 0,
       corrected: 0,
       crossSessionCollisions: 0,
+      crossSessionMessageIds: [],
     });
     const count = temp.db.prepare('SELECT COUNT(*) AS n FROM token_usage').get() as { n: number };
     expect(count.n).toBe(10);
@@ -161,12 +164,14 @@ describe('insertTokenUsageRows (WP-D8 / LONG token_usage matrix)', () => {
         inserted: 5,
         corrected: 0,
         crossSessionCollisions: 0,
+        crossSessionMessageIds: [],
       });
       // All five rows change: three by tokens, all five by the settled model.
       expect(insertTokenUsageRows(temp.db, sessionId, [settled])).toEqual({
         inserted: 0,
         corrected: 5,
         crossSessionCollisions: 0,
+        crossSessionMessageIds: [],
       });
 
       expect(readMessage('msg-stream')).toEqual([
@@ -186,6 +191,7 @@ describe('insertTokenUsageRows (WP-D8 / LONG token_usage matrix)', () => {
         inserted: 0,
         corrected: 0,
         crossSessionCollisions: 0,
+        crossSessionMessageIds: [],
       });
 
       expect(readMessage('msg-stream')).toEqual([
@@ -210,6 +216,7 @@ describe('insertTokenUsageRows (WP-D8 / LONG token_usage matrix)', () => {
         inserted: 0,
         corrected: 1,
         crossSessionCollisions: 0,
+        crossSessionMessageIds: [],
       });
 
       const rows = readMessage('msg-stream');
@@ -244,6 +251,7 @@ describe('insertTokenUsageRows (WP-D8 / LONG token_usage matrix)', () => {
         inserted: 0,
         corrected: 5,
         crossSessionCollisions: 0,
+        crossSessionMessageIds: [],
       });
 
       const rows = readMessage('msg-main');
@@ -305,6 +313,7 @@ describe('insertTokenUsageRows (WP-D8 / LONG token_usage matrix)', () => {
         inserted: 5,
         corrected: 0,
         crossSessionCollisions: 0,
+        crossSessionMessageIds: [],
       });
 
       // The fork's copy names a different agent — the exact rewrite the guard exists to refuse.
@@ -312,6 +321,7 @@ describe('insertTokenUsageRows (WP-D8 / LONG token_usage matrix)', () => {
         inserted: 0,
         corrected: 0,
         crossSessionCollisions: 1,
+        crossSessionMessageIds: ['msg-shared'],
       });
 
       expect(ownerOf(temp.db, 'msg-shared')).toBe(sessionId);
@@ -352,6 +362,7 @@ describe('insertTokenUsageRows (WP-D8 / LONG token_usage matrix)', () => {
         inserted: 0,
         corrected: 0,
         crossSessionCollisions: 1,
+        crossSessionMessageIds: ['msg-shared'],
       });
 
       const output = temp.db
@@ -385,6 +396,7 @@ describe('insertTokenUsageRows (WP-D8 / LONG token_usage matrix)', () => {
         inserted: 0,
         corrected: 1,
         crossSessionCollisions: 0,
+        crossSessionMessageIds: [],
       });
 
       const output = temp.db
@@ -409,6 +421,7 @@ describe('insertTokenUsageRows (WP-D8 / LONG token_usage matrix)', () => {
         inserted: 5,
         corrected: 0,
         crossSessionCollisions: 1,
+        crossSessionMessageIds: ['msg-shared'],
       });
 
       expect(ownerOf(temp.db, 'msg-fork-own')).toBe(FORK_SESSION);
@@ -469,11 +482,13 @@ describe('insertTokenUsageRows (WP-D8 / LONG token_usage matrix)', () => {
         inserted: 5,
         corrected: 0,
         crossSessionCollisions: 0,
+        crossSessionMessageIds: [],
       });
       expect(insertTokenUsageRows(temp.db, sessionId, rows)).toEqual({
         inserted: 0,
         corrected: 0,
         crossSessionCollisions: 0,
+        crossSessionMessageIds: [],
       });
     });
 

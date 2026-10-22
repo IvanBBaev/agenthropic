@@ -440,6 +440,85 @@ export function tickTroubleTransition(
 }
 
 /**
+ * The line that ends the replay phase a read error left open (2026-10-08).
+ * A boot replay that a read error cuts short stays 'replaying' into the
+ * scheduled polls, and the first poll that does not continue the sweep ends
+ * the phase - health then says 'ok' for the life of the process (owner
+ * decision, 2026-10-01). That end used to be silent: the boot log said the
+ * corpus could not be read, health later said 'ok', and nothing in between
+ * said which poll ended the phase or on how much of the corpus. Returns
+ * `null` for the one outcome that does NOT end the phase - a capped pass with
+ * more to drain - and a line for every other outcome, so the composition root
+ * never has to decide on its own which outcomes are an ending. Total on
+ * purpose, like {@link replayOutcomeLine}: the three "cannot happen on a poll"
+ * arms get an 'error' line rather than a branch nothing can take.
+ */
+export function replayPhaseEndLine(outcome: TickOutcome): {
+  readonly level: 'log' | 'error';
+  readonly text: string;
+} | null {
+  switch (outcome.kind) {
+    case 'ingested':
+      return outcome.pending
+        ? null
+        : {
+            level: 'log',
+            text:
+              'corpus replay: the scheduled poll finished the sweep a read error cut short - ' +
+              "health now says 'ok'.",
+          };
+    case 'unchanged':
+      return {
+        level: 'log',
+        text:
+          'corpus replay: the corpus reads again and no session changed since the last ' +
+          "checkpoint - health now says 'ok'.",
+      };
+    case 'read-error':
+      // The honest ending, not a recovery: the sessions the sweep did not reach
+      // are still owed. The watcher keeps the sweep and its cap on a read
+      // error, so they land through the scheduled poll in capped passes once
+      // the corpus reads again - under a health answer that already says 'ok'.
+      return {
+        level: 'error',
+        text:
+          `corpus replay: the corpus still could not be read on the next poll (${outcome.reason}) - ` +
+          "the phase ends here and health says 'ok' on what landed; the sessions the sweep " +
+          'did not reach land through the scheduled poll in capped passes once the corpus ' +
+          'reads again.',
+      };
+    case 'no-corpus-root':
+      return {
+        level: 'log',
+        text:
+          "corpus replay: the corpus root is gone - the phase ends here and health says 'ok' " +
+          'on what landed; a root that reappears is picked up by the scheduled poll.',
+      };
+    case 'containment-halt':
+      return {
+        level: 'error',
+        text:
+          'corpus replay: halted by a containment violation on the poll that was finishing ' +
+          "the replay - see the FATAL line above; health says 'ok' on what landed.",
+      };
+    case 'stopped':
+      return {
+        level: 'error',
+        text:
+          'corpus replay: the watcher was stopped before the poll could finish the replay - ' +
+          "health says 'ok' on what landed.",
+      };
+    case 'overlapped':
+      return {
+        level: 'error',
+        text:
+          'corpus replay: a pass was already in flight when the poll that was finishing the ' +
+          "replay started - the phase ends here and health says 'ok' on what landed.",
+      };
+  }
+}
+
+/**
  * WP-IN5 the failure-visibility seam: an ingest failure reaches BOTH the
  * operator (a server log) and the dashboard (the SSE stream every client is
  * already listening on).
@@ -733,8 +812,9 @@ export async function start(
   // it for in-process harnesses that stub process.exit (production exits).
   let appRef: FastifyInstance | null = null;
   // /api/health's boot phase (M-16): 'replaying' from bind until the startup
-  // replay tick finishes (successfully or not), then 'idle' for the life of the
-  // process. Not wired at all when ingest is off.
+  // replay is over, then 'idle' for the life of the process - it turns exactly
+  // once. A replay that a read error cut short is not over: the scheduled poll
+  // finishes it (see onTickOutcome below). Not wired at all when ingest is off.
   let ingestPhase: 'replaying' | 'idle' = config.ingestEnabled ? 'replaying' : 'idle';
   // Trouble state for the scheduled poll loop, seeded from the replay tick
   // below so a boot that already announced its trouble is not announced twice.
@@ -842,6 +922,19 @@ export async function start(
         if (line !== null) {
           (line.level === 'error' ? console.error : console.log)(line.text);
         }
+        // Only a replay that a read error cut short is still 'replaying' when
+        // the poll starts. A pass that leaves sessions pending keeps it so;
+        // anything else ends it - the sweep drained, or the corpus is still
+        // unreadable and nothing is about to drain. The second matters: the
+        // token screen waits on this phase with no timeout. The ending is
+        // said in the log (2026-10-08): which poll ended it, and on what.
+        if (ingestPhase === 'replaying') {
+          const end = replayPhaseEndLine(outcome);
+          if (end !== null) {
+            ingestPhase = 'idle';
+            (end.level === 'error' ? console.error : console.log)(end.text);
+          }
+        }
       },
       onTickDuration: (durationMs) => {
         lastTickDurationMs = durationMs;
@@ -948,8 +1041,15 @@ export async function start(
     if (replay.kind === 'read-error' || replay.kind === 'no-corpus-root') {
       tickTrouble = replay.kind;
     }
+    // A read error ended the loop, not the replay: the sessions it did not
+    // reach are still owed and the watcher still holds the cap, so the poll
+    // finishes the sweep in capped passes and ends the phase (onTickOutcome).
+    // Every other ending - drained, nothing to read, no root - is final.
+    // (With ingest off there is no watcher and the phase was 'idle' all along.)
+    if (replay.kind !== 'read-error') {
+      ingestPhase = 'idle';
+    }
   }
-  ingestPhase = 'idle';
   watcher?.start(); // tail-follow begins only after a healthy bind AND the replay
   return { app, db, skipCounters: () => skipReporter.counters(), close };
 }

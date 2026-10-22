@@ -85,6 +85,26 @@ const MAIN_BODY =
     message: { role: 'user', content: 'go' },
   }) + '\n';
 
+/** A main that itself holds one id-less usage record: a whole read counts three. */
+const MAIN_WITH_DROPPED_BODY =
+  MAIN_BODY +
+  JSON.stringify({
+    parentUuid: '77777777-0000-4000-8000-000000000000',
+    isSidechain: false,
+    sessionId: SID,
+    type: 'assistant',
+    uuid: '77777777-0000-4000-8000-000000000009',
+    timestamp: '2026-09-01T00:00:09.000Z',
+    message: {
+      type: 'message',
+      role: 'assistant',
+      model: 'synthetic-model-a',
+      content: [{ type: 'text', text: 'synthetic' }],
+      usage: { input_tokens: 900, output_tokens: 1 },
+    },
+  }) +
+  '\n';
+
 function corpus(main: ReturnType<typeof file>): TreeSpec {
   return {
     [SLUG]: dir({
@@ -273,6 +293,30 @@ describe('the partial flag and the dropped count are persisted by the real inges
 
     // The main shrinks back under the cap (or the cap is raised): the latest
     // pass is the truth, so the session is whole again.
+    runCorpusIngest(deps(temp, corpus(file(MAIN_BODY))));
+    expect(sessionRow(temp)).toEqual({
+      partial_reason: null,
+      partial_skipped_bytes: null,
+      usage_records_dropped: 2,
+    });
+  });
+
+  it('a main that grows past the cap never lowers the dropped count', () => {
+    // Read whole: the main's own id-less record counts with the subagent's two.
+    runCorpusIngest(deps(temp, corpus(file(MAIN_WITH_DROPPED_BODY))));
+    expect(sessionRow(temp)?.usage_records_dropped).toBe(3);
+
+    // The main grows past the cap. This pass sees only the subagent's two, but
+    // the main's record is still excluded from totals that still hold the
+    // main's earlier usage: the count is a lower bound and must not shrink.
+    runCorpusIngest(deps(temp, corpus(file(MAIN_WITH_DROPPED_BODY, { size: OVERSIZE_BYTES }))));
+    expect(sessionRow(temp)).toEqual({
+      partial_reason: 'main-transcript-oversize',
+      partial_skipped_bytes: OVERSIZE_BYTES,
+      usage_records_dropped: 3,
+    });
+
+    // A whole read is exact, so it still overwrites - downwards too.
     runCorpusIngest(deps(temp, corpus(file(MAIN_BODY))));
     expect(sessionRow(temp)).toEqual({
       partial_reason: null,

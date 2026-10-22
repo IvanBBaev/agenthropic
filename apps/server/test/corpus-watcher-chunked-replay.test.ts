@@ -68,14 +68,29 @@ describe('corpus watcher: chunked passes and rejectionOf', () => {
       [ROOT, makeFakeCorpusFs(ROOT, { [SLUG]: dir(tree) })],
       [OTHER_ROOT, makeFakeCorpusFs(OTHER_ROOT, { [SLUG]: dir(tree) })],
     ]);
-    let rootGone = false;
+    let rootFault: 'ENOENT' | 'EACCES' | null = null;
+    // Armed by `failRealpathOnCall`: the Nth realpath call from now throws
+    // EACCES once; the calls before and after it resolve normally.
+    let realpathFault: { readonly call: number; seen: number } | null = null;
     const env: Record<string, string | undefined> = { CLAUDE_PROJECTS_DIR: ROOT };
     const current = (): CorpusFs => roots.get(env['CLAUDE_PROJECTS_DIR'] ?? ROOT) as CorpusFs;
     const fs = new Proxy({} as CorpusFs, {
       get(_target, key: keyof CorpusFs) {
-        if (key === 'realpath' && rootGone) {
+        if (key === 'realpath' && rootFault !== null) {
+          const code = rootFault;
           return () => {
-            throw Object.assign(new Error('gone'), { code: 'ENOENT' });
+            throw Object.assign(new Error('realpath failed'), { code });
+          };
+        }
+        if (key === 'realpath' && realpathFault !== null) {
+          return (absPath: string): string => {
+            const fault = realpathFault as { readonly call: number; seen: number };
+            fault.seen += 1;
+            if (fault.seen === fault.call) {
+              realpathFault = null;
+              throw Object.assign(new Error('realpath failed'), { code: 'EACCES' });
+            }
+            return current().realpath(absPath);
           };
         }
         const delegate = current();
@@ -128,7 +143,20 @@ describe('corpus watcher: chunked passes and rejectionOf', () => {
         delete tree[`${id}.jsonl`];
       },
       setRootGone(gone: boolean): void {
-        rootGone = gone;
+        rootFault = gone ? 'ENOENT' : null;
+      },
+      /** The root is there but cannot be resolved: a pass ends in 'read-error'. */
+      setRootUnreadable(unreadable: boolean): void {
+        rootFault = unreadable ? 'EACCES' : null;
+      },
+      /**
+       * Fail the Nth realpath call from now, once. A pass resolves the root
+       * TWICE - the watcher for its own enumeration, then the runner before it
+       * reads - so `2` is a throw in the middle of a pass, after the cap has
+       * admitted its chunk and before any of it is read.
+       */
+      failRealpathOnCall(call: number): void {
+        realpathFault = { call, seen: 0 };
       },
     };
   }
@@ -168,6 +196,69 @@ describe('corpus watcher: chunked passes and rejectionOf', () => {
     const corpus = harness(3);
     expect(corpus.watcher.tick({ maxSessions: 3 })).toMatchObject({ pending: false });
     expect(corpus.reads).toHaveLength(3);
+  });
+
+  it('an uncapped tick that continues a pending sweep stays capped', () => {
+    // The scheduled poll passes no cap. When a replay is cut short it inherits
+    // the remainder, and admitting all of it at once would be the single
+    // synchronous pass the chunking exists to avoid.
+    const corpus = harness(4);
+    expect(corpus.watcher.tick({ maxSessions: 1 })).toMatchObject({ pending: true });
+
+    expect(corpus.watcher.tick()).toMatchObject({ kind: 'ingested', pending: true });
+    expect(corpus.reads).toEqual([0, 1].map(sessionId));
+    expect(corpus.watcher.tick()).toMatchObject({ kind: 'ingested', pending: true });
+    expect(corpus.watcher.tick()).toMatchObject({ kind: 'ingested', pending: false });
+    expect(corpus.reads).toEqual([0, 1, 2, 3].map(sessionId));
+
+    // The cap ends with the sweep: the next uncapped pass is a plain one.
+    for (const n of [0, 1, 2, 3]) {
+      corpus.touch(sessionId(n));
+    }
+    const plain = corpus.watcher.tick();
+    expect(plain).toMatchObject({ kind: 'ingested', pending: false });
+    expect(ingestedIds(plain)).toBe(4);
+  });
+
+  it('an explicit cap wins over the one a sweep carries', () => {
+    const corpus = harness(4);
+    expect(corpus.watcher.tick({ maxSessions: 1 })).toMatchObject({ pending: true });
+    expect(corpus.watcher.tick({ maxSessions: 2 })).toMatchObject({ pending: true });
+    expect(corpus.reads).toEqual([0, 1, 2].map(sessionId));
+  });
+
+  it.each([
+    ['without a checkpoint store', false],
+    // Production wiring. The retry is then also the first pass to hydrate the
+    // store, and adopting a root for the first time abandons no sweep.
+    ['with a checkpoint store', true],
+  ])(
+    'a capped pass that could not read the corpus keeps its cap for the retry (%s)',
+    (_, store) => {
+      // The replay's first pass fails before any sweep exists. The retry comes
+      // from the scheduled poll, uncapped, and must not become the whole replay
+      // in one pass.
+      const corpus = harness(3, { checkpoints: store });
+      corpus.setRootUnreadable(true);
+      expect(corpus.watcher.tick({ maxSessions: 1 })).toMatchObject({ kind: 'read-error' });
+      corpus.setRootUnreadable(false);
+
+      expect(corpus.watcher.tick()).toMatchObject({ kind: 'ingested', pending: true });
+      expect(corpus.reads).toEqual([sessionId(0)]);
+    },
+  );
+
+  it('a read error in the middle of a sweep keeps the sweep and its cap', () => {
+    const corpus = harness(3);
+    expect(corpus.watcher.tick({ maxSessions: 1 })).toMatchObject({ pending: true });
+    corpus.setRootUnreadable(true);
+    expect(corpus.watcher.tick()).toMatchObject({ kind: 'read-error' });
+    corpus.setRootUnreadable(false);
+
+    expect(corpus.watcher.tick()).toMatchObject({ kind: 'ingested', pending: true });
+    expect(corpus.watcher.tick()).toMatchObject({ kind: 'ingested', pending: false });
+    // Nothing the sweep read before the fault is read again after it.
+    expect(corpus.reads).toEqual([0, 1, 2].map(sessionId));
   });
 
   it('a session that fails early in a sweep is not retried by the same sweep', () => {
@@ -232,6 +323,23 @@ describe('corpus watcher: chunked passes and rejectionOf', () => {
     // read again, not skipped as "already read in this sweep".
     corpus.watcher.tick();
     expect(corpus.reads).toEqual([0, 0, 1, 2].map(sessionId));
+  });
+
+  it('a pass that throws after admitting its chunk does not count the chunk as read', () => {
+    const corpus = harness(4);
+    corpus.failRealpathOnCall(2);
+    expect(corpus.watcher.tick({ maxSessions: 2 })).toMatchObject({ kind: 'read-error' });
+    expect(corpus.reads).toEqual([]);
+
+    // The retry admits the SAME chunk: nothing of it was read. Before
+    // 2026-10-08 the sweep was recorded before the runner ran, so the retry
+    // skipped the unread chunk as "done in this sweep", reported the sweep
+    // drained with two sessions still unread, and only a later plain pass
+    // (their fingerprints never settled) read them - after health said 'ok'.
+    expect(corpus.watcher.tick()).toMatchObject({ kind: 'ingested', pending: true });
+    expect(corpus.reads).toEqual([0, 1].map(sessionId));
+    expect(corpus.watcher.tick()).toMatchObject({ kind: 'ingested', pending: false });
+    expect(corpus.reads).toEqual([0, 1, 2, 3].map(sessionId));
   });
 
   it('adopting a different root ends the sweep in progress', () => {

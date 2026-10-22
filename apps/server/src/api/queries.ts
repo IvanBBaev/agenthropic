@@ -75,6 +75,15 @@ function pricedCte(where = ''): string {
 `;
 }
 
+// Unscoped: the three per-session readers below (session detail's per-model
+// split, the tree's usage_by_agent, and the unattributed probe) filter
+// `priced` on `session_id` in the OUTER query. SQLite flattens the CTE and
+// pushes that predicate into the scan - EXPLAIN QUERY PLAN on the migrated
+// schema (2026-10-10, API-3) shows `SEARCH tu USING INDEX
+// idx_token_usage_session_id` for all three, identical to the plan of an
+// explicitly scoped `pricedCte('WHERE tu.session_id = ?')`. The scoped form
+// is required only where the outer query cannot carry the predicate: the
+// LEFT JOIN onto a GROUP BY (sessionSummarySelect, getGlobalDag).
 const PRICED_CTE = pricedCte();
 
 /** USD over PRICED rows only - unpriced rows contribute $0, never a guess. */
@@ -644,6 +653,15 @@ function byBinary(a: string, b: string): number {
 }
 
 /**
+ * Whether the database holds a row for this session - the one fact the
+ * cost-analysis route needs from it before it turns to the corpus (see the
+ * rejected-session rule there). A primary-key probe, nothing more.
+ */
+export function sessionExists(db: SqliteDatabase, sessionId: string): boolean {
+  return db.prepare('SELECT 1 FROM sessions WHERE id = ?').get(sessionId) !== undefined;
+}
+
+/**
  * The persisted project slug for one session, or null when the session is
  * unknown (or was ingested without a slug). The substrate provider takes this
  * as its `slugOf` LOCATION HINT: the value is re-vetted against corpus
@@ -717,19 +735,26 @@ export interface CostSummaryProbe {
  *   `token_usage`, the rollup rows migration 16's triggers write behind it
  *   (a trigger's writes count as this connection's — re-verified 2026-08-31:
  *   one INSERT firing one trigger INSERT moves total_changes by 2) and
- *   `sessions` entirely, because only this server process writes them
- *   (single-writer by design: ingest and retention run on this same handle) —
- *   a hypothetical second writer to those tables is out of threat scope, and
- *   WAL locking makes it a misconfiguration, not a flow.
- * - `total_changes()` is blind to OTHER connections (also verified), and
- *   `model_pricing` is the one table with a documented cross-connection write
- *   path: the operator seeds rates via the sqlite3 CLI while the server runs.
- *   Such a write also rewrites the affected rollup slice through migration
- *   16's `model_pricing` triggers, on that other connection and so equally
- *   invisible here. So the table's full content rides in the key verbatim —
- *   ~40 rows (PROVISIONAL: the WP-C1 seed plus migrations 18-20), a trivial read next to the
- *   rollup scan being avoided, and the one thing that makes a cross-connection
- *   repricing visible to this cache at all.
+ *   `sessions` on the normal path, because this server process is the one
+ *   writer by design (ingest and retention run on this same handle).
+ * - `total_changes()` is blind to OTHER connections (also verified). Until
+ *   API-6 a second writer to the ledger was declared out of threat scope;
+ *   that was a blind spot, not a defence, so `PRAGMA data_version` now rides
+ *   in the key too. SQLite bumps it on this connection whenever ANY OTHER
+ *   connection commits to the database file (and never for this connection's
+ *   own writes, which `total_changes()` already covers), so a foreign
+ *   `token_usage` INSERT, a manual sqlite3 repair or a restore-then-write all
+ *   invalidate the cache on the next read — proven by the API-6 test, which
+ *   inserts through a second handle and shows this one's change counter did
+ *   not move. It costs one pragma read per request.
+ * - `model_pricing` still rides in the key verbatim, ~40 rows (PROVISIONAL:
+ *   the WP-C1 seed plus migrations 18-20). `data_version` would catch the
+ *   operator's sqlite3-CLI repricing as well, but the fingerprint also
+ *   guards a same-connection path `total_changes()` cannot see: a rate
+ *   written through a migration or a future admin route lands on THIS handle
+ *   and still reprices every rollup slice behind the cache. Its triggers
+ *   fire on that other connection too, so the content, not a counter, is
+ *   what makes any repricing visible here regardless of who wrote it.
  *
  * The fingerprint is serialized in JS over an ORDER BY'd SELECT rather than
  * SQL group_concat, whose concatenation order SQLite does not guarantee.
@@ -762,6 +787,8 @@ export interface CostSummaryProbe {
  */
 function costSummaryStateKey(db: SqliteDatabase): string {
   const changes = (db.prepare('SELECT total_changes() AS n').get() as { n: number }).n;
+  // API-6: moves on any OTHER connection's commit; see the note above.
+  const dataVersion = db.pragma('data_version', { simple: true }) as number;
   const pricing = db
     .prepare(
       `SELECT model, bucket, usd_per_mtok, effective_from
@@ -769,7 +796,7 @@ function costSummaryStateKey(db: SqliteDatabase): string {
        ORDER BY model, bucket, effective_from`,
     )
     .all() as PricingFingerprintRow[];
-  return `${changes}|${JSON.stringify(pricing)}`;
+  return `${changes}|${String(dataVersion)}|${JSON.stringify(pricing)}`;
 }
 
 export function getCostSummary(
@@ -781,8 +808,11 @@ export function getCostSummary(
   //
   // History, so the shape below is not mistaken for an accident. This function
   // used to price and group ALL of `token_usage` on every cold read, and
-  // `token_usage` is the one table whose retention is deliberately refused —
-  // cost history IS the product — so it grows with corpus age forever. The
+  // the signed v1.0 retention policy (D3, 2026-09-08) never prunes
+  // `token_usage` — cost history IS the product — so it grows with corpus age
+  // forever. (The DELETE mechanism exists in `db/retention-queries.ts` and
+  // runs only if an operator configures a rule; the policy, not the code,
+  // is what refuses it.) The
   // one-entry memo below widened the cache's hit window but never bounded the
   // read: `total_changes()` moves on essentially every ingest tick, so on an
   // actively ingesting server nearly every /api/cost/summary read was a cold,

@@ -296,6 +296,27 @@ describe('status lifecycle', () => {
       ).toEqual({ agentId: SUBAGENT_ID, status: 'completed' });
     });
 
+    it('reads the subagent from agent_transcript_path when transcript_path names the parent (HK-4)', () => {
+      // Since Claude Code 2.1.251 a SubagentStop carries the PARENT session's
+      // transcript_path plus agent_transcript_path for the subagent itself.
+      // Reading only transcript_path found no agent-<hex> basename and the
+      // completion was lost; the subagent then aged into 'unknown'.
+      expect(
+        resolveHookStatusTarget('SubagentStop', {
+          session_id: SESSION_ID,
+          transcript_path: `/home/u/.claude/projects/slug/${SESSION_ID}.jsonl`,
+          agent_transcript_path: `/home/u/.claude/projects/slug/subagents/agent-${SUBAGENT_ID}.jsonl`,
+        }),
+      ).toEqual({ agentId: SUBAGENT_ID, status: 'completed' });
+      expect(
+        resolveHookStatusTarget('SubagentStop', {
+          session_id: SESSION_ID,
+          transcriptPath: `/home/u/.claude/projects/slug/${SESSION_ID}.jsonl`,
+          agentTranscriptPath: `subagents/agent-${SUBAGENT_ID}.jsonl`,
+        }),
+      ).toEqual({ agentId: SUBAGENT_ID, status: 'completed' });
+    });
+
     it('reads a bare filename with no directory part', () => {
       expect(
         resolveHookStatusTarget('SubagentStop', {
