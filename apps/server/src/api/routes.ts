@@ -138,6 +138,11 @@ const ChangesQuerySchema = Type.Object(
     since: Type.String({ pattern: ISO_INSTANT_PATTERN }),
     limit: Type.Integer({ minimum: 1, maximum: MAX_PAGE_LIMIT, default: DEFAULT_PAGE_LIMIT }),
     offset: Type.Integer({ minimum: 0, maximum: MAX_PAGE_OFFSET, default: 0 }),
+    /**
+     * S-1: the `ingestCursor` of the previous answer. Optional - without it the
+     * reply is the event-time window alone and `lateIngested` is null.
+     */
+    after: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
   },
   { additionalProperties: false },
 );
@@ -563,9 +568,10 @@ export const apiRoutes: FastifyPluginAsync<ApiRoutesOptions> = async (app, optio
   // The reply names its own window - `since`, `until`, and the half-open
   // `interval` between them - so chaining `since=until` never double-counts
   // and misses nothing that was already ingested when the previous call ran.
-  // A session ingested LATER with event times at or before that `until` is
-  // missed (S-1; the window is over event time and no ingest order is
-  // stored - see the shared schema). `until` comes from the DATA,
+  // A session ingested LATER with event times at or before that `until` is in
+  // no chained window (the window is over event time); passing the previous
+  // `ingestCursor` as `after` names it in `lateIngested` instead (S-1, see the
+  // shared schema). `until` comes from the DATA,
   // never the clock (see getChanges), because ingest lags event time and a
   // clock boundary would promise rows that have not arrived.
   //
@@ -586,7 +592,7 @@ export const apiRoutes: FastifyPluginAsync<ApiRoutesOptions> = async (app, optio
       },
     },
     async (request, reply) => {
-      const { since, limit, offset } = request.query;
+      const { since, limit, offset, after } = request.query;
       const normalized = normalizeSinceInstant(since);
       if (normalized === null) {
         return reply.code(400).send({
@@ -594,7 +600,7 @@ export const apiRoutes: FastifyPluginAsync<ApiRoutesOptions> = async (app, optio
             'The `since` parameter must be an ISO-8601 instant with a zone designator (Z or ±hh:mm), or a bare UTC date.',
         });
       }
-      return getChanges(db, normalized, limit, offset);
+      return getChanges(db, normalized, limit, offset, after);
     },
   );
 };

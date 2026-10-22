@@ -423,6 +423,8 @@ export function changes(overrides: Partial<ChangesDto> = {}): ChangesDto {
     until: '2026-09-29T09:30:00.000Z',
     interval: '(since, until]',
     basis: 'event-time',
+    ingestCursor: 7,
+    lateIngested: null,
     sessions,
     totals: {
       sessionsNew: 1,

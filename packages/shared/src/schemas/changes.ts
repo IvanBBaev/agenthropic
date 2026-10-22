@@ -20,10 +20,18 @@
  *   happened), not ingest time (when this database learned of it). The
  *   database stores no ingest timestamp, so a session whose activity predates
  *   `since` but which was ingested afterwards is NOT in the window. That is a
- *   real limitation of the answer; it is named here rather than papered over.
- *   A chaining client that needs completeness re-queries with an overlap
- *   (`since` earlier than the previous `until` by its ingest lag) and
- *   dedupes by session id.
+ *   The window alone therefore cannot be complete; the ingest cursor below
+ *   closes that gap (S-1).
+ * - `ingestCursor` is the database's ingest high-water mark: every session
+ *   carries an `ingest_seq` stamped each time this database learns something
+ *   new about it (the session row, or one of its agents, usage rows or spawn
+ *   edges, inserted or materially changed). A chaining client passes the
+ *   previous `ingestCursor` back as `after`, and `lateIngested` then names the
+ *   sessions that changed in ingest order since that call but are NOT in this
+ *   event-time window - exactly the ones the window would have missed. Delivery
+ *   is at-least-once: a session ingested while an answer is being computed can
+ *   appear in that answer's window AND in the next call's `lateIngested`, so a
+ *   client dedupes by session id.
  * - `coverage` counts the rows that no window can ever contain, because they
  *   carry no usable timestamp at all. They are disclosed, never dropped
  *   silently and never folded into the window as if they had been dated.
@@ -130,6 +138,31 @@ export const ChangesCoverageSchema = Type.Object(
 
 export type ChangesCoverageDto = Static<typeof ChangesCoverageSchema>;
 
+/**
+ * Sessions the database learned something new about since the client's `after`
+ * cursor, which this event-time window does NOT contain (S-1).
+ *
+ * Ordered by ingest sequence, oldest first, and capped at the request's
+ * `limit` - `offset` pages the window, not this list. `total` counts the whole
+ * set; when `sessionIds` is shorter, `next` is the ingest sequence of the last
+ * id returned, so passing it as the next `after` resumes the list exactly.
+ * Otherwise `next` equals the response's `ingestCursor`. The ids are a pointer,
+ * not a delta: the session itself is read from /api/sessions/:id.
+ */
+export const LateIngestedSchema = Type.Object(
+  {
+    /** The `after` cursor this list was computed from. */
+    after: Type.Integer({ minimum: 0 }),
+    total: Type.Integer({ minimum: 0 }),
+    sessionIds: Type.Array(Type.String()),
+    /** The `after` to send next. */
+    next: Type.Integer({ minimum: 0 }),
+  },
+  { additionalProperties: false },
+);
+
+export type LateIngestedDto = Static<typeof LateIngestedSchema>;
+
 /** `GET /api/changes` response. */
 export const ChangesResponseSchema = Type.Object(
   {
@@ -138,13 +171,18 @@ export const ChangesResponseSchema = Type.Object(
     /**
      * The server's boundary for this answer; chain the next call with `since=until`.
      * Event time: a session ingested after this call with older events is not
-     * picked up by the chained call (see the module header).
+     * in the chained call's window - pass `ingestCursor` as `after` to have it
+     * named in `lateIngested` instead (see the module header).
      */
     until: Type.String(),
     /** The window's half-open spelling, served so it cannot be misread. */
     interval: Type.Literal('(since, until]'),
-    /** Which clock the window is over. Ingest time is not stored, so it is not offered. */
+    /** Which clock the window is over; ingest order is served separately below. */
     basis: Type.Literal('event-time'),
+    /** The ingest high-water mark at answer time; send it back as `after`. */
+    ingestCursor: Type.Integer({ minimum: 0 }),
+    /** Present only when the request carried `after`; null otherwise. */
+    lateIngested: nullable(LateIngestedSchema),
     sessions: Type.Array(ChangedSessionSchema),
     totals: ChangeTotalsSchema,
     coverage: ChangesCoverageSchema,

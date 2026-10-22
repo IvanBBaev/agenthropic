@@ -19,14 +19,15 @@
  * The normaliser cancels the classes a transform is free to vary - comments
  * (including annotations a transform INJECTS, such as vite's `@__PURE__` block
  * annotation), whitespace, and separators that are redundant before a closing
- * bracket. After it, vitest agrees with tsx on 16 of the 21, up from 0 - and
+ * bracket. After it, vitest agrees with tsx on 17 of the 22, up from 0 - and
  * `node --experimental-strip-types` agrees on the same ids (1-6, 8, 9, 10, 12,
- * 13, 17, 18, 19, 20), also up from 0 (migration 21 measured under tsx and
- * vitest only). Re-measured 2026-09-01 by running all
+ * 13, 17, 18, 19, 20), also up from 0 (migrations 21 and 22 measured under tsx
+ * and vitest only). Re-measured 2026-09-01 by running all
  * three, again on 2026-09-10 when migration 18 was appended, and again under
  * tsx and vitest on 2026-09-26 when migration 19 was appended, and under all
  * three on 2026-09-26 when migration 20 was appended, and under tsx and vitest
- * on 2026-10-01 when migration 21 was appended.
+ * on 2026-10-01 when migration 21 was appended, and under tsx and vitest on
+ * 2026-10-23 when migration 22 was appended.
  *
  * Migration 17 (`agents-outcome-cause`) is the twelfth, appended after the H-1
  * measurement above, and it agrees for a reason its body states: one `db.exec`
@@ -41,7 +42,9 @@
  * fifteenth, the same five-row shape, with `0.2` and `2.5` in the SQL text.
  * Migration 21 (`sessions-partial-and-dropped-usage`) is the sixteenth: one
  * `db.exec` of a single template literal holding three `ALTER TABLE`
- * statements, no JS number literal, no `new`, no arrow function.
+ * statements, no JS number literal, no `new`, no arrow function. Migration 22
+ * (`sessions-ingest-seq`) is the seventeenth, the same single-literal shape
+ * carrying a column, an index, a clock table and its triggers.
  *
  * It does NOT reach full executor independence, and that is not fixable while
  * the recorded checksums must stay byte-identical. The differences that survive
@@ -75,7 +78,8 @@
  * identical as well. Migration 20's entry followed later the same day, with
  * the nineteen above it re-measured byte-identical under tsx, 19 of 19.
  * Migration 21's entry followed on 2026-10-01 the same way, its tsx and
- * vitest values measured identical. A row may be APPENDED to these tables; an existing row
+ * vitest values measured identical. Migration 22's entry followed on
+ * 2026-10-23 the same way, its tsx and vitest values measured identical. A row may be APPENDED to these tables; an existing row
  * changing value is drift, not a re-pin.
  *
  * WHY THIS FILE CARRIES `spawner-gate-allow` MARKERS. The no-spawner gate
@@ -92,7 +96,7 @@
  * one `scripts/check-licenses.mjs` uses for its sanctioned `pnpm licenses` call
  * - and it is per-line, so any OTHER forbidden line added to this file is still
  * caught. The alternative was to delete the tsx runs, which would demote
- * OPERATOR_CHECKSUMS from a measurement re-taken on every CI run to twenty-one
+ * OPERATOR_CHECKSUMS from a measurement re-taken on every CI run to twenty-two
  * transcribed strings that nothing checks against the shipped file. That trade
  * is not worth making: the pins exist precisely to be a measurement.
  */
@@ -132,12 +136,13 @@ const OPERATOR_CHECKSUMS: Readonly<Record<number, string>> = {
   19: '4efb01c611acb6d2723aed7beb74d1e82ec676b970adf64857ce1d40537a6920',
   20: '1ab85d628e8fc59a527933d0bb247289f733f4bac43cb5e24d2de53092dbbaed',
   21: 'be69986f328412a763d1b92ccdfc887f5a31cf07944cf51439d9c4132bd029fd',
+  22: '2f3ad6d3e4add8bca1fbdc263dc9469aace137ba169426266dac881803ac23ae',
 };
 
 /**
- * The same twenty-one, computed inside this vitest process. Spelled as the
+ * The same twenty-two, computed inside this vitest process. Spelled as the
  * operator table plus the five overrides, so a migration the two executors
- * agree on - which is every one not listed here, migrations 17 to 21
+ * agree on - which is every one not listed here, migrations 17 to 22
  * included - cannot drift in one table without drifting in the other.
  */
 const IN_PROCESS_CHECKSUMS: Readonly<Record<number, string>> = {

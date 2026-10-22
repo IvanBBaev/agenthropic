@@ -105,6 +105,7 @@ export {
   ChangedSessionSchema,
   ChangeTotalsSchema,
   ChangesCoverageSchema,
+  LateIngestedSchema,
   ChangesResponseSchema,
 } from './schemas/changes';
 export type {
@@ -112,6 +113,7 @@ export type {
   ChangedSessionDto,
   ChangeTotalsDto,
   ChangesCoverageDto,
+  LateIngestedDto,
   ChangesDto,
 } from './schemas/changes';
 export {

@@ -457,8 +457,8 @@ in `skippedSessions`), every subagent without a resolvable top-tier model in
 `subagentsSkipped`, and agent rows with a `NULL` type in `untypedAgents` — an aggregate
 quietly computed over a subset would be a lie.
 
-**`GET /api/changes?since&limit&offset`** → `{ since, until, interval, basis, sessions,
-totals, coverage, total, limit, offset }` — the "what changed across sessions" answer
+**`GET /api/changes?since&after&limit&offset`** → `{ since, until, interval, basis,
+ingestCursor, lateIngested, sessions, totals, coverage, total, limit, offset }` — the "what changed across sessions" answer
 (`WP-U11`, daily question 5). `since` is **required**, must be an ISO-8601 instant with
 a zone designator (`Z` or `±hh:mm`) or a bare UTC date (`YYYY-MM-DD`), and has no default
 (a delta endpoint that invents its own lower bound answers a different question than the
@@ -470,9 +470,19 @@ accepted and read as `00:00` of the **next** day, while `T23:59:60` (leap second
 The window is half-open and says so: `interval` is the literal `"(since, until]"`, so a
 client chaining `since=until` neither misses nor double-counts an instant, and `until` is
 derived from the **data**, never the wall clock, because ingest lags event time. `basis`
-is the literal `"event-time"` — the database stores no ingest timestamp, so a session
-whose activity predates `since` but was ingested afterwards is *not* in the window, a
-limitation named rather than papered over. Each session row carries `id`, `projectSlug`,
+is the literal `"event-time"`, so a session whose activity predates `since` but was
+ingested afterwards is *not* in the window. The window does not paper over that gap. It
+exposes an ingest-order cursor beside it (S-1, 2026-10-23). `ingestCursor` is the
+database's ingest high-water mark: every material write to a session, or to one of its
+agents, usage rows or orchestration edges, stamps the session with the next value. An
+identical rewrite does not stamp it, so a replay leaves the cursor still. A client passes
+the previous reply's cursor back as `after` (a non-negative integer, else `400`).
+`lateIngested` then lists the sessions stamped in `(after, ingestCursor]` that are *not*
+in this window, including undated ones, as `{ after, total, sessionIds, next }`. The list
+is oldest stamp first and capped at `limit`. When it is cut, `next` is the stamp to resume
+from; otherwise `next` is the cursor itself, including when `after` is ahead of it, as after
+a backup restore. Without `after`, `lateIngested` is `null`. Delivery is at-least-once, so
+a client dedupes by session id. Each session row carries `id`, `projectSlug`,
 `status`, `startedAt`, `lastActivityAt`, `changedAt`, `change` (`new` / `updated` /
 `unknown` — `unknown` is a first-class answer for a session whose start is unparseable,
 not a synonym for `updated`), `agentsAppeared`, `tokensAdded`, `costAddedUsd`,

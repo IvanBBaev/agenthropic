@@ -368,30 +368,145 @@ describe('/api/changes (WP-U11)', () => {
     expect(second.coverage.undatedSessions).toBe(1);
   });
 
-  it('documents S-1: a chained call misses a session ingested late with older event times', async () => {
+  it('S-1: a chained call names a session ingested late with older event times', async () => {
     const first = (
       await app.inject({ method: 'GET', url: url('since=2026-01-01'), headers: AUTH })
     ).json() as ChangesDto;
+    // Without `after` the reply is the event-time window alone.
+    expect(first.lateIngested).toBeNull();
+    expect(first.ingestCursor).toBeGreaterThan(0);
 
     // Ingested AFTER the first call, but its activity predates that call's
-    // `until`. The window is over event time and no ingest order is stored,
-    // so neither window ever contains it.
+    // `until`, so no chained event-time window will ever contain it.
     temp.db.exec(`
       INSERT INTO sessions (id, project_slug, started_at, last_activity_at, status) VALUES
         ('s-late', 'proj-g', '2026-07-11T10:00:00Z', '2026-07-11T11:00:00Z', 'completed');
     `);
 
     const second = (
-      await app.inject({ method: 'GET', url: url(`since=${first.until}`), headers: AUTH })
+      await app.inject({
+        method: 'GET',
+        url: url(`since=${first.until}&after=${String(first.ingestCursor)}`),
+        headers: AUTH,
+      })
     ).json() as ChangesDto;
-    expect(first.sessions.map((s) => s.id)).not.toContain('s-late');
     expect(second.sessions.map((s) => s.id)).not.toContain('s-late');
+    expect(second.ingestCursor).toBe(first.ingestCursor + 1);
+    expect(second.lateIngested).toEqual({
+      after: first.ingestCursor,
+      total: 1,
+      sessionIds: ['s-late'],
+      next: second.ingestCursor,
+    });
 
-    // The documented remedy - re-query with an overlap - does find it.
-    const overlap = (
-      await app.inject({ method: 'GET', url: url('since=2026-01-01'), headers: AUTH })
+    // Chaining on: nothing new has been ingested, so nothing is named twice.
+    const third = (
+      await app.inject({
+        method: 'GET',
+        url: url(`since=${second.until}&after=${String(second.lateIngested!.next)}`),
+        headers: AUTH,
+      })
     ).json() as ChangesDto;
-    expect(overlap.sessions.map((s) => s.id)).toContain('s-late');
+    expect(third.lateIngested).toEqual({
+      after: second.ingestCursor,
+      total: 0,
+      sessionIds: [],
+      next: second.ingestCursor,
+    });
+  });
+
+  it('S-1: a late agent, usage row or edge re-stamps its session; an identical rewrite does not', () => {
+    const cursor = getChanges(temp.db, UNTIL, 50, 0).ingestCursor;
+
+    // Identical rewrites - what every ingest upsert does on a replay - and an
+    // edge that already exists (INSERT OR IGNORE): no new information.
+    temp.db.exec(`
+      UPDATE sessions SET status = status, last_activity_at = last_activity_at;
+      UPDATE agents SET status = status;
+      UPDATE token_usage SET tokens = tokens;
+      INSERT INTO orchestration_edges (session_id, parent_agent_id, child_agent_id, source, instance, host_id)
+        VALUES ('s-new', 'a-main-new', 'a-sub-new', 'tool_use', 'i', 'h');
+    `);
+    const replayed = getChanges(temp.db, UNTIL, 50, 0, cursor);
+    // The edge was new to the database, so only s-new is stamped.
+    expect(replayed.lateIngested?.sessionIds).toEqual(['s-new']);
+    temp.db.exec(`
+      INSERT OR IGNORE INTO orchestration_edges (session_id, parent_agent_id, child_agent_id, source, instance, host_id)
+        VALUES ('s-new', 'a-main-new', 'a-sub-new', 'tool_use', 'i', 'h');
+    `);
+    const idle = getChanges(temp.db, UNTIL, 50, 0, replayed.ingestCursor);
+    expect(idle.ingestCursor).toBe(replayed.ingestCursor);
+    expect(idle.lateIngested?.total).toBe(0);
+
+    // Real changes, each to a session whose own dates are long past.
+    temp.db.exec(`
+      INSERT INTO agents (id, session_id, type, subagent_type, status, parent_agent_id, first_seen_at, last_seen_at) VALUES
+        ('a-late-sub', 's-old', 'subagent', 'explorer', 'completed', 'a-main-old', '2026-01-02T00:00:00Z', '2026-01-02T00:00:00Z');
+      UPDATE token_usage SET tokens = tokens + 1 WHERE message_id = 'm5';
+      UPDATE sessions SET partial_reason = 'main-transcript-oversize' WHERE id = 's-undated';
+    `);
+    const changed = getChanges(temp.db, UNTIL, 50, 0, idle.ingestCursor);
+    // Oldest stamp first; the undated session is in no window, so it is late.
+    expect(changed.lateIngested?.sessionIds).toEqual(['s-old', 's-updated', 's-undated']);
+  });
+
+  it('S-1: a session that changed inside the window is not named late as well', () => {
+    const cursor = getChanges(temp.db, SINCE, 50, 0).ingestCursor;
+    temp.db.exec(`UPDATE sessions SET status = 'completed' WHERE id = 's-new'`);
+
+    const dto = getChanges(temp.db, SINCE, 50, 0, cursor);
+    expect(dto.sessions.map((s) => s.id)).toContain('s-new');
+    expect(dto.lateIngested).toEqual({
+      after: cursor,
+      total: 0,
+      sessionIds: [],
+      next: dto.ingestCursor,
+    });
+  });
+
+  it('S-1: the late list is capped at `limit` and `next` resumes it exactly', () => {
+    const cursor = getChanges(temp.db, UNTIL, 50, 0).ingestCursor;
+    temp.db.exec(`
+      UPDATE sessions SET status = 'archived' WHERE id = 's-old';
+      UPDATE sessions SET status = 'archived' WHERE id = 's-boundary';
+    `);
+
+    const page1 = getChanges(temp.db, UNTIL, 1, 0, cursor);
+    expect(page1.lateIngested).toEqual({
+      after: cursor,
+      total: 2,
+      sessionIds: ['s-old'],
+      next: cursor + 1,
+    });
+    const page2 = getChanges(temp.db, UNTIL, 1, 0, page1.lateIngested!.next);
+    expect(page2.lateIngested).toEqual({
+      after: cursor + 1,
+      total: 1,
+      sessionIds: ['s-boundary'],
+      next: page2.ingestCursor,
+    });
+  });
+
+  it('S-1: a cursor ahead of the clock (a restored backup) resets to the clock', () => {
+    const { ingestCursor } = getChanges(temp.db, UNTIL, 50, 0);
+    const ahead = getChanges(temp.db, UNTIL, 50, 0, ingestCursor + 1000);
+    expect(ahead.lateIngested).toEqual({
+      after: ingestCursor + 1000,
+      total: 0,
+      sessionIds: [],
+      next: ingestCursor,
+    });
+  });
+
+  it('S-1: rejects an `after` that is not a non-negative integer', async () => {
+    for (const after of ['-1', 'abc', '1.5']) {
+      const response = await app.inject({
+        method: 'GET',
+        url: url(`since=${SINCE}&after=${after}`),
+        headers: AUTH,
+      });
+      expect(response.statusCode).toBe(400);
+    }
   });
 
   it('never reaches past the newest instant it can actually see', async () => {
@@ -431,6 +546,8 @@ describe('/api/changes on an empty database (WP-U11)', () => {
       until: SINCE,
       interval: '(since, until]',
       basis: 'event-time',
+      ingestCursor: 0,
+      lateIngested: null,
       sessions: [],
       totals: {
         sessionsNew: 0,
@@ -495,6 +612,8 @@ describe('assertChangesInvariants (WP-U11)', () => {
       until: UNTIL,
       interval: '(since, until]',
       basis: 'event-time',
+      ingestCursor: 10,
+      lateIngested: { after: 2, total: 2, sessionIds: ['s-late'], next: 9 },
       sessions: [
         {
           id: 's-new',
@@ -592,6 +711,35 @@ describe('assertChangesInvariants (WP-U11)', () => {
       'a negative per-session figure',
       (dto) => ({ ...dto, sessions: [{ ...dto.sessions[0]!, costAddedUsd: -0.5 }] }),
       /session s-new costAddedUsd is -0\.5/,
+    ],
+    [
+      'a late-ingested page longer than its own total',
+      (dto) => ({ ...dto, lateIngested: { ...dto.lateIngested!, total: 0 } }),
+      /late-ingested page of 1 exceeds its total 0/,
+    ],
+    [
+      'a late-ingested page longer than the limit',
+      (dto) => ({
+        ...dto,
+        limit: 1,
+        lateIngested: { ...dto.lateIngested!, total: 2, sessionIds: ['s-a', 's-b'] },
+      }),
+      /late-ingested page of 2 exceeds its total 2 or the limit 1/,
+    ],
+    [
+      'a late-ingested resume point past the cursor',
+      (dto) => ({ ...dto, lateIngested: { ...dto.lateIngested!, next: 11 } }),
+      /late-ingested next 11 is past the ingest cursor 10/,
+    ],
+    [
+      'a session both in the window and named late',
+      (dto) => ({ ...dto, lateIngested: { ...dto.lateIngested!, sessionIds: ['s-new'] } }),
+      /session s-new is both in the window and named late-ingested/,
+    ],
+    [
+      'a negative late-ingested count',
+      (dto) => ({ ...dto, lateIngested: { ...dto.lateIngested!, after: -1 } }),
+      /lateIngested.after is -1/,
     ],
     [
       'a figure that is not a number at all',

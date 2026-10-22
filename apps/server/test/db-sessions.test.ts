@@ -11,6 +11,7 @@ interface SessionRow {
   readonly partial_reason: string | null;
   readonly partial_skipped_bytes: number | null;
   readonly usage_records_dropped: number;
+  readonly ingest_seq: number;
 }
 
 /** What an upsert that names no honesty field records: a whole read, nothing dropped. */
@@ -53,6 +54,7 @@ describe('upsertSession (WP-D4)', () => {
       last_activity_at: '2026-07-11T00:05:00Z',
       status: 'active',
       ...WHOLE,
+      ingest_seq: 1,
     });
   });
 
@@ -80,7 +82,24 @@ describe('upsertSession (WP-D4)', () => {
       last_activity_at: '2026-07-11T00:42:00Z',
       status: 'completed',
       ...WHOLE,
+      // S-1: the second upsert changed values, so it re-stamped the row.
+      ingest_seq: 2,
     });
+  });
+
+  it('keeps the ingest stamp when an upsert rewrites identical values (S-1)', () => {
+    const row: SessionUpsert = {
+      id: 'session-1',
+      projectSlug: 'agenthropic',
+      startedAt: '2026-07-11T00:00:00Z',
+      lastActivityAt: '2026-07-11T00:05:00Z',
+      status: 'active',
+    };
+    upsertSession(temp.db, row);
+    upsertSession(temp.db, row);
+
+    expect(readRow('session-1')?.ingest_seq).toBe(1);
+    expect(temp.db.prepare('SELECT seq FROM ingest_clock').get()).toEqual({ seq: 1 });
   });
 
   it('accepts a null projectSlug', () => {
@@ -100,6 +119,7 @@ describe('upsertSession (WP-D4)', () => {
       last_activity_at: null,
       status: 'active',
       ...WHOLE,
+      ingest_seq: 1,
     });
   });
 });

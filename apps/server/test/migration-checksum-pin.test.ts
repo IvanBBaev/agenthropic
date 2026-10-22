@@ -34,8 +34,8 @@
  *
  *   vitest (vite's esbuild transform, what this file pins) and `tsx` (what
  *   `pnpm start`, `pnpm dev` and `pnpm bench` run) now produce an IDENTICAL
- *   checksum for SIXTEEN of the twenty-one migrations - ids 1-6, 8, 9, 10,
- *   12, 13, 17, 18, 19, 20 and 21. They differ on ids 7, 11, 14, 15 and 16. Running the pre-H-1
+ *   checksum for SEVENTEEN of the twenty-two migrations - ids 1-6, 8, 9, 10,
+ *   12, 13, 17, 18, 19, 20, 21 and 22. They differ on ids 7, 11, 14, 15 and 16. Running the pre-H-1
  *   whitespace-only formula over the SAME two transform outputs puts the
  *   agreement at ZERO, so the agreeing set is what H-1 bought.
  *
@@ -289,6 +289,11 @@ const PINNED: readonly PinnedChecksum[] = [
     name: 'sessions-partial-and-dropped-usage',
     checksum: 'be69986f328412a763d1b92ccdfc887f5a31cf07944cf51439d9c4132bd029fd',
   },
+  {
+    id: 22,
+    name: 'sessions-ingest-seq',
+    checksum: '2f3ad6d3e4add8bca1fbdc263dc9469aace137ba169426266dac881803ac23ae',
+  },
 ];
 
 /** The literal whitespace normalisation `migrationChecksum` applies. */
@@ -370,7 +375,7 @@ describe('migration checksum pin', () => {
     // One `toEqual` over the whole table rather than a loop of assertions: the
     // failure output then shows every literal that moved at once, which
     // separates "someone edited migration 11" from "the transform changed" at a
-    // glance - one row versus twenty-one.
+    // glance - one row versus twenty-two.
     expect(computed).toEqual(PINNED);
   });
 

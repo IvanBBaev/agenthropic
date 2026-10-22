@@ -27,6 +27,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reconnects with `Last-Event-ID` (which `EventSource` sends by itself), replays the frames it
   missed before live frames resume. A longer absence, or a reconnect across a server restart,
   can still miss frames; the dashboard keeps reporting those as a stream gap.
+- `GET /api/changes` names the sessions a chained caller would otherwise miss (S-1). Every reply
+  carries `ingestCursor`, an ingest-order high-water mark kept by a new migration (22): a session
+  is stamped whenever it, or one of its agents, usage rows or edges, materially changes. An
+  identical replay rewrite does not stamp it. Passing the cursor back as `after=` adds
+  `lateIngested`, the sessions stamped since then that fall outside the event-time window
+  (`{ after, total, sessionIds, next }`, capped at `limit`). The window, its totals and its
+  invariants are unchanged; delivery is at-least-once, deduped by session id.
 - `DASHBOARD_ALLOWED_ORIGINS` (C-2): an opt-in, comma-separated list of exact origins the
   `/api/stream` same-origin check admits next to the loopback origin, for a `tailscale serve`
   front end or an SSH forward onto a different local port, which otherwise get a `403` on the
@@ -98,13 +105,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tests: cache-write coherence across mixed partial shapes (C-4, 5 cases), the self-parent guard
   on all three join paths (C-6, 3), instant-ordered timestamp merges (S-2, 8) and the auth
   scheme's case (C-1, 6), all red-proven against the pre-fix code; one case documenting the S-1
-  late-ingest limitation. The P0 reconciliation's independent reader now applies NN2 and the C-4
+  late-ingest limitation (since replaced by the cursor tests). The P0 reconciliation's independent reader now applies NN2 and the C-4
   pair rule too.
 - Tests: `packages/core/test/transcript-timespan.test.ts` pins the C-3 min/max span (out-of-order,
   backwards, offset spellings, instant tie, unparsable in any position; 5 cases, red-proven).
 - Tests: the C-2 origin allowlist — exact-match semantics in `isAllowedOrigin` (4 cases), the
   `DASHBOARD_ALLOWED_ORIGINS` parser (3 cases, 11 refused spellings) and an allowlisted origin
   opening a real stream while a foreign one still gets `403`; all red-proven.
+- Tests: the S-1 cursor — a late-ingested older session named in `lateIngested` and not in the
+  window, a chained third call empty, identical rewrites and `INSERT OR IGNORE` leaving the cursor
+  still, child-row changes re-stamping their session, paging by `next`, a cursor ahead of the
+  clock, `400` on a bad `after`, four new invariant violations; migration 22's backfill, triggers
+  and `CHECK`s; its checksum pinned (tsx and vitest agree, 17 of 22). These replace the S-1
+  limitation case.
 - Tests: `apps/server/test/api-dag.test.ts` pins that a dangling `orchestration_edges` row, an
   edge naming an agent id with no stored row, is counted in `totalEdges` but never returned, with
   `truncated` still `false`; `api.md` says the same, so a client reads the edge gap from the two
@@ -343,8 +356,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is now a span candidate, an unparsable one anywhere fails the session (parser-spec §6.4).
 - `/api/changes` no longer claims that chaining `since=until` is gap-free (S-1): the route and
   shared-schema docs now say a session ingested after the previous call with older event times
-  is missed, and name the overlap-and-dedupe remedy. The gap itself needs an ingest-order cursor
-  (an owner decision).
+  is missed, and name the overlap-and-dedupe remedy. The gap itself is now closed by the
+  `ingestCursor` / `after=` cursor (see Added).
 - Redaction masks a PEM `PRIVATE KEY` block whole, body included, and masks a block whose END
   line was cut off to the end of the string; `passphrase` joined the secret-bearing field names.
   A pasted private key used to pass through in the clear, because its body matches no prefix

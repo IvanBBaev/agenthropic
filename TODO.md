@@ -1249,6 +1249,11 @@ one-word answer; the recommended default is first.
     `/api/stream` same-origin check, validated at startup (exact `http`/`https` origin, no `*` /
     `null`), empty = unchanged; documented in `configuration.md` and `remote-access.md`. The
     real-browser repro behind `tailscale serve` is still Ivan's to run.
+  - **Done 2026-10-23 (S-1):** migration 22 `sessions-ingest-seq` (`ingest_seq` column +
+    `ingest_clock` + triggers on sessions/agents/token_usage/edges that fire only on a material
+    change; backfill = rowid). `/api/changes` serves `ingestCursor` always and `lateIngested`
+    with `after=`; event-time window and invariants unchanged; P0 double replay still
+    byte-identical; documented in `usage/api.md`.
 
 ### Post-1.0 / v2.0 · Alerting core _(off the v1.0 critical path — best-path §6.1; **entered only via KC-5**: 14 consecutive days of real daily v1.0 use + ≥3 friction-log entries wanting alerts — roadmap §6. If that evidence never materializes, v2.0 never starts, and that is a success of the roadmap, not a failure.)_
 - [ ] **WP-A2** alert/webhook schema · **A3** secret `token_ref` resolver · **A4** no-SSRF

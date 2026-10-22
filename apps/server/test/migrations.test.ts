@@ -1188,7 +1188,7 @@ describe('migration runner (WP-D3)', () => {
       // The fresh database is at the latest schema; migration 20 touches only
       // claude-sonnet-5, so the opus-5-5 rows read exactly as 19 wrote them.
       temp = createMigratedTempDb();
-      expect(currentSchemaVersion(temp.db)).toBe(21);
+      expect(currentSchemaVersion(temp.db)).toBe(22);
       expect(opus55Rows(temp.db)).toEqual(
         OFFICIAL_RATES.map((row) => ({ ...row, effective_from: FLOOR })),
       );
@@ -1334,7 +1334,7 @@ describe('migration runner (WP-D3)', () => {
 
     it('prices claude-sonnet-5 at the official per-bucket rates on a fresh database', () => {
       temp = createMigratedTempDb();
-      expect(currentSchemaVersion(temp.db)).toBe(21);
+      expect(currentSchemaVersion(temp.db)).toBe(22);
       expect(sonnet5Rows(temp.db)).toEqual(at(OFFICIAL_RATES));
     });
 
@@ -1418,6 +1418,113 @@ describe('migration runner (WP-D3)', () => {
         // 1M input @ $2 + 100k output @ $10 = 2 + 1 - exactly two thirds of before.
         expect(getCostSummary(db, 10).totals.costUsd).toBeCloseTo(3, 9);
       });
+    });
+  });
+
+  describe('migration 22 (sessions-ingest-seq)', () => {
+    const throughMigration21 = migrations.filter((m) => m.id <= 21);
+    const stamps = (db: SqliteDatabase): unknown[] =>
+      db.prepare('SELECT id, ingest_seq FROM sessions ORDER BY id').all();
+    const clock = (db: SqliteDatabase): unknown => db.prepare('SELECT seq FROM ingest_clock').get();
+
+    function withSchema21Db(slug: string, body: (db: SqliteDatabase) => void): void {
+      const dir = mkdtempSync(join(tmpdir(), `agenthropic-mig22-${slug}-`));
+      const db = openDatabase(join(dir, 'v21.db'));
+      try {
+        runMigrations(db, throughMigration21);
+        expect(currentSchemaVersion(db)).toBe(21);
+        body(db);
+      } finally {
+        db.close();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+
+    it('backfills every existing session with its rowid and seeds the clock at the maximum', () => {
+      withSchema21Db('backfill', (db) => {
+        insertSession(db, 'sess-a');
+        insertSession(db, 'sess-b');
+        insertSession(db, 'sess-c');
+
+        expect(runMigrations(db, migrations).appliedIds).toEqual([22]);
+
+        expect(stamps(db)).toEqual([
+          { id: 'sess-a', ingest_seq: 1 },
+          { id: 'sess-b', ingest_seq: 2 },
+          { id: 'sess-c', ingest_seq: 3 },
+        ]);
+        expect(clock(db)).toEqual({ seq: 3 });
+      });
+    });
+
+    it('seeds the clock at zero on an empty database', () => {
+      temp = createMigratedTempDb();
+      expect(clock(temp.db)).toEqual({ seq: 0 });
+    });
+
+    it('stamps a session from the clock on every material write to it or its children', () => {
+      temp = createMigratedTempDb();
+      const { db } = temp;
+      insertSession(db, 'sess-a');
+      insertSession(db, 'sess-b');
+      expect(stamps(db)).toEqual([
+        { id: 'sess-a', ingest_seq: 1 },
+        { id: 'sess-b', ingest_seq: 2 },
+      ]);
+
+      db.exec(`UPDATE sessions SET status = 'completed' WHERE id = 'sess-a'`);
+      expect(stamps(db)).toEqual([
+        { id: 'sess-a', ingest_seq: 3 },
+        { id: 'sess-b', ingest_seq: 2 },
+      ]);
+
+      db.exec(`
+        INSERT INTO agents (id, session_id, type, subagent_type, status, parent_agent_id, first_seen_at, last_seen_at)
+          VALUES ('ag-b', 'sess-b', 'main', NULL, 'working', NULL, '2026-07-11T00:00:00Z', '2026-07-11T00:00:00Z');
+      `);
+      db.exec(`UPDATE agents SET status = 'completed' WHERE id = 'ag-b'`);
+      db.exec(`
+        INSERT INTO token_usage
+          (session_id, agent_id, message_id, model, bucket, tokens, is_compaction_baseline, occurred_at)
+          VALUES ('sess-a', NULL, 'msg-a', 'claude-sonnet-5', 'input', 10, 0, '2026-07-11T00:00:00.000Z');
+      `);
+      expect(stamps(db)).toEqual([
+        { id: 'sess-a', ingest_seq: 6 },
+        { id: 'sess-b', ingest_seq: 5 },
+      ]);
+      db.exec(`UPDATE token_usage SET tokens = 11 WHERE message_id = 'msg-a'`);
+      expect(stamps(db)).toEqual([
+        { id: 'sess-a', ingest_seq: 7 },
+        { id: 'sess-b', ingest_seq: 5 },
+      ]);
+      expect(clock(db)).toEqual({ seq: 7 });
+    });
+
+    it('leaves the clock alone on an identical rewrite and on a delete', () => {
+      temp = createMigratedTempDb();
+      const { db } = temp;
+      insertSession(db, 'sess-a');
+      insertSession(db, 'sess-b');
+
+      db.exec(`
+        UPDATE sessions SET status = status, last_activity_at = last_activity_at;
+        UPDATE sessions SET ingest_seq = ingest_seq;
+        DELETE FROM sessions WHERE id = 'sess-b';
+      `);
+
+      expect(stamps(db)).toEqual([{ id: 'sess-a', ingest_seq: 1 }]);
+      expect(clock(db)).toEqual({ seq: 2 });
+    });
+
+    it('rejects a second clock row and a negative stamp', () => {
+      temp = createMigratedTempDb();
+      expect(() => temp!.db.exec('INSERT INTO ingest_clock (id, seq) VALUES (2, 0)')).toThrow(
+        /CHECK constraint failed/,
+      );
+      insertSession(temp.db, 'sess-a');
+      expect(() => temp!.db.exec('UPDATE sessions SET ingest_seq = -1')).toThrow(
+        /CHECK constraint failed/,
+      );
     });
   });
 });

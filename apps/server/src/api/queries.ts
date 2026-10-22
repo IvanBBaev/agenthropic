@@ -21,6 +21,7 @@ import {
   type AggregateSavingsSkipDto,
   type AgentNodeDto,
   type ChangesDto,
+  type LateIngestedDto,
   type CostSummaryDto,
   type GlobalDagDto,
   type ModelCostDto,
@@ -1584,7 +1585,13 @@ function changeMeasurements(dto: ChangesDto): ReadonlyArray<readonly [string, nu
     ['coverage.undatedSessions', coverage.undatedSessions],
     ['coverage.undatedAgents', coverage.undatedAgents],
     ['coverage.undatedUsageRows', coverage.undatedUsageRows],
+    ['ingestCursor', dto.ingestCursor],
   ];
+  if (dto.lateIngested !== null) {
+    entries.push(['lateIngested.after', dto.lateIngested.after]);
+    entries.push(['lateIngested.total', dto.lateIngested.total]);
+    entries.push(['lateIngested.next', dto.lateIngested.next]);
+  }
   for (const session of dto.sessions) {
     entries.push([`session ${session.id} agentsAppeared`, session.agentsAppeared]);
     entries.push([`session ${session.id} tokensAdded`, session.tokensAdded]);
@@ -1647,6 +1654,26 @@ export function assertChangesInvariants(dto: ChangesDto): void {
     );
   }
 
+  const late = dto.lateIngested;
+  if (late !== null) {
+    if (late.sessionIds.length > late.total || late.sessionIds.length > dto.limit) {
+      problems.push(
+        `late-ingested page of ${String(late.sessionIds.length)} exceeds its total ${String(late.total)} or the limit ${String(dto.limit)}`,
+      );
+    }
+    if (late.next > dto.ingestCursor) {
+      problems.push(
+        `late-ingested next ${String(late.next)} is past the ingest cursor ${String(dto.ingestCursor)}`,
+      );
+    }
+    const inWindow = new Set(dto.sessions.map((session) => session.id));
+    for (const id of late.sessionIds) {
+      if (inWindow.has(id)) {
+        problems.push(`session ${id} is both in the window and named late-ingested`);
+      }
+    }
+  }
+
   let pageTokens = 0;
   for (const session of dto.sessions) {
     pageTokens += session.tokensAdded;
@@ -1677,6 +1704,44 @@ export function assertChangesInvariants(dto: ChangesDto): void {
 }
 
 /**
+ * S-1: the sessions stamped in `(after, cursor]` that the event-time window
+ * `(since, until]` does not contain. An undated session is in no window, so it
+ * counts as outside this one - the COALESCE turns the window's NULL verdict
+ * into "not in it" rather than letting `NOT NULL` drop the row.
+ */
+function lateIngested(
+  db: SqliteDatabase,
+  since: string,
+  until: string,
+  after: number,
+  cursor: number,
+  limit: number,
+): LateIngestedDto {
+  const where = `s.ingest_seq > ? AND s.ingest_seq <= ? AND COALESCE(${SESSION_WINDOW}, 0) = 0`;
+  const { total } = db
+    .prepare(`SELECT COUNT(*) AS total FROM sessions s WHERE ${where}`)
+    .get(after, cursor, since, until) as { total: number };
+  const rows = db
+    .prepare(
+      `SELECT s.id AS id, s.ingest_seq AS ingest_seq FROM sessions s
+       WHERE ${where}
+       ORDER BY s.ingest_seq ASC
+       LIMIT ?`,
+    )
+    .all(after, cursor, since, until, limit) as Array<{ id: string; ingest_seq: number }>;
+  const last = rows.at(-1);
+  return {
+    after,
+    total,
+    sessionIds: rows.map((row) => row.id),
+    // When complete, `next` is the cursor even if `after` was above it (a
+    // database restored from an older backup rewinds the clock): handing the
+    // larger value back would silence the list until the clock caught up.
+    next: rows.length < total && last !== undefined ? last.ingest_seq : cursor,
+  };
+}
+
+/**
  * `GET /api/changes` - the delta between `since` and the newest instant this
  * database can vouch for, over the half-open window `(since, until]`.
  *
@@ -1691,7 +1756,27 @@ export function getChanges(
   since: string,
   limit: number,
   offset: number,
+  after?: number,
 ): ChangesDto {
+  // One read transaction, so the cursor, the window and the late list are
+  // computed over ONE snapshot: without it an ingest landing between two of
+  // the statements below could put a session in the window and in
+  // `lateIngested` at once (S-1).
+  return db.transaction(() => computeChanges(db, since, limit, offset, after))();
+}
+
+function computeChanges(
+  db: SqliteDatabase,
+  since: string,
+  limit: number,
+  offset: number,
+  after: number | undefined,
+): ChangesDto {
+  // Read BEFORE the window: everything stamped up to this mark is either in
+  // this answer's window or named in its `lateIngested`, and anything stamped
+  // later is above the cursor the client sends next - at least once, never
+  // zero times (S-1).
+  const ingestCursor = (db.prepare('SELECT seq FROM ingest_clock').get() as { seq: number }).seq;
   const until = changesBoundary(db, since);
 
   // Classification is over the whole window, not the page. A NULL
@@ -1817,6 +1902,9 @@ export function getChanges(
     until,
     interval: '(since, until]',
     basis: 'event-time',
+    ingestCursor,
+    lateIngested:
+      after === undefined ? null : lateIngested(db, since, until, after, ingestCursor, limit),
     sessions: pageRows.map((row) => {
       const added = money.get(row.id) ?? NO_WINDOW_MONEY;
       return {

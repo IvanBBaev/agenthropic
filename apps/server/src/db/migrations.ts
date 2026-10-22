@@ -1288,6 +1288,124 @@ export const migrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    id: 22,
+    name: 'sessions-ingest-seq',
+    up(db) {
+      // WHY. S-1: /api/changes windows over EVENT time, and this database
+      // stored no ingest order, so a session ingested after a client's last
+      // call with activity dated before that call's `until` was in no window
+      // the client would ever chain to. `ingest_seq` is that missing order: a
+      // database-wide monotonic counter stamped on the session every time this
+      // database learns something new about it.
+      //
+      // WHAT BUMPS IT. An INSERT of the session, or of one of its agents,
+      // usage rows or spawn edges; and an UPDATE of any of those rows that
+      // actually changes a value. The ingest write paths are upserts that
+      // rewrite every row on every pass, so the WHEN clauses compare OLD and
+      // NEW with IS NOT (NULL-safe): an idempotent replay touches every row
+      // and bumps nothing. A DELETE (retention) bumps nothing - it removes
+      // nothing a client has not already been told about.
+      //
+      // HOW. The counter lives in a one-row `ingest_clock` rather than being
+      // derived from MAX(ingest_seq): a MAX would hand a re-stamped session
+      // the same value a concurrent reader already used as its cursor. The
+      // stamping UPDATE writes only `ingest_seq`, which no `UPDATE OF` list
+      // below names, so it never re-fires a trigger.
+      //
+      // BACKFILL. Existing sessions are stamped with their rowid - an
+      // arbitrary but stable order - and the clock starts at the largest
+      // stamp, so every later change sorts after every existing row.
+      db.exec(`
+        ALTER TABLE sessions ADD COLUMN ingest_seq INTEGER NOT NULL DEFAULT 0
+          CHECK (ingest_seq >= 0);
+        UPDATE sessions SET ingest_seq = rowid;
+        CREATE INDEX idx_sessions_ingest_seq ON sessions(ingest_seq);
+
+        CREATE TABLE ingest_clock (
+          id  INTEGER PRIMARY KEY CHECK (id = 1),
+          seq INTEGER NOT NULL CHECK (seq >= 0)
+        );
+        INSERT INTO ingest_clock (id, seq) SELECT 1, COALESCE(MAX(ingest_seq), 0) FROM sessions;
+
+        CREATE TRIGGER sessions_ingest_seq_insert
+        AFTER INSERT ON sessions
+        BEGIN
+          UPDATE ingest_clock SET seq = seq + 1;
+          UPDATE sessions SET ingest_seq = (SELECT seq FROM ingest_clock) WHERE id = NEW.id;
+        END;
+
+        CREATE TRIGGER sessions_ingest_seq_update
+        AFTER UPDATE OF id, project_slug, started_at, last_activity_at, status,
+          partial_reason, partial_skipped_bytes, usage_records_dropped ON sessions
+        WHEN OLD.id IS NOT NEW.id
+          OR OLD.project_slug IS NOT NEW.project_slug
+          OR OLD.started_at IS NOT NEW.started_at
+          OR OLD.last_activity_at IS NOT NEW.last_activity_at
+          OR OLD.status IS NOT NEW.status
+          OR OLD.partial_reason IS NOT NEW.partial_reason
+          OR OLD.partial_skipped_bytes IS NOT NEW.partial_skipped_bytes
+          OR OLD.usage_records_dropped IS NOT NEW.usage_records_dropped
+        BEGIN
+          UPDATE ingest_clock SET seq = seq + 1;
+          UPDATE sessions SET ingest_seq = (SELECT seq FROM ingest_clock) WHERE id = NEW.id;
+        END;
+
+        CREATE TRIGGER agents_ingest_seq_insert
+        AFTER INSERT ON agents
+        BEGIN
+          UPDATE ingest_clock SET seq = seq + 1;
+          UPDATE sessions SET ingest_seq = (SELECT seq FROM ingest_clock) WHERE id = NEW.session_id;
+        END;
+
+        CREATE TRIGGER agents_ingest_seq_update
+        AFTER UPDATE ON agents
+        WHEN OLD.id IS NOT NEW.id
+          OR OLD.session_id IS NOT NEW.session_id
+          OR OLD.type IS NOT NEW.type
+          OR OLD.subagent_type IS NOT NEW.subagent_type
+          OR OLD.status IS NOT NEW.status
+          OR OLD.parent_agent_id IS NOT NEW.parent_agent_id
+          OR OLD.first_seen_at IS NOT NEW.first_seen_at
+          OR OLD.last_seen_at IS NOT NEW.last_seen_at
+          OR OLD.outcome_cause IS NOT NEW.outcome_cause
+        BEGIN
+          UPDATE ingest_clock SET seq = seq + 1;
+          UPDATE sessions SET ingest_seq = (SELECT seq FROM ingest_clock) WHERE id = NEW.session_id;
+        END;
+
+        CREATE TRIGGER token_usage_ingest_seq_insert
+        AFTER INSERT ON token_usage
+        BEGIN
+          UPDATE ingest_clock SET seq = seq + 1;
+          UPDATE sessions SET ingest_seq = (SELECT seq FROM ingest_clock) WHERE id = NEW.session_id;
+        END;
+
+        CREATE TRIGGER token_usage_ingest_seq_update
+        AFTER UPDATE ON token_usage
+        WHEN OLD.id IS NOT NEW.id
+          OR OLD.session_id IS NOT NEW.session_id
+          OR OLD.agent_id IS NOT NEW.agent_id
+          OR OLD.message_id IS NOT NEW.message_id
+          OR OLD.model IS NOT NEW.model
+          OR OLD.bucket IS NOT NEW.bucket
+          OR OLD.tokens IS NOT NEW.tokens
+          OR OLD.is_compaction_baseline IS NOT NEW.is_compaction_baseline
+          OR OLD.occurred_at IS NOT NEW.occurred_at
+        BEGIN
+          UPDATE ingest_clock SET seq = seq + 1;
+          UPDATE sessions SET ingest_seq = (SELECT seq FROM ingest_clock) WHERE id = NEW.session_id;
+        END;
+
+        CREATE TRIGGER orchestration_edges_ingest_seq_insert
+        AFTER INSERT ON orchestration_edges
+        BEGIN
+          UPDATE ingest_clock SET seq = seq + 1;
+          UPDATE sessions SET ingest_seq = (SELECT seq FROM ingest_clock) WHERE id = NEW.session_id;
+        END;
+      `);
+    },
+  },
 ];
 
 export interface MigrationRunResult {
