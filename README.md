@@ -237,9 +237,9 @@ the dashboard even by accident.
 **100% test coverage — statements, branches, functions and lines — pinned in all five
 packages** (`packages/shared`, `packages/core`, `packages/test-fixtures`,
 `apps/server`, `apps/web`), with zero coverage-ignore pragmas anywhere under `src/`
-and guard tests that fail the build if one appears. Last local full run: **184 test
-files, 3487 tests, 100% on all four axes in every package** (2026-10-22; the figure
-moves as the tree does - the 2026-10-10 reading was 180 files / 3438, the 2026-10-08 reading was 180 files / 3398, the 2026-09-26 one
+and guard tests that fail the build if one appears. Last local full run: **185 test
+files, 3517 tests, 100% on all four axes in every package** (2026-10-23; the figure
+moves as the tree does - the 2026-10-22 reading was 184 files / 3487, the 2026-10-10 reading was 180 files / 3438, the 2026-10-08 reading was 180 files / 3398, the 2026-09-26 one
 167 files / 3060, the 2026-09-23 one 140 files / 2621 and the 2026-09-18 one 131 files / 2428 tests, and it moved because tests were added, not because any of them changed verdict). CI runs the same command on every push to `main` and on every
 pull request, so a
 regression turns the run red and, since 2026-08-25, withholds the merge button from anyone

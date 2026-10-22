@@ -71,8 +71,8 @@ Run each gate locally on the release commit; the six below plus the web producti
 - [ ] `pnpm run typecheck`
 - [ ] `pnpm run lint`
 - [ ] `pnpm run format:check`
-- [ ] `pnpm run test` — the full workspace suite (**184 test files / 3487 tests** on a
-      local run of 2026-10-22, up from 180 / 3438 on 2026-10-10, 180 / 3398 on 2026-10-08, 167 / 3060 on 2026-09-26, 140 / 2621 on 2026-09-23 and 131 / 2428 on 2026-09-18; the figure moves as the
+- [ ] `pnpm run test` — the full workspace suite (**185 test files / 3517 tests** on a
+      local run of 2026-10-23, up from 184 / 3487 on 2026-10-22, 180 / 3438 on 2026-10-10, 180 / 3398 on 2026-10-08, 167 / 3060 on 2026-09-26, 140 / 2621 on 2026-09-23 and 131 / 2428 on 2026-09-18; the figure moves as the
       tree does, so re-measure on the release commit rather than trusting this line). Coverage: **all five** packages —
       `@agenthropic/server`, `@agenthropic/web`, `@agenthropic/core`,
       `@agenthropic/shared` and `@agenthropic/test-fixtures` — run `vitest run --coverage`
