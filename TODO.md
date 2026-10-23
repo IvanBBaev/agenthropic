@@ -1219,8 +1219,9 @@ one-word answer; the recommended default is first.
   - **Done 2026-10-22:** `isPrunedAt` prunes only next to a `package.json` (or at the scan
     root) in all three walkers; real-tree output unchanged (333 files, 6 manifests, 0
     offenders). Four cases in `scripts-gates.test.ts`, three red against the old gate.
-- [ ] **AU nits (recorded, not defects on their own):** the licence gate trusts the whole
-  `@agenthropic/*` scope by name; ~~the installer's backup `copyFileSync` has no
+- [ ] **AU nits (recorded, not defects on their own):** ~~the licence gate trusts the whole
+  `@agenthropic/*` scope by name~~ (fixed 2026-10-23: skipped only when every path lies outside
+  `node_modules`; real-tree output unchanged, 407 / 429; one red-proven case); ~~the installer's backup `copyFileSync` has no
   `COPYFILE_EXCL`~~ (fixed 2026-10-22: `COPYFILE_EXCL` + `-1`..`-99` suffix, two red-proven
   cases); a hand-formatted `settings.json` is reformatted (with a backup) on the
   first re-install.

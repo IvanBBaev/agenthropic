@@ -33,6 +33,14 @@
 // exited 0. Zero violations found in zero packages is not a clean tree, it is a
 // gate that never looked, and in CI that is indistinguishable from success. The
 // shape is now validated and an empty inspection is a failure.
+//
+// AMENDED 2026-10-23 (AU nit). Workspace-local packages were skipped by NAME
+// alone: anything called `@agenthropic/*` was waved through. A registry package
+// published under that scope - or a dependency that happens to share it - would
+// have been exempt from the licence check without ever being looked at. The skip
+// now also requires every reported path to lie outside `node_modules`, i.e. the
+// package is a checkout in this workspace, not something installed into it. An
+// entry with no paths at all is not provably local and is checked.
 import { execFileSync } from 'node:child_process'; // spawner-gate-allow: the only sanctioned subprocess in scripts/ (fixed-argv `pnpm licenses list`)
 import { realpathSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -63,6 +71,23 @@ const PACKAGE_EXCEPTIONS = new Map([
   // and is the license the entire frontend ecosystem ships this package under.
   ['caniuse-lite', 'CC-BY-4.0'],
 ]);
+
+/**
+ * True when a `pnpm licenses list` entry is one of this workspace's own
+ * packages: in the `@agenthropic/` scope AND located only outside
+ * `node_modules`. The name alone proves nothing - a registry package can carry
+ * the same scope (AU nit, 2026-10-23).
+ *
+ * @param {{ name: string, paths?: string[] }} pkg
+ * @returns {boolean}
+ */
+function isWorkspaceLocal(pkg) {
+  if (!pkg.name.startsWith('@agenthropic/')) return false;
+  if (!Array.isArray(pkg.paths) || pkg.paths.length === 0) return false;
+  return pkg.paths.every(
+    (entry) => typeof entry === 'string' && !entry.split(/[\\/]/).includes('node_modules'),
+  );
+}
 
 /**
  * Split an SPDX expression into licence ids, parentheses and operators.
@@ -191,7 +216,7 @@ function readLicenseOutput() {
  * @returns {import('./check-licenses.d.mts').LicenseFindings}
  */
 export function evaluateLicenses(raw) {
-  /** @type {Record<string, Array<{ name: string, versions?: string[], version?: string, license?: string }>>} */
+  /** @type {Record<string, Array<{ name: string, versions?: string[], version?: string, license?: string, paths?: string[] }>>} */
   let byLicense;
   try {
     byLicense = JSON.parse(raw);
@@ -236,7 +261,7 @@ export function evaluateLicenses(raw) {
   for (const [license, packages] of Object.entries(byLicense)) {
     const allowed = isAllowedExpression(license);
     for (const pkg of packages) {
-      if (pkg.name.startsWith('@agenthropic/')) continue; // workspace-local, private
+      if (isWorkspaceLocal(pkg)) continue; // workspace-local checkout, private
       const versions = pkg.versions ? pkg.versions.join(', ') : (pkg.version ?? '?');
       checkedNameSet.add(pkg.name);
       checkedVersions += pkg.versions ? pkg.versions.length : 1;

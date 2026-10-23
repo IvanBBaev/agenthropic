@@ -294,6 +294,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The licence gate no longer exempts a package because of its name alone. Anything in the
+  `@agenthropic/*` scope used to be skipped as workspace-local, so a registry package published
+  under that scope would never have had its licence checked. A package is now skipped only when
+  it is in that scope and every path pnpm reports for it lies outside `node_modules`; an entry
+  with no paths is checked. The real tree's result is unchanged (407 packages / 429 installed
+  versions).
 - The Cost view's ingest-coverage banner renders once for an infinite excluded-session count.
   The two banner arms were independent conditions and an infinity satisfied both, so the page
   named the count unreadable and then said "Infinity sessions could not be ingested" in a second

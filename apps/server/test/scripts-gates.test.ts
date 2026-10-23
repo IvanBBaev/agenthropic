@@ -505,6 +505,7 @@ interface LicensePackage {
   name: string;
   versions?: string[];
   version?: string;
+  paths?: string[];
 }
 
 type LicensePayload = Record<string, LicensePackage[]>;
@@ -635,11 +636,55 @@ describe('check-licenses: evaluateLicenses / formatReport', () => {
 
   it('counts workspace-local packages as nothing inspected, so an all-local scan fails', () => {
     const findings = inspect({
-      'CC-BY-NC-4.0': [{ name: '@agenthropic/server', versions: ['0.3.0'] }],
+      'CC-BY-NC-4.0': [
+        { name: '@agenthropic/server', versions: ['0.3.0'], paths: ['/repo/apps/server'] },
+        { name: '@agenthropic/core', versions: ['0.3.0'], paths: ['C:\\repo\\packages\\core'] },
+      ],
     });
     expect(findings.offenders).toEqual([]);
     expect(findings.checkedNames).toBe(0);
     expect(formatLicenseReport(findings).exitCode).toBe(1);
+  });
+
+  it('checks an @agenthropic/* package that is installed rather than local (AU nit)', () => {
+    // The scope alone used to exempt a package. A registry package under the same
+    // scope, installed into node_modules, or an entry with no paths to prove it
+    // is a workspace checkout, is checked like any other dependency.
+    const findings = inspect({
+      'GPL-3.0': [
+        {
+          name: '@agenthropic/evil',
+          versions: ['1.0.0'],
+          paths: [
+            '/repo/node_modules/.pnpm/@agenthropic+evil@1.0.0/node_modules/@agenthropic/evil',
+          ],
+        },
+        { name: '@agenthropic/pathless', versions: ['1.0.0'] },
+        { name: '@agenthropic/emptypaths', versions: ['1.0.0'], paths: [] },
+        {
+          name: '@agenthropic/mixed',
+          versions: ['1.0.0'],
+          paths: ['/repo/packages/mixed', 'C:\\repo\\node_modules\\@agenthropic\\mixed'],
+        },
+      ],
+    });
+    expect(findings.offenders).toEqual([
+      '@agenthropic/evil@1.0.0  [GPL-3.0]',
+      '@agenthropic/pathless@1.0.0  [GPL-3.0]',
+      '@agenthropic/emptypaths@1.0.0  [GPL-3.0]',
+      '@agenthropic/mixed@1.0.0  [GPL-3.0]',
+    ]);
+    expect(findings.checkedNames).toBe(4);
+    expect(formatLicenseReport(findings).exitCode).toBe(1);
+  });
+
+  it('does not exempt an outside package because its paths avoid node_modules', () => {
+    const findings = inspect({
+      'GPL-3.0': [
+        { name: 'agenthropic-lookalike', versions: ['1.0.0'], paths: ['/repo/vendor/x'] },
+      ],
+    });
+    expect(findings.offenders).toEqual(['agenthropic-lookalike@1.0.0  [GPL-3.0]']);
   });
 
   it('refuses valid JSON of the wrong shape', () => {

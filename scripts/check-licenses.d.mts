@@ -38,7 +38,10 @@ export interface LicensesInspected {
   appliedExceptions: string[];
   /** Exceptions that matched nothing - reported, never fatal (L-2). */
   unusedExceptions: string[];
-  /** Distinct package names inspected, excluding workspace-local `@agenthropic/*`. */
+  /**
+   * Distinct package names inspected, excluding workspace-local packages: an
+   * `@agenthropic/*` name whose every path lies outside `node_modules` (AU nit).
+   */
   checkedNames: number;
   /** Installed versions inspected: one name present twice counts twice (L-1). */
   checkedVersions: number;
