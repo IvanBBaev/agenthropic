@@ -222,6 +222,64 @@ describe('alert dispatcher (WP-A7)', () => {
     expect(countDeliveries(db)).toEqual({ pending: 0, sent: 3, failed: 0 });
   });
 
+  it('a throttled backlog on one target never starves another (AU, 2026-10-27)', async () => {
+    // A full batch of older `ops` rows used to fill every pass: they stayed
+    // pending (throttled) and the later `oncall` row was never reached.
+    syncAlertsConfig(
+      db,
+      {
+        targets: [
+          {
+            id: 'ops',
+            kind: 'telegram',
+            tokenRef: 'env:ALERT_TOKEN',
+            chatId: '1',
+            maxPerMinute: 1,
+          },
+          { id: 'oncall', kind: 'telegram', tokenRef: 'env:ALERT_TOKEN', chatId: '2' },
+        ],
+        rules: [
+          { id: 'errors', kind: 'error', targetId: 'ops' },
+          { id: 'page', kind: 'error', targetId: 'oncall' },
+        ],
+      },
+      T0.toISOString(),
+    );
+    for (let i = 0; i < DISPATCH_BATCH_SIZE + 5; i++) fire(db, `a${String(i).padStart(3, '0')}`);
+    recordAlertEvent(db, {
+      ruleId: 'page',
+      targetId: 'oncall',
+      dedupeKey: 'page:b1',
+      payload: {
+        kind: 'error',
+        ruleId: 'page',
+        sessionId: 's1',
+        agentId: 'b1',
+        firedAt: at(1).toISOString(),
+      },
+    });
+    clock = at(1);
+    const ops = new InMemoryAlertSink('ops');
+    const oncall = new InMemoryAlertSink('oncall');
+    const d = createAlertDispatcher({
+      db,
+      sinks: new Map<string, AlertSinkPort>([
+        ['ops', ops],
+        ['oncall', oncall],
+      ]),
+      now,
+    });
+
+    expect(await d.runOnce()).toEqual({
+      sent: 2,
+      retried: 0,
+      failed: 0,
+      throttled: DISPATCH_BATCH_SIZE + 4,
+    });
+    expect(ops.sent()).toHaveLength(1);
+    expect(oncall.sent().map((n) => n.ruleId)).toEqual(['page']);
+  });
+
   it('fails a delivery whose target has no sink', async () => {
     fire(db, 'a1');
     expect((await dispatcher(null).runOnce())?.failed).toBe(1);
@@ -231,6 +289,21 @@ describe('alert dispatcher (WP-A7)', () => {
       last_error: 'target not configured',
     });
     expect(logs).toEqual([expect.stringContaining('failed (target not configured)')]);
+  });
+
+  it('fails every due delivery of a sinkless target in one pass, whatever its budget', async () => {
+    // A disabled target is still in the table with a budget; the budget must
+    // not hold its rows back as "throttled" when they can only fail.
+    syncAlertsConfig(db, config(1), T0.toISOString());
+    fire(db, 'a1');
+    fire(db, 'a2');
+    fire(db, 'a3');
+    expect(await dispatcher(null).runOnce()).toEqual({
+      sent: 0,
+      retried: 0,
+      failed: 3,
+      throttled: 0,
+    });
   });
 
   it('treats a throwing sink as retryable and never relays its message', async () => {

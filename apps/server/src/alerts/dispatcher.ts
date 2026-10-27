@@ -16,7 +16,9 @@
  * THROTTLE. A target sends at most `maxPerMinute` messages in any trailing
  * 60 s window, counted from `delivered_at` in the table itself (so it holds
  * across restarts). A delivery over budget is not attempted and not charged an
- * attempt: it stays `pending` and goes out on a later pass.
+ * attempt: it stays `pending` and goes out on a later pass. The budget caps
+ * each target's share of the batch in the query itself, so a throttled
+ * target's backlog never crowds another target's due rows out of a pass.
  *
  * NO SINK. A delivery whose target has no sink - the target was disabled or
  * removed from the config file after the event fired - fails terminally with a
@@ -28,6 +30,7 @@
 import type { AlertSinkPort, DeliveryOutcome } from '@agenthropic/shared';
 import type { SqliteDatabase } from '../db/connection';
 import {
+  countDueByTarget,
   countSentSince,
   listDueDeliveries,
   listTargets,
@@ -77,12 +80,20 @@ export function createAlertDispatcher(deps: AlertDispatcherDeps): AlertDispatche
     const summary: DispatchSummary = { sent: 0, retried: 0, failed: 0, throttled: 0 };
     const start = now();
     const windowStart = new Date(start.getTime() - THROTTLE_WINDOW_MS).toISOString();
+    const nowIso = start.toISOString();
     const budget = new Map<string, number>();
     for (const target of listTargets(deps.db)) {
-      budget.set(target.id, target.maxPerMinute - countSentSince(deps.db, target.id, windowStart));
+      // Only a target that can send is budgeted: a sinkless one's rows can
+      // only fail, so they are never held back as throttled.
+      if (!deps.sinks.has(target.id)) continue;
+      const left = target.maxPerMinute - countSentSince(deps.db, target.id, windowStart);
+      budget.set(target.id, Math.max(0, left));
+    }
+    for (const [targetId, due] of countDueByTarget(deps.db, nowIso)) {
+      summary.throttled += Math.max(0, due - (budget.get(targetId) ?? due));
     }
 
-    for (const delivery of listDueDeliveries(deps.db, start.toISOString(), DISPATCH_BATCH_SIZE)) {
+    for (const delivery of listDueDeliveries(deps.db, nowIso, DISPATCH_BATCH_SIZE, budget)) {
       const attempts = delivery.attemptCount + 1;
       const sink = deps.sinks.get(delivery.targetId);
       if (sink === undefined) {
@@ -98,14 +109,6 @@ export function createAlertDispatcher(deps: AlertDispatcherDeps): AlertDispatche
         );
         continue;
       }
-      // A target with a sink is in the table (sinks are built from it).
-      const remaining = budget.get(delivery.targetId) as number;
-      if (remaining <= 0) {
-        summary.throttled++;
-        continue;
-      }
-      budget.set(delivery.targetId, remaining - 1);
-
       const outcome = await sendSafely(sink, delivery.notification);
       const at = now();
       const prefix = `alert delivery ${delivery.deliveryId} -> ${delivery.targetId}`;

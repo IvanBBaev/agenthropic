@@ -304,6 +304,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A throttled alert target can no longer starve the others. Each delivery pass took the 100
+  oldest due rows across all targets, so a target over its per-minute budget with a backlog of
+  100 or more filled every pass with rows it then skipped, and another target's alerts were never
+  sent. The budget now caps each target's share of the batch in the query itself; a target with
+  no sink (disabled or removed) is not capped, so its rows still fail in one pass.
 - The alerts config named by `DASHBOARD_ALERTS_CONFIG` is now refused at startup when
   group or other can write it, or when it is owned by a user other than the server user or
   root. The file picks the chat alerts go to and which secret is sent with them, so a file

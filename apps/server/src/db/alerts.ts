@@ -246,22 +246,35 @@ interface DueRecord {
  * Pending deliveries due at `nowIso` (next_retry_at <= nowIso), ordered by
  * next_retry_at then id, at most `limit`. The notification is the stored
  * payload plus its alertEventId.
+ *
+ * `caps` limits how many rows one target may take (its throttle budget); a
+ * target absent from it is uncapped. The cap is applied in SQL, before
+ * `limit`, so a target over budget never fills the batch with rows the
+ * dispatcher would only skip - another target's due rows still make it in.
  */
 export function listDueDeliveries(
   db: SqliteDatabase,
   nowIso: string,
   limit: number,
+  caps: ReadonlyMap<string, number> = new Map(),
 ): DueDelivery[] {
   const rows = db
     .prepare(
-      `SELECT d.id, d.target_id, d.attempt_count, d.alert_event_id, e.payload
-         FROM webhook_deliveries d
-         JOIN alert_events e ON e.id = d.alert_event_id
-        WHERE d.status = 'pending' AND d.next_retry_at <= ?
-        ORDER BY d.next_retry_at, d.id
+      `WITH due AS (
+         SELECT d.id, d.target_id, d.attempt_count, d.alert_event_id, d.next_retry_at, e.payload,
+                ROW_NUMBER() OVER (PARTITION BY d.target_id ORDER BY d.next_retry_at, d.id) AS rn
+           FROM webhook_deliveries d
+           JOIN alert_events e ON e.id = d.alert_event_id
+          WHERE d.status = 'pending' AND d.next_retry_at <= ?
+       )
+       SELECT due.id, due.target_id, due.attempt_count, due.alert_event_id, due.payload
+         FROM due
+         LEFT JOIN json_each(?) cap ON cap.key = due.target_id
+        WHERE cap.key IS NULL OR due.rn <= cap.value
+        ORDER BY due.next_retry_at, due.id
         LIMIT ?`,
     )
-    .all(nowIso, limit) as DueRecord[];
+    .all(nowIso, JSON.stringify(Object.fromEntries(caps)), limit) as DueRecord[];
   return rows.map((row) => ({
     deliveryId: row.id,
     targetId: row.target_id,
@@ -271,6 +284,18 @@ export function listDueDeliveries(
       alertEventId: row.alert_event_id,
     },
   }));
+}
+
+/** Pending deliveries due at `nowIso`, counted per target id. */
+export function countDueByTarget(db: SqliteDatabase, nowIso: string): Map<string, number> {
+  const rows = db
+    .prepare(
+      `SELECT target_id, COUNT(*) AS n FROM webhook_deliveries
+        WHERE status = 'pending' AND next_retry_at <= ?
+        GROUP BY target_id`,
+    )
+    .all(nowIso) as { target_id: string; n: number }[];
+  return new Map(rows.map((row) => [row.target_id, row.n]));
 }
 
 /** Deliveries for `targetId` sent at or after `sinceIso` - the throttle window. */
