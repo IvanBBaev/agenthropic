@@ -8,7 +8,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { InMemoryAlertSink, type AlertsConfig } from '@agenthropic/shared';
+import { InMemoryAlertSink, type AlertsConfig, type DeliveryOutcome } from '@agenthropic/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { startAlerting } from '../src/alerts/index';
 import { countDeliveries, listTargets } from '../src/db/alerts';
@@ -113,6 +113,64 @@ describe('startAlerting (AD-1)', () => {
     } finally {
       service.stop();
     }
+  });
+
+  it('stop() resolves only after an in-flight delivery is recorded (AU, 2026-10-27)', async () => {
+    // close() awaits stop() before db.close(): a send still in flight when the
+    // DB closed could not be marked sent, and went out again on the next boot.
+    let release: (outcome: DeliveryOutcome) => void = () => undefined;
+    let sending: () => void = () => undefined;
+    const reachedSend = new Promise<void>((resolve) => (sending = resolve));
+    const service = startAlerting({
+      db: temp.db,
+      config: CONFIG,
+      intervalMs: 60_000,
+      now,
+      resolveToken: () => 'token',
+      createSink: () => ({
+        targetId: 'ops',
+        kind: 'telegram',
+        send: () => {
+          sending();
+          return new Promise<DeliveryOutcome>((resolve) => (release = resolve));
+        },
+      }),
+    });
+    erroredAgent(temp.db);
+    clock = LATER;
+    const ticking = service.tick();
+    await reachedSend;
+
+    let stopped = false;
+    const stopping = service.stop().then(() => (stopped = true));
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(stopped).toBe(false);
+
+    release({ kind: 'sent' });
+    await stopping;
+    expect(countDeliveries(temp.db)).toEqual({ pending: 0, sent: 1, failed: 0 });
+    await ticking;
+    // Nothing in flight: stop() settles at once, and twice is harmless.
+    await service.stop();
+  });
+
+  it('stop() swallows a failed in-flight tick - the timer path already logged it', async () => {
+    let broken = false;
+    const service = startAlerting({
+      db: temp.db,
+      config: CONFIG,
+      intervalMs: 60_000,
+      now: () => {
+        if (broken) throw new Error('clock broke');
+        return clock;
+      },
+      resolveToken: () => 'token',
+      createSink: () => new InMemoryAlertSink('ops'),
+    });
+    broken = true;
+    const ticking = service.tick();
+    await expect(service.stop()).resolves.toBeUndefined();
+    await expect(ticking).rejects.toThrow('clock broke');
   });
 
   it('ticks on the timer, logs a failing tick and keeps going, and stops cleanly', async () => {

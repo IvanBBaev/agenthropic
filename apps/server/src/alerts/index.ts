@@ -44,10 +44,15 @@ export interface AlertTickResult {
 }
 
 export interface AlertingService {
-  /** One tick by hand (tests, and the first tick at boot). */
+  /** One tick by hand (tests). */
   tick(): Promise<AlertTickResult>;
-  /** Clear the timer. Idempotent. */
-  stop(): void;
+  /**
+   * Clear the timer and resolve once every tick already in flight has settled
+   * (a failed one included - the timer path logs it). Shutdown awaits this
+   * before closing the DB: a send that finished after the close could not be
+   * marked sent and would go out again on the next boot. Idempotent.
+   */
+  stop(): Promise<void>;
 }
 
 export function startAlerting(deps: AlertingDeps): AlertingService {
@@ -78,10 +83,22 @@ export function startAlerting(deps: AlertingDeps): AlertingService {
   const sinks = new Map(deps.config.targets.map((t) => [t.id, createSink(t)] as const));
   const dispatcher = createAlertDispatcher({ db: deps.db, sinks, now, log });
 
-  async function tick(): Promise<AlertTickResult> {
+  const inFlight = new Set<Promise<AlertTickResult>>();
+
+  async function runTick(): Promise<AlertTickResult> {
     const fired = evaluateAlertRules(deps.db, now().toISOString());
     if (fired > 0) log(`alerts: ${fired} new alert event(s).`);
     return { fired, delivery: await dispatcher.runOnce() };
+  }
+
+  function tick(): Promise<AlertTickResult> {
+    const running = runTick();
+    inFlight.add(running);
+    const forget = (): void => {
+      inFlight.delete(running);
+    };
+    running.then(forget, forget);
+    return running;
   }
 
   const timer = setInterval(() => {
@@ -97,8 +114,9 @@ export function startAlerting(deps: AlertingDeps): AlertingService {
 
   return {
     tick,
-    stop() {
+    async stop() {
       clearInterval(timer);
+      await Promise.allSettled(inFlight);
     },
   };
 }

@@ -304,6 +304,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Shutdown with alerting on now waits for an alert delivery that is already in flight before it
+  closes the database. It used to close the database mid-send, so a message Telegram had
+  accepted could not be marked sent and was delivered a second time on the next boot.
 - A throttled alert target can no longer starve the others. Each delivery pass took the 100
   oldest due rows across all targets, so a target over its per-minute budget with a backlog of
   100 or more filled every pass with rows it then skipped, and another target's alerts were never

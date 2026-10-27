@@ -1030,7 +1030,8 @@ export async function start(
   // boot through the same close path as a failed bind.
   let alerting: AlertingService | null = null;
   const close = async (): Promise<void> => {
-    alerting?.stop();
+    // Awaited: an in-flight delivery must be recorded before db.close().
+    await alerting?.stop();
     backups.stop();
     watcher?.stop();
     await app.close();
