@@ -1,56 +1,89 @@
 # Telegram alerts
 
-> **How to read this page.** Unlike the rest of the usage section, nothing described
-> here is built. The dashboard around it is: the server, the ingest pipeline, the
-> persisted DAG, the cost engine and the four dashboard views all exist and run. The
-> **alerting core and the Telegram sink do not**, and — as the box below explains —
-> they are not on the schedule either. So read this as a design contract to check a
-> future pull request against, not as a feature you can configure. Values marked
-> _(planned)_ or _(leaning — unconfirmed)_ are the state of the design when it was
-> written; the **security invariants are binding and will not change**.
+> **As built — 2026-10-24.** The alerting core and the Telegram sink now exist
+> (`WP-A1`–`WP-A7` and `WP-A10`), built under an explicit owner override of the KC-5
+> entry gate. Alerting is **off by default**: with `DASHBOARD_ALERTS_CONFIG` unset the
+> server constructs none of it and nothing in the process dials out. `WP-A8`
+> (alerts API) and `WP-A9` (alerts UI) stay **cut** — configuration is a JSON file.
+> The sections after "Set it up" are the original design record; where they say
+> _(planned)_ or describe API/UI steps, the file-based setup below replaces them.
 
-> **Update — 2026-07 (as built): nothing on this page exists, and it is not on the
-> path to existing.** Read the whole page as a design record, not as a feature you
-> can configure. Specifically:
->
-> - **Alerting is v2.0, and v2.0 has no start date.** It is off the v1.0 critical
->   path entirely. v1.0 (hard date **2026-12-01**) is explicitly defined as the
->   persisted cross-session DAG plus dollar-accurate cost, **"no alerts"**.
-> - **v2.0 is entered only through kill checkpoint KC-5**, which is earned rather
->   than scheduled: **14 consecutive days of real daily use of v1.0 by its own
->   author**, plus **≥3 dated friction-log entries** actually wishing for a
->   notification. There is no other entry path. If that evidence never materialises,
->   **v2.0 never starts — and the roadmap counts that as a success, not a failure**,
->   because it will have prevented building a notification system for a dashboard
->   nobody opens.
-> - **`WP-A8` (operator alerts API) and `WP-A9` (alerts UI) were CUT outright.** They
->   stay dead even if KC-5 is passed: "a single operator does not need CRUD screens
->   for himself" — configuration would live in a file. Every _(planned, `WP-A8`)_
->   step in the setup flow below therefore describes something that will not be
->   built in that form. The reduced v2.0 scope is `WP-A1`–`WP-A7` plus `WP-A10`.
-> - **Zero alerting code exists in the repository**: no `alert_rules`,
->   `alert_events`, `webhook_targets` or `webhook_deliveries` table, no rules engine,
->   no dispatcher, no Telegram adapter, and no `token_ref` resolver. There is nothing
->   to enable, no flag to flip, and no partial version running. The absence is
->   structural rather than merely unfinished: those four table names appear nowhere in
->   the source tree, and the server has **no outbound HTTP client of any kind** — its
->   runtime dependencies are Fastify, TypeBox and `better-sqlite3`, and nothing under
->   `apps/server/src` or `packages/*/src` calls `fetch`, imports `node:http`/`node:https`,
->   or pulls in an HTTP library. (`fetch` does appear elsewhere in the repository: in
->   `apps/web/src/api.ts` — the browser bundle calling this server's own relative `/api`
->   paths — in `scripts/time-to-understand.mjs`, a local measurement script, and in four
->   server test files that probe this server's own `/api/stream`. None is the server
->   process and none takes a URL from ingested data.) ~~Note also that
->   **no automated gate defends this**~~ — **since 2026-09-26 a gate does:**
->   `scripts/check-no-spawner.mjs` (`WP-F5`) fails CI on an outbound network primitive or
->   HTTP client in server-process source or manifests. Until then the absence was upheld
->   by review alone.
->
-> The security *rules* on this page do hold today, because they are project-wide and
-> not alerting-specific: the server dials nothing derived from an ingested payload,
-> and secrets never reach SQLite, SSE or logs. They hold trivially, in the sense that
-> the outbound-dispatch code path they constrain has never been written — the first
-> rule holds because the server cannot dial *anything*.
+## Set it up
+
+1. **Create a bot** with `@BotFather` and note its token (`<bot id>:<secret>`), and
+   find the chat id that should receive alerts (a numeric id, or `@channelname`).
+2. **Store the token by reference.** Either export it in the server's environment
+   (for example `AGENTHROPIC_TELEGRAM_TOKEN`) or write it to a file owned by the
+   server's user with mode `0600` — a symlink, a file owned by another user, or any
+   group/other permission bit is rejected.
+3. **Write the config file** and point `DASHBOARD_ALERTS_CONFIG` at its **absolute**
+   path:
+
+   ```json
+   {
+     "targets": [
+       {
+         "id": "ops",
+         "kind": "telegram",
+         "tokenRef": "env:AGENTHROPIC_TELEGRAM_TOKEN",
+         "chatId": "123456789",
+         "maxPerMinute": 10
+       }
+     ],
+     "rules": [
+       { "id": "big-spend", "kind": "cost_threshold", "targetId": "ops", "thresholdUsd": 25 },
+       { "id": "stuck", "kind": "stuck_agent", "targetId": "ops" },
+       { "id": "errors", "kind": "error", "targetId": "ops", "enabled": false }
+     ]
+   }
+   ```
+
+   `tokenRef` is `env:<NAME>` or `file:/absolute/path` — never the token itself; the
+   file holds no secret. Ids are lowercase `[a-z0-9-]`, at most 64 characters.
+   `maxPerMinute` is 1–60 (default 10). Up to 16 targets and 64 rules.
+4. **Restart the server.** It logs `alerts: enabled - N target(s), M active rule(s).`
+   Boot **fails** — the server does not start — when the file is unreadable, not valid
+   JSON, fails the schema, names an unknown target, repeats an id, or when any
+   target's `tokenRef` does not resolve. The error names the file or the ref, never a
+   token value.
+
+### What it does, as built
+
+- **Rules** (evaluated on every ingest poll tick, `DASHBOARD_POLL_INTERVAL_MS`):
+  - `cost_threshold` — a session whose priced cost (the same pricing CTE as the cost
+    views) is **at or above** `thresholdUsd`;
+  - `stuck_agent` — an agent the stuck-session watchdog moved to `unknown`;
+  - `error` — an agent whose status resolved to `error`.
+- **Exactly once per subject.** Each rule fires at most once per session (cost) or
+  agent (stuck/error) — the dedupe key `<ruleId>:<subjectId>` is unique in
+  `alert_events`. A condition that stays true is one notification, not one per tick.
+- **No history flood.** A rule only considers subjects active at or after the moment
+  it was **armed** (first synced, or re-enabled after being disabled). Turning
+  alerting on over months of history pages nothing old.
+- **Throttle and retry.** A target sends at most `maxPerMinute` messages in any
+  trailing minute; an over-budget delivery waits, uncharged. Network errors, timeouts,
+  HTTP 429 and 5xx retry with backoff 30 s × 2ⁿ (a longer Telegram `retry_after`
+  wins), giving up after 5 attempts; any other 4xx fails at once.
+- **Removing** a target or rule from the file disables it (rows are kept for the
+  alert history); pending deliveries to a disabled target fail as
+  `target not configured`.
+- **Messages** are plain text (no Markdown/HTML parse mode, link previews off) with
+  ids and figures only — no prompt or tool content.
+
+### Security, as built
+
+- The only host ever dialled is the constant `https://api.telegram.org`; the token
+  must match `<digits>:<[A-Za-z0-9_-]>` before it is placed in the path, and nothing
+  from an event payload or the config file (other than the token and chat id in the
+  JSON body) reaches the request. Redirects are refused; requests time out after 10 s.
+- The token is resolved at boot only to prove it exists, then dropped; each send
+  re-resolves it. It never reaches SQLite, SSE, logs or a delivery's `last_error`
+  (reasons are fixed strings, and any echo of the token is redacted).
+- `WP-A10` pins all of this with an SSRF corpus (16 hostile values in every string
+  field), a secret-leak corpus over every outcome path, and a static scan of
+  `apps/server/src/alerts/**` (one URL literal, no `console.`, one token
+  interpolation).
+
 
 This page covers the designed alerting core — the rule engine, the no-SSRF webhook
 dispatcher, the secret-handling contract, and the delivery guarantees — and its one
@@ -355,36 +388,20 @@ of `docs/analysis/development-plan.md` (Phase 5–6):
 | `WP-A5` | backend | Rules engine (cost threshold / stuck agent / error) over the projection |
 | `WP-A6` | backend | Telegram `AlertSink` adapter (hoangsonww-attributed), token via `token_ref`, per `AlertKind` |
 | `WP-A7` | backend | Delivery log + retry/backoff + dedupe & rate-limit → exactly one throttled notification |
-| `WP-A8` | backend | Operator alerts API — auth-gated CRUD for rules + targets |
-| `WP-A9` | frontend | Alerts UI — rule config, target registration, delivery-log view; `token_ref` name only |
+| `WP-A8` | backend | ~~Operator alerts API — auth-gated CRUD for rules + targets~~ — **cut** |
+| `WP-A9` | frontend | ~~Alerts UI — rule config, target registration, delivery-log view~~ — **cut** |
 | `WP-A10` | qa | Alerts negative-test corpus + coverage hardening — SSRF and secret-leak tests |
 
 ## Current status
 
-The paragraph that stood here described a pre-Phase-0 project waiting on a feasibility
-verdict. That is no longer where things are, and the change is worth stating precisely,
-because it moves alerting *further* from being built rather than closer.
-
-The Phase-0 spike returned **CONDITIONAL GO**, and the prerequisite phases this page said
-had not landed have landed: the security spine, the ingest substrate, the persisted
-projection and the read API all exist and run. Every dependency alerting was waiting on is
-therefore satisfied. What changed at the same time is the schedule those dependencies were
-supposed to feed. **v1.0 is defined as the persisted cross-session DAG plus dollar-accurate
-cost, explicitly "no alerts"**, with a hard date of **2026-12-01**; alerting was moved
-wholesale into v2.0, and v2.0 is entered only through kill checkpoint **KC-5** — fourteen
-consecutive days of the author actually using v1.0 daily, plus at least three dated
-friction-log entries wishing for a notification. Nothing schedules it; only evidence
-admits it. Two of the ten work packages below, `WP-A8` (operator alerts API) and `WP-A9`
-(alerts UI), were **cut outright** and stay cut even if KC-5 passes, on the reasoning that
-a single operator does not need CRUD screens for himself.
-
-So the old "longest tail of the whole graph" framing has inverted. Alerting is not the
-last thing blocking a release; it is deliberately outside the release, and the honest
-current status is that **it may never be built at all — and the roadmap counts that
-outcome as a success**, since it would mean the project declined to build a notification
-system for a dashboard nobody opens. Everything above this section remains a **binding
-design commitment to check a future pull request against**, and none of it is a
-description of running code.
+**Built (2026-10-24):** `WP-A1` (port and domain types), `WP-A2` (migration 23
+`alerts-core`: `webhook_targets`, `alert_rules`, `alert_events`, `webhook_deliveries`),
+`WP-A3` (`tokenRef` resolver and redaction), `WP-A4` (constant-host Telegram dispatch),
+`WP-A5` (rules engine), `WP-A6` (Telegram formatter and sink, hoangsonww-attributed),
+`WP-A7` (delivery loop: dedupe, throttle, backoff) and `WP-A10` (negative-test corpus).
+**Cut and staying cut:** `WP-A8` and `WP-A9`. v1.0 (hard date 2026-12-01) is unchanged
+and does not depend on any of this; alerting stays off unless the operator names a
+config file.
 
 ## See also
 

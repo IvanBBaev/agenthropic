@@ -126,8 +126,12 @@ important limit of what that CI gate can and cannot prove
 > copied into this repository. The two MIT rows in §5's ledger describe work that
 > either was written from scratch anyway (the tree/layout code lives in
 > `apps/web/src/views/layout/layered.ts` and `cost-flow.ts`, not a port of
-> `simple10`'s) or has not been built at all (`hoangsonww`'s Telegram/webhook
-> provider belongs to the alerts workstream, which is v2.0 and gated behind KC-5).
+> `simple10`'s) or was re-implemented rather than copied (`hoangsonww`'s
+> Telegram/webhook provider: the v2.0 alerts core built on 2026-10-24 takes only the
+> *idea* of a per-provider `formatTelegram` step, credited in the header of
+> `apps/server/src/alerts/format-telegram.ts`; the formatter, the sink and the
+> alert tables were written against agenthropic's own schema, and no line of
+> `hoangsonww`'s source was pasted in).
 > Consequently there is no `NOTICE` or `THIRD-PARTY-NOTICES` file — none is owed
 > yet. The moment any MIT-licensed source is pasted in, the obligation activates and
 > the mechanism has to be chosen; until then this is an open decision with no

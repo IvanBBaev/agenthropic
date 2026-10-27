@@ -20,6 +20,7 @@ import type { CorpusIngestSummary } from './corpus/ingest-corpus';
 import { nodeCorpusFs } from './corpus/node-corpus-fs';
 import { createTailCachingFs } from './corpus/tail-cache';
 import { backupDatabase } from './db/backup';
+import { loadAlertsConfig, startAlerting, type AlertingService } from './alerts/index';
 import { loadPricing } from './db/pricing';
 import { openDatabase, type SqliteDatabase } from './db/connection';
 import { SqliteEventStore } from './db/event-store';
@@ -788,6 +789,10 @@ export async function start(
   env: Record<string, string | undefined> = process.env,
 ): Promise<RunningServer> {
   const config = loadConfig(env);
+  // Read and validate the alerts file before anything opens: a broken config
+  // must stop the boot, never leave the server running without its alerts.
+  const alertsConfig =
+    config.alertsConfigPath === null ? null : loadAlertsConfig(config.alertsConfigPath);
   const db = openDatabase(config.dbPath);
   runMigrations(db);
 
@@ -1020,13 +1025,28 @@ export async function start(
   // scheduled regardless of ingest, next to the database it protects - with
   // the retention pass chained after each successful backup (L9).
   const backups = scheduleDailyBackups(db, backupsDir, retention);
+  // v2.0 alerting (AD-1): built only when the operator named a config file.
+  // Started inside the try below so a tokenRef that does not resolve fails the
+  // boot through the same close path as a failed bind.
+  let alerting: AlertingService | null = null;
   const close = async (): Promise<void> => {
+    alerting?.stop();
     backups.stop();
     watcher?.stop();
     await app.close();
     db.close();
   };
   try {
+    if (alertsConfig !== null) {
+      alerting = startAlerting({
+        db,
+        config: alertsConfig,
+        intervalMs: config.pollIntervalMs,
+        // Node's console methods are bound to the console instance.
+        log: console.log,
+        logError: console.error,
+      });
+    }
     await app.listen({ host: HOST, port: config.port });
     await enforceLoopbackOrExit(app.addresses(), close);
   } catch (error) {

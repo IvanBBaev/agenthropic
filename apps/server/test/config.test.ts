@@ -44,6 +44,7 @@ describe('config (WP-U0)', () => {
       watchdogMinutes: DEFAULT_WATCHDOG_MINUTES,
       webRoot: DEFAULT_WEB_ROOT,
       allowedOrigins: [],
+      alertsConfigPath: null,
       retention: {
         eventsDays: DEFAULT_RETENTION_EVENTS_DAYS,
         backupDays: DEFAULT_RETENTION_BACKUP_DAYS,
@@ -276,6 +277,28 @@ describe('DASHBOARD_ALLOWED_ORIGINS (C-2, owner decision 2026-10-23)', () => {
       'https://a.example,,https://b.example',
     ]) {
       expect(() => originsOf(bad), bad).toThrow(/Invalid DASHBOARD_ALLOWED_ORIGINS/);
+    }
+  });
+});
+
+describe('DASHBOARD_ALERTS_CONFIG (v2.0 AD-1/AD-2)', () => {
+  const pathOf = (raw: string | undefined): string | null =>
+    loadConfig({ DASHBOARD_TOKEN: TEST_TOKEN, DASHBOARD_ALERTS_CONFIG: raw }).alertsConfigPath;
+
+  it('is off by default: unset or empty means no alerting at all', () => {
+    expect(pathOf(undefined)).toBeNull();
+    expect(pathOf('')).toBeNull();
+  });
+
+  it('accepts an absolute path verbatim', () => {
+    expect(pathOf('/etc/agenthropic/alerts.json')).toBe('/etc/agenthropic/alerts.json');
+  });
+
+  it('rejects a relative path - the file must never resolve against cwd', () => {
+    for (const bad of ['alerts.json', './alerts.json', '../alerts.json']) {
+      expect(() => pathOf(bad), bad).toThrow(
+        /Invalid DASHBOARD_ALERTS_CONFIG ".*": expected an absolute path/,
+      );
     }
   });
 });

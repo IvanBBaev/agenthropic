@@ -1,6 +1,37 @@
 export type { TokenBucket, RawEventSource } from './types/enums';
 export type * from './ports/event-store';
 export { InMemoryEventStore } from './testing/in-memory-event-store';
+export type { AlertSinkPort, DeliveryOutcome } from './ports/alert-sink';
+export { InMemoryAlertSink } from './testing/in-memory-alert-sink';
+export {
+  AlertKindSchema,
+  AlertTargetKindSchema,
+  ALERT_ID_PATTERN,
+  TOKEN_REF_PATTERN,
+  MAX_ALERTS_PER_MINUTE,
+  DEFAULT_ALERTS_PER_MINUTE,
+  TelegramTargetConfigSchema,
+  CostThresholdRuleConfigSchema,
+  StuckAgentRuleConfigSchema,
+  ErrorRuleConfigSchema,
+  AlertRuleConfigSchema,
+  AlertsConfigSchema,
+  alertsConfigProblems,
+} from './schemas/alerts';
+export type {
+  AlertKind,
+  AlertTargetKind,
+  TelegramTargetConfig,
+  CostThresholdRuleConfig,
+  StuckAgentRuleConfig,
+  ErrorRuleConfig,
+  AlertRuleConfig,
+  AlertsConfig,
+  CostThresholdNotification,
+  StuckAgentNotification,
+  ErrorNotification,
+  AlertNotification,
+} from './schemas/alerts';
 export {
   MIN_TOKEN_LENGTH,
   requireDashboardToken,

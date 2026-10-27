@@ -653,6 +653,37 @@ function byBinary(a: string, b: string): number {
   return a < b ? -1 : 1;
 }
 
+export interface SessionCostRow {
+  readonly sessionId: string;
+  readonly costUsd: number;
+}
+
+/**
+ * WP-A5 - priced cost of every session active at or after `sinceIso` whose
+ * cost is at least `minCostUsd`, ordered by session id. The `cost_threshold`
+ * rule's input: it reuses the dashboard's own `pricedCte`, so an alert fires
+ * on exactly the figure the session page shows (unpriced rows add $0, never
+ * a guess). Scoped to the active sessions before pricing, so a tick costs
+ * O(recent usage), not O(corpus).
+ */
+export function listSessionCostsAtLeast(
+  db: SqliteDatabase,
+  sinceIso: string,
+  minCostUsd: number,
+): SessionCostRow[] {
+  const rows = db
+    .prepare(
+      `WITH ${pricedCte('WHERE tu.session_id IN (SELECT id FROM sessions WHERE last_activity_at >= ?)')}
+       SELECT session_id, ${COST_USD} AS cost_usd
+       FROM priced
+       GROUP BY session_id
+       HAVING ${COST_USD} >= ?
+       ORDER BY session_id`,
+    )
+    .all(sinceIso, minCostUsd) as Array<{ session_id: string; cost_usd: number }>;
+  return rows.map((row) => ({ sessionId: row.session_id, costUsd: row.cost_usd }));
+}
+
 /**
  * Whether the database holds a row for this session - the one fact the
  * cost-analysis route needs from it before it turns to the corpus (see the

@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Opt-in Telegram alerts (v2.0 alerting core).** Set `DASHBOARD_ALERTS_CONFIG` to the absolute
+  path of a JSON file of targets and rules and the server raises three kinds of alert: a session
+  whose priced cost reaches a dollar threshold, an agent the watchdog marked stuck, and an agent
+  that ended in error. Each condition fires once per session or agent. Alerts go to a Telegram
+  chat with retry and backoff and a per-chat rate limit. The bot token is held only by reference
+  (`env:NAME` or a `file:` path that only its owner can read). It is never stored, logged or
+  streamed, and the only host the server ever calls is the Telegram Bot API. With the variable
+  unset nothing changes, and a bad file or an unresolvable token stops startup with a message
+  that names the problem, not the value. Turning a rule on alerts only on activity from then on,
+  never on history. Setup: `docs/site/usage/telegram.md`.
 - **The Sessions view now answers "what changed since X".** A "Changed since" form reads
   `GET /api/changes` for a chosen UTC day and lists the changed sessions as plain text. It states
   the served `(since, until]` event-time window and the totals for the whole window, and, when

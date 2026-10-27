@@ -13,6 +13,7 @@
  * deliberately no way to express a `token_usage` window - see
  * {@link loadRetentionValues}.
  */
+import { isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { requireDashboardToken } from '@agenthropic/shared';
 import { MAX_RETENTION_DAYS, type SignedRetentionValues } from './retention/policy';
@@ -94,6 +95,13 @@ export interface ServerConfig {
    * There is no `token_usage` window: v1.0 never prunes cost ground truth.
    */
   readonly retention: SignedRetentionValues;
+  /**
+   * Alerts config file (`DASHBOARD_ALERTS_CONFIG`, v2.0 AD-1). `null` - the
+   * default - means alerting is OFF: no rules engine, no delivery loop, and no
+   * outbound request from this process at all. The path must be absolute so
+   * the alert surface never depends on the directory the server started in.
+   */
+  readonly alertsConfigPath: string | null;
 }
 
 /**
@@ -121,6 +129,7 @@ export function loadConfig(env: Record<string, string | undefined>): ServerConfi
   const webRoot = parseWebRoot(env['DASHBOARD_WEB_ROOT']);
   const allowedOrigins = parseAllowedOrigins(env['DASHBOARD_ALLOWED_ORIGINS']);
   const retention = loadRetentionValues(env);
+  const alertsConfigPath = parseAlertsConfigPath(env['DASHBOARD_ALERTS_CONFIG']);
   return {
     token,
     port,
@@ -132,6 +141,7 @@ export function loadConfig(env: Record<string, string | undefined>): ServerConfi
     webRoot,
     allowedOrigins,
     retention,
+    alertsConfigPath,
   };
 }
 
@@ -169,6 +179,17 @@ function parseDbPath(raw: string | undefined): string {
 /** Empty string counts as unset — an accidental `CLAUDE_PROJECTS_DIR=` must not mean cwd. */
 function parseCorpusRoot(raw: string | undefined): string | null {
   return raw === undefined || raw === '' ? null : raw;
+}
+
+/** Same house rule: empty counts as unset (alerting off); a relative path fails the boot. */
+function parseAlertsConfigPath(raw: string | undefined): string | null {
+  if (raw === undefined || raw === '') {
+    return null;
+  }
+  if (!isAbsolute(raw)) {
+    throw new Error(`Invalid DASHBOARD_ALERTS_CONFIG "${raw}": expected an absolute path.`);
+  }
+  return raw;
 }
 
 /**

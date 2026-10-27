@@ -1406,6 +1406,91 @@ export const migrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    id: 23,
+    name: 'alerts-core',
+    up(db) {
+      // WHY. v2.0 alerting core (WP-A2, decisions AD-1..AD-7): the config
+      // file's targets and rules are mirrored here so a fired alert and its
+      // delivery state survive a restart, and dedupe is a UNIQUE key rather
+      // than an in-memory set.
+      //
+      // webhook_targets. Never holds a secret (AD-3): `token_ref` is a
+      // reference (`env:NAME` or `file:/abs/path`) and the CHECK rejects
+      // anything else, so a raw bot token pasted into the config cannot be
+      // persisted. No URL column at all (AD-4): the Telegram host is a code
+      // constant. `max_per_minute` is the AD-6 throttle, bounded 1..60.
+      //
+      // alert_rules. A rule or target dropped from the config file is set
+      // enabled = 0, never deleted, because alert_events reference it.
+      // `threshold_usd` is present exactly for cost_threshold rules and
+      // positive. `armed_at` is the instant the rule was (re)enabled: the
+      // engine ignores subjects whose activity predates it, so enabling a
+      // rule never floods the operator with history.
+      //
+      // alert_events. One row per fired alert; `dedupe_key` UNIQUE is the
+      // once-per-subject guarantee (AD-5). `session_id` / `agent_id`
+      // deliberately carry NO foreign key: retention may prune the session,
+      // and the alert history must stay. `payload` is the AlertNotification
+      // minus its alertEventId - ids and figures only, never a secret.
+      //
+      // webhook_deliveries. The outbox: one row per (event, target), retried
+      // with backoff while pending. `last_error` holds a status code or short
+      // reason only, never a URL or a token. The two indexes serve the due
+      // scan (status, next_retry_at) and the throttle-window count
+      // (target_id, delivered_at).
+      //
+      // Retention never touches these four tables (PrunableTable is only
+      // events and token_usage).
+      db.exec(`
+        CREATE TABLE webhook_targets (
+          id             TEXT PRIMARY KEY,
+          kind           TEXT NOT NULL CHECK (kind IN ('telegram')),
+          token_ref      TEXT NOT NULL CHECK (token_ref LIKE 'env:_%' OR token_ref LIKE 'file:/_%'),
+          chat_id        TEXT NOT NULL,
+          max_per_minute INTEGER NOT NULL CHECK (max_per_minute BETWEEN 1 AND 60),
+          enabled        INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1))
+        );
+
+        CREATE TABLE alert_rules (
+          id            TEXT PRIMARY KEY,
+          kind          TEXT NOT NULL CHECK (kind IN ('cost_threshold', 'stuck_agent', 'error')),
+          target_id     TEXT NOT NULL REFERENCES webhook_targets(id),
+          threshold_usd REAL CHECK (
+            (kind = 'cost_threshold') = (threshold_usd IS NOT NULL)
+            AND (threshold_usd IS NULL OR threshold_usd > 0)
+          ),
+          enabled       INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+          armed_at      TEXT NOT NULL
+        );
+
+        CREATE TABLE alert_events (
+          id         TEXT PRIMARY KEY,
+          rule_id    TEXT NOT NULL REFERENCES alert_rules(id),
+          session_id TEXT NOT NULL,
+          agent_id   TEXT,
+          fired_at   TEXT NOT NULL,
+          dedupe_key TEXT NOT NULL UNIQUE,
+          payload    TEXT NOT NULL CHECK (json_valid(payload))
+        );
+
+        CREATE TABLE webhook_deliveries (
+          id             TEXT PRIMARY KEY,
+          target_id      TEXT NOT NULL REFERENCES webhook_targets(id),
+          alert_event_id TEXT NOT NULL REFERENCES alert_events(id),
+          status         TEXT NOT NULL CHECK (status IN ('pending', 'sent', 'failed')),
+          attempt_count  INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+          next_retry_at  TEXT,
+          delivered_at   TEXT,
+          last_error     TEXT,
+          UNIQUE (alert_event_id, target_id)
+        );
+        CREATE INDEX idx_webhook_deliveries_due ON webhook_deliveries(status, next_retry_at);
+        CREATE INDEX idx_webhook_deliveries_target_delivered
+          ON webhook_deliveries(target_id, delivered_at);
+      `);
+    },
+  },
 ];
 
 export interface MigrationRunResult {

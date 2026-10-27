@@ -1188,7 +1188,7 @@ describe('migration runner (WP-D3)', () => {
       // The fresh database is at the latest schema; migration 20 touches only
       // claude-sonnet-5, so the opus-5-5 rows read exactly as 19 wrote them.
       temp = createMigratedTempDb();
-      expect(currentSchemaVersion(temp.db)).toBe(22);
+      expect(currentSchemaVersion(temp.db)).toBe(23);
       expect(opus55Rows(temp.db)).toEqual(
         OFFICIAL_RATES.map((row) => ({ ...row, effective_from: FLOOR })),
       );
@@ -1334,7 +1334,7 @@ describe('migration runner (WP-D3)', () => {
 
     it('prices claude-sonnet-5 at the official per-bucket rates on a fresh database', () => {
       temp = createMigratedTempDb();
-      expect(currentSchemaVersion(temp.db)).toBe(22);
+      expect(currentSchemaVersion(temp.db)).toBe(23);
       expect(sonnet5Rows(temp.db)).toEqual(at(OFFICIAL_RATES));
     });
 
@@ -1446,7 +1446,7 @@ describe('migration runner (WP-D3)', () => {
         insertSession(db, 'sess-b');
         insertSession(db, 'sess-c');
 
-        expect(runMigrations(db, migrations).appliedIds).toEqual([22]);
+        expect(runMigrations(db, migrations).appliedIds).toEqual([22, 23]);
 
         expect(stamps(db)).toEqual([
           { id: 'sess-a', ingest_seq: 1 },

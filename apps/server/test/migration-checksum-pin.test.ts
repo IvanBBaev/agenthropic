@@ -34,8 +34,8 @@
  *
  *   vitest (vite's esbuild transform, what this file pins) and `tsx` (what
  *   `pnpm start`, `pnpm dev` and `pnpm bench` run) now produce an IDENTICAL
- *   checksum for SEVENTEEN of the twenty-two migrations - ids 1-6, 8, 9, 10,
- *   12, 13, 17, 18, 19, 20, 21 and 22. They differ on ids 7, 11, 14, 15 and 16. Running the pre-H-1
+ *   checksum for EIGHTEEN of the twenty-three migrations - ids 1-6, 8, 9, 10,
+ *   12, 13, 17, 18, 19, 20, 21, 22 and 23. They differ on ids 7, 11, 14, 15 and 16. Running the pre-H-1
  *   whitespace-only formula over the SAME two transform outputs puts the
  *   agreement at ZERO, so the agreeing set is what H-1 bought.
  *
@@ -58,6 +58,12 @@
  * one `db.exec` of a single template literal of three `ALTER TABLE` statements
  * - no JS number literal, no `new`, no arrow function - and joined the set on
  * its own measurement, identical under tsx and vitest on the day it was written.
+ * Migration 23 (`alerts-core`, appended 2026-10-24) is one `db.exec` of a single
+ * template literal creating the four alerting tables and two indexes - its
+ * CHECK bounds (1 and 60, 0 and 1) live in the SQL text, not as JS number
+ * literals - and was measured identical under tsx and vitest
+ * (fd2b7de682727403689df5cefc879d7cf8a691cfe356578b8af38de3c91acd4e) on the day
+ * it was written, with the twenty-two rows above it re-measured unchanged.
  * The residual five are still exactly ids 7, 11, 14,
  * 15 and 16.
  *
@@ -294,6 +300,11 @@ const PINNED: readonly PinnedChecksum[] = [
     name: 'sessions-ingest-seq',
     checksum: '2f3ad6d3e4add8bca1fbdc263dc9469aace137ba169426266dac881803ac23ae',
   },
+  {
+    id: 23,
+    name: 'alerts-core',
+    checksum: 'fd2b7de682727403689df5cefc879d7cf8a691cfe356578b8af38de3c91acd4e',
+  },
 ];
 
 /** The literal whitespace normalisation `migrationChecksum` applies. */
@@ -375,7 +386,7 @@ describe('migration checksum pin', () => {
     // One `toEqual` over the whole table rather than a loop of assertions: the
     // failure output then shows every literal that moved at once, which
     // separates "someone edited migration 11" from "the transform changed" at a
-    // glance - one row versus twenty-two.
+    // glance - one row versus twenty-three.
     expect(computed).toEqual(PINNED);
   });
 

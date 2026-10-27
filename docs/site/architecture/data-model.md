@@ -32,9 +32,10 @@ constraint, and invariant named in the tables is sourced.
 >   `sessions`/`agents`/`orchestration_edges`/`token_usage` in one transaction per session
 >   (`apps/server/src/ingest/ingest-session.ts`) — the separate Normalizer/Projection stages
 >   were never built. Hooks contribute **liveness only, never structure**.
-> - **The alert/webhook tables do not exist.** Alerts are post-1.0, entered only via the
->   KC-5 gate (earned by real daily use) — no `alert_rules`, `alert_events`,
->   `webhook_targets`, or `webhook_deliveries` migration exists in the repository.
+> - **The alert/webhook tables exist since 2026-10-24** (migration 23, `alerts-core`),
+>   built ahead of KC-5 by explicit owner override. They are populated only when
+>   `DASHBOARD_ALERTS_CONFIG` names a config file; otherwise they stay empty. See
+>   [Alert & webhook tables](#alert--webhook-tables-v20-core-built-2026-10-24).
 
 ## Table inventory
 
@@ -50,10 +51,10 @@ constraint, and invariant named in the tables is sourced.
 | `model_pricing` | Reference | **Built** (migration 7, converged by 11, `effective_from` canonicalized and guarded by 14, ten rows for two models added by 18, `claude-opus-5-5` added by 19 and `claude-sonnet-5` re-priced to the official page by 20; `PROVISIONAL` seed) | Versioned per-token rates, dated, per `(model, bucket)` | CD-4, `WP-C1` |
 | `ingest_checkpoints` | Operational cache | **Built** (migration 9) | Opt-in durable replay memory: which sessions' bytes have not moved since the last run. A cache of work already done — never dashboard truth | `WP-IN10` |
 | `schema_version` | Runner bookkeeping | **Built** (the runner itself) | One row per applied migration: id, name, applied-at, sha-256 content checksum | `WP-D3` |
-| `alert_rules` | Alerting (post-1.0, KC-5 gated) | Designed, **not built** | Operator-defined trigger conditions | DESIGN §4/§7, `WP-A2` |
-| `alert_events` | Alerting (post-1.0, KC-5 gated) | Designed, **not built** | Fired-alert log | DESIGN §4/§7, `WP-A2` |
-| `webhook_targets` | Alerting (post-1.0, KC-5 gated) | Designed, **not built** | Outbound delivery targets (Telegram, etc.), secret held by reference only | DESIGN §4/§7, `WP-A2`, `WP-A3` |
-| `webhook_deliveries` | Alerting (post-1.0, KC-5 gated) | Designed, **not built** | Delivery attempts with retry/backoff | DESIGN §4/§7, `WP-A2`, `WP-A7` |
+| `alert_rules` | Alerting (v2.0 core) | **Built** (migration 23) | Trigger conditions mirrored from the alerts config file; `armed_at` bounds which subjects a rule considers | DESIGN §4/§7, `WP-A2` |
+| `alert_events` | Alerting (v2.0 core) | **Built** (migration 23) | Fired-alert log; `dedupe_key` UNIQUE makes a rule fire once per subject | DESIGN §4/§7, `WP-A2` |
+| `webhook_targets` | Alerting (v2.0 core) | **Built** (migration 23) | Outbound delivery targets (Telegram only), secret held by reference only | DESIGN §4/§7, `WP-A2`, `WP-A3` |
+| `webhook_deliveries` | Alerting (v2.0 core) | **Built** (migration 23) | The outbox: one row per (event, target), retried with backoff | DESIGN §4/§7, `WP-A2`, `WP-A7` |
 
 **Not in this inventory: `projects` and `filters`.** DESIGN §4 names them as part of the
 `simple10`-derived base schema alongside `sessions`/`agents`/`events`: *"Start from
@@ -101,6 +102,8 @@ leaves the schema byte-identical.
 | 19 | `model-pricing-opus-5-5` | Five explicit rate rows for `claude-opus-5-5`, the next model id the real corpus exposed as unpriced |
 | 20 | `model-pricing-sonnet-5-official` | Rewrites the five seeded `claude-sonnet-5` floor rows to the official 2 / 10 rate (decision D10); adds no row |
 | 21 | `sessions-partial-and-dropped-usage` | Three `ALTER TABLE sessions ADD COLUMN`s: `partial_reason` and `partial_skipped_bytes` (owner decision 1 - an oversize main transcript makes the session partial) and `usage_records_dropped` (owner decision 2, NN1), each with an inline CHECK |
+| 22 | `sessions-ingest-seq` | `sessions.ingest_seq`, a database-wide monotonic counter stamped whenever ingest learns something new about a session — the cursor behind `/api/changes` (S-1) |
+| 23 | `alerts-core` | The four v2.0 alert tables (`webhook_targets`, `alert_rules`, `alert_events`, `webhook_deliveries`) + the delivery due-scan and throttle-window indexes |
 
 Three properties of that list are worth stating explicitly, because they are the reason
 the ledger table exists at all.
@@ -900,74 +903,85 @@ believed. A checkpoint may never be the reason a session is invisible.
 The fingerprint itself, and the in-memory tier that backs this table, are described in
 [ingest & reconciliation](../architecture/ingest-reconciliation.md).
 
-## Alert & webhook tables (Phase 5, not yet built)
+## Alert & webhook tables (v2.0 core, built 2026-10-24)
 
-DESIGN §4 names these four tables as a graft from `hoangsonww`, already fully modeled
-there: *"`alert_rules` + `alert_events` + `webhook_targets` + `webhook_deliveries` —
-outbound HTTP delivery already modelled; the natural Telegram integration point."*
-`WP-A2` owns their migration: *"Alert & webhook schema migration (clean-room-safe,
-hoangsonww-attributed). Forward-only, idempotent."*
+DESIGN §4 names these four tables as a graft from `hoangsonww`: *"`alert_rules` +
+`alert_events` + `webhook_targets` + `webhook_deliveries` — outbound HTTP delivery
+already modelled; the natural Telegram integration point."* `WP-A2` built them as
+migration 23, `alerts-core`, written against agenthropic's own schema (the idea is
+credited; no source was copied). The DDL as shipped:
 
 ```sql
+CREATE TABLE webhook_targets (
+  id             TEXT PRIMARY KEY,
+  kind           TEXT NOT NULL CHECK (kind IN ('telegram')),
+  token_ref      TEXT NOT NULL CHECK (token_ref LIKE 'env:_%' OR token_ref LIKE 'file:/_%'),
+  chat_id        TEXT NOT NULL,
+  max_per_minute INTEGER NOT NULL CHECK (max_per_minute BETWEEN 1 AND 60),
+  enabled        INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1))
+);
+
 CREATE TABLE alert_rules (
-  id          TEXT PRIMARY KEY,
-  kind        TEXT NOT NULL CHECK(kind IN ('cost_threshold','stuck_agent','error')),
-  config      TEXT NOT NULL,   -- JSON: e.g. {"threshold_usd": 5.00}
-  enabled     INTEGER NOT NULL DEFAULT 1,
-  created_at  TEXT NOT NULL
+  id            TEXT PRIMARY KEY,
+  kind          TEXT NOT NULL CHECK (kind IN ('cost_threshold', 'stuck_agent', 'error')),
+  target_id     TEXT NOT NULL REFERENCES webhook_targets(id),
+  threshold_usd REAL CHECK (
+    (kind = 'cost_threshold') = (threshold_usd IS NOT NULL)
+    AND (threshold_usd IS NULL OR threshold_usd > 0)
+  ),
+  enabled       INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+  armed_at      TEXT NOT NULL
 );
 
 CREATE TABLE alert_events (
-  id           TEXT PRIMARY KEY,
-  rule_id      TEXT NOT NULL REFERENCES alert_rules(id),
-  session_id   TEXT,
-  agent_id     TEXT,
-  fired_at     TEXT NOT NULL,
-  dedupe_key   TEXT NOT NULL   -- rate-limit/dedupe boundary, WP-A7
-);
-
-CREATE TABLE webhook_targets (
-  id          TEXT PRIMARY KEY,
-  kind        TEXT NOT NULL CHECK(kind IN ('telegram')),
-  token_ref   TEXT NOT NULL,   -- NEVER the secret itself — see below
-  enabled     INTEGER NOT NULL DEFAULT 1
+  id         TEXT PRIMARY KEY,
+  rule_id    TEXT NOT NULL REFERENCES alert_rules(id),
+  session_id TEXT NOT NULL,
+  agent_id   TEXT,
+  fired_at   TEXT NOT NULL,
+  dedupe_key TEXT NOT NULL UNIQUE,
+  payload    TEXT NOT NULL CHECK (json_valid(payload))
 );
 
 CREATE TABLE webhook_deliveries (
-  id               TEXT PRIMARY KEY,
-  target_id        TEXT NOT NULL REFERENCES webhook_targets(id),
-  alert_event_id   TEXT NOT NULL REFERENCES alert_events(id),
-  status           TEXT NOT NULL CHECK(status IN ('pending','sent','failed')),
-  attempt_count    INTEGER NOT NULL DEFAULT 0,
-  next_retry_at    TEXT,
-  delivered_at     TEXT
+  id             TEXT PRIMARY KEY,
+  target_id      TEXT NOT NULL REFERENCES webhook_targets(id),
+  alert_event_id TEXT NOT NULL REFERENCES alert_events(id),
+  status         TEXT NOT NULL CHECK (status IN ('pending', 'sent', 'failed')),
+  attempt_count  INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+  next_retry_at  TEXT,
+  delivered_at   TEXT,
+  last_error     TEXT,
+  UNIQUE (alert_event_id, target_id)
 );
+CREATE INDEX idx_webhook_deliveries_due ON webhook_deliveries(status, next_retry_at);
+CREATE INDEX idx_webhook_deliveries_target_delivered
+  ON webhook_deliveries(target_id, delivered_at);
 ```
 
 Rationale:
 
-- **`alert_rules.kind`** covers the three rule kinds `WP-A5` implements: *"cost threshold,
-  stuck agent, error"*; the `cost_threshold` boundary is tested to fire "exactly at the
-  operator limit."
-- **`webhook_targets.token_ref`, never a raw secret column** — this is a hard security
-  invariant, not a stylistic choice: CD-10 states the Telegram token is held *"via
-  `token_ref` → launchd env / chmod-600 (never in SQLite, never to the browser)"*, and
-  `WP-A3` owns the resolver plus a static gate ("a >0600 dotfile is rejected"). `WP-A9`'s
-  alerts UI accordingly shows "`token_ref` name only, never the secret." No column in this
-  schema ever holds the actual bot token.
-- **`webhook_deliveries.attempt_count` / `next_retry_at`** — `WP-A7`'s retry/backoff +
-  dedupe/rate-limit requirement: *"A real condition → exactly one throttled
-  notification."*
-- **No-SSRF invariant** — `WP-A4`'s dispatcher only ever sends to an operator-configured
-  row in `webhook_targets`; no code path constructs a delivery target from an inbound
-  event payload. See [security model](../security/model.md).
-
-These four tables are **designed, not implemented** — Phase 5–6 in
-[`development-plan.md`](../../analysis/development-plan.md) (Track A, `WP-A1`…`WP-A10`),
-well behind Phase 1's storage/foundation work. Nothing above should be read as an
-in-repo migration. *(As built, this remains true: v1 ships without any of them, and the
-alerting phase is entered only via the KC-5 gate — earned by real daily use, per the
-roadmap of record.)*
+- **The config file is the source; these tables mirror it.** At boot the file named by
+  `DASHBOARD_ALERTS_CONFIG` is upserted into `webhook_targets` / `alert_rules` in one
+  transaction. A target or rule absent from the file is set `enabled = 0`, **never
+  deleted**, because `alert_events` reference it and the history must survive.
+- **`webhook_targets.token_ref`, never a raw secret column** — CD-10's hard invariant.
+  The CHECK admits only `env:NAME` or `file:/absolute/path`, so a bot token pasted
+  into the config cannot be persisted even by mistake. There is no URL column: the
+  Telegram Bot API origin is a code constant (no-SSRF, `WP-A4`).
+- **`alert_rules.armed_at`** — the instant the rule was first inserted or last went from
+  disabled to enabled (an edit of kind, threshold or target keeps it). The engine only
+  considers sessions / agents active at or after it, so enabling a rule never floods the
+  operator with history. Re-enabling a *target* does not re-arm its rules.
+- **`alert_events.dedupe_key` UNIQUE** (`<ruleId>:<sessionId>` for cost, `<ruleId>:<agentId>`
+  for agent rules) — a condition fires exactly once per subject, however many ticks it
+  stays true. `session_id` / `agent_id` deliberately carry **no** foreign key, so pruning a
+  session never cascades into alert history. `payload` holds ids and figures only.
+- **`webhook_deliveries`** is the outbox: due rows are taken in `(next_retry_at, id)` order,
+  retried with a 30 s × 2ⁿ backoff (a longer server `retry_after` wins) and failed after
+  five attempts. The per-target `max_per_minute` throttle defers a row without charging an
+  attempt. `last_error` holds a status code or short reason only, never a URL or token.
+- **Retention never touches these tables** — only `events` and `token_usage` are prunable.
 
 ## What's decided vs. open
 
@@ -1014,7 +1028,7 @@ roadmap of record.)*
 | `orchestration_edges` column set (`parent_agent_id`, `instance`/`host_id`, `derived_from_event_id`, idempotent) | Decided (CD-4, `WP-D7`); exact FK/child-column naming is a synthesis |
 | `token_usage` bucket dimensions + compaction baseline + nullable `agent_id` | Decided (DESIGN §4, CD-3/CD-4); raw token-count column names are illustrative |
 | `model_pricing` versioning (`effective_from`, `verified_on`) | Decided (CD-4); rate-column shape is illustrative |
-| Alert/webhook table set (`alert_rules`, `alert_events`, `webhook_targets`, `webhook_deliveries`) | Decided at the table level (DESIGN §4, `WP-A2`); column-level DDL is a synthesis; not scheduled before Phase 5 |
+| Alert/webhook table set (`alert_rules`, `alert_events`, `webhook_targets`, `webhook_deliveries`) | **Built** (migration 23, 2026-10-24) — the DDL above is the shipped one |
 | `sessions` column set | **Open** — not specified beyond "one row per session" (`WP-D6`) |
 | `agents.status` missing `'unknown'` vs. the watchdog requirement | **Open gap**, flagged above |
 | Retention TTL sweeper vs. `events_raw`'s no-DELETE invariant | **Open tension**, flagged above |

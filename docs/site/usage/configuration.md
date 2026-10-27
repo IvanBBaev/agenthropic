@@ -48,9 +48,11 @@
 > - **Backups run on a schedule.** A daily timer writes an online backup next to the
 >   database, then the retention pass expires old ones behind the keep-minimum floor.
 >   The cadence is a constant; the window and the floor are the settings above.
-> - **The alerting rows in the table below do not exist.** No `alert_rules`, no
->   `webhook_targets`, no `token_ref` resolver, no Telegram token handling — that whole
->   slice is v2.0, gated behind KC-5. See [Telegram alerts](telegram.md).
+> - **Alerting (v2.0 core) is built and off by default** (2026-10-24). It is enabled
+>   only by `DASHBOARD_ALERTS_CONFIG`, an absolute path to a JSON file of targets and
+>   rules; unset, nothing in the process dials out. There is no operator alerts API
+>   (`WP-A8`/`WP-A9` are cut) — the file is the only surface. See
+>   [Telegram alerts](telegram.md).
 >
 > Design-era prose is kept below with `As built` notes where the shipped code settled a
 > question this page left open.
@@ -71,8 +73,9 @@ though there is no `.env` file support; they must be actual environment variable
 
 ## Reference table
 
-**As built — the environment the server reads today.** There is no config file and no
-other variable; anything not in this table cannot be configured. The first twelve rows are
+**As built — the environment the server reads today.** There is no general config file
+(the alerts JSON named by `DASHBOARD_ALERTS_CONFIG` is the one exception) and no other
+variable; anything not in this table cannot be configured. The first thirteen rows are
 what `loadConfig` parses; `DASHBOARD_INSTANCE` is read separately, by the corpus identity
 resolver.
 
@@ -90,6 +93,7 @@ resolver.
 | `DASHBOARD_RETENTION_BACKUP_KEEP_MIN` | optional | `7` — signed v1.0 policy | Keep-minimum floor for backup files: the newest N survive whatever the window says; the floor wins over the age | Positive integer (never below 1) |
 | `DASHBOARD_WEB_ROOT` | optional | `apps/web/dist`, resolved from the server module's own location (`import.meta.url`), not from the working directory | Directory of the built SPA that the single-port server serves alongside `/api`; when the bundle is absent every non-`/api` path answers `503` with a "not built yet, run `pnpm start`" message | Free-form path; empty string counts as unset |
 | `DASHBOARD_ALLOWED_ORIGINS` | optional | empty — the stream admits only `http://127.0.0.1:<port>` and `http://localhost:<port>` | Extra browser origins the `/api/stream` same-origin check admits, for a tunnel whose browser-visible origin is not the server's own loopback port (C-2, 2026-10-23). Never changes the bind host and never relaxes the token | Comma-separated; each entry must be an exact serialized `http`/`https` origin (lower-case host, no default port, no path or trailing slash, no credentials) — anything else, including `*` and `null`, is a startup error; empty counts as unset |
+| `DASHBOARD_ALERTS_CONFIG` | optional | unset — alerting off; the server builds no rules engine, no dispatcher and no sink, and nothing in the process dials out | Path to the v2.0 alerts JSON file (targets + rules, see [Telegram alerts](telegram.md)); read and validated at boot, synced into `webhook_targets` / `alert_rules`, then evaluated every poll interval | Must be an absolute path — a relative one is a startup error; empty counts as unset. An unreadable, malformed or schema-invalid file, or a `tokenRef` that does not resolve, fails startup with a message naming the file and the JSON path but never a value |
 | `DASHBOARD_INSTANCE` | optional | the machine's hostname | The `instance` label stamped on every persisted agent and orchestration edge | Free-form string; unset falls back to `hostname()` |
 
 **What "integer" means in those rows (parsing hardened 2026-09).** Every numeric variable
@@ -130,9 +134,9 @@ resolved or withdrawn; see the `As built` column.*
 | Backup directory | _(planned)_ | _(planned)_ | Where `WP-F8`'s online-backup artifacts (`agenthropic-<ts>.db`) land | `WP-F8`; [backup & restore](../operations/backup-restore.md) §2 | Derived, not configured: `<dirname(DASHBOARD_DB_PATH)>/backups`. The naming convention shipped as designed |
 | Backup retention window | _(planned — no default days fixed)_ | _(planned)_ | How long backup files are kept before the pruning step deletes them | `WP-D10`; [backup & restore](../operations/backup-restore.md) §4 | Decided (D3, 2026-09-08): 30 days behind a floor of 7, as the defaults of `DASHBOARD_RETENTION_BACKUP_DAYS` / `DASHBOARD_RETENTION_BACKUP_KEEP_MIN`. Row-level retention is signed too: `events` at 90 days (`DASHBOARD_RETENTION_EVENTS_DAYS`), `token_usage` never |
 | `model_pricing` source | Fixed requirement; seed content/refresh mechanism _(planned)_ | seeded, versioned, dated (`effective_from`, `verified_on`) | Per-token rates keyed by `model` × `service_tier` × `speed` × `inference_geo`, driving every dollar figure shown | `WP-C1`; DESIGN §4; [data model](../architecture/data-model.md) | Table exists and is seeded by migrations 7/11 (five models, cache buckets derived) 18 (`claude-opus-5`, `claude-fable-5-1`, all five buckets explicit, 2026-09-10), 19 (`claude-opus-5-5`, after the 2026-09-26 real-corpus boot refused 27 of 61 sessions on it) and 20 (`claude-sonnet-5` re-priced to the official page, fetched 2026-09-26), keyed `(model, bucket, effective_from)`. **There is no `verified_on` column**, and the seeded rates are marked as awaiting ratification. There is no refresh mechanism and no configuration for one; since 2026-09-30 the cadence is a pre-tag [HUMAN] re-read of the pricing page plus a real-corpus boot (`RELEASE.md` §6) |
-| Alert rules (`alert_rules`) | Operator-configured | none by default | Cost-threshold, stuck-agent, and error trigger conditions | `WP-A2`, `WP-A5`; Phase 5, roadmap | **Does not exist** — v2.0, KC-5-gated |
-| Webhook targets (`webhook_targets`) | Operator-configured | none by default | Outbound delivery destinations (Telegram today); dialed **only** from this operator-set table, never from an event payload | `WP-A2`, `WP-A4`; [Telegram alerts](telegram.md) | **Does not exist** — v2.0, KC-5-gated |
-| Telegram bot token | **Mandatory when Telegram alerting is enabled** | none — held by reference only | The `@baev_bot_bot` bot token, resolved through `token_ref` (`launchd` env or a `chmod 600` dotfile), never a raw column value | `WP-A3`, `WP-A6`; CD-10 | **Does not exist** — no `token_ref` resolver, no Telegram code path, nothing to enable |
+| Alert rules (`alert_rules`) | Operator-configured | none by default | Cost-threshold, stuck-agent, and error trigger conditions | `WP-A2`, `WP-A5`; Phase 5, roadmap | Built (v2.0 core, 2026-10-24): the `rules` array of the `DASHBOARD_ALERTS_CONFIG` file, synced into `alert_rules` at boot; no API (`WP-A8` cut) |
+| Webhook targets (`webhook_targets`) | Operator-configured | none by default | Outbound delivery destinations (Telegram today); dialed **only** from this operator-set table, never from an event payload | `WP-A2`, `WP-A4`; [Telegram alerts](telegram.md) | Built: the `targets` array of the same file, synced into `webhook_targets`; Telegram is the only kind, dialed only at the fixed Bot API origin |
+| Telegram bot token | **Mandatory when Telegram alerting is enabled** | none — held by reference only | The `@baev_bot_bot` bot token, resolved through `token_ref` (`launchd` env or a `chmod 600` dotfile), never a raw column value | `WP-A3`, `WP-A6`; CD-10 | Built: `tokenRef` is `env:NAME` or `file:/absolute/path` (the file must not be group/world-readable); resolved at boot to prove it works, re-read per send, never stored, logged or sent over SSE |
 
 Every non-fixed row above is either `(planned)` — a shape the design commits to but
 without a literal default yet — or `(leaning — unconfirmed)`, tied directly to the
@@ -498,14 +502,15 @@ delegation-savings mechanics.
 
 ## Alert rules and webhook targets
 
-> **Update — 2026-07 (as built): none of this exists.** There is no `alert_rules` table,
-> no `webhook_targets` table, no dispatcher and no operator alerts API — `WP-A8`/`WP-A9`
-> were **cut outright**. Alerting is v2.0, entered only through kill checkpoint
-> **KC-5**, which demands evidence of sustained real v1.0 use before a line of it is
-> written; if that evidence never appears, none of it is ever built and the roadmap
-> counts that as a success. The SSRF invariant stated below remains **binding on
-> whoever eventually builds it**, but there is nothing to configure today. See
-> [Telegram alerts](telegram.md) for the full gating story.
+> **As built — 2026-10-24.** The v2.0 alerting core exists (migration 23 adds
+> `webhook_targets`, `alert_rules`, `alert_events` and `webhook_deliveries`), built by
+> explicit owner override ahead of KC-5. There is **no operator alerts API** — `WP-A8`/
+> `WP-A9` stay cut — so the "create through the API" path below is replaced by a JSON
+> file named by `DASHBOARD_ALERTS_CONFIG` and synced into the tables at boot (a rule
+> removed from the file is disabled, never deleted, so its history survives). The SSRF
+> invariant holds as designed: the only outbound origin is the Telegram Bot API constant
+> in the sink, and no URL is ever built from ingested data. Setup steps are in
+> [Telegram alerts](telegram.md#set-it-up).
 
 `alert_rules` and `webhook_targets` are entirely **operator-configured** — there is no
 default rule and no default target. An operator creates a rule (`cost_threshold`,

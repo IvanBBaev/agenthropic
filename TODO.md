@@ -34,6 +34,15 @@ Completed milestones move to [`DONE.md`](DONE.md). Context-free session? Read
 > two overrides above: **dispatching only.** Nothing is archived, nothing is committed,
 > the physical acts stay open and stay Ivan's, the numbers stay PROVISIONAL, and the
 > security invariants are untouched.
+> **⚠️ OWNER OVERRIDE 2026-10-24:** Ivan was informed in chat that v2.0 is entered only via
+> KC-5 (14 consecutive days of daily v1.0 use + ≥3 friction-log entries wanting alerts —
+> neither satisfiable yet: v1.0 is untagged and the friction log was never opened) and that
+> roadmap §8 freezes new analysis. He then explicitly instructed: "започвай с кодирането".
+> Per the instruction-precedence rules this outranks KC-5's entry condition for the
+> **v2.0 alerts core (A1–A7 + A10) implementation only**. No new analysis document is
+> written (§8 stands); the design decisions below (Post-1.0 section) are implementation
+> choices inside the already-decided scope. KC-4 (v1.0 tag by 2026-12-01) is untouched and
+> still the date that matters; A8/A9 stay cut; every security invariant binds unchanged.
 > **Schedule of record:** [`roadmap-v1-v2-2026-07-06.md`](docs/analysis/roadmap-v1-v2-2026-07-06.md)
 > — kill checkpoints **KC-0…KC-5 with default-death**. Gate A signs by **2026-07-13**
 > (KC-0) or the project archives by default; **v1.0 hard date 2026-12-01** (KC-4).
@@ -402,7 +411,8 @@ files / 1540 tests, 100/100/100/100 in all five packages**. New PROVISIONAL cons
   `gh api -X POST repos/IvanBBaev/agenthropic/pages -f build_type=workflow` → `has_pages:
   true`, `build_type: workflow`. Re-running the previously failed `32863218759` then
   **succeeded**, and `curl` returns HTTP 200 on both `/` and `/site/`.
-- [ ] **WP-A1** alert port (v2-facing; not on the v1.0 critical path).
+- [x] **WP-A1** alert port (v2-facing; not on the v1.0 critical path). _Done 2026-10-24:
+  `AlertSinkPort` + `AlertNotification` union in `packages/shared`, with an in-memory fake._
 - **Exit gate:** coverage >90% green & blocking ✅ (now genuinely including `apps/web` —
   its script ran without `--coverage` until 2026-07-30, so the thresholds silently never
   executed) · security/license gates red on violation ✅ · WP-F7 green via WP-U0 ✅ ·
@@ -1257,12 +1267,53 @@ one-word answer; the recommended default is first.
     byte-identical; documented in `usage/api.md`.
 
 ### Post-1.0 / v2.0 · Alerting core _(off the v1.0 critical path — best-path §6.1; **entered only via KC-5**: 14 consecutive days of real daily v1.0 use + ≥3 friction-log entries wanting alerts — roadmap §6. If that evidence never materializes, v2.0 never starts, and that is a success of the roadmap, not a failure.)_
-- [ ] **WP-A2** alert/webhook schema · **A3** secret `token_ref` resolver · **A4** no-SSRF
+- [x] **WP-A2** alert/webhook schema · **A3** secret `token_ref` resolver · **A4** no-SSRF
   webhook dispatcher · **A5** rules engine (cost/stuck/error) · **A6** Telegram sink · **A7**
-  delivery log + retry/backoff + dedupe.
+  delivery log + retry/backoff + dedupe. _Done 2026-10-24 (owner override, ahead of KC-5):
+  migration 23 `alerts-core`; `apps/server/src/db/alerts.ts` (store) and
+  `apps/server/src/alerts/` (`token-ref`, `format-telegram`, `telegram-sink`, `rules-engine`,
+  `dispatcher`, `load-config`, `index` = `startAlerting`); wired in `start()` behind
+  `DASHBOARD_ALERTS_CONFIG`. Documented in `usage/telegram.md`, `usage/configuration.md`,
+  `architecture/data-model.md`._
+- [x] **WP-A10** SSRF/secret-leak negative corpus — _done 2026-10-24:
+  `alerts-ssrf-secret-corpus.test.ts` (no payload-URL dial-out, token never in
+  SQLite/logs/errors, static scan of `src/alerts/**`)._
 - ~~**WP-A8** operator alerts API · **A9** alerts UI~~ — **CUT per best-path §6.2** (near-zero
   value for a single operator). **A10 kept** (SSRF/secret-leak negative corpus).
   _(WP-X9 release checklist moved to the Phase-4 tail — roadmap §5.)_
+- **Implementation decisions (2026-10-24, owner override above; defaults chosen by the
+  orchestrator, Ivan may reverse any):**
+  - **AD-1 Off by default.** Alerting runs only when `DASHBOARD_ALERTS_CONFIG` names a
+    config file. Unset → no engine, no dispatcher, no outbound dial (v1.0 behaviour).
+  - **AD-2 Config is a file, not CRUD** (A8/A9 stay cut). One JSON file, TypeBox-validated
+    at startup; invalid → startup fails loud. It holds targets + rules and **never a
+    secret** — only `tokenRef` names. On boot it is synced into `webhook_targets` /
+    `alert_rules` (upsert by id; a rule/target removed from the file is disabled, never
+    deleted, so `alert_events` FKs survive).
+  - **AD-3 `tokenRef` grammar:** `env:NAME` (read from the process environment, i.e.
+    launchd) or `file:/absolute/path` (regular file, owned by the server's uid, mode with
+    **no group/other bits** — anything looser is rejected, CD-10). Resolved at dispatch
+    time, held only in memory, never logged, never in SQLite/SSE/an error message.
+  - **AD-4 Targets:** `telegram` only (`{ id, kind, tokenRef, chatId }`). The endpoint host
+    is the constant `https://api.telegram.org`; no URL is ever configurable or read from
+    data. Because the bot token sits in the Telegram URL path, the URL itself is a secret
+    and is never logged; errors carry status codes, not URLs.
+  - **AD-5 Rules (exactly three kinds):** `cost_threshold { thresholdUsd }` — a session's
+    priced cost reaches **≥** the limit (fires exactly at the limit); `stuck_agent` — an
+    agent the watchdog moved to `unknown`; `error` — an agent whose status is `error`.
+    Evaluated over the projection only, after each ingest tick.
+  - **AD-6 Dedupe/throttle:** `dedupe_key = <ruleId>:<subjectId>` with a UNIQUE index — a
+    condition fires once per subject, ever. Per-target throttle: at most
+    `maxPerMinute` (default 10) sends; excess stays `pending` until the window frees.
+  - **AD-7 Delivery:** `webhook_deliveries` state machine `pending → sent | failed`;
+    exponential backoff 30 s × 2^n, max 5 attempts, then `failed`. 4xx other than 429 is
+    terminal. No retry loop tighter than the poll tick.
+  - **AD-8 Arming (added during build):** each rule carries `armed_at` — set on insert and
+    reset only on a disabled → enabled transition (an edit of kind/threshold/target keeps
+    it). The engine considers only sessions/agents active at or after it, so turning a rule
+    on never floods the chat with history. Re-enabling a *target* does not re-arm its rules.
+    Per pass, a rule records at most `MAX_EVENTS_PER_RULE_PER_PASS` new events; the rest
+    drain on later ticks.
 - **Exit gate:** one real condition → exactly one throttled notification · SSRF test proves
   no payload-URL dial-out · secret never in SQLite/SSE/logs · alerts modules >90% covered ·
   `RELEASE.md` enumerates every CD-7 gate + CD-9 check + a restore.
