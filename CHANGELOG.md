@@ -304,6 +304,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Telegram alert messages now replace bidi overrides/isolates and zero-width characters in ids
+  with spaces, as they already did control characters. An id carrying a right-to-left override
+  could make the message read in a different order than it was written.
 - Shutdown with alerting on now waits for an alert delivery that is already in flight before it
   closes the database. It used to close the database mid-send, so a message Telegram had
   accepted could not be marked sent and was delivered a second time on the next boot.

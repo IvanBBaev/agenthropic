@@ -11,8 +11,10 @@
  * - Built from ids and figures only - the notification carries no transcript
  *   text, and nothing here reads any.
  * - Every id is passed through `field()`: control characters (a newline in an
- *   id could forge a fake line) become spaces and the length is capped, so the
- *   message stays well under Telegram's 4096-character limit.
+ *   id could forge a fake line), bidi overrides/isolates (which could reorder
+ *   what the reader sees) and zero-width characters become spaces, and the
+ *   length is capped, so the message stays well under Telegram's 4096-character
+ *   limit.
  */
 import type { AlertNotification } from '@agenthropic/shared';
 
@@ -63,7 +65,10 @@ function usd(value: number): string {
 }
 
 function field(value: string): string {
-  // eslint-disable-next-line no-control-regex -- stripping control characters is the point
-  const clean = String(value).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, ' ');
+  const clean = String(value).replace(
+    // eslint-disable-next-line no-control-regex -- stripping control characters is the point
+    /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/g,
+    ' ',
+  );
   return clean.length > MAX_FIELD_LENGTH ? `${clean.slice(0, MAX_FIELD_LENGTH)}…` : clean;
 }

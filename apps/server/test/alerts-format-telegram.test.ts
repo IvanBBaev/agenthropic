@@ -86,6 +86,18 @@ describe('formatTelegram', () => {
     expect(text).toContain('Agent: a Rule: forged   x');
   });
 
+  it('neutralises bidi overrides and invisible characters (AU, 2026-10-27)', () => {
+    // A right-to-left override in an id could make the message read in an
+    // order other than the one it was written in; zero-width ones hide text.
+    const invisible = ['\u200b', '\u200e', '\u200f', '\u202a', '\u202e', '\u2066', '\u2069'];
+    const text = formatTelegram({
+      ...base,
+      kind: 'error',
+      agentId: `a${invisible.join('')}\u2060\ufeffz`,
+    });
+    expect(text).toContain(`Agent: a${' '.repeat(invisible.length + 2)}z\n`);
+  });
+
   it('caps long ids with an ellipsis', () => {
     const long = 'x'.repeat(MAX_FIELD_LENGTH + 50);
     const text = formatTelegram({ ...base, kind: 'error', agentId: long });
