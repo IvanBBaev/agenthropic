@@ -278,7 +278,14 @@ DASHBOARD_ALLOWED_ORIGINS=https://<tailscale-host>
 
 ### `token_ref` — secrets held by reference, never by value
 
-> **Update — 2026-07 (as built): nothing in this section exists.** There is no
+> **Amended 2026-10-27: this section is now built.** Since 2026-10-24 a target's
+> `tokenRef` in the `DASHBOARD_ALERTS_CONFIG` file is `env:NAME` or `file:/absolute/path`;
+> a file with any group/other mode bit is refused at boot, the token is re-read per send,
+> and it is never stored in SQLite, logged or sent over SSE. See the
+> `DASHBOARD_ALERTS_CONFIG` row above and [Telegram alerts](telegram.md). The note below
+> is the record from before that date.
+>
+> **Update — 2026-07 (as built until 2026-10-24): nothing in this section exists.** There is no
 > `webhook_targets` table, no `token_ref` column, no resolver, and no permissions gate,
 > because there is no outbound secret to hold — Telegram delivery and the whole alerting
 > slice are v2.0 material behind KC-5. The invariant below is recorded as a **design

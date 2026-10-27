@@ -59,6 +59,8 @@ doesn't change the "build" verdict.
 > - **Two of the five market-gap features are not built.** Telegram alerting (§2.3) is
 >   **v2.0, entered only via KC-5, and may never start** — the operator-alerts API and UI
 >   were cut outright, and the server makes no outbound network request of any kind.
+>   *(Amended 2026-10-27: the alerting core was built on 2026-10-24 by owner override of
+>   KC-5, off by default — see §2.3.)*
 >   Fleet aggregation (§2.4) is still only the schema hedge; no second host exists.
 > - **The rival survey was never re-run against running software.** Every ranking, grade
 >   and absence claim below rests on the source-level due-diligence *reading* — **no rival
@@ -257,7 +259,16 @@ tile itself is Phase 4 in the roadmap (§6 below).
 
 ### 2.3 Telegram alert sink → `@baev_bot_bot`
 
-> **As built: none of this exists.** No Telegram sink, no `alert_rules`, no
+> **Amended 2026-10-27 — the core now exists, opt-in.** Built 2026-10-24 by an explicit
+> owner override of KC-5's entry condition: the Telegram sink, `alert_rules`,
+> `webhook_targets`, `alert_events`, `webhook_deliveries` and a throttled retrying
+> dispatcher, all off unless `DASHBOARD_ALERTS_CONFIG` is set. Still nothing grafted from
+> `hoangsonww` — the idea is credited, no code copied
+> ([licensing](../contributing/licensing.md)) — and the SSRF gate now guards a real
+> surface, proven by the `WP-A10` corpus. `WP-A8`/`A9` stay cut. The note below is the
+> record from before that date.
+>
+> **As built (until 2026-10-24): none of this exists.** No Telegram sink, no `alert_rules`, no
 > `webhook_targets`, no `webhook_deliveries`, no dispatcher. Nothing was grafted from
 > `hoangsonww`. **The server makes no outbound network request of any kind**, which is why
 > the SSRF gate below currently has nothing to guard — the surface was never opened.

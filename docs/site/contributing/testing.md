@@ -397,7 +397,7 @@ CD/acceptance criterion" that `WP-X4`'s Done-when requires:
 | `events_raw` exposes no UPDATE/DELETE path | CD-4, CD-7; concept-analysis-v2 §6 | Data integrity |
 | Server **fails startup** when `DASHBOARD_TOKEN` is unset | CD-7 | Security |
 | No-spawner grep/static gate fails the build on a `child_process` import | CD-7; `WP-F5` | Security |
-| An SSRF test proves no outbound dial to a payload-supplied URL | CD-7; `WP-F5` | Security — static half live since 2026-09-26 (`gate:spawner` refuses outbound primitives in server-process code, tested in `apps/server/test/scripts-gates.test.ts`); the dynamic test waits for a dispatcher to exist |
+| An SSRF test proves no outbound dial to a payload-supplied URL | CD-7; `WP-F5` | Security — static half live since 2026-09-26 (`gate:spawner` refuses outbound primitives in server-process code, tested in `apps/server/test/scripts-gates.test.ts`); dynamic half live since 2026-10-24 — `apps/server/test/alerts-ssrf-secret-corpus.test.ts` (`WP-A10`) |
 | SSE rejects a cross-origin connection | CD-5, CD-7 | Security |
 
 This table is illustrative of the *categories and traceable anchors* the 12-scenario

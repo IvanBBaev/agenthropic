@@ -19,9 +19,11 @@ the source and decided never to repeat.
 > test-proven**: loopback-or-fail bind, mandatory-token-or-fail-startup with a
 > timing-safe compare on every `/api/*` route, same-origin-before-auth SSE, the
 > no-spawner/no-wide-bind/no-eval static gate running in CI, and hook-payload
-> redaction at the ingest boundary. The SSRF mitigation is currently satisfied by
-> absence — no outbound-dialing code exists at all (the webhook sink is post-1.0) — and,
-> since 2026-09-26, that absence is gate-enforced in server-process code (`WP-F5`).
+> redaction at the ingest boundary. The SSRF mitigation was satisfied by absence until
+> 2026-10-24 — gate-enforced in server-process code since 2026-09-26 (`WP-F5`). Since
+> then the opt-in Telegram sink exists (off unless `DASHBOARD_ALERTS_CONFIG` is set); it
+> dials only a constant origin and is proven by the `WP-A10` negative corpus
+> (`apps/server/test/alerts-ssrf-secret-corpus.test.ts`).
 > None of the invariants was relaxed. The rival findings and attacker models below
 > are the historical record and remain accurate; per-section as-built notes mark
 > what changed — see [status](#status-and-whats-not-yet-built) at the end.
@@ -311,9 +313,10 @@ to *learn the loop from, not build on*). The webhook-sink leg of agenthropic's o
 architecture (event → outbound HTTP → Telegram) is structurally the same shape as the
 code that has the bug. The mitigation therefore has to be a rule about **where a
 dial target is allowed to come from**, not merely "don't copy disler's file."
-*(As built, that leg does not exist yet — the webhook sink is post-1.0, entered only
-via KC-5, and today the server makes no outbound request of any kind. The rule below
-is what any future dispatcher will be held to.)*
+*(As built, since 2026-10-24: that leg exists as the opt-in Telegram sink, off unless
+`DASHBOARD_ALERTS_CONFIG` is set. It is held to the rule below: the dial target is the
+constant Telegram Bot API origin, never a value from an event, and the `WP-A10` corpus
+proves it.)*
 
 **Our mitigation.**
 
@@ -479,9 +482,10 @@ first place — they only had to be studied, named, and excluded at the design s
 > dynamic eval anywhere in the tree, and the security-contract tests boot the real
 > server and prove the loopback bind, mandatory token, and same-origin SSE. Two
 > as-built refinements to the picture: the realtime leg is **SSE** (CD-5), as drawn;
-> and the bottom leg — webhook sink → Telegram relay — is **not built** (post-1.0,
-> KC-5), so its `X` currently holds in the strongest form: no outbound dial exists at
-> all. There is also a second ingest path the diagram predates: JSONL transcripts
+> and the bottom leg — webhook sink → Telegram relay — is **opt-in** (built 2026-10-24,
+> off unless `DASHBOARD_ALERTS_CONFIG` is set), so by default its `X` holds in the
+> strongest form — no outbound dial at all — and when enabled the only dial goes to the
+> constant Telegram Bot API origin. There is also a second ingest path the diagram predates: JSONL transcripts
 > read directly from the local filesystem (`~/.claude/projects`), which never crosses
 > an HTTP surface in the first place — and which, precisely because none of the `X`
 > marks above apply to it, gets its own treatment in

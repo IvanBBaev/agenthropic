@@ -1066,6 +1066,21 @@ exit and proof live in the plan. Dated one-word answers under D1…D8 are the si
     `README.md`, `comparison.md`, `faq.md`, `what-is-agenthropic.md`, `roadmap.md`.
     `configuration.md`'s eleven variables and `dag-moat.md`'s "three P0 tests" verified true
     and left. Row stays open.
+  - **R1 rehearsed again 2026-10-27** on clean `7dcf795` (the v2.0 alerting core, built
+    2026-10-24 by owner override of KC-5's entry condition): install, typecheck, lint,
+    format:check, web build, test (195 files / 3,736 tests, 100% in five packages),
+    gate:spawner (1 allowlisted, 6 inline-exempt lines — the Telegram sink's `fetch` the only
+    outbound opt-out), gate:licenses (407 packages, one documented exception), gate:node —
+    every exit code 0; §2 greps match only `telegram-sink.ts`; §3 P0 4 files. The core
+    invalidated three `RELEASE.md` boxes: §2 no-SSRF and secrets now name the sink and the
+    `WP-A10` corpus test, and §4 "nothing post-1.0" became a `[HUMAN]` box — **Ivan decides
+    whether v1.0.0 ships the core dark or not at all** (§7 notes follow that decision).
+    R2 the same day: `SECURITY.md` §9 and ~25 "no outbound request / alerting not built"
+    passages across `faq.md`, `what-is-agenthropic.md`, `model.md`, `threat-model.md`,
+    `comparison.md`, `roadmap.md`, `the-moat.md`, ADR CD-7 / CD-10, `configuration.md`,
+    `getting-started.md`, `api.md`, `testing.md` got dated "Amended 2026-10-27"
+    corrections. Not re-checked: live drill, branch protection, Pages, CI on `7dcf795`
+    (not pushed). No box ticked. Row stays open.
 - [ ] **Wave 5 · by 2026-12-01 (KC-4)** — release commit, `v1.0.0` tag, push (Ivan) ·
   post-tag CI/Pages/badges green, `DONE.md` closed, this board reduced to the KC-5 items
   (orchestrator). One week of buffer; the critical path is D1 → Wave 3's 14 days → R3.

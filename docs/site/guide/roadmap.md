@@ -590,7 +590,13 @@ throttled notification; a dedicated test proves the dispatcher never dials a URL
 from event data; and the secret token never appears in the database, the live stream,
 or the logs.
 
-> **As built: not started, and it may never be.** There is no `alert_rules` table, no
+> **Amended 2026-10-27 — the core is built, ahead of KC-5.** On 2026-10-24 the owner
+> explicitly overrode KC-5's entry condition for the alerting core only: `WP-A1`–`A7` and
+> `A10` are built (migrations 22–23, rules engine, dispatcher, Telegram sink, negative
+> corpus), off unless `DASHBOARD_ALERTS_CONFIG` is set; `WP-A8`/`A9` stay cut and KC-4 is
+> unchanged. The paragraph below is the record from before that override.
+>
+> **As built (until 2026-10-24): not started, and it may never be.** There is no `alert_rules` table, no
 > `webhook_targets` table, no dispatcher and no Telegram adapter anywhere in the
 > repository — the grep is empty, not thin. This phase is v2.0 work, and v2.0 is
 > entered only through **KC-5**, the one checkpoint with no date on it: it is earned by

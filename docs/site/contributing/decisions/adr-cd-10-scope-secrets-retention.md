@@ -59,7 +59,12 @@ below.)*
 secret is handled by any code path. The `>0600`-dotfile-rejected criterion has
 nothing to run against. Separately, `ANTHROPIC_API_KEY` does stay out of the
 dashboard env entirely — it appears nowhere in the server source, and the server has
-no outbound network call that could use one.
+no outbound network call that could use one. *(Superseded 2026-10-24: the `tokenRef`
+resolver is built — `apps/server/src/alerts/token-ref.ts` accepts `env:NAME` or
+`file:/absolute/path` and rejects a file with any group/other mode bit, so the
+`>0600`-dotfile criterion now runs. The token is re-read per send and never stored,
+logged or streamed; the opt-in Telegram sink, off unless `DASHBOARD_ALERTS_CONFIG` is
+set, is the one outbound call, and `ANTHROPIC_API_KEY` still appears nowhere.)*
 
 ## As-built update — 2026-08-15
 

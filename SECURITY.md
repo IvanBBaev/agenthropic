@@ -275,16 +275,23 @@ being handed to the rest of the app (`apps/server/src/db/connection.ts`). Backup
 written by an in-process daily timer next to the database, and the restore path refuses
 any image that fails `PRAGMA integrity_check`.
 
-### 9. No outbound network requests
+### 9. No outbound network requests - except the opt-in Telegram alert
 
-The server makes no outbound request of any kind today: no telemetry, no update check,
-no webhook dispatcher (alerting is post-1.0 and not built). `ANTHROPIC_API_KEY` appears
+By default the server makes no outbound request of any kind: no telemetry, no update
+check, no webhook dispatcher. The one exception is the opt-in v2.0 alerting core (built
+2026-10-24): only when `DASHBOARD_ALERTS_CONFIG` names an alerts file does the server
+build a dispatcher and a Telegram sink, and that sink dials only the constant origin
+`https://api.telegram.org` (`apps/server/src/alerts/telegram-sink.ts`). No part of the
+URL comes from ingested data, redirects are refused, and the bot token - held by
+reference (`tokenRef`), never stored - never appears in SQLite, on the SSE stream or in a
+log line. `apps/server/test/alerts-ssrf-secret-corpus.test.ts` (`WP-A10`) proves both
+halves with hostile payloads and a recognisable token. `ANTHROPIC_API_KEY` appears
 nowhere under `apps/`, `packages/`, `hooks/` or `scripts/` - the dashboard process does
-not hold it and no code path reads it. The SSRF class of bug therefore currently has no
-surface to land on; a change that introduced one would be in scope. Since 2026-09-26 the
-absence is also enforced: `pnpm run gate:spawner` fails CI on an outbound network
-primitive or HTTP client in `apps/server/src/` or `packages/*/src/`, or an HTTP client
-package in those manifests.
+not hold it and no code path reads it. A change that dials any other origin, or builds a
+dial target from ingested data, is in scope. `pnpm run gate:spawner` fails CI on an
+outbound network primitive or HTTP client in `apps/server/src/` or `packages/*/src/`, or
+an HTTP client package in those manifests; the Telegram `fetch` is the single line opted
+out with an audited inline marker, and the gate logs it on every run.
 
 ## Operator responsibilities
 

@@ -71,8 +71,8 @@ Run each gate locally on the release commit; the six below plus the web producti
 - [ ] `pnpm run typecheck`
 - [ ] `pnpm run lint`
 - [ ] `pnpm run format:check`
-- [ ] `pnpm run test` — the full workspace suite (**185 test files / 3519 tests** on a
-      local run of 2026-10-23, up from 184 / 3487 on 2026-10-22, 180 / 3438 on 2026-10-10, 180 / 3398 on 2026-10-08, 167 / 3060 on 2026-09-26, 140 / 2621 on 2026-09-23 and 131 / 2428 on 2026-09-18; the figure moves as the
+- [ ] `pnpm run test` — the full workspace suite (**195 test files / 3736 tests** on a
+      local run of 2026-10-27, up from 185 / 3519 on 2026-10-23, 184 / 3487 on 2026-10-22, 180 / 3438 on 2026-10-10, 180 / 3398 on 2026-10-08, 167 / 3060 on 2026-09-26, 140 / 2621 on 2026-09-23 and 131 / 2428 on 2026-09-18; the figure moves as the
       tree does, so re-measure on the release commit rather than trusting this line). Coverage: **all five** packages —
       `@agenthropic/server`, `@agenthropic/web`, `@agenthropic/core`,
       `@agenthropic/shared` and `@agenthropic/test-fixtures` — run `vitest run --coverage`
@@ -139,9 +139,19 @@ trail).
       (§1). The sole sanctioned subprocess in the repo is the fixed-argv
       `pnpm licenses list` inside `scripts/check-licenses.mjs`, opted out line-by-line
       with audited inline markers, never whole-file.
-- [ ] **No SSRF — no code path dials a payload-supplied URL.** v1.0 ships **no**
-      webhook/alert dispatcher at all (the A-track is post-1.0, roadmap §6), so the
-      strongest form holds: there is no outbound-dial feature to misuse. **Since
+- [ ] **No SSRF — no code path dials a payload-supplied URL.** **Amended 2026-10-27:**
+      the tree now carries the v2.0 alerting core (`WP-A1`–`A7`, `A10`, built 2026-10-24
+      by owner override, commit `7dcf795`), off unless `DASHBOARD_ALERTS_CONFIG` is set.
+      Its one outbound call is `fetch` at `apps/server/src/alerts/telegram-sink.ts`, to the
+      constant origin `https://api.telegram.org`, with `redirect: 'error'`; the gate logs
+      it as `inline opt-out in force (line not scanned): apps/server/src/alerts/telegram-sink.ts:97  [outbound fetch( call]`
+      — **read that line: it must be the only outbound opt-out**. The dynamic proof is
+      `apps/server/test/alerts-ssrf-secret-corpus.test.ts` (`WP-A10`): hostile URLs in
+      every notification field never move the dial target, and the alerts source holds no
+      other URL origin literal. The grep below therefore now matches exactly that line
+      (plus a comment in the same file), not nothing. _(Until 2026-10-24 v1.0 had no
+      dispatcher at all, and the box read: "there is no outbound-dial feature to
+      misuse".)_ **Since
       2026-09-26 `gate:spawner` enforces it (§1):** server-process source
       (`apps/server/src/`, `packages/*/src/`) may not call `fetch(`, import a node
       network module (`http`/`https`/`http2`/`net`/`tls`/`dgram`/`dns`), import an HTTP
@@ -151,13 +161,17 @@ trail).
       carried no outbound pattern and this box rested on review and the grep below,
       which stays as a cheap cross-check. Run:
       `grep -rnE "\bfetch\(|node:https?|\baxios\b|\bundici\b" apps/server/src packages/*/src`
-      — expect empty (matches in `apps/web/src` are the browser bundle calling this
-      server's own relative `/api` paths, and are not the server process). The full
-      no-SSRF negative corpus is a v2.0 gate (`WP-A10`).
+      — expect only `apps/server/src/alerts/telegram-sink.ts` (the marked `fetch` line and
+      the header comment naming undici); any other match is a red box (matches in
+      `apps/web/src` are the browser bundle calling this server's own relative `/api`
+      paths, and are not the server process).
 - [ ] **Secrets never in SQLite, never on the SSE stream, never in logs** — redaction
       at the ingest boundary proven by `apps/server/test/hooks-redact.test.ts`; log
-      hygiene by `apps/server/test/server-logging.test.ts`. v1.0 stores no third-party
-      secret at all (`token_ref` / Telegram is post-1.0, CD-10).
+      hygiene by `apps/server/test/server-logging.test.ts`. The only third-party secret is
+      the opt-in Telegram bot token, held by reference (`tokenRef` = `env:NAME` or
+      `file:/abs/path` with no group/other mode bits), re-read per send and never stored;
+      `apps/server/test/alerts-ssrf-secret-corpus.test.ts` drives every delivery outcome
+      with a recognisable token and asserts it reaches no outcome, row or log line.
 - [ ] **The corpus (`~/.claude/projects`) is read-only to this system** — the corpus
       fs-port is read-only **by construction**: `apps/server/src/corpus/fs-port.ts` and
       `apps/server/src/corpus/node-corpus-fs.ts` import no write/rename/unlink/chmod
@@ -222,10 +236,16 @@ scan."**
       [`docs/site/contributing/licensing.md`](docs/site/contributing/licensing.md).
       This is a judgment review of code vs. attribution page — a human read, not a
       script.
-- [ ] **Nothing post-1.0 leaked in:** the hoangsonww Telegram/webhook schema and the
-      cast/nirdiamant clean-room reimplementations belong to the post-1.0 A-track.
-      Confirm none of them ships in v1.0 (nothing to attribute / attest yet):
-      `grep -rniE "telegram|controlGate|nirdiamant" apps/ packages/ --include='*.ts' -l`
+- [ ] **[HUMAN] Post-1.0 code in the tagged tree — decide and record.** _(Amended
+      2026-10-27; until then this box expected the grep below to be empty.)_ The v2.0
+      alerting core (Telegram sink, rules engine, dispatcher, migrations 22–23) is in the
+      tree since `7dcf795`, off by default. Before tagging, the owner decides whether
+      v1.0.0 ships it dark (release notes say "opt-in alerting core, off by default") or
+      not at all, and records the choice here. Provenance either way: no hoangsonww code
+      was copied — the idea is credited in
+      [`licensing.md`](docs/site/contributing/licensing.md) — and the cast/nirdiamant
+      clean-room reimplementations are still absent:
+      `grep -rniE "controlGate|nirdiamant" apps/ packages/ --include='*.ts' -l | grep -v /dist/`
       — expected empty.
 - [ ] **`LICENSE` (MIT) committed and pushed.** **Resolved 2026-07-30** — tracked in
       commit `9b6c6b3`; `gh api repos/IvanBBaev/agenthropic --jq .license.spdx_id`
@@ -350,7 +370,8 @@ scan."**
 
 - [ ] **Release notes must contain, verbatim honesty included:**
   - what v1.0 is: the persisted subagent DAG + dollar-accurate cost cockpit answering
-    the five daily questions — and that alerts are explicitly **not** in v1.0;
+    the five daily questions — and, per the §4 decision, either that the opt-in alerting
+    core ships off by default (`DASHBOARD_ALERTS_CONFIG`) or that alerts are not in v1.0;
   - the security posture paragraph (loopback-only, no spawner, auth-mandatory,
     same-origin SSE, tunnel-only remote access);
   - the ground-truth rule: token counts read from `~/.claude/projects/*.jsonl`, never
@@ -408,5 +429,15 @@ one test file written in that session and passed after `prettier --write`); the 
 333 files with only the policy file allowlisted and 97 server-process files checked for outbound
 network calls; the license gate read 407 packages / 429 installed versions, 406 allowlisted, 1
 documented exception. §2 greps as on 2026-09-26; §3 P0 4 files / 20 tests green; §5 `backup.test.ts`
-4/4. Not re-checked: the live drill, branch protection, Pages. Schema is 21 since 2026-10-01.)* A rehearsal ticks no box: every box on this page
+4/4. Not re-checked: the live drill, branch protection, Pages. Schema is 21 since 2026-10-01.)* *(Fourth rehearsal 2026-10-27 on
+`7dcf795`, clean tree, Node 22.23.2: all seven CI commands plus `pnpm install --frozen-lockfile`
+and `gate:node` exited 0 at 195 test files / 3736 tests (server 132 / 2013, web 27 / 1043, core
+21 / 364, test-fixtures 6 / 167, shared 9 / 149) with 100% in all five packages; the spawner gate
+scanned 360 files with only the policy file allowlisted, 109 server-process files checked for
+outbound network calls, and the Telegram `fetch` as the only outbound inline opt-out; the license
+gate read 407 packages / 429 installed versions, 406 allowlisted, 1 documented exception. §2's
+no-SSRF grep matched only `telegram-sink.ts` (the amended expectation) and the corpus write-symbol
+grep only the two in-file comments; §3 P0 4 files green inside the server run; §5 `backup.test.ts`
+green inside the same run. Schema is 23 since 2026-10-24. Not re-checked: the live drill, branch
+protection, Pages, CI on `7dcf795` (not pushed).)* A rehearsal ticks no box: every box on this page
 is ticked on the release commit only. The record is on the `TODO.md` Wave 4 row.

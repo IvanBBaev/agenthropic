@@ -299,8 +299,9 @@ summarizes the shape, not the diagram, to avoid drifting out of sync with it:
 > as-built pipeline.
 
 The full walkthrough — including the webhook-sink side branch to Telegram *(as
-built: not present — the server makes no outbound network request of any kind;
-alerts are post-1.0, gated by KC-5)*, the component-responsibility table, and the
+built: opt-in since 2026-10-24 — off unless `DASHBOARD_ALERTS_CONFIG` is set, in which
+case the only outbound request goes to the fixed Telegram Bot API origin; see
+[Telegram alerts](telegram.md))*, the component-responsibility table, and the
 ports-&-adapters seams behind each stage — is the dedicated subject of
 [architecture overview](../architecture/overview.md); this page stops at "here is
 the loop your install produces," not "here is how each stage is built."

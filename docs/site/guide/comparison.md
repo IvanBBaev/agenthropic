@@ -28,8 +28,9 @@ this page (full grading rationale: [the moat §3](the-moat.md)).
 > **Cross-machine remains ❌ not built** — only the `instance`/`host_id` key on
 > `orchestration_edges` exists, and no second host does. The security row was implemented
 > exactly as committed: loopback-only bind, mandatory `DASHBOARD_TOKEN` compared with
-> `timingSafeEqual`, no spawner, no SSRF (the server makes no outbound network request at
-> all). Test figures, re-measured 2026-09-18: **131 test files / 2428 tests**, with **100%
+> `timingSafeEqual`, no spawner, no SSRF (by default the server makes no outbound network
+> request at all; the opt-in Telegram alert sink, built 2026-10-24, dials only the fixed
+> Bot API origin). Test figures, re-measured 2026-09-18: **131 test files / 2428 tests**, with **100%
 > statements, branches, functions and lines** enforced in **all five** packages
 > *(re-measured again 2026-09-23: **140 test files / 2621 tests**; 2026-09-26: **167 test files / 3060 tests**; 2026-10-08: **180 test files / 3398 tests**; 2026-10-10: **180 test files / 3438 tests**; 2026-10-22: **184 test files / 3487 tests**; 2026-10-23: **185 test files / 3519 tests**; 2026-10-24: **195 test files / 3736 tests**, same 100%)* —
 > `packages/test-fixtures` is inside the gate, not excluded from it. Three P0 moat

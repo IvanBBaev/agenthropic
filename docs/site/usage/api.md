@@ -659,6 +659,13 @@ delivery has ever created an agent, an edge, or a token-usage row.
 
 ## Operator alerts API (`WP-A8`, Phase 6)
 
+> **Amended 2026-10-27:** the alerting *core* was built on 2026-10-24 (tables
+> `alert_rules`, `webhook_targets`, `alert_events`, `webhook_deliveries`; rules engine;
+> Telegram sink), configured only through the `DASHBOARD_ALERTS_CONFIG` file. This API
+> is still cut: there is no alerts route, and `/api/hooks/event` is still the only `POST`.
+> In the note below, the "no table / no schema module" clause is the pre-2026-10-24
+> record.
+>
 > **Update — 2026-07 (as built): this surface was CUT and does not exist.** `WP-A8`
 > (operator alerts API) and `WP-A9` (alerts UI) were cut outright, not deferred. There
 > is no `alert_rules` table, no `webhook_targets` table, no alerts schema module, no

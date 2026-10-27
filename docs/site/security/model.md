@@ -103,11 +103,12 @@ with the trust boundary drawn explicitly around it.
 
 > **As built:** everything from the tunnel down through "SQLite (WAL mode) — backup —
 > tested restore" exists and runs. The two bottom boxes — the **webhook sink** and the
-> **Telegram relay** — are **not built**: alerting is post-1.0 and is entered only via
-> KC-5 (earned by real daily use). Today the server makes **no outbound network
-> request of any kind**, so the "operator-configured targets only" constraint is
-> currently satisfied in the strongest possible way — the dial-out surface does not
-> exist. One refinement the diagram's token box undersells: the same-origin check on
+> **Telegram relay** — exist since 2026-10-24 (the v2.0 alerting core, built by an
+> explicit owner override of KC-5's entry condition) and are **off by default**: with
+> `DASHBOARD_ALERTS_CONFIG` unset the server makes **no outbound network request of any
+> kind**. Enabled, the "operator-configured targets only" constraint holds structurally:
+> targets come only from the operator's file, and the sink dials only the constant
+> `https://api.telegram.org` origin with redirects refused (§6 below). One refinement the diagram's token box undersells: the same-origin check on
 > `/api/stream` runs *before* the token check (a cross-origin request is 403 even with
 > a valid token), and the JSONL ingest path enters the box directly from the local
 > filesystem (`~/.claude/projects`), never through an HTTP endpoint.
@@ -404,7 +405,20 @@ packages and Definition-of-Done that turn each rule into CI-blocking code).
   dial-out." `WP-A10`'s alerts negative-test corpus keeps this proven on every future
   change to the alerting surface, not just at first ship.
 
-  > **As built:** the webhook dispatcher (`WP-A4`) is **not built** — alerting is
+  > **Amended 2026-10-27 — enforced, no longer satisfied by absence.** The dispatcher and
+  > Telegram sink (`WP-A4`/`WP-A6`/`WP-A7`) were built on 2026-10-24, off unless
+  > `DASHBOARD_ALERTS_CONFIG` is set. The sink is the only code in the server process that
+  > dials out: the origin is the constant `TELEGRAM_API_ORIGIN`, the only variable URL part
+  > is the operator's bot token (pinned to Telegram's token grammar, so it cannot carry a
+  > path, query or fragment), `redirect: 'error'` refuses a redirect, and no notification
+  > field reaches the URL. `apps/server/test/alerts-ssrf-secret-corpus.test.ts` (`WP-A10`)
+  > is the dynamic proof — hostile URLs and header-injection strings in every field never
+  > move the dial target — plus a source-as-text sweep that the alerts code holds no other
+  > URL origin literal. `gate:spawner` still refuses every other outbound primitive; the
+  > sink's `fetch` is its one audited inline opt-out. The note below is the pre-2026-10-24
+  > record.
+  >
+  > **As built (until 2026-10-24):** the webhook dispatcher (`WP-A4`) is **not built** — alerting is
   > post-1.0, entered only via KC-5. Today the server process makes no outbound network
   > request of any kind: nothing under `apps/server/src` or `packages/*/src` calls
   > `fetch`, imports `node:http`/`node:https`, or reaches an HTTP client, and the
@@ -631,10 +645,12 @@ As built today:
   the signed retention pass (D3, 2026-09-08) chained after each successful backup,
   hook-payload redaction before the idempotency key, and the
   no-spawner/no-wide-bind/no-eval and license static gates running in CI.
-- **Satisfied by absence:** no subprocess surface, no outbound dial of any kind (the
-  webhook dispatcher does not exist yet), no `ANTHROPIC_API_KEY` anywhere in the tree.
-  The first two absences are also gate-enforced: the subprocess family since Phase 1, the
-  outbound-network family in server-process code since 2026-09-26.
+- **Satisfied by absence:** no subprocess surface, no `ANTHROPIC_API_KEY` anywhere in the
+  tree, and — by default — no outbound dial of any kind. The absences are also
+  gate-enforced: the subprocess family since Phase 1, the outbound-network family in
+  server-process code since 2026-09-26. The one exception is the opt-in Telegram sink
+  (2026-10-24), enforced by construction and by the `WP-A10` corpus rather than by
+  absence (§6).
 - **Running (signed D3, 2026-09-08):** the `WP-D10` retention sweeper, chained after
   each successful daily backup — `events` rows older than 90 days are pruned in
   bounded runs with a journal receipt, backup files older than 30 days expire behind

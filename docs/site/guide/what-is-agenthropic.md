@@ -58,7 +58,11 @@ is no longer true — see the update immediately below.)*
 > be.** It is v2.0 work, entered only via checkpoint KC-5 (14 consecutive days of real
 > daily v1.0 use plus ≥3 friction-log entries asking for alerts); the operator-alerts API
 > and UI were cut outright. The server currently makes **no outbound network request of
-> any kind**.
+> any kind**. *(Amended 2026-10-27: the alerting core was built on 2026-10-24 by an
+> explicit owner override of that entry condition. It is off by default, so the sentence
+> above still holds unless `DASHBOARD_ALERTS_CONFIG` is set; when it is, the only outbound
+> call is the Telegram sink, to the fixed Bot API origin — see
+> [Telegram alerts](../usage/telegram.md).)*
 >
 > **Two caveats this page must not lose.** The Phase-0 spike numbers below (including the
 > confidence-85 `CONDITIONAL-GO`) remain **PROVISIONAL** — they were scored against machine
@@ -105,8 +109,10 @@ hook-ingest  ──►  SQLite (persisted, WAL)  ──►  SSE  ──►  brow
 > `orchestration_edges` / `token_usage` directly, in one transaction per session. The
 > `hook-ingest` arrow is thinner than drawn — a hook delivery lands one raw row in
 > `events_raw` plus one identifier-only liveness row in `events`, and never touches the
-> hierarchy or token tables. The **webhook-sink → Telegram branch does not exist**: it is
-> v2.0 work behind KC-5, and the server makes no outbound network request at all today.
+> hierarchy or token tables. The **webhook-sink → Telegram branch is opt-in**: built
+> 2026-10-24 as the v2.0 alerting core, off unless `DASHBOARD_ALERTS_CONFIG` is set, and
+> then dialing only the fixed Telegram Bot API origin; unset, the server makes no outbound
+> network request at all.
 > The SQLite → SSE → browser SPA path is built and running.
 
 Two invariants hold across every layer of that loop and are non-negotiable design

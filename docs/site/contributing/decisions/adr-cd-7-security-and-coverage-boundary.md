@@ -64,7 +64,13 @@ test; today it has nothing to test. *(As-built addendum 2026-09-26: the static h
 `WP-F5`'s no-SSRF gate now exists — `scripts/check-no-spawner.mjs` fails CI on an outbound
 network primitive or HTTP client in server-process source or manifests — so the absence is
 enforced rather than merely observed. The dynamic SSRF test is still the future
-dispatcher's Done-when.)*
+dispatcher's Done-when.)* *(As-built addendum 2026-10-27: the criterion is no longer
+vacuous. The opt-in alerting core, built 2026-10-24 and off unless
+`DASHBOARD_ALERTS_CONFIG` is set, added one outbound call — the Telegram sink's `fetch`
+to the constant `https://api.telegram.org` origin, its single audited inline opt-out
+from the static gate. The dynamic half now exists:
+`apps/server/test/alerts-ssrf-secret-corpus.test.ts` (`WP-A10`) proves no event field
+moves the dial target and no secret reaches SQLite, SSE or logs.)*
 
 ## As-built update — 2026-08-15
 

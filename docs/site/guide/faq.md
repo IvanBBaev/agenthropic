@@ -7,7 +7,9 @@ machines, and how alerts reach you.
 **Short version:** agenthropic is a self-hosted, local-first dashboard that binds to
 `127.0.0.1` on your own machine, never sends telemetry anywhere, has no cloud bill
 because there is no cloud tier, and the only thing it ever sends outbound is an alert
-*you* configured — *(as built: nothing at all, because the alert sink was never built)*.
+*you* configured — *(as built: nothing at all by default; only if you set
+`DASHBOARD_ALERTS_CONFIG` does the opt-in Telegram alert sink, built 2026-10-24, send to
+the fixed Telegram Bot API)*.
 Every answer below links to the deeper reference page for the full detail.
 
 > **Update — 2026-07 (as built).** This page was written before any code existed. Four
@@ -39,6 +41,12 @@ Every answer below links to the deeper reference page for the full detail.
 >   operator-alerts API and UI were **cut outright**. The running server **makes no
 >   outbound network request of any kind**. Read every "Phase 5, not yet built" below as
 >   "not built, not scheduled, possibly never."
+>   **Amended 2026-10-27:** the v2.0 alerting core *was* built on 2026-10-24, by an
+>   explicit owner override of KC-5's entry condition. It is off by default — with
+>   `DASHBOARD_ALERTS_CONFIG` unset the server still makes no outbound request of any
+>   kind — and when enabled its only outbound call is the Telegram sink, to the constant
+>   `https://api.telegram.org` origin. The API and UI stay cut; a JSON file is the only
+>   surface ([Telegram alerts](../usage/telegram.md)).
 > - **Retention is built, signed and wired (as of 2026-09-10).** Redaction *is* implemented
 >   (`apps/server/src/hooks/redact.ts`, applied at the hook ingest boundary, before the
 >   idempotency key is computed). The retention *mechanism* — pruning, an audit journal,
@@ -69,7 +77,7 @@ Every answer below links to the deeper reference page for the full detail.
 | Question | Short answer |
 |---|---|
 | Cloud / SaaS? | No — self-hosted, local-first. Runs on your own machine. |
-| Phones home? | No telemetry egress. **As built: no outbound traffic at all** — the alert sink was never built, so the server makes no outbound network request of any kind. |
+| Phones home? | No telemetry egress. **As built: no outbound traffic by default** — the server makes no outbound network request unless you opt in to Telegram alerts with `DASHBOARD_ALERTS_CONFIG` (built 2026-10-24); then the only outbound call goes to the fixed Telegram Bot API origin. |
 | Cost to run? | No cloud bill — it's a local process + SQLite on hardware you already own. **Still no published CPU/RAM/disk figures.** One benchmark does exist (`apps/server/bench/corpus-scale.ts`), but it measures query and ingest *latency* against a **synthetic** corpus, not resource footprint on a real one — so it answers a different question than this row asks. |
 | Data safety / location? | Local SQLite (WAL) on your machine; tokens read from your own `~/.claude/projects/*.jsonl`; auth-gated writes; nothing leaves the box by default. *(As built: all four hold. Redaction is live; retention is **built, signed and wired** (D3, 2026-09-08) — `events` rows older than 90 days and backup files older than 30 days (never below the newest 7) are pruned after each successful daily backup; `token_usage` is never pruned in v1.0.)* |
 | Do I have to install the hooks? | Optional, but they are the only signal that an agent *stopped*. Without them nothing ever reads `completed` — agents age `working` → `unknown`. `node hooks/install.mjs --out <settings.json>` writes them; `--dry-run` shows the result first. |
@@ -119,13 +127,15 @@ Claude Code ──►  hook-ingest ──► SQLite (WAL) ──► SSE ──�
                                                                             alert rule
 ```
 
-> **As built, delete the bottom branch.** There is no webhook sink and no Telegram relay —
-> not a stub, not a disabled feature, nothing. The running system's outbound arrow count is
-> **zero**. The rest of the diagram is accurate, with one refinement: the hook-ingest arrow
+> **As built, the bottom branch is opt-in.** *(Amended 2026-10-27; until 2026-10-24 there
+> was no webhook sink at all.)* The Telegram sink exists since 2026-10-24 but is off by
+> default: with `DASHBOARD_ALERTS_CONFIG` unset the outbound arrow count is **zero**, and
+> with it set the one arrow goes to the fixed Telegram Bot API origin, never to a URL from
+> an event. The rest of the diagram is accurate, with one refinement: the hook-ingest arrow
 > carries *liveness only*. The load-bearing input is the JSONL read, which is what
 > builds the DAG, the agents, and every token row.
 
-The Telegram relay (roadmap Phase 5, not built yet) is the sole outbound network call
+The Telegram relay (roadmap Phase 5, built opt-in 2026-10-24) is the sole outbound network call
 in the whole design, and it only fires against `webhook_targets` you configured
 yourself — the server never dials a URL taken from an incoming event payload (the
 no-SSRF invariant: it does not repeat `disler`'s bug of dialing an
@@ -205,9 +215,11 @@ leaves that machine by default.** Concretely:
 - **No secret leakage:** `ANTHROPIC_API_KEY` is kept out of the dashboard's
   environment unless a feature genuinely requires it, and any Telegram bot token is
   planned to live behind a `token_ref` into `launchd` env / a chmod-600 file — never
-  inside SQLite, never shipped to the browser. *(As built: no Telegram bot token exists,
-  because no alerting was built. The `ANTHROPIC_API_KEY` rule holds — the server never
-  calls an LLM API, or any API.)*
+  inside SQLite, never shipped to the browser. *(As built, since 2026-10-24: the opt-in
+  Telegram bot token is a `tokenRef` — `env:NAME` or a `file:` path that must not be
+  group/world-readable — re-read per send and never stored, logged or streamed. The
+  `ANTHROPIC_API_KEY` rule holds — the server never calls an LLM API, and calls no API
+  at all unless Telegram alerts are enabled.)*
 - **Retention:** a retention TTL and payload-redaction rule for stored tool payloads
   is planned from Phase 1 (not yet implemented — this project has no code yet).
   *(As built: done, and the "no code yet" reason is stale. **Payload redaction is
@@ -361,13 +373,14 @@ for the persisted-edges design that carries the `instance`/`host_id` key, and
 
 ## How do alerts reach me?
 
-> **As built: they don't, and this may never change.** No Telegram sink, no `alert_rules`,
-> no `webhook_targets`, no dispatcher, no bot token — none of it was built, and the server
-> makes no outbound network request of any kind. Alerting is **v2.0**, entered only via
-> **KC-5**, a checkpoint earned by sustained real daily use and deliberately given no date;
-> the operator-alerts API and UI (WP-A8/A9) were **cut outright**. The description below is
-> the design record for work that has not started. If you need to be notified away from
-> your desk, agenthropic does not do that today — watch the dashboard.
+> **As built (amended 2026-10-27): by Telegram, if you opt in.** The v2.0 alerting core —
+> `alert_rules`, `webhook_targets`, `alert_events`, `webhook_deliveries`, a rules engine
+> (cost threshold, stuck agent, error), a throttled retrying dispatcher and a Telegram
+> sink — was built on 2026-10-24 by an explicit owner override of KC-5's entry condition.
+> It is **off by default**: point `DASHBOARD_ALERTS_CONFIG` at a JSON file of targets and
+> rules to turn it on. The operator-alerts API and UI (WP-A8/A9) stay **cut** — the file is
+> the only surface. Setup is in [Telegram alerts](../usage/telegram.md). The description
+> below is the original design record; where it differs, the setup page is the truth.
 
 **Telegram, to a bot you control (`@baev_bot_bot`) — this is a Phase 5 roadmap item
 and is not built yet.** The design grafts `hoangsonww`'s `formatTelegram` webhook
