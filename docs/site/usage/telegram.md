@@ -17,7 +17,9 @@
    server's user with mode `0600` — a symlink, a file owned by another user, or any
    group/other permission bit is rejected.
 3. **Write the config file** and point `DASHBOARD_ALERTS_CONFIG` at its **absolute**
-   path:
+   path. It must be owned by the server's user (or root) and not writable by group or
+   other (`chmod 644` or `600`) — it decides where alerts go, so a looser file stops the
+   server at startup:
 
    ```json
    {

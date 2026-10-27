@@ -304,6 +304,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The alerts config named by `DASHBOARD_ALERTS_CONFIG` is now refused at startup when
+  group or other can write it, or when it is owned by a user other than the server user or
+  root. The file picks the chat alerts go to and which secret is sent with them, so a file
+  another local user could rewrite could redirect alerts to them. Read bits stay allowed (the
+  file holds no secret); the check runs before the file is read.
 - The licence gate no longer exempts a package because of its name alone. Anything in the
   `@agenthropic/*` scope used to be skipped as workspace-local, so a registry package published
   under that scope would never have had its licence checked. A package is now skipped only when
