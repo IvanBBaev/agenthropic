@@ -65,12 +65,18 @@
 - **Throttle and retry.** A target sends at most `maxPerMinute` messages in any
   trailing minute; an over-budget delivery waits, uncharged. Network errors, timeouts,
   HTTP 429 and 5xx retry with backoff 30 s × 2ⁿ (a longer Telegram `retry_after`
-  wins), giving up after 5 attempts; any other 4xx fails at once.
+  wins), giving up after 5 attempts; any other 4xx fails at once. Each delivery pass
+  caps every target at its remaining budget, so a throttled target with a backlog never
+  holds back another target's alerts.
+- **Shutdown** waits for a delivery already in flight before it closes the database, so
+  a message Telegram accepted is marked sent and not repeated on the next boot.
 - **Removing** a target or rule from the file disables it (rows are kept for the
   alert history); pending deliveries to a disabled target fail as
   `target not configured`.
 - **Messages** are plain text (no Markdown/HTML parse mode, link previews off) with
-  ids and figures only — no prompt or tool content.
+  ids and figures only — no prompt or tool content. Control characters, bidi
+  overrides/isolates and zero-width characters in an id become spaces, so an id cannot
+  forge a line or reorder what the reader sees.
 
 ### Security, as built
 
