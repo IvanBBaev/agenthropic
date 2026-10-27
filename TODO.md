@@ -1244,12 +1244,13 @@ one-word answer; the recommended default is first.
   - **Done 2026-10-22:** `isPrunedAt` prunes only next to a `package.json` (or at the scan
     root) in all three walkers; real-tree output unchanged (333 files, 6 manifests, 0
     offenders). Four cases in `scripts-gates.test.ts`, three red against the old gate.
-- [ ] **AU nits (recorded, not defects on their own):** ~~the licence gate trusts the whole
+- [x] **AU nits (recorded, not defects on their own):** ~~the licence gate trusts the whole
   `@agenthropic/*` scope by name~~ (fixed 2026-10-23: skipped only when every path lies outside
   `node_modules`; real-tree output unchanged, 407 / 429; one red-proven case); ~~the installer's backup `copyFileSync` has no
   `COPYFILE_EXCL`~~ (fixed 2026-10-22: `COPYFILE_EXCL` + `-1`..`-99` suffix, two red-proven
-  cases); a hand-formatted `settings.json` is reformatted (with a backup) on the
-  first re-install.
+  cases); ~~a hand-formatted `settings.json` is reformatted (with a backup) on the
+  first re-install~~ (fixed 2026-10-27: install decides `unchanged` on meaning, as L-3 does for
+  `--remove`; one red-proven case + a guard-rail).
 - [x] **Packages / API audit 2026-10-22 (read-only, handed to the apps lane):** closed
   2026-10-27 — every finding is fixed or decided (C-5: no change). The only open act is the
   C-2 real-browser repro behind `tailscale serve`, which is Ivan's, not an agent task.

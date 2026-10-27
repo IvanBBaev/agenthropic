@@ -257,6 +257,15 @@ a change, and `--remove` backed up and rewrote the file as `{}` about a removal
 that removed nothing. Only a container that THIS removal emptied is dropped
 now; one that was already empty is the operator's shape and stays as found.
 
+AMENDED 2026-10-27 (AU nit). L-3 decided only `--remove` on meaning; a plain
+re-install still compared bytes, so a hand-indented `settings.json` that already
+held exactly the current agenthropic hooks was backed up and reformatted into
+two-space shape on the first re-run. Install now uses the same rule: when the
+merge changes nothing in meaning, the run reports `unchanged` (and `--dry-run`
+reports no pending write), takes no backup and leaves the bytes as found. A
+re-install that does change the hooks (a new `--port`, say) still rewrites the
+file in the installer's two-space shape, with a backup.
+
 AMENDED 2026-09-07 (findings H-2, H-3). The two bullets above are new, and both
 correct something this section used to imply rather than say. On the first: the
 installer backed up and rewrote on EVERY run, so re-running it to check whether

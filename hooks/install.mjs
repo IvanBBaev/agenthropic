@@ -888,7 +888,11 @@ export function runInstall({
   const existingText = formatSettings(existing);
   const settingsText = formatSettings(transform(existing));
   const currentText = fileExisted ? readFileSync(out, 'utf8') : undefined;
-  const unchanged = currentText === settingsText;
+  // AU nit (2026-10-27). Bytes alone made a hand-formatted file that already
+  // holds exactly our hooks look changed, so a re-install backed it up and
+  // reformatted it into two-space shape. L-3's rule for `--remove` now covers
+  // install too: an existing file whose merge is a no-op on meaning is unchanged.
+  const unchanged = currentText === settingsText || (fileExisted && settingsText === existingText);
 
   // C-7 (2026-09-23). `--remove` against a file that does not exist used to fall
   // through to the write path: it created the whole parent tree, wrote `{}`, and

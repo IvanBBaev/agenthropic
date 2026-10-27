@@ -665,6 +665,40 @@ describe('runInstall file workflow (WP-X8)', () => {
     expect(result.backupPath).toBeDefined();
   });
 
+  // AU nit (2026-10-27). L-3's rule, applied to install: a re-install over a
+  // hand-formatted file that already holds exactly our hooks compared bytes,
+  // so the operator's indentation alone sent it down the write path - backup
+  // taken, file reformatted into two-space shape, `Wrote ...` printed over a
+  // run that changed nothing.
+  it('re-install over a hand-formatted file already holding our hooks writes nothing (AU nit)', () => {
+    runInstall({ out, now: fixedNow });
+    const handFormatted = `${JSON.stringify(JSON.parse(readFileSync(out, 'utf8')), null, 4)}\n`;
+    writeFileSync(out, handFormatted, 'utf8');
+    for (const entry of readdirSync(join(dir, '.claude'))) {
+      if (entry !== 'settings.json') rmSync(join(dir, '.claude', entry));
+    }
+
+    const preview = runInstall({ out, dryRun: true, now: fixedNow });
+    expect(preview.action).toBe('dry-run');
+    expect(preview.unchanged).toBe(true);
+
+    const result = runInstall({ out, now: fixedNow });
+    expect(result.action).toBe('unchanged');
+    expect(result.backupPath).toBeUndefined();
+    expect(readFileSync(out, 'utf8')).toBe(handFormatted);
+    expect(readdirSync(join(dir, '.claude'))).toEqual(['settings.json']);
+  });
+
+  it('re-install over a hand-formatted file still writes when our hooks change (AU nit guard-rail)', () => {
+    runInstall({ out, now: fixedNow });
+    const handFormatted = `${JSON.stringify(JSON.parse(readFileSync(out, 'utf8')), null, 4)}\n`;
+    writeFileSync(out, handFormatted, 'utf8');
+
+    const result = runInstall({ out, port: 4999, now: fixedNow });
+    expect(result.action).toBe('written');
+    expect(result.backupPath).toBeDefined();
+  });
+
   it('refuses a non-object "hooks" before any backup or write (GG6)', () => {
     mkdirSync(join(dir, '.claude'));
     const original = '{ "theme": "dark", "hooks": [] }\n';
