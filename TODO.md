@@ -1250,7 +1250,9 @@ one-word answer; the recommended default is first.
   `COPYFILE_EXCL`~~ (fixed 2026-10-22: `COPYFILE_EXCL` + `-1`..`-99` suffix, two red-proven
   cases); a hand-formatted `settings.json` is reformatted (with a backup) on the
   first re-install.
-- [~] **Packages / API audit 2026-10-22 (read-only, handed to the apps lane):**
+- [x] **Packages / API audit 2026-10-22 (read-only, handed to the apps lane):** closed
+  2026-10-27 — every finding is fixed or decided (C-5: no change). The only open act is the
+  C-2 real-browser repro behind `tailscale serve`, which is Ivan's, not an agent task.
   - **Done 2026-10-22:** C-4 (cache-write pair, `usage/dedupe.ts`), C-6 (self-parent guard,
     `parse-session.ts`), S-2 (`julianday()` merges, `db/instant-order.ts`), C-1 (case-insensitive
     scheme) — red-proven tests; P0 independent reader aligned (NN2 + C-4). S-1: docs over-claims
