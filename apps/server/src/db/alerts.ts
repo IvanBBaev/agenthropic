@@ -92,7 +92,6 @@ export function syncAlertsConfig(db: SqliteDatabase, config: AlertsConfig, nowIs
     `INSERT INTO alert_rules (id, kind, target_id, threshold_usd, enabled, armed_at)
      VALUES (@id, @kind, @targetId, @thresholdUsd, @enabled, @nowIso)
      ON CONFLICT(id) DO UPDATE SET
-       kind          = excluded.kind,
        target_id     = excluded.target_id,
        threshold_usd = excluded.threshold_usd,
        -- Re-arm only on a disabled -> enabled transition: enabling a rule
@@ -108,6 +107,20 @@ export function syncAlertsConfig(db: SqliteDatabase, config: AlertsConfig, nowIs
     `UPDATE alert_rules SET enabled = 0
       WHERE id NOT IN (SELECT value FROM json_each(?))`,
   );
+
+  // A rule id keeps its kind for life: the dedupe key is <ruleId>:<subjectId>
+  // (AD-6), so a new condition under an old id would stay silent for every
+  // subject the old condition already fired on. Disabled rows count too.
+  const storedKind = db.prepare('SELECT kind FROM alert_rules WHERE id = ?').pluck();
+  const changed = config.rules.flatMap((rule) => {
+    const was = storedKind.get(rule.id) as string | undefined;
+    return was !== undefined && was !== rule.kind ? [`${rule.id} (${was} -> ${rule.kind})`] : [];
+  });
+  if (changed.length > 0) {
+    throw new Error(
+      `Alert rules changed kind: ${changed.join(', ')}. Give a new condition a new id.`,
+    );
+  }
 
   db.transaction(() => {
     for (const target of config.targets) {

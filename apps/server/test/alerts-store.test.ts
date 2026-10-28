@@ -389,32 +389,32 @@ describe('alerts store (WP-A2)', () => {
     it('keeps armed_at on an edit and resets it only on a disabled -> enabled transition', () => {
       syncAlertsConfig(db, baseConfig(), T0);
 
-      // Edited kind, threshold and target while enabled: armed_at stays.
+      // Edited threshold and target while enabled: armed_at stays.
       const edited: AlertsConfig = {
         targets: [
           ...baseConfig().targets,
           { id: 'tg-two', kind: 'telegram', tokenRef: 'env:OTHER', chatId: '42' },
         ],
         rules: [
-          { id: 'cost-5', kind: 'error', targetId: 'tg-two' },
-          { id: 'stuck', kind: 'cost_threshold', targetId: 'tg-main', thresholdUsd: 9.5 },
+          { id: 'cost-5', kind: 'cost_threshold', targetId: 'tg-two', thresholdUsd: 9.5 },
+          { id: 'stuck', kind: 'stuck_agent', targetId: 'tg-two' },
         ],
       };
       syncAlertsConfig(db, edited, T1);
       expect(listActiveRules(db)).toEqual([
         {
           id: 'cost-5',
-          kind: 'error',
+          kind: 'cost_threshold',
           targetId: 'tg-two',
-          thresholdUsd: null,
+          thresholdUsd: 9.5,
           enabled: true,
           armedAt: T0,
         },
         {
           id: 'stuck',
-          kind: 'cost_threshold',
-          targetId: 'tg-main',
-          thresholdUsd: 9.5,
+          kind: 'stuck_agent',
+          targetId: 'tg-two',
+          thresholdUsd: null,
           enabled: true,
           armedAt: T0,
         },
@@ -424,7 +424,13 @@ describe('alerts store (WP-A2)', () => {
       const disabled: AlertsConfig = {
         ...edited,
         rules: [
-          { id: 'cost-5', kind: 'error', targetId: 'tg-two', enabled: false },
+          {
+            id: 'cost-5',
+            kind: 'cost_threshold',
+            targetId: 'tg-two',
+            thresholdUsd: 9.5,
+            enabled: false,
+          },
           edited.rules[1]!,
         ],
       };
@@ -439,6 +445,40 @@ describe('alerts store (WP-A2)', () => {
         ['cost-5', T2],
         ['stuck', T0],
       ]);
+    });
+
+    it('refuses a rule whose kind changed under the same id, and writes nothing (AU, 2026-10-28)', () => {
+      // The dedupe key is <ruleId>:<subjectId> (AD-6): a new condition under an
+      // old id would be silenced for every subject the old one already fired on.
+      syncAlertsConfig(db, baseConfig(), T0);
+      const swapped: AlertsConfig = {
+        targets: baseConfig().targets,
+        rules: [
+          { id: 'cost-5', kind: 'error', targetId: 'tg-main' },
+          { id: 'stuck', kind: 'cost_threshold', targetId: 'tg-main', thresholdUsd: 1 },
+        ],
+      };
+      expect(() => syncAlertsConfig(db, swapped, T1)).toThrow(
+        'Alert rules changed kind: cost-5 (cost_threshold -> error), ' +
+          'stuck (stuck_agent -> cost_threshold). Give a new condition a new id.',
+      );
+      expect(listActiveRules(db).map((r) => [r.id, r.kind])).toEqual([
+        ['cost-5', 'cost_threshold'],
+        ['stuck', 'stuck_agent'],
+      ]);
+
+      // A disabled rule keeps its id's history too, so the same refusal holds.
+      syncAlertsConfig(db, { targets: baseConfig().targets, rules: [] }, T1);
+      expect(() =>
+        syncAlertsConfig(
+          db,
+          {
+            targets: baseConfig().targets,
+            rules: [{ id: 'stuck', kind: 'error', targetId: 'tg-main' }],
+          },
+          T2,
+        ),
+      ).toThrow(/stuck \(stuck_agent -> error\)/);
     });
 
     it('re-arms a rule that was dropped from the file and comes back', () => {

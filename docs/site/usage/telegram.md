@@ -46,8 +46,9 @@
 4. **Restart the server.** It logs `alerts: enabled - N target(s), M active rule(s).`
    Boot **fails** — the server does not start — when the file is unreadable, not valid
    JSON, fails the schema, names an unknown target, repeats an id, or when any
-   target's `tokenRef` does not resolve. The error names the file or the ref, never a
-   token value.
+   target's `tokenRef` does not resolve, or when a rule keeps its id but changes `kind`
+   (give a new condition a new id). The error names the file, the ref or the rule, never
+   a token value.
 
 ### What it does, as built
 
@@ -62,6 +63,9 @@
 - **No history flood.** A rule only considers subjects active at or after the moment
   it was **armed** (first synced, or re-enabled after being disabled). Turning
   alerting on over months of history pages nothing old.
+- **A rule id keeps its kind.** Threshold, target and `enabled` can be edited in place;
+  changing `kind` under the same id is refused at boot, since the dedupe key would
+  silence the new condition for every subject the old one already fired on.
 - **Throttle and retry.** A target sends at most `maxPerMinute` messages in any
   trailing minute; an over-budget delivery waits, uncharged. Network errors, timeouts,
   HTTP 429 and 5xx retry with backoff 30 s × 2ⁿ (a longer Telegram `retry_after`

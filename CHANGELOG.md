@@ -304,6 +304,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- An alert rule can no longer change `kind` while keeping its id; boot fails and names the
+  rule. Dedupe is keyed on rule id and subject, so the new condition stayed silent for every
+  session or agent the old one had already fired on.
 - Telegram alert messages now replace bidi overrides/isolates and zero-width characters in ids
   with spaces, as they already did control characters. An id carrying a right-to-left override
   could make the message read in a different order than it was written.
