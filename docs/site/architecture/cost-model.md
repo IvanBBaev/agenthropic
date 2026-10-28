@@ -307,6 +307,13 @@ enforces it. Two honest departures from the CD-4 sketch:
   scheduled 3 / 15 increase never took effect, so the five floor rows are rewritten in place
   rather than superseded by a later-dated row; no row is added, and stored Sonnet 5 usage
   re-prices at read time without a re-ingest.
+- **Migration 24 (2026-10-28) added `claude-sonnet-5-5`** after a scan of the last fourteen
+  days of the corpus found 1119 records stamped with it and no row to price them. Five
+  explicit rows at 2 / 10, cache-read 0.10 (0.05× input, so copied, not derived): nine
+  models, 45 rows, the same floor, the same PROVISIONAL label. `claude-haiku-5-5` is left
+  out on purpose: its page price is tiered by prompt length (up to and over 100k tokens)
+  and `model_pricing` has no tier dimension, so it is a cost-model decision, not a row. It
+  does not occur in the corpus; if it appears, the halt gate refuses it loudly.
 
 **What is genuinely undecided:** the *authoritative dated source* for these rates and
 the *refresh cadence* that keeps the staleness-fails-CI test honest as the model lineup

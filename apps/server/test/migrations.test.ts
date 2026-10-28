@@ -1188,7 +1188,7 @@ describe('migration runner (WP-D3)', () => {
       // The fresh database is at the latest schema; migration 20 touches only
       // claude-sonnet-5, so the opus-5-5 rows read exactly as 19 wrote them.
       temp = createMigratedTempDb();
-      expect(currentSchemaVersion(temp.db)).toBe(23);
+      expect(currentSchemaVersion(temp.db)).toBe(24);
       expect(opus55Rows(temp.db)).toEqual(
         OFFICIAL_RATES.map((row) => ({ ...row, effective_from: FLOOR })),
       );
@@ -1334,7 +1334,7 @@ describe('migration runner (WP-D3)', () => {
 
     it('prices claude-sonnet-5 at the official per-bucket rates on a fresh database', () => {
       temp = createMigratedTempDb();
-      expect(currentSchemaVersion(temp.db)).toBe(23);
+      expect(currentSchemaVersion(temp.db)).toBe(24);
       expect(sonnet5Rows(temp.db)).toEqual(at(OFFICIAL_RATES));
     });
 
@@ -1446,7 +1446,7 @@ describe('migration runner (WP-D3)', () => {
         insertSession(db, 'sess-b');
         insertSession(db, 'sess-c');
 
-        expect(runMigrations(db, migrations).appliedIds).toEqual([22, 23]);
+        expect(runMigrations(db, migrations).appliedIds).toEqual([22, 23, 24]);
 
         expect(stamps(db)).toEqual([
           { id: 'sess-a', ingest_seq: 1 },
@@ -1525,6 +1525,70 @@ describe('migration runner (WP-D3)', () => {
       expect(() => temp!.db.exec('UPDATE sessions SET ingest_seq = -1')).toThrow(
         /CHECK constraint failed/,
       );
+    });
+  });
+  /**
+   * Migration 24: explicit five-bucket rows for `claude-sonnet-5-5`, the model
+   * id the 2026-10-28 real-corpus scan found unpriced (1119 records in the
+   * last fourteen days, every session halted by the gate). Same shape as
+   * migrations 19 and 20.
+   */
+  describe('migration 24 (model-pricing-sonnet-5-5)', () => {
+    const FLOOR = '2026-01-01T00:00:00.000Z';
+    const OFFICIAL_RATES: ReadonlyArray<{ model: string; bucket: string; usd_per_mtok: number }> = [
+      // https://platform.claude.com/docs/en/about-claude/pricing, fetched 2026-10-28.
+      { model: 'claude-sonnet-5-5', bucket: 'cache_read', usd_per_mtok: 0.1 },
+      { model: 'claude-sonnet-5-5', bucket: 'cache_write_1h', usd_per_mtok: 4 },
+      { model: 'claude-sonnet-5-5', bucket: 'cache_write_5m', usd_per_mtok: 2.5 },
+      { model: 'claude-sonnet-5-5', bucket: 'input', usd_per_mtok: 2 },
+      { model: 'claude-sonnet-5-5', bucket: 'output', usd_per_mtok: 10 },
+    ];
+
+    function sonnet55Rows(db: SqliteDatabase): unknown[] {
+      return db
+        .prepare(
+          `SELECT model, bucket, usd_per_mtok, effective_from FROM model_pricing
+            WHERE model = 'claude-sonnet-5-5'
+            ORDER BY model, bucket, effective_from`,
+        )
+        .all();
+    }
+
+    it('seeds claude-sonnet-5-5 with the official per-bucket rates at the canonical floor', () => {
+      temp = createMigratedTempDb();
+      expect(currentSchemaVersion(temp.db)).toBe(24);
+      expect(sonnet55Rows(temp.db)).toEqual(
+        OFFICIAL_RATES.map((row) => ({ ...row, effective_from: FLOOR })),
+      );
+    });
+
+    it('applies forward-only on a schema-23 database and touches no other model', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'agenthropic-mig24-'));
+      const db = openDatabase(join(dir, 'v23.db'));
+      try {
+        runMigrations(
+          db,
+          migrations.filter((m) => m.id <= 23),
+        );
+        expect(sonnet55Rows(db)).toEqual([]);
+        const otherRows = (): unknown[] =>
+          db
+            .prepare(
+              `SELECT model, bucket, usd_per_mtok, effective_from FROM model_pricing
+                WHERE model <> 'claude-sonnet-5-5'
+                ORDER BY model, bucket, effective_from`,
+            )
+            .all();
+        const before = otherRows();
+
+        expect(runMigrations(db).appliedIds).toEqual([24]);
+        expect(sonnet55Rows(db)).toHaveLength(OFFICIAL_RATES.length);
+        expect(otherRows()).toEqual(before);
+        expect(runMigrations(db).appliedIds).toEqual([]);
+      } finally {
+        db.close();
+        rmSync(dir, { recursive: true, force: true });
+      }
     });
   });
 });

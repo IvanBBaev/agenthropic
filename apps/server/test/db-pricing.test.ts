@@ -11,10 +11,10 @@ describe('loadPricing (WP-C1 seed read path)', () => {
     temp = undefined;
   });
 
-  it('returns the full 40-row table (5 seed models + 2 from migration 18 + 1 from migration 19, x 5 buckets)', () => {
+  it('returns the full 45-row table (5 seed models + 2 from migration 18 + 1 each from migrations 19 and 24, x 5 buckets)', () => {
     temp = createMigratedTempDb();
     const pricing = loadPricing(temp.db);
-    expect(pricing).toHaveLength(40);
+    expect(pricing).toHaveLength(45);
   });
 
   it('prices a claude-opus-5-5 message instead of halting on an unknown model id (migration 19)', () => {

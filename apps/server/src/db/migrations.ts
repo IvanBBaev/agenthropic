@@ -1491,6 +1491,45 @@ export const migrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    id: 24,
+    name: 'model-pricing-sonnet-5-5',
+    up(db) {
+      // WHY. The 2026-10-28 real-corpus scan (the last fourteen days of
+      // ~/.claude/projects) carries 1119 assistant records stamped
+      // `claude-sonnet-5-5`, and the seed has no row for it. The halt gate
+      // refuses every one of those sessions rather than price them at 0, so
+      // until this migration they were simply absent from the dashboard - the
+      // same failure migration 19 fixed for claude-opus-5-5.
+      //
+      // SOURCE. https://platform.claude.com/docs/en/about-claude/pricing,
+      // fetched 2026-10-28, USD per million tokens:
+      //   Claude Sonnet 5.5   input 2   5m write 2.50   1h write 4   read 0.10  output 10
+      // Its cache_read is 0.05x input, not the seed's 0.1x, so every rate is
+      // copied from the page rather than derived, and spelled inside the SQL
+      // text as in migrations 18-20 so every figure is covered by the checksum.
+      //
+      // NOT HERE. claude-haiku-5-5 is priced in two tiers by prompt length
+      // (up to and over 100k tokens); model_pricing has no tier dimension, so
+      // seeding it is a cost-model decision, not a data row. It does not occur
+      // in the corpus, and an occurrence halts loudly instead of mispricing.
+      //
+      // FLOOR. The rows land on the seed's canonical instant (2026-01-01), so
+      // every message ever stamped with this id is priced. ON CONFLICT DO
+      // UPDATE keeps a re-run idempotent; a row an operator wrote at any other
+      // instant is never touched. PROVISIONAL like the rest of the seed until
+      // WP-C1 ratifies.
+      db.exec(`
+        INSERT INTO model_pricing (model, bucket, usd_per_mtok, effective_from) VALUES
+          ('claude-sonnet-5-5', 'input',          2,   '2026-01-01T00:00:00.000Z'),
+          ('claude-sonnet-5-5', 'output',         10,  '2026-01-01T00:00:00.000Z'),
+          ('claude-sonnet-5-5', 'cache_read',     0.1, '2026-01-01T00:00:00.000Z'),
+          ('claude-sonnet-5-5', 'cache_write_5m', 2.5, '2026-01-01T00:00:00.000Z'),
+          ('claude-sonnet-5-5', 'cache_write_1h', 4,   '2026-01-01T00:00:00.000Z')
+        ON CONFLICT (model, bucket, effective_from) DO UPDATE SET usd_per_mtok = excluded.usd_per_mtok;
+      `);
+    },
+  },
 ];
 
 export interface MigrationRunResult {

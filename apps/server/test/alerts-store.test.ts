@@ -95,7 +95,7 @@ describe('migration 23 (alerts-core)', () => {
 
   it('creates the four alert tables and both delivery indexes on a fresh database', () => {
     temp = createMigratedTempDb();
-    expect(currentSchemaVersion(temp.db)).toBe(23);
+    expect(currentSchemaVersion(temp.db)).toBe(24);
     expect(tableNames(temp.db)).toEqual(expect.arrayContaining(ALERT_TABLES));
     const indexes = temp.db
       .prepare(
@@ -126,11 +126,14 @@ describe('migration 23 (alerts-core)', () => {
         expect(tableNames(db)).not.toContain(table);
       }
 
-      expect(runMigrations(db).appliedIds).toEqual([23]);
+      // Bounded at 23: an unbounded run would also apply every later
+      // migration, and "applied [23]" is the claim.
+      const throughMigration23 = migrations.filter((m) => m.id <= 23);
+      expect(runMigrations(db, throughMigration23).appliedIds).toEqual([23]);
       expect(db.prepare('SELECT * FROM sessions').all()).toEqual(before);
       expect(tableNames(db)).toEqual(expect.arrayContaining(ALERT_TABLES));
 
-      expect(runMigrations(db).appliedIds).toEqual([]);
+      expect(runMigrations(db, throughMigration23).appliedIds).toEqual([]);
       expect(currentSchemaVersion(db)).toBe(23);
     } finally {
       db.close();

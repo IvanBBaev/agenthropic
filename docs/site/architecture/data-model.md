@@ -104,6 +104,7 @@ leaves the schema byte-identical.
 | 21 | `sessions-partial-and-dropped-usage` | Three `ALTER TABLE sessions ADD COLUMN`s: `partial_reason` and `partial_skipped_bytes` (owner decision 1 - an oversize main transcript makes the session partial) and `usage_records_dropped` (owner decision 2, NN1), each with an inline CHECK |
 | 22 | `sessions-ingest-seq` | `sessions.ingest_seq`, a database-wide monotonic counter stamped whenever ingest learns something new about a session — the cursor behind `/api/changes` (S-1) |
 | 23 | `alerts-core` | The four v2.0 alert tables (`webhook_targets`, `alert_rules`, `alert_events`, `webhook_deliveries`) + the delivery due-scan and throttle-window indexes |
+| 24 | `model-pricing-sonnet-5-5` | Five explicit rate rows for `claude-sonnet-5-5`, the next model id the real corpus exposed as unpriced (2026-10-28) |
 
 Three properties of that list are worth stating explicitly, because they are the reason
 the ledger table exists at all.
@@ -761,9 +762,10 @@ CREATE TABLE model_pricing (
 
 ### What the seed actually contains
 
-Eight models at one `effective_from` floor of `2026-01-01` — five from the original seed
+Nine models at one `effective_from` floor of `2026-01-01` — five from the original seed
 (migrations 7 and 11), each expanded into all five buckets, two added explicitly by
-migration 18 on 2026-09-10 and one by migration 19 on 2026-09-26. Migration 20 (2026-09-26)
+migration 18 on 2026-09-10, one by migration 19 on 2026-09-26 and one by migration 24 on
+2026-10-28. Migration 20 (2026-09-26)
 adds no model; it corrects the seeded Sonnet 5 rows in place:
 
 | `model` | input $/Mtok | output $/Mtok |
@@ -776,6 +778,7 @@ adds no model; it corrects the seeded Sonnet 5 rows in place:
 | `claude-opus-5` (migration 18) | 5 | 25 |
 | `claude-fable-5-1` (migration 18) | 10 | 50 |
 | `claude-opus-5-5` (migration 19) | 4 | 20 |
+| `claude-sonnet-5-5` (migration 24) | 2 | 10 |
 
 For the four other seed models the three cache buckets are **derived** from the input rate rather
 than listed separately: `cache_read` at 0.1×, `cache_write_5m` at 1.25×, `cache_write_1h`
@@ -787,8 +790,9 @@ have priced every Fable 5.1 cache read four times too high, which is why the der
 not reused. Migration 19's Opus 5.5 reads cache at 0.20 — 0.05× its input rate, a third
 ratio no derivation covers — and writes it at 5 / 8, copied from the same page fetched
 2026-09-26. Migration 20 writes Sonnet 5's five rows explicitly too (cache read 0.20, writes
-2.50 / 4 — the standard ratios, spelled out so every figure sits in the checksummed SQL). All
-40 rows carry the same PROVISIONAL label.
+2.50 / 4 — the standard ratios, spelled out so every figure sits in the checksummed SQL).
+Migration 24's Sonnet 5.5 reads cache at 0.10 — 0.05× input — and writes it at 2.50 / 4,
+copied from the page fetched 2026-10-28. All 45 rows carry the same PROVISIONAL label.
 
 Two details in that table are load-bearing rather than cosmetic. The keys are the **exact
 `message.model` byte-strings** emitted in the corpus, verified 2026-07-13 against
