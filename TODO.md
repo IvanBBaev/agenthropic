@@ -66,6 +66,9 @@ The rules that keep them from colliding:
    "fix" real transcripts. All spike output stays under `spike/` and is labeled
    THROWAWAY (it dies after WP-S7; nothing under `spike/` is production code).
 5. **No agent runs git commands.** Committing is Ivan's explicit call, always.
+   **Amended 2026-10-28:** the remaining v1.0 work runs as branch lanes — one worktree per lane
+   under `~/Development/_branches/`, disjoint write sets, hot files written only on `main`. See
+   [`branch-lanes-2026-10-28.md`](docs/analysis/branch-lanes-2026-10-28.md).
 6. Everything written is **English**; security invariants (bottom of this file) bind
    every lane; if a probe needs a listener (it shouldn't), loopback + token, no exceptions.
 
