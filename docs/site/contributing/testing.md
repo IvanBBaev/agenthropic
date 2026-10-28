@@ -63,7 +63,7 @@ and the quantified acceptance criteria in
 >   7/84. Coverage still 100% on all four axes in every package. Re-measured 2026-09-26:
   **167 test files / 3060 tests**, still green — `apps/server` 115/1629, `apps/web` 23/860,
   `packages/core` 17/338, `packages/test-fixtures` 5/139, `packages/shared` 7/94; 100% on
-  all four axes in every package. Re-measured 2026-10-08: **180 test files / 3398 tests**; 2026-10-10: **180 test files / 3438 tests**; 2026-10-22: **184 test files / 3487 tests**; 2026-10-23: **185 test files / 3519 tests**; 2026-10-24: **195 test files / 3736 tests**, still
+  all four axes in every package. Re-measured 2026-10-08: **180 test files / 3398 tests**; 2026-10-10: **180 test files / 3438 tests**; 2026-10-22: **184 test files / 3487 tests**; 2026-10-23: **185 test files / 3519 tests**; 2026-10-24: **195 test files / 3736 tests**; 2026-10-28: **195 test files / 3747 tests**, still
   green — `apps/server` 121/1762, `apps/web` 27/1015, `packages/core` 18/351,
   `packages/test-fixtures` 6/167, `packages/shared` 8/103; 100% on all four axes in every
   package.)*
