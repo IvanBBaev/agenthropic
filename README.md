@@ -20,10 +20,8 @@ dated price — token counts are read from the JSONL, never inferred).
 
 ## Quickstart
 
-> **On npm:** the `agenthropic` package publishes documentation only — no code, no
-> `bin`, nothing to run. agenthropic is a self-hosted app you clone and run from
-> source, so `npm install agenthropic` will not give you a dashboard. The package
-> exists to hold the name; the instructions below are the actual install.
+> **Not on npm.** agenthropic is a self-hosted app you clone and run from source;
+> no package is published under its name. The instructions below are the install.
 
 Requires **Node 22, and only 22**, and **pnpm** (the repo pins `pnpm@11.11.0` via
 `packageManager`, so `corepack enable` is enough). `.nvmrc` names the Node major,
@@ -125,7 +123,7 @@ hook can never create, delete or re-parent a node in the DAG.
 
 🚧 **It works locally. It is not released.** There is no tag and no binary; the
 version is `0.3.0`, every `@agenthropic/*` workspace package is `private` and
-unpublished, and the `agenthropic` package on npm ships documentation only. The
+unpublished, and so is the root `agenthropic` package — nothing is on npm. The
 only way to run it is the Quickstart above, from a checkout. Nothing below
 describes a download.
 

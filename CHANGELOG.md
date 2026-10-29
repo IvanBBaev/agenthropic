@@ -145,6 +145,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Nothing is published to npm, and the docs now say so (D7, 2026-10-30).** The README and the
+  0.3.0 notes said the root `agenthropic` package was on npm carrying documentation only; the
+  registry has no such package (`npm view agenthropic` → E404). The root `package.json` is now
+  `private: true` and its `publishConfig` is gone, so an accidental `npm publish` is refused;
+  the README states plainly that agenthropic is installed from a checkout only.
+
 - Docs truth pass, second round: `README.md` and the site count twenty-one migrations everywhere
   the count appears; the data-model pricing row names migrations 19 (`claude-opus-5-5`) and 20
   (`claude-sonnet-5` re-priced to the official page); the padded-token startup refusal is on
