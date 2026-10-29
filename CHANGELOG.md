@@ -304,6 +304,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Sessions on `claude-sonnet-5-5` are priced instead of halting ingest. The model had no
+  `model_pricing` row, so each of its sessions stopped with an `unknown model id` PricingError
+  and was left out of the dashboard (1119 assistant records in the local corpus). Migration 24
+  `model-pricing-sonnet-5-5` seeds its five buckets from the official pricing page fetched
+  2026-10-28 (2 / 10 / 0.1 / 2.5 / 4 USD per million tokens) at the 2026-01-01 floor; nine
+  models, 45 rows. The other seeded models were re-checked against the same page and are
+  unchanged. `claude-haiku-5-5` is not seeded: its price is tiered by prompt length and
+  `model_pricing` has no tier dimension. PROVISIONAL like the rest of the seed until WP-C1
+  ratifies.
 - An alert rule can no longer change `kind` while keeping its id; boot fails and names the
   rule. Dedupe is keyed on rule id and subject, so the new condition stayed silent for every
   session or agent the old one had already fired on.
