@@ -157,6 +157,31 @@ move the date.
 The remaining reviewer questions are answered by the recommendation of the item they belong to;
 each report keeps its full question list.
 
+### 6.1 Answers — 2026-10-30 (owner delegation)
+
+Ivan delegated every open owner item on 2026-10-30 (in chat: "всичко което чака мен - искам да
+направиш необходимите анализи и да решиш проблема"). Each answer below was taken by the
+coordinator on that delegation, after the check named in the "Basis" column. Where an answer
+departs from the recommendation, the row says why.
+
+| # | Answer | Basis |
+|---|---|---|
+| D1 | **Seed `claude-haiku-5-5`** with the official rates for prompts ≤ 100k tokens and handle the > 100k long-context rates per request (prompt = input + cache read + cache creation); see R15 | Official pricing page re-read 2026-10-30; corpus scan: 16 haiku-5-5 requests, every prompt ≤ 100k |
+| D2 | **No** — a pricing gap never hides the DAG (R2 stays P0) | As recommended |
+| D3 | **CLI with an audit row** | As recommended |
+| D4 | **Yes** — availability is a release criterion; SEC-1 stays P0 (R3) | As recommended |
+| D5 | **One account** (only uid 501 on the Mac Mini); **fix SEC-2 anyway** (R4 stays P0) | `dscl . -list /Users UniqueID` on 2026-10-30 |
+| D6 | **Defer tunnel access to v1.x** — Tailscale is not installed; the token-strength and 401-backoff items stay v1.x | `which tailscale` empty on 2026-10-30 |
+| D7 | **`private: true`**, `publishConfig` removed, README and CHANGELOG say nothing is on npm — done in `1229091` (R6) | `npm view agenthropic` → E404; publishing needs an npm login that does not exist on this machine |
+| D8 | **Departs from the recommendation.** The human labels are **not** filled by an agent: that would launder the gate the project calls its moat (lane L3 forbids it, and a test guards `annotations/human/`). Instead an **independent agent cross-check** of the 60 template claims is recorded as agent evidence, and RELEASE §3 carries a **written waiver**: v1.0.0 ships with the hierarchy gate **NOT CERTIFIED** by humans, and the release notes say so. Ivan may still label before 2026-11-16 and lift the waiver | Labelling is a human act by definition; the delegation cannot transfer it |
+| D9 | Per box, in writing (RELEASE): **drill** and **BENCH-SHAPE** done by an agent on 2026-10-30; **COPY review** passes; **friction log** and the **< 30 s stopwatch** need Ivan's own use, so they are **waived as tag criteria** and kept as KC-5 evidence; **rival trial** needs Ivan's permission to run a third-party package (blocked, asked) | Each box's "who" column in RELEASE.md |
+| D10 | **Yes** — lane L11 is frozen until KC-5 | As recommended |
+| D11 | **256 MiB default, env override** (R14) | As recommended |
+| D12 | **Done** — `cleanupPeriodDays: 99999` in `~/.claude/settings.json` and in the harness source repo; the code half of R12 stays open | Applied 2026-10-30 |
+| D13 | **v1.x** | As recommended |
+| D14 | **v1.x** — the corpus has no fast-mode and no web-search usage | Corpus scan 2026-10-30 |
+| D15 | **No** — a post-freeze verdict record | As recommended |
+
 ## 7. Documentation rule for the rest of v1.0
 
 New prose is allowed only where it replaces stale prose (R22) or records a decision above.

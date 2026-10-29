@@ -31,15 +31,31 @@ Rules of this document:
       rebases — and ticked on 2026-09-18, four days after its date, because the session
       owning the tick was inactive in between (the tree did not change). KC-3 is
       2026-10-12.
+      **Checked 2026-10-30:** 32 days to KC-4; KC-3's condition is met (the tick is still
+      the owner's); KC-5 cannot be met before the tag. This box is redone on the tag day
+      and ticked then. A check made a month early does not count for the tag.
 - [ ] **[HUMAN] LABEL-ME ratification.** The five
       `spike/corpus/sessions/<short>/LABEL-ME.md` trees (224 per-edge blanks) are
       hand-filled by Ivan ([`docs/analysis/phase0-verdict.md`](docs/analysis/phase0-verdict.md)
       §"what still needs Ivan"). Until then every spike-derived number is
       **PROVISIONAL** and the release notes must say so. By definition this cannot be
       automated.
+      **Waiver recorded 2026-10-30 (D8).** No agent fills these trees, because that would
+      launder the human gate. If they are still blank on the tag day, v1.0.0 ships with
+      every spike-derived number **PROVISIONAL** and the hierarchy gate **NOT CERTIFIED**,
+      and the release notes say both (§7). An independent agent cross-check of the 60
+      template claims is recorded as agent evidence in
+      [`docs/measurement/hierarchy-oracle-2026-10-30.md`](docs/measurement/hierarchy-oracle-2026-10-30.md).
+      It does not replace this box. Ivan can still label the trees and lift the waiver.
+      _(Owner delegation of 2026-10-30, D-numbers of [`10-synthesis.md`](docs/analysis/role-reviews-2026-10-29/10-synthesis.md) §6.1.)_
 - [ ] **[HUMAN] The two KC-0 physical acts** — friction log opened; ≥1 rival dashboard
       installed — recorded open in `TODO.md` as of 2026-07-29. Close or consciously
       waive them in writing before tagging.
+      **2026-10-30 (D9):** the **friction log** is **waived as a tag criterion**. It needs
+      Ivan's own daily use and cannot be produced on his behalf; it remains the KC-5
+      evidence it always was. The **rival install** waits for Ivan's permission to run a
+      third-party package (`claude-code-templates --analytics`) under
+      `~/Development/_temp/rival-trial/`, and stays open until then. _(Owner delegation of 2026-10-30, D-numbers of [`10-synthesis.md`](docs/analysis/role-reviews-2026-10-29/10-synthesis.md) §6.1.)_
 - [x] **Branch protection — DONE 2026-08-25.** CD-7 says coverage **"blocks merges"**; the
       CI workflow itself notes that blocking requires a branch-protection rule
       ([`.github/workflows/ci.yml`](.github/workflows/ci.yml) header). `main` now requires
@@ -217,6 +233,9 @@ them. Test bodies live under `apps/server/test/p0/`.
 - [ ] **[HUMAN-dependent] Hierarchy correctness ≥95%** vs. the labeled corpus
       (testing.md §4) — this bar is only meaningful once the §0 LABEL-ME box is done,
       because it is scored against Ivan's hand-labeled trees, not self-check.
+      **Waived in writing 2026-10-30 (D8):** unless Ivan labels the trees before the tag,
+      this box stays unticked and the release notes say the gate is **NOT CERTIFIED** by
+      humans. See the §0 LABEL-ME box.
 
 ## 4. CD-9 provenance / licensing checks
 
@@ -236,6 +255,13 @@ scan."**
       [`docs/site/contributing/licensing.md`](docs/site/contributing/licensing.md).
       This is a judgment review of code vs. attribution page — a human read, not a
       script.
+      **Reviewed 2026-10-30 by the coordinator on owner delegation (D9): nothing was
+      copied.** `licensing.md` states that no source was copied. The Telegram sink
+      (`apps/server/src/alerts/format-telegram.ts`) records the hoangsonww idea as
+      reimplemented, and the DAG layout (`apps/web/src/views/layout/layered.ts`) was
+      written from scratch. With no copied artifact in the tree, there is nothing to
+      attribute beyond what the page already says. Re-read it on the tag day if the tree
+      has changed.
 - [x] **[HUMAN] Post-1.0 code in the tagged tree — decide and record.** _(Amended
       2026-10-27; until then this box expected the grep below to be empty.)_ The v2.0
       alerting core (Telegram sink, rules engine, dispatcher, migrations 22–23) is in the
@@ -303,6 +329,9 @@ scan."**
 - [ ] **[HUMAN] The five daily questions are answerable and time-to-understand < 30s is
       measured, not asserted** (roadmap §5, Phase-4 exit gate) — a human sits in front
       of the dashboard with a stopwatch. Record the measurement.
+      **Waived as a tag criterion 2026-10-30 (D9):** a stopwatch run is a human act and
+      cannot be delegated. If Ivan does not run it before the tag, the release notes must
+      not claim "< 30 s" and must say the time-to-understand is **unmeasured**. _(Owner delegation of 2026-10-30, D-numbers of [`10-synthesis.md`](docs/analysis/role-reviews-2026-10-29/10-synthesis.md) §6.1.)_
 - [ ] **Every displayed dollar traces to ground-truth tokens × a dated price** — proven
       by P0-1 (§3) plus `apps/server/test/api-cost.test.ts` / `db-pricing` suites; no
       silent zero-cost default (CD-3/CD-4 cost-trust chain).
@@ -380,7 +409,9 @@ scan."**
   - the ground-truth rule: token counts read from `~/.claude/projects/*.jsonl`, never
     inferred;
   - the **PROVISIONAL** label on all spike-derived accuracy numbers if the §0 LABEL-ME
-    box is still open at tag time;
+    box is still open at tag time, and the sentence "the hierarchy gate is NOT CERTIFIED
+    by human labels" (D8 waiver, 2026-10-30);
+  - "time-to-understand is unmeasured" unless the §6 stopwatch box was run (D9 waiver);
   - the backup drilled in §5 (path + date);
   - a link to the GitHub Pages docs site and the MIT license.
 - [ ] **Post-tag:** CI green on the tag ref; Pages deploy green; badges in `README.md`

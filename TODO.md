@@ -1106,15 +1106,15 @@ synthesis, not on this board._
 - [ ] **R3** fix the `ENV_ASSIGNMENT` ReDoS in `hooks/redact.ts`; length cap; time-budget test [SEC-1]
 - [ ] **R4** private modes for DB dir, DB/WAL/SHM, backups; startup permission check [SEC-2]
 - [ ] **R5** `pnpm audit --prod` free of high (fastify ≥5.12.7) [OSS-2]
-- [ ] **R6** npm: `private: true` + remove the claim, or publish (Ivan decides, D7) [OSS-1]
-- [ ] **R7** LABEL-ME ≥52 agents by 2026-11-16, or written waiver in RELEASE §3 (Ivan, D8) [QA-1, PRD-8]
+- [x] **R6** npm: `private: true` + remove the claim, or publish (Ivan decides, D7) [OSS-1] _(done 2026-10-30, `1229091` — D7 answered `private: true`)_
+- [ ] **R7** LABEL-ME ≥52 agents by 2026-11-16, or written waiver in RELEASE §3 (Ivan, D8) [QA-1, PRD-8] _(D8 2026-10-30: waiver written in RELEASE §3 + agent cross-check recorded; Ivan may still label and lift it)_
 
 **P1 — by 2026-11-22**
 - [ ] **R8** SIGTERM/SIGINT → `close()` [OPS-2]
 - [ ] **R9** atomic + verified backups, backup at start, pre-migration backup, downgrade guard, restore schema check [OPS-3/4/9, ARC-8, DAT-16]
 - [ ] **R10** RELEASE §5 drill on the real DB, with a real restore [OPS-10, OSS-5]
 - [ ] **R11** `/health` reflects watcher/backup/DB/corpus state; logger on [OPS-5, OPS-6]
-- [ ] **R12** model `cleanupPeriodDays`; fix `overview.md:154` (Ivan: D12) [ARC-3, OPS-11]
+- [ ] **R12** model `cleanupPeriodDays`; fix `overview.md:154` (Ivan: D12) [ARC-3, OPS-11] _(D12 done 2026-10-30 — setting raised to 99999; the code/doc half is open)_
 - [ ] **R13** drift census on `/health`; persist CC version; skip-and-count bad lines [ARC-6, QA-3, DAT-7, DAT-11]
 - [ ] **R14** configurable file cap (256 MiB default); partial flag in API + UI [DAT-3, DAT-5, OPS-15]
 - [ ] **R15** operator pricing CLI with audit row; re-decide haiku-5-5 (D1, D3) [DAT-1, DAT-4]
@@ -1129,7 +1129,7 @@ synthesis, not on this board._
 - [ ] **R24** re-scope `comparison.md` against first-party OTel after the rival trial [PRD-4]
 - [ ] **R25** re-measure cold replay on the current corpus [DAT-17]
 - [ ] **R26** threat-model gaps (availability, multi-user, ambient token, redaction scope) [SEC §4]
-- [ ] **Owner decisions D1–D15** answered (synthesis §6); **lane L11 frozen until KC-5** (D10)
+- [x] **Owner decisions D1–D15** answered (synthesis §6); **lane L11 frozen until KC-5** (D10) _(answered 2026-10-30 on owner delegation — synthesis §6.1)_
 
 ### WP audit 2026-09-26 — every ticked v1.0 work package against its Done-when
 
