@@ -313,7 +313,8 @@ enforces it. Two honest departures from the CD-4 sketch:
   models, 45 rows, the same floor, the same PROVISIONAL label. `claude-haiku-5-5` is left
   out on purpose: its page price is tiered by prompt length (up to and over 100k tokens)
   and `model_pricing` has no tier dimension, so it is a cost-model decision, not a row. It
-  does not occur in the corpus; if it appears, the halt gate refuses it loudly.
+  does not occur in the corpus; if it appears, the halt gate refuses it loudly. _(Owner
+  decision 2026-10-29: it stays unseeded — no base-tier row and no tier dimension.)_
 
 **What is genuinely undecided:** the *authoritative dated source* for these rates and
 the *refresh cadence* that keeps the staleness-fails-CI test honest as the model lineup
