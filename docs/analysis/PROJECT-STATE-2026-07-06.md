@@ -15,6 +15,12 @@ checkpoint has its own playbook in §6 below. If you are reading this much later
 check `DONE.md` and `WORKLOG.md` for entries newer than this date before trusting the
 snapshot in §4–§5.
 
+> **Update — 2026-10-29 (newest; read first).** Eight senior role reviews were run on
+> `db3f042` by owner override of the §8 freeze:
+> [`role-reviews-2026-10-29/`](role-reviews-2026-10-29/README.md). Their synthesis is the
+> current backlog to the v1.0.0 tag (roadmap §9, `TODO.md` role-review backlog): P0 R1–R7,
+> P1 R8–R26 by 2026-11-22, owner decisions D1–D15. KC-4 stays 2026-12-01.
+
 > **Update — 2026-07-07 (the snapshot below remains accurate; nothing is superseded):**
 > the roadmap §8 **analysis freeze was exercised for the first time** — in the 07-06
 > evening chat session Ivan asked for a merciless "what is missing" analysis (i.e. #10);

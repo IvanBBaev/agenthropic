@@ -1094,6 +1094,43 @@ exit and proof live in the plan. Dated one-word answers under D1…D8 are the si
   post-tag CI/Pages/badges green, `DONE.md` closed, this board reduced to the KC-5 items
   (orchestrator). One week of buffer; the critical path is D1 → Wave 3's 14 days → R3.
 
+### Role-review backlog (2026-10-29) _(plan of record: [`10-synthesis.md`](docs/analysis/role-reviews-2026-10-29/10-synthesis.md); roadmap §9)_
+
+_Eight senior role reviews on `db3f042`. P0 rows block the tag; P1 rows land by 2026-11-22
+(Wave 4 end). Ids are the synthesis's; sources in brackets. v1.x/v2.0 items stay in the
+synthesis, not on this board._
+
+**P0 — tag blockers**
+- [ ] **R1** run it: launchd service + hooks installed, friction log day 1 on 2026-10-30 (Ivan; agent writes plist + install script) [PRD-1, OPS-1]
+- [ ] **R2** decouple projection from pricing; `pricing_status` + unpriced banner [ARC-1, DAT-2, PRD-3]
+- [ ] **R3** fix the `ENV_ASSIGNMENT` ReDoS in `hooks/redact.ts`; length cap; time-budget test [SEC-1]
+- [ ] **R4** private modes for DB dir, DB/WAL/SHM, backups; startup permission check [SEC-2]
+- [ ] **R5** `pnpm audit --prod` free of high (fastify ≥5.12.7) [OSS-2]
+- [ ] **R6** npm: `private: true` + remove the claim, or publish (Ivan decides, D7) [OSS-1]
+- [ ] **R7** LABEL-ME ≥52 agents by 2026-11-16, or written waiver in RELEASE §3 (Ivan, D8) [QA-1, PRD-8]
+
+**P1 — by 2026-11-22**
+- [ ] **R8** SIGTERM/SIGINT → `close()` [OPS-2]
+- [ ] **R9** atomic + verified backups, backup at start, pre-migration backup, downgrade guard, restore schema check [OPS-3/4/9, ARC-8, DAT-16]
+- [ ] **R10** RELEASE §5 drill on the real DB, with a real restore [OPS-10, OSS-5]
+- [ ] **R11** `/health` reflects watcher/backup/DB/corpus state; logger on [OPS-5, OPS-6]
+- [ ] **R12** model `cleanupPeriodDays`; fix `overview.md:154` (Ivan: D12) [ARC-3, OPS-11]
+- [ ] **R13** drift census on `/health`; persist CC version; skip-and-count bad lines [ARC-6, QA-3, DAT-7, DAT-11]
+- [ ] **R14** configurable file cap (256 MiB default); partial flag in API + UI [DAT-3, DAT-5, OPS-15]
+- [ ] **R15** operator pricing CLI with audit row; re-decide haiku-5-5 (D1, D3) [DAT-1, DAT-4]
+- [ ] **R16** Vitest `testTimeout` / projects split [QA-4]
+- [ ] **R17** opt-in real-corpus contract suite [QA-2]
+- [ ] **R18** CSP, `frame-ancestors`, XFO, Referrer-Policy; Host allowlist [SEC-3, SEC-4]
+- [ ] **R19** pragmas, periodic checkpoint, vacuum policy [DAT-16, OPS-7, OPS-19]
+- [ ] **R20** replay yields; hook receiver stays responsive [OPS-8]
+- [ ] **R21** UX minimum: deep links, ATTENTION band, live tree, node tokens/$, session labels, local Today, collapsed honesty prose [UX-1/2/3/5/6/8/9]
+- [ ] **R22** release mechanics + docs refresh (CHANGELOG cut, `gh release`, SECURITY channel, RELEASE state, landing page, README ~120 lines) [OSS-3/4/6/7/8]
+- [ ] **R23** every `[HUMAN]` box: do or waive in writing by 2026-11-16 (Ivan, D9) [OSS-9, PRD-2]
+- [ ] **R24** re-scope `comparison.md` against first-party OTel after the rival trial [PRD-4]
+- [ ] **R25** re-measure cold replay on the current corpus [DAT-17]
+- [ ] **R26** threat-model gaps (availability, multi-user, ambient token, redaction scope) [SEC §4]
+- [ ] **Owner decisions D1–D15** answered (synthesis §6); **lane L11 frozen until KC-5** (D10)
+
 ### WP audit 2026-09-26 — every ticked v1.0 work package against its Done-when
 
 _Prompted by WP-F5, found ticked with only its spawner half built. Four read-only auditors
