@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Observed outcome causes on the Live board (D9).** Every session summary from
+  `GET /api/sessions` now carries `outcomeCauseCounts` — all six cause buckets
+  (`concurrency_limit`, `user_interrupt`, `permission_failed`, `dispatch_unavailable`,
+  `terminated_early`, `unclassified`), always present, counting the session's agents whose
+  `outcome_cause` holds that value. Agents with a NULL cause count nowhere: no observed outcome
+  is not success, so the buckets need not sum to `agentCount`. Each Live card adds one
+  plain-text line — `Observed agent outcomes: concurrency_limit 19 · terminated_early 1.` —
+  with the causes verbatim and no colour, and shows nothing when every bucket is zero. No
+  migration: the column exists since migration 17. Closes the WP-U13 UI half.
 - **Opt-in Telegram alerts (v2.0 alerting core).** Set `DASHBOARD_ALERTS_CONFIG` to the absolute
   path of a JSON file of targets and rules and the server raises three kinds of alert: a session
   whose priced cost reaches a dollar threshold, an agent the watchdog marked stuck, and an agent

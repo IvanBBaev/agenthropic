@@ -455,8 +455,9 @@ cascades into deleting its subtree, it just detaches it.
 > exists. Every pre-existing row reads `NULL`, the honest value for an outcome nobody
 > observed. Ingest writes it from the transcript's terminal record; the API serves it as
 > `outcomeCause`, a required nullable field of the agent DTO; the session tree lists any
-> non-`NULL` value verbatim. Whether the Live view shows it is an open owner decision
-> (D9 on the `TODO.md` closing board).
+> non-`NULL` value verbatim. The Live view shows per-cause counts per session
+> (`outcomeCauseCounts` on the session summary; D9, decided yes 2026-10-29), with
+> `NULL`-cause agents counted in no bucket.
 
 ## `orchestration_edges` — the persisted DAG (the moat artifact)
 

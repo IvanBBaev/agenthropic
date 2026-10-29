@@ -168,7 +168,7 @@ snapshot in §4–§5.
 > 5. **What remains is Ivan's, not code.** Wave 3 (from 2026-10-13): the 60 LABEL-ME claims,
 >    the stopwatch run, the 14-day friction log (also the KC-5 evidence), one rival
 >    dashboard. Then the `[HUMAN]` release boxes, the §5 live backup→restore drill on the
->    real database, the L8 BENCH-SHAPE ratification tick, the open decisions D9/D10 on the
+>    real database, the L8 BENCH-SHAPE ratification tick, the open decision D10 (D9 decided yes and built 2026-10-29) on the
 >    board, and the release commit + `v1.0.0` tag by 2026-12-01. Every `package.json` reads
 >    `0.3.0`; the `0.3.0 → 1.0.0` bump, the `CHANGELOG` `[1.0.0]` section and the `DONE.md`
 >    v1.0 entry are acts of the release commit. Agents take only defects the friction log

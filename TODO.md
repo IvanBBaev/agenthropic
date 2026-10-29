@@ -633,7 +633,7 @@ files / 1540 tests, 100/100/100/100 in all five packages**. New PROVISIONAL cons
   - **Decided 2026-09-09 (D4, Closing board):** yes, minimal — the cause as text on `error`
     rows in the Live view and the session tree; no new view, no colour. Wave-1 lane L5. As
     applied: any non-NULL `outcomeCause` renders, whatever the status (see the Closing board);
-    the Live-view half is open as D9.
+    the Live-view half was D9 — decided yes 2026-10-29 and built in lane L8 (`7b2cad2`).
 
   **API HALF CLOSED 2026-09-03; the UI half is still Ivan's.** `outcomeCause` is now a required,
   nullable field on `AgentNodeDto` (`packages/shared/src/schemas/graph.ts`) and is selected and
