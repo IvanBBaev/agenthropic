@@ -481,6 +481,11 @@ has been blocked by a coverage drop yet. The demonstration will be one throwaway
 coverage, its red `ci` run recorded, then closed unmerged. It is opened only on the owner's
 separate go-ahead.)*
 
+*(Amended 2026-10-29: demonstrated. PR #2 deleted one `packages/shared` test file; every
+test passed, the `ci` check failed at the coverage-threshold step (95.74% lines against 100%),
+the PR's merge state read `BLOCKED`, and it was closed unmerged. Record:
+[`d15-coverage-gate-demo.md`](https://github.com/IvanBBaev/agenthropic/blob/main/docs/measurement/d15-coverage-gate-demo.md).)*
+
 **Scope is resolved explicitly, not left ambiguous.** The open scope question the gap
 analysis raised — whether the shipped UI would be quietly exempted from the bar — is
 resolved by *not* exempting it: the web package "counts toward the >90% gate" once

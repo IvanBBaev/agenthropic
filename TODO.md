@@ -1184,10 +1184,11 @@ one-word answer; the recommended default is first.
   does) and add the two missing pathologies synthetically (agent lane) · (b) promote redacted
   real sessions (needs your corpus and a redaction pass).
   - **Done 2026-09-30 (a):** `crashed-no-stop` + `concurrent-instance-a/-b` fixtures and `PATHOLOGY_MANIFEST`; synthetic hierarchy corpus 14/14 edges; WP-X1 amended.
-- [~] **D15 — WP-X5 "a PR dropping below the threshold is blocked (demonstrated)".** Never
+- [x] **D15 — WP-X5 "a PR dropping below the threshold is blocked (demonstrated)".** Never
   demonstrated. **(a)** one throwaway PR lowering coverage, red `ci` run recorded, PR closed
   (needs your go-ahead to open it) · (b) accept the gate's configuration as the evidence.
   - **Decided 2026-09-30 (a), not yet run:** docs record it as pending; the throwaway PR waits for Ivan's go-ahead.
+  - **Done 2026-10-29 (a):** PR #2 red at the coverage-threshold step (run 40945826253), merge state `BLOCKED`, closed unmerged, branch deleted — [`d15-coverage-gate-demo.md`](docs/measurement/d15-coverage-gate-demo.md) (lane L9).
 - [x] **D16 — WP-X10 "WORKLOG presence check".** None exists; WORKLOG is a git-excluded local
   file. **(a)** drop the clause — a tracked check for an untracked file cannot run in CI ·
   (b) a local-only warning script.

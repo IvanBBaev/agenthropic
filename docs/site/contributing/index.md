@@ -226,6 +226,10 @@ has yet been blocked by a coverage drop. The demonstration will be one throwaway
 lowers coverage, its red `ci` run recorded, then closed unmerged — opened only on the
 owner's separate go-ahead.
 
+_Amended 2026-10-29:_ demonstrated — PR #2 failed the required `ci` check on the coverage
+thresholds alone, was blocked from merging and closed unmerged
+([record](https://github.com/IvanBBaev/agenthropic/blob/main/docs/measurement/d15-coverage-gate-demo.md)).
+
 ## WORKLOG discipline
 
 Every project keeps a local `WORKLOG.md` — a session journal appended after each
