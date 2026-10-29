@@ -14,6 +14,7 @@
 import type {
   AgentStatus,
   AgentStatusChangedEvent,
+  SessionOutcomeCauseCountsDto,
   SessionStatusCountsDto,
   SessionSummaryDto,
 } from '../dto';
@@ -30,6 +31,53 @@ export function bucketCount(
   status: AgentStatus,
 ): number | undefined {
   return (counts as Partial<Record<AgentStatus, number>>)[status];
+}
+
+/**
+ * The six persisted outcome causes in the order a card lists them. The
+ * `satisfies` makes a cause added to, removed from or renamed in the shared
+ * schema a compile error here instead of a bucket the board silently skips.
+ */
+const OUTCOME_CAUSE_ORDER = {
+  concurrency_limit: true,
+  user_interrupt: true,
+  permission_failed: true,
+  dispatch_unavailable: true,
+  terminated_early: true,
+  unclassified: true,
+} as const satisfies Record<keyof SessionOutcomeCauseCountsDto, true>;
+
+/**
+ * D9 (2026-10-29), WP-U13 UI half: the line a session card prints for the
+ * outcome causes of its agents - or `null`, meaning print nothing.
+ *
+ * Text only, no colour, each cause as its persisted token VERBATIM (the same
+ * rule as `outcomeCauseText` in the session tree: a paraphrase would have to
+ * decide whether a refused spawn is a failure, and it is not). A zero bucket
+ * is left out; all six at zero is `null`, because agents with no observed
+ * outcome are in no bucket, and saying "no causes" would read as "nothing went
+ * wrong" - a claim the data does not make.
+ *
+ * `dto-guards.ts` does not check this object (rule 2: a missing figure here
+ * has a fallback), so it arrives as `unknown`: a payload with no object at all
+ * says so in words, and a bucket that is not a number names itself
+ * `unreadable` rather than dropping out of the line as if it were zero.
+ */
+export function outcomeCauseLine(counts: unknown): string | null {
+  if (typeof counts !== 'object' || counts === null) {
+    return 'Observed agent outcomes: unreadable (no cause counts sent).';
+  }
+  const record = counts as Record<string, unknown>;
+  const parts: string[] = [];
+  for (const cause of Object.keys(OUTCOME_CAUSE_ORDER)) {
+    const count = record[cause];
+    if (typeof count !== 'number' || !Number.isFinite(count)) {
+      parts.push(`${cause} unreadable`);
+    } else if (count > 0) {
+      parts.push(`${cause} ${String(count)}`);
+    }
+  }
+  return parts.length === 0 ? null : `Observed agent outcomes: ${parts.join(' · ')}.`;
 }
 
 /**

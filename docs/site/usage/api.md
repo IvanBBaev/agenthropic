@@ -388,7 +388,12 @@ lists.)*
 `agentCount`, `totalTokens`, `totalCostUsd`, `unpricedTokens`, and `statusCounts` — an
 object carrying **all five** buckets (`working`, `waiting`, `completed`, `error`,
 `unknown`) every time, so a bucket at zero is a stated zero rather than a gap the client
-has to interpret. Every summary also carries the two honesty fields
+has to interpret. `outcomeCauseCounts` (D9) is the same idea for agent outcome causes:
+all six buckets (`concurrency_limit`, `user_interrupt`, `permission_failed`,
+`dispatch_unavailable`, `terminated_early`, `unclassified`) every time, each counting the
+session's agents whose `outcome_cause` holds that value. Agents with a NULL cause are in
+none of them — NULL means no outcome was observed, not success — so the buckets need not
+sum to `agentCount`. Every summary also carries the two honesty fields
 (`SessionHonestyFields` in `packages/shared/src/schemas/cost.ts`): `partial` (`null`, or
 `{ reason: "main-transcript-oversize", skippedBytes }` when only the session's subagent
 transcripts could be read; `skippedBytes` is nullable) and `usageRecordsDropped` (an

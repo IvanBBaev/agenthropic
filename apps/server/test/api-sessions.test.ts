@@ -94,6 +94,25 @@ describe('session endpoints (WP-U3)', () => {
       error: 0,
       unknown: 1,
     });
+    // D9: one bucket per persisted cause. a-main's NULL cause counts nowhere -
+    // no outcome observed is not "succeeded" - so the buckets sum to 2 of 3.
+    expect(sessionA.outcomeCauseCounts).toEqual({
+      concurrency_limit: 1,
+      user_interrupt: 1,
+      permission_failed: 0,
+      dispatch_unavailable: 0,
+      terminated_early: 0,
+      unclassified: 0,
+    });
+    // The agentless session reports all six buckets at zero, not an absent object.
+    expect(sessionB.outcomeCauseCounts).toEqual({
+      concurrency_limit: 0,
+      user_interrupt: 0,
+      permission_failed: 0,
+      dispatch_unavailable: 0,
+      terminated_early: 0,
+      unclassified: 0,
+    });
   });
 
   it('paginates with defaults, honors offset, and 400s above the caps', async () => {

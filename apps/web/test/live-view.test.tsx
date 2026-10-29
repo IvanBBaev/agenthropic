@@ -15,7 +15,14 @@ import {
 // M-10: the cadence now belongs to the app-wide clock, not to this view.
 import { CLOCK_INTERVAL_MS } from '../src/clock';
 import { createSseClient, type SseClient } from '../src/sse';
-import { deferred, jsonResponse, sessionList, sessionSummary, statusCounts } from './fixtures';
+import {
+  deferred,
+  jsonResponse,
+  outcomeCauseCounts,
+  sessionList,
+  sessionSummary,
+  statusCounts,
+} from './fixtures';
 import { MockEventSource } from './mock-event-source';
 
 const fetchMock = vi.fn();
@@ -89,6 +96,26 @@ describe('LiveView', () => {
     expect(screen.getByText('$0.42')).toBeDefined();
     expect(screen.getByText('~ 3,000 unpriced')).toBeDefined();
     expect(screen.getByText('1 session, most recent first.')).toBeDefined();
+  });
+
+  it('prints the observed outcome causes as plain text on the card (D9)', async () => {
+    const withCauses = sessionSummary({
+      outcomeCauseCounts: outcomeCauseCounts({ concurrency_limit: 2, terminated_early: 1 }),
+    });
+    const withoutCauses = sessionSummary({ id: 'bbbbbbbb-1111-2222-3333-444444444444' });
+    fetchMock.mockResolvedValue(jsonResponse(200, sessionList([withCauses, withoutCauses])));
+    renderView();
+    await screen.findByRole('list', { name: 'sessions' });
+
+    const line = screen.getByTestId(`outcome-causes-${withCauses.id}`);
+    expect(line.textContent).toBe(
+      'Observed agent outcomes: concurrency_limit 2 · terminated_early 1.',
+    );
+    // Text only, no colour: nothing on the line borrows a status class.
+    expect(line.className).toBe('muted card-causes');
+    expect(line.querySelector('[class*="status"]')).toBeNull();
+    // No cause observed is not "nothing went wrong": the card says nothing.
+    expect(screen.queryByTestId(`outcome-causes-${withoutCauses.id}`)).toBeNull();
   });
 
   it('says "Showing N of M" when the server holds more sessions than the page', async () => {

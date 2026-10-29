@@ -244,6 +244,13 @@ button:disabled {
   line-height: 1.4;
 }
 
+/* The outcome-cause line (D9). Plain muted text, no colour: a cause is a
+   recorded fact about how an agent ended, not a severity. */
+.card-causes {
+  margin: 0.35rem 0 0;
+  font-size: 0.85rem;
+}
+
 /* The crash fallback (F-5). Bordered in the error colour because it is the
    one panel on screen that is NOT reporting data - a reader scanning past it
    must not mistake it for an empty state. */

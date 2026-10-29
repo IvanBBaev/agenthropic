@@ -35,6 +35,7 @@ export type {
   SessionListDto,
   SessionPartialDto,
   SessionStatusCountsDto,
+  SessionOutcomeCauseCountsDto,
   SessionSummaryDto,
   SessionTreeDto,
 } from '../../../packages/shared/src/index';

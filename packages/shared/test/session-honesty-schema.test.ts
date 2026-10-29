@@ -31,6 +31,14 @@ const summary: SessionSummaryDto = {
   totalCostUsd: 0,
   unpricedTokens: 10,
   statusCounts: { working: 0, waiting: 0, completed: 0, error: 0, unknown: 1 },
+  outcomeCauseCounts: {
+    concurrency_limit: 0,
+    user_interrupt: 0,
+    permission_failed: 0,
+    dispatch_unavailable: 0,
+    terminated_early: 0,
+    unclassified: 0,
+  },
   partial: PARTIAL,
   usageRecordsDropped: 3,
 };

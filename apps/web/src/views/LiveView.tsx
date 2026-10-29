@@ -75,6 +75,7 @@ import {
   bucketCount,
   isAgentStatusChangedEvent,
   livePatchCount,
+  outcomeCauseLine,
   sortSessionsByRecency,
 } from './live-model';
 import { AGENT_STATUSES, NO_FIGURE_META, STATUS_META, statusMeta } from './status';
@@ -565,6 +566,7 @@ export function LiveView({ token, sse, onAuthRejected }: ViewProps) {
               const recency = formatRelativeTime(session.lastActivityAt, nowMs);
               const sessionStatus = statusMeta(session.status);
               const patches = livePatchCount(session);
+              const causeLine = outcomeCauseLine(session.outcomeCauseCounts);
               return (
                 <li key={session.id} className="card">
                   <div className="card-head">
@@ -618,6 +620,11 @@ export function LiveView({ token, sse, onAuthRejected }: ViewProps) {
                       );
                     })}
                   </div>
+                  {causeLine !== null && (
+                    <p className="muted card-causes" data-testid={`outcome-causes-${session.id}`}>
+                      {causeLine}
+                    </p>
+                  )}
                   <div className="card-metrics muted">
                     <span>
                       {session.agentCount} agent{session.agentCount === 1 ? '' : 's'}
@@ -641,8 +648,9 @@ export function LiveView({ token, sse, onAuthRejected }: ViewProps) {
                   {patches > 0 && (
                     <p className="muted card-provenance" data-testid={`provenance-${session.id}`}>
                       Live from the stream: the buckets above, and the time beside them. Read{' '}
-                      {snapshotAge} and not updated since: the session status, agent count, tokens
-                      and cost ({patches} status {patches === 1 ? 'frame' : 'frames'} applied).
+                      {snapshotAge} and not updated since: the session status, agent count, outcome
+                      causes, tokens and cost ({patches} status {patches === 1 ? 'frame' : 'frames'}{' '}
+                      applied).
                     </p>
                   )}
                 </li>

@@ -72,6 +72,7 @@ export { AgentNodeSchema, OrchestrationEdgeDtoSchema } from './schemas/graph';
 export type { AgentNodeDto, OrchestrationEdgeDto } from './schemas/graph';
 export {
   SessionStatusCountsSchema,
+  SessionOutcomeCauseCountsSchema,
   SessionSummarySchema,
   SessionListResponseSchema,
   SessionDetailSchema,
@@ -79,6 +80,7 @@ export {
 } from './schemas/sessions';
 export type {
   SessionStatusCountsDto,
+  SessionOutcomeCauseCountsDto,
   SessionSummaryDto,
   SessionListDto,
   SessionDetailDto,

@@ -25,6 +25,27 @@ export const SessionStatusCountsSchema = Type.Object(
 
 export type SessionStatusCountsDto = Static<typeof SessionStatusCountsSchema>;
 
+/**
+ * Per-cause counts of the session's agents whose `outcome_cause` is set
+ * (D9, WP-U13 UI half). One bucket per `AgentOutcomeCauseSchema` member, all
+ * six always present; agents with a NULL cause are in none of them, because
+ * NULL means no outcome was observed, not that the agent succeeded. The
+ * buckets do not sum to `agentCount`, and are not meant to.
+ */
+export const SessionOutcomeCauseCountsSchema = Type.Object(
+  {
+    concurrency_limit: Type.Integer({ minimum: 0 }),
+    user_interrupt: Type.Integer({ minimum: 0 }),
+    permission_failed: Type.Integer({ minimum: 0 }),
+    dispatch_unavailable: Type.Integer({ minimum: 0 }),
+    terminated_early: Type.Integer({ minimum: 0 }),
+    unclassified: Type.Integer({ minimum: 0 }),
+  },
+  { additionalProperties: false },
+);
+
+export type SessionOutcomeCauseCountsDto = Static<typeof SessionOutcomeCauseCountsSchema>;
+
 export const SessionSummarySchema = Type.Object(
   {
     id: Type.String(),
@@ -37,6 +58,7 @@ export const SessionSummarySchema = Type.Object(
     totalCostUsd: Type.Number({ minimum: 0 }),
     unpricedTokens: Type.Integer({ minimum: 0 }),
     statusCounts: SessionStatusCountsSchema,
+    outcomeCauseCounts: SessionOutcomeCauseCountsSchema,
     ...SessionHonestyFields,
   },
   { additionalProperties: false },

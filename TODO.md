@@ -620,7 +620,7 @@ files / 1540 tests, 100/100/100/100 in all five packages**. New PROVISIONAL cons
   export named the next duplicate is a compile error instead of a silent shadow. The four correct
   local redeclarations (`db-sessions.test.ts:5`, `db-agents.test.ts:10`, `event-store.test.ts:57`,
   `src/db/pricing.ts:35`) are untouched and still correct.
-- [~] **WP-U13 — `agents.outcome_cause` is written by ingest and read by nothing.** The mirror of
+- [x] **WP-U13 — `agents.outcome_cause` is written by ingest and read by nothing.** The mirror of
   WP-U10: that was a value read by no writer, this is a column written for no reader. Produced at
   `apps/server/src/ingest/normalize-session.ts:267,277` → `apps/server/src/db/agents.ts:130,146,156`;
   no `src/` path ever selects it. Migration 17 justified the column with "the dashboard can say
@@ -895,6 +895,11 @@ exit and proof live in the plan. Dated one-word answers under D1…D8 are the si
     cause there needs a session-level field on the sessions DTO (server + shared, this lane).
     Recommended default: **no for v1.0** — the session tree is where agents are; DagView is out
     of D4's "minimal" scope by the same reading. Found-not-taken by the web lane, not invented.
+    **Decided 2026-10-29 (Ivan): yes.** Built in lane L8: `SessionSummary.outcomeCauseCounts`
+    (six required buckets, NULL-cause agents in none; `apps/server/src/api/queries.ts`) and one
+    plain-text line per Live card, `Observed agent outcomes: <cause> <n> · …`, absent when every
+    bucket is zero (`outcomeCauseLine` in `apps/web/src/views/live-model.ts`). No migration
+    (column since 17), no colour, snapshot-only like tokens/cost. WP-U13 UI half: both views done.
   - **L2 closed 2026-09-09** before Wave 1 opened: the web lane's CF-2 made `hubIsWhole`
     two-sided (`flow.hub` carries both drawn sides; labels `all cost` / `drawn cost` /
     `larger drawn side`), `describeCostFlow` states the hub note itself, and the CV-5 dollar

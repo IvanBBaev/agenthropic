@@ -189,6 +189,15 @@ updates in place.
 > session has tokens that could not be priced, the row shows `~ n unpriced`
 > alongside its dollar figure rather than absorbing them into it.
 >
+> **Observed outcome causes (D9).** When any of a session's agents carries an
+> `outcome_cause`, the card adds one plain-text line under the buckets —
+> `Observed agent outcomes: concurrency_limit 19 · terminated_early 1.` — listing each
+> non-zero cause verbatim, in a fixed order, with no colour. Agents whose cause is NULL
+> are counted nowhere: no observed outcome is not "succeeded", so the counts do not sum
+> to the agent count, and a session with no causes shows no line at all rather than an
+> "ok". The per-agent cause lives in the session tree; this line is the count. Like the
+> token and cost figures, it comes from the snapshot fetch — status frames do not update it.
+>
 > **Who writes each state — and what you see with no hooks installed.** Reading a
 > transcript proves *activity*, never *termination*, so ingest only ever writes
 > `working`. `completed` comes from the `SubagentStop` hook, `waiting` from the `Stop`

@@ -127,7 +127,13 @@ function sessionSummarySelect(idCount: number): string {
       SUM(CASE WHEN status = 'waiting' THEN 1 ELSE 0 END) AS waiting_count,
       SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed_count,
       SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS error_count,
-      SUM(CASE WHEN status IS NULL OR status = 'unknown' THEN 1 ELSE 0 END) AS unknown_count
+      SUM(CASE WHEN status IS NULL OR status = 'unknown' THEN 1 ELSE 0 END) AS unknown_count,
+      SUM(CASE WHEN outcome_cause = 'concurrency_limit' THEN 1 ELSE 0 END) AS cause_concurrency_limit,
+      SUM(CASE WHEN outcome_cause = 'user_interrupt' THEN 1 ELSE 0 END) AS cause_user_interrupt,
+      SUM(CASE WHEN outcome_cause = 'permission_failed' THEN 1 ELSE 0 END) AS cause_permission_failed,
+      SUM(CASE WHEN outcome_cause = 'dispatch_unavailable' THEN 1 ELSE 0 END) AS cause_dispatch_unavailable,
+      SUM(CASE WHEN outcome_cause = 'terminated_early' THEN 1 ELSE 0 END) AS cause_terminated_early,
+      SUM(CASE WHEN outcome_cause = 'unclassified' THEN 1 ELSE 0 END) AS cause_unclassified
     FROM agents
     WHERE session_id IN ${ids}
     GROUP BY session_id
@@ -144,6 +150,12 @@ function sessionSummarySelect(idCount: number): string {
     COALESCE(a.completed_count, 0) AS completed_count,
     COALESCE(a.error_count, 0) AS error_count,
     COALESCE(a.unknown_count, 0) AS unknown_count,
+    COALESCE(a.cause_concurrency_limit, 0) AS cause_concurrency_limit,
+    COALESCE(a.cause_user_interrupt, 0) AS cause_user_interrupt,
+    COALESCE(a.cause_permission_failed, 0) AS cause_permission_failed,
+    COALESCE(a.cause_dispatch_unavailable, 0) AS cause_dispatch_unavailable,
+    COALESCE(a.cause_terminated_early, 0) AS cause_terminated_early,
+    COALESCE(a.cause_unclassified, 0) AS cause_unclassified,
     COALESCE(u.total_tokens, 0) AS total_tokens,
     COALESCE(u.cost_usd, 0) AS cost_usd,
     COALESCE(u.unpriced_tokens, 0) AS unpriced_tokens,
@@ -169,6 +181,12 @@ interface SessionSummaryRow {
   readonly completed_count: number;
   readonly error_count: number;
   readonly unknown_count: number;
+  readonly cause_concurrency_limit: number;
+  readonly cause_user_interrupt: number;
+  readonly cause_permission_failed: number;
+  readonly cause_dispatch_unavailable: number;
+  readonly cause_terminated_early: number;
+  readonly cause_unclassified: number;
   readonly total_tokens: number;
   readonly cost_usd: number;
   readonly unpriced_tokens: number;
@@ -218,6 +236,15 @@ function toSessionSummary(row: SessionSummaryRow): SessionSummaryDto {
       completed: row.completed_count,
       error: row.error_count,
       unknown: row.unknown_count,
+    },
+    // D9: one bucket per persisted cause; NULL-cause agents count nowhere.
+    outcomeCauseCounts: {
+      concurrency_limit: row.cause_concurrency_limit,
+      user_interrupt: row.cause_user_interrupt,
+      permission_failed: row.cause_permission_failed,
+      dispatch_unavailable: row.cause_dispatch_unavailable,
+      terminated_early: row.cause_terminated_early,
+      unclassified: row.cause_unclassified,
     },
     ...toHonesty(row.partial_reason, row.partial_skipped_bytes, row.usage_records_dropped),
   };

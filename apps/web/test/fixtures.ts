@@ -18,6 +18,7 @@ import type {
   SessionCostDto,
   SessionListDto,
   SessionPartialDto,
+  SessionOutcomeCauseCountsDto,
   SessionStatusCountsDto,
   SessionSummaryDto,
   SessionTreeDto,
@@ -27,6 +28,20 @@ export function statusCounts(
   overrides: Partial<SessionStatusCountsDto> = {},
 ): SessionStatusCountsDto {
   return { working: 0, waiting: 0, completed: 0, error: 0, unknown: 0, ...overrides };
+}
+
+export function outcomeCauseCounts(
+  overrides: Partial<SessionOutcomeCauseCountsDto> = {},
+): SessionOutcomeCauseCountsDto {
+  return {
+    concurrency_limit: 0,
+    user_interrupt: 0,
+    permission_failed: 0,
+    dispatch_unavailable: 0,
+    terminated_early: 0,
+    unclassified: 0,
+    ...overrides,
+  };
 }
 
 export function sessionSummary(overrides: Partial<SessionSummaryDto> = {}): SessionSummaryDto {
@@ -41,6 +56,7 @@ export function sessionSummary(overrides: Partial<SessionSummaryDto> = {}): Sess
     totalCostUsd: 0.42,
     unpricedTokens: 0,
     statusCounts: statusCounts({ working: 1, completed: 2 }),
+    outcomeCauseCounts: outcomeCauseCounts(),
     partial: null,
     usageRecordsDropped: 0,
     ...overrides,

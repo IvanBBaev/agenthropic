@@ -8,9 +8,10 @@ import {
   applyAgentStatusChange,
   isAgentStatusChangedEvent,
   livePatchCount,
+  outcomeCauseLine,
   sortSessionsByRecency,
 } from '../src/views/live-model';
-import { sessionSummary, statusCounts } from './fixtures';
+import { outcomeCauseCounts, sessionSummary, statusCounts } from './fixtures';
 
 function statusEvent(overrides: Partial<AgentStatusChangedEvent> = {}): AgentStatusChangedEvent {
   return {
@@ -487,5 +488,57 @@ describe('applyAgentStatusChange under frames that contradict an applied move (L
       statusCounts({ working: 2, completed: 1 }),
     );
     expect(livePatchCount(redelivered.sessions[0]!)).toBe(2);
+  });
+});
+
+describe('outcomeCauseLine (D9)', () => {
+  it('prints nothing when no agent carries a cause - never "no causes" or "ok"', () => {
+    expect(outcomeCauseLine(outcomeCauseCounts())).toBeNull();
+  });
+
+  it('lists every non-zero cause verbatim, in schema order, and leaves zeros out', () => {
+    expect(
+      outcomeCauseLine(
+        outcomeCauseCounts({ terminated_early: 1, concurrency_limit: 19, user_interrupt: 7 }),
+      ),
+    ).toBe(
+      'Observed agent outcomes: concurrency_limit 19 · user_interrupt 7 · terminated_early 1.',
+    );
+  });
+
+  it('reaches every one of the six buckets', () => {
+    const line = outcomeCauseLine({
+      concurrency_limit: 1,
+      user_interrupt: 2,
+      permission_failed: 3,
+      dispatch_unavailable: 4,
+      terminated_early: 5,
+      unclassified: 6,
+    });
+    expect(line).toBe(
+      'Observed agent outcomes: concurrency_limit 1 · user_interrupt 2 · permission_failed 3 · ' +
+        'dispatch_unavailable 4 · terminated_early 5 · unclassified 6.',
+    );
+  });
+
+  it('names a bucket that is missing or not a finite number instead of treating it as zero', () => {
+    const rest: Record<string, unknown> = { ...outcomeCauseCounts({ unclassified: 2 }) };
+    delete rest.permission_failed;
+    expect(outcomeCauseLine({ ...rest, terminated_early: Number.NaN })).toBe(
+      'Observed agent outcomes: permission_failed unreadable · terminated_early unreadable · ' +
+        'unclassified 2.',
+    );
+    expect(outcomeCauseLine({ ...outcomeCauseCounts(), user_interrupt: '3' })).toBe(
+      'Observed agent outcomes: user_interrupt unreadable.',
+    );
+  });
+
+  it('says so when the payload carried no cause counts at all', () => {
+    expect(outcomeCauseLine(undefined)).toBe(
+      'Observed agent outcomes: unreadable (no cause counts sent).',
+    );
+    expect(outcomeCauseLine(null)).toBe(
+      'Observed agent outcomes: unreadable (no cause counts sent).',
+    );
   });
 });

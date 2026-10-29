@@ -68,6 +68,14 @@ const sessionSummary: SessionSummaryDto = {
   totalCostUsd: 0.05,
   unpricedTokens: 100,
   statusCounts: { working: 1, waiting: 0, completed: 1, error: 0, unknown: 0 },
+  outcomeCauseCounts: {
+    concurrency_limit: 0,
+    user_interrupt: 0,
+    permission_failed: 0,
+    dispatch_unavailable: 0,
+    terminated_early: 0,
+    unclassified: 0,
+  },
   partial: null,
   usageRecordsDropped: 0,
 };
@@ -206,6 +214,38 @@ describe('session schemas', () => {
     expect(
       Value.Check(SessionListResponseSchema, {
         sessions: [{ ...sessionSummary, statusCounts: counts }],
+        total: 1,
+        limit: 50,
+        offset: 0,
+      }),
+    ).toBe(false);
+  });
+
+  it('outcomeCauseCounts carries exactly the six cause buckets (D9)', () => {
+    const list = (outcomeCauseCounts: unknown): unknown => ({
+      sessions: [{ ...sessionSummary, outcomeCauseCounts }],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    });
+    const missingOne: Record<string, unknown> = { ...sessionSummary.outcomeCauseCounts };
+    delete missingOne.unclassified;
+    expect(Value.Check(SessionListResponseSchema, list(missingOne))).toBe(false);
+    // An invented "ok" bucket is refused: no cause observed is not success.
+    expect(
+      Value.Check(SessionListResponseSchema, list({ ...sessionSummary.outcomeCauseCounts, ok: 3 })),
+    ).toBe(false);
+    expect(
+      Value.Check(
+        SessionListResponseSchema,
+        list({ ...sessionSummary.outcomeCauseCounts, terminated_early: -1 }),
+      ),
+    ).toBe(false);
+    const withoutCauses: Record<string, unknown> = { ...sessionSummary };
+    delete withoutCauses.outcomeCauseCounts;
+    expect(
+      Value.Check(SessionListResponseSchema, {
+        sessions: [withoutCauses],
         total: 1,
         limit: 50,
         offset: 0,
