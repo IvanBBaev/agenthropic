@@ -236,12 +236,15 @@ scan."**
       [`docs/site/contributing/licensing.md`](docs/site/contributing/licensing.md).
       This is a judgment review of code vs. attribution page — a human read, not a
       script.
-- [ ] **[HUMAN] Post-1.0 code in the tagged tree — decide and record.** _(Amended
+- [x] **[HUMAN] Post-1.0 code in the tagged tree — decide and record.** _(Amended
       2026-10-27; until then this box expected the grep below to be empty.)_ The v2.0
       alerting core (Telegram sink, rules engine, dispatcher, migrations 22–23) is in the
       tree since `7dcf795`, off by default. Before tagging, the owner decides whether
       v1.0.0 ships it dark (release notes say "opt-in alerting core, off by default") or
-      not at all, and records the choice here. Provenance either way: no hoangsonww code
+      not at all, and records the choice here.
+      **Decided 2026-10-29 (Ivan): ships dark.** v1.0.0 carries the core unchanged and
+      inert unless `DASHBOARD_ALERTS_CONFIG` is set; the release notes say "opt-in
+      alerting core, off by default". Nothing is removed (lane L10, no branch). Provenance either way: no hoangsonww code
       was copied — the idea is credited in
       [`licensing.md`](docs/site/contributing/licensing.md) — and the cast/nirdiamant
       clean-room reimplementations are still absent:
@@ -370,8 +373,8 @@ scan."**
 
 - [ ] **Release notes must contain, verbatim honesty included:**
   - what v1.0 is: the persisted subagent DAG + dollar-accurate cost cockpit answering
-    the five daily questions — and, per the §4 decision, either that the opt-in alerting
-    core ships off by default (`DASHBOARD_ALERTS_CONFIG`) or that alerts are not in v1.0;
+    the five daily questions — and, per the §4 decision (ship dark, 2026-10-29), that the
+    opt-in alerting core ships off by default (`DASHBOARD_ALERTS_CONFIG`);
   - the security posture paragraph (loopback-only, no spawner, auth-mandatory,
     same-origin SSE, tunnel-only remote access);
   - the ground-truth rule: token counts read from `~/.claude/projects/*.jsonl`, never

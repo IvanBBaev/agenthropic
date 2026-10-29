@@ -29,7 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streamed, and the only host the server ever calls is the Telegram Bot API. With the variable
   unset nothing changes, and a bad file or an unresolvable token stops startup with a message
   that names the problem, not the value. Turning a rule on alerts only on activity from then on,
-  never on history. Setup: `docs/site/usage/telegram.md`.
+  never on history. Ships in v1.0.0 off by default (owner decision 2026-10-29, `RELEASE.md` §4).
+  Setup: `docs/site/usage/telegram.md`.
 - **The Sessions view now answers "what changed since X".** A "Changed since" form reads
   `GET /api/changes` for a chosen UTC day and lists the changed sessions as plain text. It states
   the served `(since, until]` event-time window and the totals for the whole window, and, when

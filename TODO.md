@@ -1083,6 +1083,7 @@ exit and proof live in the plan. Dated one-word answers under D1…D8 are the si
     invalidated three `RELEASE.md` boxes: §2 no-SSRF and secrets now name the sink and the
     `WP-A10` corpus test, and §4 "nothing post-1.0" became a `[HUMAN]` box — **Ivan decides
     whether v1.0.0 ships the core dark or not at all** (§7 notes follow that decision).
+    **Decided 2026-10-29: ships dark** (lane L10; RELEASE §4 box checked, §7 note narrowed).
     R2 the same day: `SECURITY.md` §9 and ~25 "no outbound request / alerting not built"
     passages across `faq.md`, `what-is-agenthropic.md`, `model.md`, `threat-model.md`,
     `comparison.md`, `roadmap.md`, `the-moat.md`, ADR CD-7 / CD-10, `configuration.md`,

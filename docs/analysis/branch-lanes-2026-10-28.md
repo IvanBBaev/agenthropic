@@ -89,7 +89,7 @@
 | L7 | WP-C1 pricing ratification (+ migration 24 if a rate moves) | Ivan + agent | `lane/pricing` | now | — |
 | L8 | D9 / WP-U13 UI half (Live view cause) | Ivan decides; agent builds if "yes" | `lane/d9-live-cause` | **done 2026-10-29** (D9 = yes; `7b2cad2`) | — |
 | L9 | D15: throwaway coverage-drop PR, red CI recorded | agent, on Ivan's go-ahead (needs a push) | `lane/d15-coverage-drop` | after go-ahead | — (never merged) |
-| L10 | RELEASE §4: ship the alerting core dark or remove it | Ivan decides; agent applies | `lane/alerts-ship` | after §4 answer | L11 if "remove" |
+| L10 | RELEASE §4: ship the alerting core dark or remove it | Ivan decides; agent applies | — (`main`) | **done 2026-10-29** (§4 = ship dark; no branch) | — |
 | L11 | Alerting-core hardening (the peer session's current work) | agent | `lane/alerts-hardening` | ongoing | L10 "remove" variant |
 | INT | Integrator: hot files, count pass, R1/R2 | agent, on `main` | — (`main`) | after each merge | — |
 | R3 / W5 | `[HUMAN]` release boxes, release commit, tag, push | Ivan (+ INT) | — (`main`) | after every lane above has merged | everything — serial |
