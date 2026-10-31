@@ -1103,7 +1103,10 @@ synthesis, not on this board._
 **P0 — tag blockers**
 - [ ] **R1** run it: launchd service + hooks installed, friction log day 1 on 2026-10-30 (Ivan; agent writes plist + install script) [PRD-1, OPS-1]
 - [ ] **R2** decouple projection from pricing; `pricing_status` + unpriced banner [ARC-1, DAT-2, PRD-3]
-- [ ] **R3** fix the `ENV_ASSIGNMENT` ReDoS in `hooks/redact.ts`; length cap; time-budget test [SEC-1]
+- [x] **R3** fix the `ENV_ASSIGNMENT` ReDoS in `hooks/redact.ts`; length cap; time-budget test [SEC-1]
+  — done 2026-10-31 (`d310067`): JWT and `ENV_ASSIGNMENT` rewritten to linear, output pinned to the
+  originals by a 20k-input differential test; 256 KiB adversarial time-budget test. The length cap was
+  deliberately not applied (no gain once linear; it would break dedupe idempotency and drop evidence).
 - [ ] **R4** private modes for DB dir, DB/WAL/SHM, backups; startup permission check [SEC-2]
 - [ ] **R5** `pnpm audit --prod` free of high (fastify ≥5.12.7) [OSS-2]
 - [x] **R6** npm: `private: true` + remove the claim, or publish (Ivan decides, D7) [OSS-1] _(done 2026-10-30, `1229091` — D7 answered `private: true`)_

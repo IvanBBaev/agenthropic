@@ -320,6 +320,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Hook ingest can no longer be stalled by a single crafted body (R3 / SEC-1). Two redactor
+  patterns, the JWT shape and the `NAME=value` assignment rule, were quadratic on long runs of
+  their character class (`'a.'` x 40k chars took 35 s on the event loop). Both now attempt once
+  per run and run in linear time with byte-identical output, pinned by a differential test
+  against the original patterns and a 256 KiB adversarial time-budget test.
 - Sessions on `claude-sonnet-5-5` are priced instead of halting ingest. The model had no
   `model_pricing` row, so each of its sessions stopped with an `unknown model id` PricingError
   and was left out of the dashboard (1119 assistant records in the local corpus). Migration 24
