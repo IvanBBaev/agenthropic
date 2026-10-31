@@ -409,6 +409,16 @@ a `tool_result` (`user` row, **no `usage` block**), so it is never re-counted. P
 child `message.id` sets are **disjoint** → provably no double-count. Partition identity
 `sum(per-agent) + ROOT == session total` holds to <1e-6 USD in all 5 sessions.
 
+> **Amended 2026-10-31 — forked subagents.** A fork transcript (`agentType: "fork"`,
+> `isFork: true` in its sidecar) breaks the disjointness in one known place. Its first record
+> is `{"type":"fork-context-ref", agentId, contextLength, parentLastUuid, parentSessionId}`,
+> and the next one repeats the parent's assistant message that holds the spawning `Agent`
+> tool_use: same `message.id`, `parentUuid: null`, the fork's own `agentId`. The real corpus
+> holds four such files (two sessions). The parser drops that copy — a parent-less assistant
+> record on a transcript that opens with `fork-context-ref`, whose `message.id` also has
+> usage on another transcript — so the tokens stay with the parent and are counted once.
+> Every other `message.id` shared across agents is still a loud `UsageConflictError`.
+
 ### 5.4 Pricing must be bucket-and-model-aware (N3)
 88% of corpus tokens are cheap **cache reads** — a flat per-token rate would be wildly
 wrong. Price each of the **five** buckets (fresh input, output, cache-write-5m,

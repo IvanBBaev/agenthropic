@@ -864,12 +864,55 @@ interface ExtractedUsage {
   readonly dropped: number;
 }
 
-/** One UsageRow per assistant message carrying a `usage` block, across every transcript. */
+/**
+ * A forked subagent's transcript opens with a `fork-context-ref` record that
+ * points at the parent's context instead of copying it.
+ */
+function isForkTranscript(transcript: Transcript): boolean {
+  const first = asRecord(transcript.records.find((record) => asRecord(record) !== undefined));
+  return asString(first?.['type']) === 'fork-context-ref';
+}
+
+/** The owners of every transcript carrying a usage record with each `message.id`. */
+function usageOwnersByMessageId(transcripts: readonly Transcript[]): Map<string, Set<string>> {
+  const owners = new Map<string, Set<string>>();
+  for (const transcript of transcripts) {
+    for (const rawRecord of transcript.records) {
+      const record = asRecord(rawRecord);
+      if (asString(record?.['type']) !== 'assistant') {
+        continue;
+      }
+      const message = asRecord(record?.['message']);
+      const messageId = asString(message?.['id']);
+      if (messageId === undefined || asRecord(message?.['usage']) === undefined) {
+        continue;
+      }
+      const set = owners.get(messageId) ?? new Set<string>();
+      set.add(transcript.owner);
+      owners.set(messageId, set);
+    }
+  }
+  return owners;
+}
+
+/**
+ * One UsageRow per assistant message carrying a `usage` block, across every transcript.
+ *
+ * Fork inheritance (parser-spec 5.3, amended 2026-10-31): right after its
+ * `fork-context-ref` record a fork transcript repeats the parent's assistant
+ * message that spawned it — same `message.id`, `parentUuid: null`, the fork's
+ * own `agentId`. Those tokens were spent by the parent and are already on the
+ * parent's transcript, so the fork's copy is not a usage row. Only that exact
+ * shape is skipped; any other `message.id` shared across agents still reaches
+ * the dedupe as a loud attribution conflict.
+ */
 function extractUsageRows(transcripts: readonly Transcript[]): ExtractedUsage {
   const rows: UsageRow[] = [];
   let dropped = 0;
+  const owners = usageOwnersByMessageId(transcripts);
   for (const transcript of transcripts) {
     const agentId = transcript.isMain ? null : transcript.owner;
+    const isFork = isForkTranscript(transcript);
     for (const rawRecord of transcript.records) {
       const record = asRecord(rawRecord);
       if (asString(record?.['type']) !== 'assistant') {
@@ -883,6 +926,11 @@ function extractUsageRows(transcripts: readonly Transcript[]): ExtractedUsage {
       }
       if (messageId === undefined) {
         dropped += 1;
+        continue;
+      }
+      // This transcript is always among the owners, so a second one means the
+      // message also lives on another agent's transcript.
+      if (isFork && record?.['parentUuid'] === null && owners.get(messageId)!.size > 1) {
         continue;
       }
       rows.push({

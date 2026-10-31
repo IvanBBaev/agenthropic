@@ -325,6 +325,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   their character class (`'a.'` x 40k chars took 35 s on the event loop). Both now attempt once
   per run and run in linear time with byte-identical output, pinned by a differential test
   against the original patterns and a 256 KiB adversarial time-budget test.
+- Forked subagents no longer halt ingest. A fork transcript opens with a
+  `fork-context-ref` record and then repeats the parent's spawning assistant message under the
+  fork's `agentId`. The usage dedupe saw one `message.id` on two agents and threw
+  "conflicting agent attribution", so the whole session failed to ingest (four files in the
+  real corpus). The parser now drops that inherited copy and keeps the tokens on the parent;
+  any other cross-agent `message.id` collision stays loud. parser-spec §5.3 records the rule.
 - Sessions on `claude-sonnet-5-5` are priced instead of halting ingest. The model had no
   `model_pricing` row, so each of its sessions stopped with an `unknown model id` PricingError
   and was left out of the dashboard (1119 assistant records in the local corpus). Migration 24

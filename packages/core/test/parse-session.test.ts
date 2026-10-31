@@ -2623,3 +2623,130 @@ describe('parseSession — Claude Code version detection (parser-gate #10)', () 
     expect(result.claudeCodeVersions).toEqual([]);
   });
 });
+
+// --- fork inheritance: a fork's copy of the parent's spawning message --------
+// A forked subagent's transcript opens with a `fork-context-ref` record and then
+// repeats the parent's assistant message that spawned it (same message.id,
+// `parentUuid: null`, the fork's agentId). The tokens were spent once, by the
+// parent, so the copy is not a usage row (parser-spec 5.3, amended 2026-10-31).
+
+describe('parseSession — fork transcripts inherit the spawning message', () => {
+  const SESSION = 'f04c0000-1111-4222-8333-444444444444';
+  const FORK = 'f04cf04c';
+
+  const forkRef = (extra: Record<string, unknown> = {}) =>
+    jline({
+      type: 'fork-context-ref',
+      agentId: FORK,
+      contextLength: 2,
+      parentLastUuid: 'u-main-2',
+      parentSessionId: SESSION,
+      ...extra,
+    });
+
+  const mainSpawn = jline({
+    sessionId: SESSION,
+    type: 'assistant',
+    uuid: 'u-main-2',
+    parentUuid: 'u-main-1',
+    timestamp: '2026-10-30T10:00:01.000Z',
+    message: { id: 'msg_spawn', model: 'claude-opus-5-5', usage: { input_tokens: 100 } },
+  });
+
+  const mainFile = {
+    path: `${SESSION}.jsonl`,
+    lines: [
+      jline({
+        sessionId: SESSION,
+        type: 'user',
+        uuid: 'u-main-1',
+        timestamp: '2026-10-30T10:00:00.000Z',
+        message: { role: 'user', content: 'go' },
+      }),
+      mainSpawn,
+    ],
+  };
+
+  const forkCopy = (messageId: string, parentUuid: string | null) =>
+    jline({
+      sessionId: SESSION,
+      agentId: FORK,
+      isSidechain: true,
+      type: 'assistant',
+      uuid: `u-fork-${messageId}`,
+      parentUuid,
+      timestamp: '2026-10-30T10:00:02.000Z',
+      message: { id: messageId, model: 'claude-opus-5-5', usage: { input_tokens: 100 } },
+    });
+
+  const forkOwn = jline({
+    sessionId: SESSION,
+    agentId: FORK,
+    isSidechain: true,
+    type: 'assistant',
+    uuid: 'u-fork-own',
+    parentUuid: 'u-fork-msg_spawn',
+    timestamp: '2026-10-30T10:00:03.000Z',
+    message: { id: 'msg_fork_own', model: 'claude-opus-5-5', usage: { input_tokens: 7 } },
+  });
+
+  it('attributes the copied message to the parent once and keeps the fork’s own rows', () => {
+    const result = parseSession(
+      substrate([
+        mainFile,
+        {
+          path: `subagents/agent-${FORK}.jsonl`,
+          lines: [forkRef(), forkCopy('msg_spawn', null), forkOwn],
+        },
+      ]),
+    );
+    expect(result.usage.filter((u) => u.messageId === 'msg_spawn')).toHaveLength(1);
+    expect(usageFor(result, 'msg_spawn')?.agentId).toBeNull();
+    expect(usageFor(result, 'msg_fork_own')?.agentId).toBe(FORK);
+  });
+
+  it('looks past non-object lines to find the fork-context-ref record', () => {
+    const result = parseSession(
+      substrate([
+        mainFile,
+        {
+          path: `subagents/agent-${FORK}.jsonl`,
+          lines: ['null', forkRef(), forkCopy('msg_spawn', null)],
+        },
+      ]),
+    );
+    expect(usageFor(result, 'msg_spawn')?.agentId).toBeNull();
+  });
+
+  it('keeps a parent-less fork record whose message lives on no other transcript', () => {
+    const result = parseSession(
+      substrate([
+        mainFile,
+        {
+          path: `subagents/agent-${FORK}.jsonl`,
+          lines: [forkRef(), forkCopy('msg_only_fork', null)],
+        },
+      ]),
+    );
+    expect(usageFor(result, 'msg_only_fork')?.agentId).toBe(FORK);
+  });
+
+  it('stays loud when the same shape appears without a fork-context-ref', () => {
+    const input = substrate([
+      mainFile,
+      { path: `subagents/agent-${FORK}.jsonl`, lines: [forkCopy('msg_spawn', null)] },
+    ]);
+    expect(() => parseSession(input)).toThrow(UsageConflictError);
+  });
+
+  it('stays loud when the fork record sharing the id has a parent', () => {
+    const input = substrate([
+      mainFile,
+      {
+        path: `subagents/agent-${FORK}.jsonl`,
+        lines: [forkRef(), forkCopy('msg_spawn', 'u-fork-elsewhere')],
+      },
+    ]);
+    expect(() => parseSession(input)).toThrow(UsageConflictError);
+  });
+});
