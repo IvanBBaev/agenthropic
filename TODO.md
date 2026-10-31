@@ -356,7 +356,7 @@ files / 1540 tests, 100/100/100/100 in all five packages**. New PROVISIONAL cons
     **six** times (root + five packages). Deliberately NOT wired: `build`, `typecheck`,
     `lint`, `format:check`, `render-claims` - the native ABI does not participate in them.
     Still bypassable by invoking `vitest`/`tsx` directly, which goes through no package script.
-- [ ] **BENCH-SHAPE** _(benchmark, blocked on Ivan)_ — **the measured `34.87-39.92 s` cold replay
+- [x] **BENCH-SHAPE** _(benchmark — closed 2026-10-31 on owner delegation D9)_ — **the measured `34.87-39.92 s` cold replay
   does not describe the real corpus, and the gap is per-session size, not total bytes.**
   Established 2026-09-01 at the source: `corpus-scale.ts` deliberately never reads
   `~/.claude/projects` (`:82`, `:740`) — it plants a synthetic corpus (`:1349`) whose per-session
@@ -377,6 +377,11 @@ files / 1540 tests, 100/100/100/100 in all five packages**. New PROVISIONAL cons
     (byte-linear transfer underestimates it 1.10–1.61×), and the real shape costs 4.1–6.1× the
     band per session; synthetic lower bound (subagent bytes folded into one file). Ivan ticks
     this row; the doc's §7 lists every line that changes then.
+  - **Closed 2026-10-31 (D9, agent-measured)** — superseded by a direct measurement on the real
+    corpus instead of a synthetic rerun: **≈120.4 s** cold replay for 5.70 GiB / 362 sessions /
+    2,490 subagent files on `dcf3aee`, one sample on a machine at load 67–91 (upper side, not a
+    band). Both synthetic figures are now historical. Evidence:
+    `docs/measurement/real-corpus-boot-2026-10-31.md`.
 - [x] **WP-U0** _(backend)_ — Fastify bootstrap: loopback-or-fail (plus post-listen address
   re-verification that hard-exits), timing-safe token compare, same-origin SSE check,
   TypeBox, config. _(D9 merged into C1; WP-X11 vector-DB stub **deleted** per best-path §6.3.)_
@@ -1115,11 +1120,11 @@ synthesis, not on this board._
 **P1 — by 2026-11-22**
 - [ ] **R8** SIGTERM/SIGINT → `close()` [OPS-2]
 - [ ] **R9** atomic + verified backups, backup at start, pre-migration backup, downgrade guard, restore schema check [OPS-3/4/9, ARC-8, DAT-16]
-- [ ] **R10** RELEASE §5 drill on the real DB, with a real restore [OPS-10, OSS-5]
+- [x] **R10** RELEASE §5 drill on the real DB, with a real restore [OPS-10, OSS-5] _(done 2026-10-31 by an agent (D9) on a copy of a 342 MB real-corpus DB — drill + shipped `restoreDatabase()` OK, counts identical; re-run at the tag — `docs/measurement/real-corpus-boot-2026-10-31.md`)_
 - [ ] **R11** `/health` reflects watcher/backup/DB/corpus state; logger on [OPS-5, OPS-6]
 - [ ] **R12** model `cleanupPeriodDays`; fix `overview.md:154` (Ivan: D12) [ARC-3, OPS-11] _(D12 done 2026-10-30 — setting raised to 99999; the code/doc half is open)_
 - [ ] **R13** drift census on `/health`; persist CC version; skip-and-count bad lines [ARC-6, QA-3, DAT-7, DAT-11]
-- [ ] **R14** configurable file cap (256 MiB default); partial flag in API + UI [DAT-3, DAT-5, OPS-15]
+- [ ] **R14** configurable file cap (256 MiB default); partial flag in API + UI [DAT-3, DAT-5, OPS-15] _(real-corpus boot 2026-10-31: 5 main transcripts skipped as oversize — 79–170 MB, all under 256 MiB; their main-agent tokens are missing from the totals)_
 - [ ] **R15** operator pricing CLI with audit row; re-decide haiku-5-5 (D1, D3) [DAT-1, DAT-4] _(haiku half done 2026-10-31 — migration 25 seeds the ≤100k base tier, `computeCostUsd` halts a longer prompt; the pricing CLI half is open)_
 - [ ] **R16** Vitest `testTimeout` / projects split [QA-4]
 - [ ] **R17** opt-in real-corpus contract suite [QA-2]
@@ -1130,7 +1135,7 @@ synthesis, not on this board._
 - [ ] **R22** release mechanics + docs refresh (CHANGELOG cut, `gh release`, SECURITY channel, RELEASE state, landing page, README ~120 lines) [OSS-3/4/6/7/8]
 - [ ] **R23** every `[HUMAN]` box: do or waive in writing by 2026-11-16 (Ivan, D9) [OSS-9, PRD-2]
 - [ ] **R24** re-scope `comparison.md` against first-party OTel after the rival trial [PRD-4]
-- [ ] **R25** re-measure cold replay on the current corpus [DAT-17]
+- [x] **R25** re-measure cold replay on the current corpus [DAT-17] _(done 2026-10-31 (D9): ≈120.4 s for 5.70 GiB on a loaded machine; `cold-replay-2026-09.md` marked historical; the architecture page `ingest-reconciliation.md` refresh rides on R22)_
 - [ ] **R26** threat-model gaps (availability, multi-user, ambient token, redaction scope) [SEC §4]
 - [x] **Owner decisions D1–D15** answered (synthesis §6); **lane L11 frozen until KC-5** (D10) _(answered 2026-10-30 on owner delegation — synthesis §6.1)_
 

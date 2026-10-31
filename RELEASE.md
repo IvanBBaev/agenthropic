@@ -321,6 +321,14 @@ scan."**
       under WAL — the server may stay up. Verified working against the live
       `data/agenthropic.db` on 2026-07-29.)
 
+      **Exercised by an agent 2026-10-31 (D9), on copies:** the command above plus the
+      shipped `restoreDatabase()` were run on a copy of a 341.9 MB real-corpus database
+      (schema v25, 360 sessions, 982,880 usage rows): `restore drill OK` in 2,893 ms,
+      restore in 4,505 ms, `journal_mode wal`, `integrity_check ok`, row counts identical
+      across all 15 tables. The in-repo `data/agenthropic.db` is stale (schema v7, no
+      sessions) and proves little alone. **Still due at the tag:** run the drill against
+      the database the release boots on. Evidence: [`docs/measurement/real-corpus-boot-2026-10-31.md`](docs/measurement/real-corpus-boot-2026-10-31.md). _(Owner delegation of 2026-10-30, D-numbers of [`10-synthesis.md`](docs/analysis/role-reviews-2026-10-29/10-synthesis.md) §6.1.)_
+
 - [ ] **Keep the pre-tag backup file** produced above; note its path in the release
       notes.
 
@@ -350,6 +358,12 @@ scan."**
          `corpus replay failure:` line carrying a `PricingError` message (`unknown model id`,
          `has no price for bucket`, `no price effective at`) is a red box: seed the rate and
          boot again.
+
+      **Done by an agent 2026-10-31 on `dcf3aee` (D9):** `0 failed`, 360/362 sessions ok,
+      6 files skipped (1 empty main, 5 over the 64 MiB cap — R14), cold replay ≈120 s for
+      5.70 GiB on a heavily loaded machine. The rate check is current: `claude-sonnet-5-5`
+      is seeded by migration 24, `claude-haiku-5-5` (≤100k base tier) by migration 25.
+      **Repeat both steps on the release commit.** Evidence: [`docs/measurement/real-corpus-boot-2026-10-31.md`](docs/measurement/real-corpus-boot-2026-10-31.md). _(Owner delegation of 2026-10-30, D-numbers of [`10-synthesis.md`](docs/analysis/role-reviews-2026-10-29/10-synthesis.md) §6.1.)_
 
       Why this and not a CI job: the CI corpus is synthetic and uses `synthetic-model-a/b`,
       which the seed deliberately does not price, so a CI "every corpus model has a row"
