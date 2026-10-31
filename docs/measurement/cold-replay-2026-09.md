@@ -1,5 +1,12 @@
 # Cold replay at the real corpus shape — measurement 2026-09-09
 
+> ## HISTORICAL — superseded 2026-10-31
+>
+> Every number in this file is synthetic and describes the September corpus. The current
+> figure is a direct real-corpus measurement: ≈120.4 s for 5.70 GiB / 362 sessions, in
+> [`real-corpus-boot-2026-10-31.md`](real-corpus-boot-2026-10-31.md). BENCH-SHAPE and R25
+> were closed on it under owner delegation D9. The banner below is kept as written.
+
 > ## ⚠ UNRATIFIED — measured by an agent, not yet ticked by Ivan
 >
 > This file records five benchmark runs made on 2026-09-09 for the **BENCH-SHAPE** row
