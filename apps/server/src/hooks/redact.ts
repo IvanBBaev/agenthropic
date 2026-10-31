@@ -70,27 +70,57 @@ const TOKEN_COUNT_ALLOWLIST: ReadonlySet<string> = new Set([
   'tokenusage',
 ]);
 
-/** Obvious credential shapes masked inside string values. */
-const CREDENTIAL_SHAPES: readonly RegExp[] = [
+/**
+ * Obvious credential shapes masked inside string values, each with its
+ * replacement (`$1` re-emits a context prefix the match had to consume - see
+ * the JWT shape).
+ *
+ * AMENDED 2026-10-31 (R3 / SEC-1): every pattern here and {@link ENV_ASSIGNMENT}
+ * must run in time LINEAR in the input. This is the ingest boundary: the route
+ * scans every string of an attacker-shapeable hook body (up to Fastify's 1 MiB
+ * default `bodyLimit`) synchronously on the event loop, so one superlinear
+ * pattern is a single-request denial of service. Two were quadratic: the JWT
+ * shape and HK-1's assignment pattern both open with `\b` + a character class
+ * that a long run of class characters satisfies at almost every position, and
+ * each attempt rescanned the run to its end before failing (`'a.'` x 40k chars
+ * took 35 s; `'eyJ-'` x 256 KiB, minutes). Both are rewritten below to attempt
+ * at most once per run, with byte-identical output - a differential test pins
+ * the rewrites to the original patterns, and a time-budget test runs every
+ * pattern against 256 KiB adversarial inputs. A per-string length cap (the SEC-1
+ * fallback) is deliberately NOT applied: once every pattern is linear it buys
+ * nothing, and cutting a string would break the idempotency the dedupe key
+ * relies on and drop evidence from the stored payload.
+ */
+const CREDENTIAL_SHAPES: readonly (readonly [RegExp, string])[] = [
   // Anthropic / OpenAI style secret keys (sk-ant-..., sk-proj-..., sk-...).
-  /\bsk-[A-Za-z0-9_-]{8,}/g,
+  [/\bsk-[A-Za-z0-9_-]{8,}/g, REDACTED],
   // GitHub tokens (classic and fine-grained).
-  /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{16,}/g,
-  /\bgithub_pat_[A-Za-z0-9_]{20,}/g,
+  [/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{16,}/g, REDACTED],
+  [/\bgithub_pat_[A-Za-z0-9_]{20,}/g, REDACTED],
   // Slack tokens.
-  /\bxox[a-z]-[A-Za-z0-9-]{8,}/g,
+  [/\bxox[a-z]-[A-Za-z0-9-]{8,}/g, REDACTED],
   // AWS access key ids.
-  /\bAKIA[0-9A-Z]{16}\b/g,
+  [/\bAKIA[0-9A-Z]{16}\b/g, REDACTED],
   // JWTs (three base64url segments, first decoding to a {"alg"... header).
-  /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,
+  // Semantically `\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+`, made
+  // linear (SEC-1): the lookbehind admits only the START of a `[A-Za-z0-9_-]`
+  // run; a lazy lookahead captures the run's prefix up to its leftmost
+  // `\beyJ` (the start the original pattern would pick - every later start in
+  // the same run shares its first segment's end, so it fails or succeeds
+  // alike); `(?=(...))\2` then takes the whole run atomically. The prefix is
+  // put back by the `$1` replacement.
+  [
+    /(?<![A-Za-z0-9_-])(?=([A-Za-z0-9_-]*?)\beyJ[A-Za-z0-9_-])(?=([A-Za-z0-9_-]+))\2\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,
+    `$1${REDACTED}`,
+  ],
   // Inline bearer credentials inside header-ish strings.
-  /\bBearer\s+[A-Za-z0-9._~+/=-]{6,}/gi,
+  [/\bBearer\s+[A-Za-z0-9._~+/=-]{6,}/gi, REDACTED],
   // SEC-5 (2026-10-10): PEM private-key blocks (RSA, EC, OPENSSH, PKCS#8 ...),
   // body included. The armour lines are the signature - the base64 body
   // matches no prefix shape above. A block whose END line is missing (a
   // truncated paste) is masked to the end of the string rather than left in
   // the clear. PUBLIC KEY / CERTIFICATE blocks carry no secret and stay.
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g,
+  [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g, REDACTED],
 ];
 
 /**
@@ -100,8 +130,19 @@ const CREDENTIAL_SHAPES: readonly RegExp[] = [
  * whitespace, `&` or `;` so a query string or a `;`-chained shell line keeps
  * everything after the credential. Whether NAME is secret-bearing is decided
  * by {@link isSecretKeyName}, the same rule the object-key pass uses.
+ *
+ * AMENDED 2026-10-31 (R3 / SEC-1): semantically still
+ * `\b([A-Za-z_][A-Za-z0-9_.-]*)\s*=(?!=)\s*("[^"]*"|'[^']*'|[^\s&;]+)`, which
+ * was quadratic (see {@link CREDENTIAL_SHAPES}). NAME is greedy over
+ * `[A-Za-z0-9_.-]`, so it always ends where its run ends, and every start in
+ * one run shares the same `=` test: only the leftmost `\b[A-Za-z_]` start
+ * matters. The pattern now attempts once per run (lookbehind), captures the
+ * run's prefix before that start (group 1, lazy lookahead) and the whole run
+ * atomically (group 2, `(?=(...))\2`); the name is the run minus the prefix,
+ * and the prefix is kept verbatim in the output.
  */
-const ENV_ASSIGNMENT = /\b([A-Za-z_][A-Za-z0-9_.-]*)\s*=(?!=)\s*("[^"]*"|'[^']*'|[^\s&;]+)/g;
+const ENV_ASSIGNMENT =
+  /(?<![A-Za-z0-9_.-])(?=([A-Za-z0-9_.-]*?)\b[A-Za-z_])(?=([A-Za-z0-9_.-]+))\2\s*=(?!=)\s*(?:"[^"]*"|'[^']*'|[^\s&;]+)/g;
 
 function normalizeKey(key: string): string {
   return key.toLowerCase().replace(/[-_ ]/g, '');
@@ -119,13 +160,14 @@ export function isSecretKeyName(key: string): boolean {
 /** Mask every credential-shaped fragment inside a string value. */
 export function maskCredentialShapes(text: string): string {
   let masked = text;
-  for (const shape of CREDENTIAL_SHAPES) {
-    masked = masked.replace(shape, REDACTED);
+  for (const [shape, replacement] of CREDENTIAL_SHAPES) {
+    masked = masked.replace(shape, replacement);
   }
   // Idempotent by construction: `NAME=[REDACTED]` re-masks to itself.
-  return masked.replace(ENV_ASSIGNMENT, (match: string, name: string) =>
-    isSecretKeyName(name) ? `${name}=${REDACTED}` : match,
-  );
+  return masked.replace(ENV_ASSIGNMENT, (match: string, prefix: string, run: string) => {
+    const name = run.slice(prefix.length);
+    return isSecretKeyName(name) ? `${prefix}${name}=${REDACTED}` : match;
+  });
 }
 
 /**

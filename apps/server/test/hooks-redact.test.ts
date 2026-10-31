@@ -165,6 +165,142 @@ describe('maskCredentialShapes (WP-IN14)', () => {
   });
 });
 
+describe('maskCredentialShapes runs in linear time (R3 / SEC-1)', () => {
+  // The pre-SEC-1 implementation, verbatim: the oracle the linear rewrite must
+  // reproduce byte for byte. Its JWT and assignment patterns are quadratic, so
+  // it is only ever fed short strings here.
+  const ORIGINAL_SHAPES: readonly RegExp[] = [
+    /\bsk-[A-Za-z0-9_-]{8,}/g,
+    /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{16,}/g,
+    /\bgithub_pat_[A-Za-z0-9_]{20,}/g,
+    /\bxox[a-z]-[A-Za-z0-9-]{8,}/g,
+    /\bAKIA[0-9A-Z]{16}\b/g,
+    /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,
+    /\bBearer\s+[A-Za-z0-9._~+/=-]{6,}/gi,
+    /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g,
+  ];
+  const ORIGINAL_ENV_ASSIGNMENT =
+    /\b([A-Za-z_][A-Za-z0-9_.-]*)\s*=(?!=)\s*("[^"]*"|'[^']*'|[^\s&;]+)/g;
+  function originalMask(text: string): string {
+    let masked = text;
+    for (const shape of ORIGINAL_SHAPES) {
+      masked = masked.replace(shape, REDACTED);
+    }
+    return masked.replace(ORIGINAL_ENV_ASSIGNMENT, (match: string, name: string) =>
+      isSecretKeyName(name) ? `${name}=${REDACTED}` : match,
+    );
+  }
+
+  it('matches the original patterns on the run-boundary cases the rewrite reasons about', () => {
+    for (const text of [
+      '--api-key=hunter2',
+      '-token=abc',
+      '.secret=abc',
+      'os.environ.API_KEY=abc',
+      '9.password=abc',
+      '9password=abc',
+      'a9.b-c_TOKEN = "quoted value" rest',
+      "x=1 y.z-token='v' w",
+      'eyJ=1',
+      'x-eyJhbGci.eyJzdWIi.sig',
+      '.eyJhbGci.eyJzdWIi.sig tail',
+      'xeyJhbGci.eyJzdWIi.sig',
+      '9-eyJa.b.c',
+      'eyJ.eyJa.b.c',
+      'eyJa-eyJb.c',
+      'eyJa.b',
+      'auth=eyJa.b.c&next=1',
+    ]) {
+      expect(maskCredentialShapes(text)).toBe(originalMask(text));
+    }
+  });
+
+  it('is byte-identical to the original patterns on random inputs (differential)', () => {
+    const pieces = [
+      'a',
+      'Z',
+      '9',
+      '_',
+      '.',
+      '-',
+      '=',
+      '==',
+      ' ',
+      '\t',
+      '"',
+      "'",
+      '&',
+      ';',
+      '!',
+      'eyJ',
+      'key',
+      'token',
+      'api_',
+      'PASSWORD',
+      'sk-',
+      'abcdef1234',
+      'Bearer ',
+      'é',
+    ];
+    let seed = 0x5ec1;
+    const next = (bound: number): number => {
+      seed = (Math.imul(seed, 1103515245) + 12345) & 0x7fffffff;
+      return seed % bound;
+    };
+    for (let round = 0; round < 20_000; round += 1) {
+      let text = '';
+      const length = 1 + next(16);
+      for (let index = 0; index < length; index += 1) {
+        text += pieces[next(pieces.length)];
+      }
+      expect(maskCredentialShapes(text), JSON.stringify(text)).toBe(originalMask(text));
+    }
+  });
+
+  it('scans 256 KiB adversarial strings within a time budget', () => {
+    // Each unit repeated to 256 KiB (a quarter of the default Fastify
+    // bodyLimit, to stay fast under a loaded test run). The original
+    // assignment pattern needed 35 s for `'a.'` at just 40k chars - at this
+    // size, tens of minutes; a linear scan takes milliseconds. The budget is
+    // generous for a slow, busy CI box yet far below any quadratic regression,
+    // and the test's own timeout is raised so 26 scans never trip the default.
+    const budgetMs = 1_500;
+    for (const unit of [
+      'a.',
+      'a-',
+      '_.',
+      '9a.',
+      '.a',
+      'a ',
+      'a =',
+      'a="',
+      "a='",
+      'a=a.',
+      'eyJ-',
+      'eyJa.',
+      'eyJa.b-',
+      '.eyJ-',
+      '-eyJa',
+      'sk-',
+      'sk-.',
+      'ghp_',
+      'github_pat_',
+      'xoxa-',
+      'AKIA',
+      'Bearer ',
+      'bearer  ',
+      '-----BEGIN ',
+      '-----BEGIN A',
+      '-----BEGIN A PRIVATE KEY-----',
+    ]) {
+      const text = unit.repeat(Math.ceil((256 * 1024) / unit.length));
+      const started = performance.now();
+      maskCredentialShapes(text);
+      expect(performance.now() - started, JSON.stringify(unit)).toBeLessThan(budgetMs);
+    }
+  }, 60_000);
+});
+
 describe('redactSecrets (WP-IN14)', () => {
   // WP-D10 Done-when: "Redaction deterministic; redacted re-ingest byte-identical +
   // idempotent" (2026-09-26 audit: no test proved either property). The route
