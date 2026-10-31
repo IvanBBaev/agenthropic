@@ -34,6 +34,23 @@ interface DatedRate {
 
 type PricingIndex = Map<string, Map<TokenBucket, DatedRate[]>>;
 
+/**
+ * Models whose published price is tiered by prompt length, mapped to the
+ * largest prompt (in tokens) the base tier covers. `model_pricing` has no tier
+ * dimension and holds ONLY the base-tier rates for these models, so a request
+ * over the limit is refused rather than priced at the lower tier.
+ *
+ * The prompt is every input token of the request - `input` + `cacheRead` +
+ * `cacheWrite5m` + `cacheWrite1h` - and each request is priced on its own
+ * (pricing page, fetched 2026-10-30). The limit is inclusive: "prompts up to
+ * 100,000 tokens" are base tier.
+ *
+ * claude-haiku-5-5: base tier seeded by migration 25 (owner decision D1).
+ */
+const BASE_TIER_PROMPT_LIMITS: ReadonlyMap<string, number> = new Map([
+  ['claude-haiku-5-5', 100_000],
+]);
+
 function buildPricingIndex(pricing: readonly PricingEntry[]): PricingIndex {
   const index: PricingIndex = new Map();
   for (const entry of pricing) {
@@ -84,7 +101,8 @@ function resolveRate(rates: readonly DatedRate[], usageMs: number): DatedRate | 
  * feeding raw rows here reintroduces the ~2.4-2.7x over-count).
  *
  * Throws {@link PricingError} when a message's model has no pricing rows at
- * all, or when any bucket with a nonzero token count has no price row
+ * all, when a tiered model's prompt exceeds its seeded base tier
+ * ({@link BASE_TIER_PROMPT_LIMITS}), or when any bucket with a nonzero token count has no price row
  * effective at the message timestamp. Zero-token buckets need no price row.
  */
 export function computeCostUsd(
@@ -101,6 +119,16 @@ export function computeCostUsd(
       throw new PricingError(
         `unknown model id "${entry.model}" (message "${entry.messageId}") — refusing to price at $0; seed an explicit pricing row instead`,
       );
+    }
+    const promptLimit = BASE_TIER_PROMPT_LIMITS.get(entry.model);
+    if (promptLimit !== undefined) {
+      const { input, cacheRead, cacheWrite5m, cacheWrite1h } = entry.usage;
+      const promptTokens = input + cacheRead + cacheWrite5m + cacheWrite1h;
+      if (promptTokens > promptLimit) {
+        throw new PricingError(
+          `model "${entry.model}" (message "${entry.messageId}"): prompt of ${String(promptTokens)} tokens (input + cache reads + cache writes) exceeds the ${String(promptLimit)}-token base tier, and only base-tier rates are seeded — refusing to price it at the lower tier`,
+        );
+      }
     }
     for (const { key, bucket } of BUCKET_MAP) {
       const tokens = entry.usage[key];

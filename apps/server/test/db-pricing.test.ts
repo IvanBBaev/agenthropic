@@ -11,10 +11,40 @@ describe('loadPricing (WP-C1 seed read path)', () => {
     temp = undefined;
   });
 
-  it('returns the full 45-row table (5 seed models + 2 from migration 18 + 1 each from migrations 19 and 24, x 5 buckets)', () => {
+  it('returns the full 50-row table (5 seed models + 2 from migration 18 + 1 each from migrations 19, 24 and 25, x 5 buckets)', () => {
     temp = createMigratedTempDb();
     const pricing = loadPricing(temp.db);
-    expect(pricing).toHaveLength(45);
+    expect(pricing).toHaveLength(50);
+  });
+
+  it('prices a claude-haiku-5-5 message up to 100k prompt tokens and halts one over (migration 25, D1)', () => {
+    // The corpus carries 16 such records, every prompt <= 100k. Only the base
+    // tier is seeded, so a longer prompt must halt rather than price at it.
+    temp = createMigratedTempDb();
+    const pricing = loadPricing(temp.db);
+    const atLimit: DedupedUsage = {
+      messageId: 'msg-haiku-5-5',
+      model: 'claude-haiku-5-5',
+      timestamp: '2026-10-29T00:00:00.000Z',
+      agentId: null,
+      usage: {
+        input: 20_000,
+        output: 40_000,
+        cacheRead: 60_000,
+        cacheWrite5m: 16_000,
+        cacheWrite1h: 4_000,
+      },
+    };
+    // 20k input @ $0.10 + 40k output @ $0.50 + 60k cache_read @ $0.01
+    // + 16k 5m write @ $0.125 + 4k 1h write @ $0.20
+    // = 0.002 + 0.02 + 0.0006 + 0.002 + 0.0008 = 0.0254.
+    expect(computeCostUsd([atLimit], pricing)).toBeCloseTo(0.0254, 12);
+    expect(() =>
+      computeCostUsd(
+        [{ ...atLimit, usage: { ...atLimit.usage, cacheRead: atLimit.usage.cacheRead + 1 } }],
+        pricing,
+      ),
+    ).toThrow(/exceeds the 100000-token base tier/);
   });
 
   it('prices a claude-opus-5-5 message instead of halting on an unknown model id (migration 19)', () => {

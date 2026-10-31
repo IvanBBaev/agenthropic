@@ -1117,7 +1117,7 @@ synthesis, not on this board._
 - [ ] **R12** model `cleanupPeriodDays`; fix `overview.md:154` (Ivan: D12) [ARC-3, OPS-11] _(D12 done 2026-10-30 — setting raised to 99999; the code/doc half is open)_
 - [ ] **R13** drift census on `/health`; persist CC version; skip-and-count bad lines [ARC-6, QA-3, DAT-7, DAT-11]
 - [ ] **R14** configurable file cap (256 MiB default); partial flag in API + UI [DAT-3, DAT-5, OPS-15]
-- [ ] **R15** operator pricing CLI with audit row; re-decide haiku-5-5 (D1, D3) [DAT-1, DAT-4]
+- [ ] **R15** operator pricing CLI with audit row; re-decide haiku-5-5 (D1, D3) [DAT-1, DAT-4] _(haiku half done 2026-10-31 — migration 25 seeds the ≤100k base tier, `computeCostUsd` halts a longer prompt; the pricing CLI half is open)_
 - [ ] **R16** Vitest `testTimeout` / projects split [QA-4]
 - [ ] **R17** opt-in real-corpus contract suite [QA-2]
 - [ ] **R18** CSP, `frame-ancestors`, XFO, Referrer-Policy; Host allowlist [SEC-3, SEC-4]

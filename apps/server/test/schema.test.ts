@@ -201,7 +201,7 @@ describe('Phase-1 schema', () => {
   });
 
   describe('model_pricing (WP-C1)', () => {
-    it('is seeded with the WP-C1 approximate list prices (2026-01-01 floor) for all nine models', () => {
+    it('is seeded with the WP-C1 approximate list prices (2026-01-01 floor) for all ten models', () => {
       const rows = temp.db
         .prepare('SELECT model, bucket, usd_per_mtok, effective_from FROM model_pricing')
         .all() as Array<{
@@ -211,8 +211,8 @@ describe('Phase-1 schema', () => {
         effective_from: string;
       }>;
       // 5 seed models (migrations 7 + 11) + the 2 corpus models migration 18 adds
-      // + the 1 each migrations 19 and 24 add, x 5 buckets.
-      expect(rows).toHaveLength(45);
+      // + the 1 each migrations 19, 24 and 25 add, x 5 buckets.
+      expect(rows).toHaveLength(50);
       // Migration 14 canonicalises every effective_from to the full UTC instant, so the
       // column's lexicographic order is its chronological order — the ordering the rate
       // resolver's `effective_from <= occurred_at` + `ORDER BY ... DESC LIMIT 1` assumes.
@@ -264,6 +264,13 @@ describe('Phase-1 schema', () => {
       expect(rate('claude-sonnet-5-5', 'cache_read')).toBe(0.1);
       expect(rate('claude-sonnet-5-5', 'cache_write_5m')).toBe(2.5);
       expect(rate('claude-sonnet-5-5', 'cache_write_1h')).toBe(4);
+      // Migration 25: claude-haiku-5-5, the <= 100k-prompt tier only (pricing page
+      // fetched 2026-10-30); a longer prompt halts in core instead of using these.
+      expect(rate('claude-haiku-5-5', 'input')).toBe(0.1);
+      expect(rate('claude-haiku-5-5', 'output')).toBe(0.5);
+      expect(rate('claude-haiku-5-5', 'cache_read')).toBe(0.01);
+      expect(rate('claude-haiku-5-5', 'cache_write_5m')).toBe(0.125);
+      expect(rate('claude-haiku-5-5', 'cache_write_1h')).toBe(0.2);
       for (const bucket of ['input', 'output', 'cache_read', 'cache_write_5m', 'cache_write_1h']) {
         expect(rate('<synthetic>', bucket)).toBe(0);
       }

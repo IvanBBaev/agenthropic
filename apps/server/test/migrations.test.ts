@@ -1188,7 +1188,7 @@ describe('migration runner (WP-D3)', () => {
       // The fresh database is at the latest schema; migration 20 touches only
       // claude-sonnet-5, so the opus-5-5 rows read exactly as 19 wrote them.
       temp = createMigratedTempDb();
-      expect(currentSchemaVersion(temp.db)).toBe(24);
+      expect(currentSchemaVersion(temp.db)).toBe(25);
       expect(opus55Rows(temp.db)).toEqual(
         OFFICIAL_RATES.map((row) => ({ ...row, effective_from: FLOOR })),
       );
@@ -1334,7 +1334,7 @@ describe('migration runner (WP-D3)', () => {
 
     it('prices claude-sonnet-5 at the official per-bucket rates on a fresh database', () => {
       temp = createMigratedTempDb();
-      expect(currentSchemaVersion(temp.db)).toBe(24);
+      expect(currentSchemaVersion(temp.db)).toBe(25);
       expect(sonnet5Rows(temp.db)).toEqual(at(OFFICIAL_RATES));
     });
 
@@ -1446,7 +1446,7 @@ describe('migration runner (WP-D3)', () => {
         insertSession(db, 'sess-b');
         insertSession(db, 'sess-c');
 
-        expect(runMigrations(db, migrations).appliedIds).toEqual([22, 23, 24]);
+        expect(runMigrations(db, migrations).appliedIds).toEqual([22, 23, 24, 25]);
 
         expect(stamps(db)).toEqual([
           { id: 'sess-a', ingest_seq: 1 },
@@ -1556,7 +1556,7 @@ describe('migration runner (WP-D3)', () => {
 
     it('seeds claude-sonnet-5-5 with the official per-bucket rates at the canonical floor', () => {
       temp = createMigratedTempDb();
-      expect(currentSchemaVersion(temp.db)).toBe(24);
+      expect(currentSchemaVersion(temp.db)).toBe(25);
       expect(sonnet55Rows(temp.db)).toEqual(
         OFFICIAL_RATES.map((row) => ({ ...row, effective_from: FLOOR })),
       );
@@ -1581,8 +1581,74 @@ describe('migration runner (WP-D3)', () => {
             .all();
         const before = otherRows();
 
-        expect(runMigrations(db).appliedIds).toEqual([24]);
+        // Bounded at 24: an unbounded run would also apply migration 25.
+        const throughMigration24 = migrations.filter((m) => m.id <= 24);
+        expect(runMigrations(db, throughMigration24).appliedIds).toEqual([24]);
         expect(sonnet55Rows(db)).toHaveLength(OFFICIAL_RATES.length);
+        expect(otherRows()).toEqual(before);
+        expect(runMigrations(db, throughMigration24).appliedIds).toEqual([]);
+      } finally {
+        db.close();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  });
+  /**
+   * Migration 25: the <= 100k-token base tier of `claude-haiku-5-5` (owner
+   * decision D1, 2026-10-30), the id the 2026-10-29 FinOps review (DAT-1) found
+   * in the corpus with every prompt at most 100k tokens. The over-100k tier is
+   * not a row: core's computeCostUsd halts such a request instead.
+   */
+  describe('migration 25 (model-pricing-haiku-5-5-base-tier)', () => {
+    const FLOOR = '2026-01-01T00:00:00.000Z';
+    const OFFICIAL_RATES: ReadonlyArray<{ model: string; bucket: string; usd_per_mtok: number }> = [
+      // https://platform.claude.com/docs/en/about-claude/pricing, fetched 2026-10-30.
+      { model: 'claude-haiku-5-5', bucket: 'cache_read', usd_per_mtok: 0.01 },
+      { model: 'claude-haiku-5-5', bucket: 'cache_write_1h', usd_per_mtok: 0.2 },
+      { model: 'claude-haiku-5-5', bucket: 'cache_write_5m', usd_per_mtok: 0.125 },
+      { model: 'claude-haiku-5-5', bucket: 'input', usd_per_mtok: 0.1 },
+      { model: 'claude-haiku-5-5', bucket: 'output', usd_per_mtok: 0.5 },
+    ];
+
+    function haiku55Rows(db: SqliteDatabase): unknown[] {
+      return db
+        .prepare(
+          `SELECT model, bucket, usd_per_mtok, effective_from FROM model_pricing
+            WHERE model = 'claude-haiku-5-5'
+            ORDER BY model, bucket, effective_from`,
+        )
+        .all();
+    }
+
+    it('seeds claude-haiku-5-5 with the official base-tier rates at the canonical floor', () => {
+      temp = createMigratedTempDb();
+      expect(currentSchemaVersion(temp.db)).toBe(25);
+      expect(haiku55Rows(temp.db)).toEqual(
+        OFFICIAL_RATES.map((row) => ({ ...row, effective_from: FLOOR })),
+      );
+    });
+
+    it('applies forward-only on a schema-24 database and touches no other model', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'agenthropic-mig25-'));
+      const db = openDatabase(join(dir, 'v24.db'));
+      try {
+        runMigrations(
+          db,
+          migrations.filter((m) => m.id <= 24),
+        );
+        expect(haiku55Rows(db)).toEqual([]);
+        const otherRows = (): unknown[] =>
+          db
+            .prepare(
+              `SELECT model, bucket, usd_per_mtok, effective_from FROM model_pricing
+                WHERE model <> 'claude-haiku-5-5'
+                ORDER BY model, bucket, effective_from`,
+            )
+            .all();
+        const before = otherRows();
+
+        expect(runMigrations(db).appliedIds).toEqual([25]);
+        expect(haiku55Rows(db)).toHaveLength(OFFICIAL_RATES.length);
         expect(otherRows()).toEqual(before);
         expect(runMigrations(db).appliedIds).toEqual([]);
       } finally {

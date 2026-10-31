@@ -187,4 +187,85 @@ describe('computeCostUsd', () => {
     const total = computeCostUsd(dedupeUsageByMessageId(raw), sonnetPricing());
     expect(total).toBeCloseTo(3, 10); // naive summation would report $9
   });
+
+  /**
+   * claude-haiku-5-5 is tiered by prompt length (pricing page, fetched
+   * 2026-10-30); model_pricing holds only its <= 100k tier (migration 25), so a
+   * request over 100,000 prompt tokens must halt, never price at tier 1.
+   */
+  describe('claude-haiku-5-5 base-tier prompt limit (owner decision D1)', () => {
+    function haiku55Pricing(): PricingEntry[] {
+      return [
+        { model: 'claude-haiku-5-5', bucket: 'input', usdPerMtok: 0.1, effectiveFrom: EPOCH },
+        { model: 'claude-haiku-5-5', bucket: 'output', usdPerMtok: 0.5, effectiveFrom: EPOCH },
+        { model: 'claude-haiku-5-5', bucket: 'cache_read', usdPerMtok: 0.01, effectiveFrom: EPOCH },
+        {
+          model: 'claude-haiku-5-5',
+          bucket: 'cache_write_5m',
+          usdPerMtok: 0.125,
+          effectiveFrom: EPOCH,
+        },
+        {
+          model: 'claude-haiku-5-5',
+          bucket: 'cache_write_1h',
+          usdPerMtok: 0.2,
+          effectiveFrom: EPOCH,
+        },
+      ];
+    }
+    const haiku = (buckets: Partial<TokenBuckets>): DedupedUsage =>
+      usage({ messageId: 'msg_haiku', model: 'claude-haiku-5-5' }, buckets);
+
+    it('prices a prompt under 100k tokens at the base-tier rates', () => {
+      // 20k input ($0.002) + 50k cache read ($0.0005) + 8k 5m write ($0.001)
+      // + 2k 1h write ($0.0004) + 10k output ($0.005) = $0.0089
+      const entry = haiku({
+        input: 20_000,
+        cacheRead: 50_000,
+        cacheWrite5m: 8_000,
+        cacheWrite1h: 2_000,
+        output: 10_000,
+      });
+      expect(computeCostUsd([entry], haiku55Pricing())).toBeCloseTo(0.0089, 12);
+    });
+
+    it('prices a prompt of exactly 100,000 tokens at the base tier (the limit is inclusive)', () => {
+      // 10k input ($0.001) + 70k cache read ($0.0007) + 15k 5m write ($0.001875)
+      // + 5k 1h write ($0.001) + 1k output ($0.0005) = $0.005075
+      const entry = haiku({
+        input: 10_000,
+        cacheRead: 70_000,
+        cacheWrite5m: 15_000,
+        cacheWrite1h: 5_000,
+        output: 1_000,
+      });
+      expect(computeCostUsd([entry], haiku55Pricing())).toBeCloseTo(0.005075, 12);
+    });
+
+    it('halts a prompt of 100,001 tokens instead of pricing it at the base tier', () => {
+      const entry = haiku({ input: 1, cacheRead: 100_000, output: 500 });
+      expect(() => computeCostUsd([entry], haiku55Pricing())).toThrow(PricingError);
+      expect(() => computeCostUsd([entry], haiku55Pricing())).toThrow(
+        /"claude-haiku-5-5" \(message "msg_haiku"\): prompt of 100001 tokens .* exceeds the 100000-token base tier/,
+      );
+    });
+
+    it('counts every cache bucket toward the prompt, but not output', () => {
+      // Each input bucket alone pushes the prompt over the limit...
+      for (const bucket of ['input', 'cacheRead', 'cacheWrite5m', 'cacheWrite1h'] as const) {
+        expect(() => computeCostUsd([haiku({ [bucket]: 100_001 })], haiku55Pricing())).toThrow(
+          PricingError,
+        );
+      }
+      // ...while a large output on a small prompt is still base tier.
+      expect(
+        computeCostUsd([haiku({ input: 1_000, output: 200_000 })], haiku55Pricing()),
+      ).toBeCloseTo(0.1001, 12);
+    });
+
+    it('leaves untiered models unlimited', () => {
+      const entry = usage({}, { cacheRead: 1_000_000 });
+      expect(computeCostUsd([entry], sonnetPricing())).toBeCloseTo(0.3, 10);
+    });
+  });
 });

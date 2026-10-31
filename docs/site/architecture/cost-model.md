@@ -316,6 +316,24 @@ enforces it. Two honest departures from the CD-4 sketch:
   does not occur in the corpus; if it appears, the halt gate refuses it loudly. _(Owner
   decision 2026-10-29: it stays unseeded — no base-tier row and no tier dimension.)_
 
+  _Amended 2026-10-30 (owner decision D1):_ the premise above was wrong. The 2026-10-29
+  data/FinOps review (DAT-1) found 16 assistant records on `claude-haiku-5-5` in one
+  transcript, every prompt at most 100,000 tokens, so that session halted. **Migration 25
+  seeds its base tier** — the page's rates for prompts up to 100,000 tokens: input 0.10,
+  output 0.50, cache read 0.01, 5m write 0.125, 1h write 0.20 (fetched 2026-10-30; ten
+  models, 50 rows, same floor, PROVISIONAL). The over-100k tier (0.50 / 2.50 / 0.05 /
+  0.625 / 1) is **not** seeded and `model_pricing` still has no tier dimension. Instead,
+  `computeCostUsd` carries an explicit per-model base-tier prompt limit
+  (`BASE_TIER_PROMPT_LIMITS`, today only `claude-haiku-5-5` → 100,000): a request whose
+  prompt — input + cache reads + cache writes, per request, as the page defines it — is
+  over the limit halts with a `PricingError` rather than being priced at the lower tier.
+  Exactly 100,000 is base tier. Halting rather than pricing tier 2 in core is deliberate:
+  the dashboard's read path prices stored `token_usage` rows per bucket through SQL and
+  the rollup, which keep no per-request prompt length, so a tier-2 price in core would
+  disagree with every dollar the API serves. Because the halt sits at the ingest gate, no
+  over-limit row is ever stored. Real tier-2 pricing needs a tier dimension (DAT-1/DAT-4
+  follow-up), not a row.
+
 **What is genuinely undecided:** the *authoritative dated source* for these rates and
 the *refresh cadence* that keeps the staleness-fails-CI test honest as the model lineup
 churns is an open Phase-0 input, not yet answered (concept-analysis-v2 §7, question 7:

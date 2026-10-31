@@ -1530,6 +1530,45 @@ export const migrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    id: 25,
+    name: 'model-pricing-haiku-5-5-base-tier',
+    up(db) {
+      // WHY. Migration 24's note that claude-haiku-5-5 "does not occur in the
+      // corpus" was wrong: the 2026-10-29 data/FinOps review (DAT-1) found 16
+      // assistant records stamped with it in one transcript, every one with a
+      // prompt of at most 100,000 tokens, and the halt gate refused that whole
+      // session. Owner decision D1 (2026-10-30) prices it.
+      //
+      // SOURCE. https://platform.claude.com/docs/en/about-claude/pricing,
+      // fetched 2026-10-30, USD per million tokens. The page prices Haiku 5.5
+      // in two tiers by prompt length, where the prompt counts every input
+      // token, cache reads and cache writes included, and each request is
+      // priced on its own:
+      //   prompt <= 100k   input 0.10  5m write 0.125  1h write 0.20  read 0.01  output 0.50
+      //   prompt  > 100k   input 0.50  5m write 0.625  1h write 1     read 0.05  output 2.50
+      //
+      // BASE TIER ONLY. model_pricing has no tier dimension, so these five rows
+      // are the <= 100k tier and nothing else. A claude-haiku-5-5 request whose
+      // prompt exceeds 100,000 tokens must never be priced from them: core's
+      // computeCostUsd (BASE_TIER_PROMPT_LIMITS) halts such a request with a
+      // PricingError at the ingest gate, so no over-limit row ever reaches
+      // token_usage, where the read path could price it at these rates.
+      //
+      // FLOOR. Same canonical instant, ON CONFLICT idempotence and PROVISIONAL
+      // label as migrations 19, 20 and 24; every rate spelled in the SQL text
+      // so the checksum covers it.
+      db.exec(`
+        INSERT INTO model_pricing (model, bucket, usd_per_mtok, effective_from) VALUES
+          ('claude-haiku-5-5', 'input',          0.1,   '2026-01-01T00:00:00.000Z'),
+          ('claude-haiku-5-5', 'output',         0.5,   '2026-01-01T00:00:00.000Z'),
+          ('claude-haiku-5-5', 'cache_read',     0.01,  '2026-01-01T00:00:00.000Z'),
+          ('claude-haiku-5-5', 'cache_write_5m', 0.125, '2026-01-01T00:00:00.000Z'),
+          ('claude-haiku-5-5', 'cache_write_1h', 0.2,   '2026-01-01T00:00:00.000Z')
+        ON CONFLICT (model, bucket, effective_from) DO UPDATE SET usd_per_mtok = excluded.usd_per_mtok;
+      `);
+    },
+  },
 ];
 
 export interface MigrationRunResult {

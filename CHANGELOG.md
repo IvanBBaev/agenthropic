@@ -329,6 +329,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unchanged. `claude-haiku-5-5` is not seeded: its price is tiered by prompt length and
   `model_pricing` has no tier dimension. PROVISIONAL like the rest of the seed until WP-C1
   ratifies.
+- Sessions on `claude-haiku-5-5` are priced instead of halting ingest (owner decision D1). The
+  local corpus holds 16 assistant records on it, all with prompts of at most 100,000 tokens, and
+  the one session carrying them stopped with an `unknown model id` PricingError. Migration 25
+  `model-pricing-haiku-5-5-base-tier` seeds the page's up-to-100k tier (0.1 / 0.5 / 0.01 / 0.125
+  / 0.2 USD per million tokens for input / output / cache read / 5m write / 1h write, fetched
+  2026-10-30) at the 2026-01-01 floor; ten models, 50 rows. `model_pricing` still has no tier
+  dimension, so a `claude-haiku-5-5` request whose prompt (input + cache reads + cache writes)
+  exceeds 100,000 tokens now halts with a PricingError naming the prompt size instead of being
+  priced at the lower tier. PROVISIONAL like the rest of the seed until WP-C1 ratifies.
 - An alert rule can no longer change `kind` while keeping its id; boot fails and names the
   rule. Dedupe is keyed on rule id and subject, so the new condition stayed silent for every
   session or agent the old one had already fired on.
