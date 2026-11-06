@@ -320,6 +320,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The stored data is now as private as the transcripts it comes from (R4 / SEC-2). The database,
+  its `-wal` and `-shm` sidecars, the backups and the retention journal were created with umask
+  defaults (0644 in 0755), so another account on the host could read them past the auth token.
+  They are now 0600 from creation and directories the server creates are 0700. A failed backup
+  removes the file it started. Upgrading needs no migration: each boot tightens what an older
+  install left open and refuses to continue if a file stays exposed. The directory holding the
+  database is not changed; if it is open, the boot logs the `chmod 700` to run.
 - Hook ingest can no longer be stalled by a single crafted body (R3 / SEC-1). Two redactor
   patterns, the JWT shape and the `NAME=value` assignment rule, were quadratic on long runs of
   their character class (`'a.'` x 40k chars took 35 s on the event loop). Both now attempt once
