@@ -192,6 +192,21 @@ process instead — the plist below ships with nothing and is installed by nothi
 > the server still contains no subprocess surface at all — `pnpm gate:spawner` is the
 > first step of CI and fails the build if one appears.
 
+### File modes, as built
+
+Backups hold the same prompts, paths and costs as the database, so they get the same
+modes (R4 / SEC-2). A backup is `0600` before its first page lands, and the server
+creates `backups/` as `0700`. A failed backup removes the file it started, because
+retention would otherwise count an empty file as the newest backup.
+
+**Upgrading an older install needs no migration.** The first boot on this version takes
+the database, its sidecars, the journal and every regular file directly in `backups/` to
+`0600`, and `backups/` to `0700`. Check the log for one line afterwards: the directory
+holding the database keeps its mode, because `DASHBOARD_DB_PATH` may point into a folder
+you share for other reasons. If that directory is open to other accounts, the boot prints
+the `chmod 700` to run. Backups you copied elsewhere keep the mode they had. A restored
+database is always private, whatever the mode of the backup it came from.
+
 ### Scheduling, as built
 
 No `launchd` plist ships in this repository, and nothing installs the one above. The

@@ -23,6 +23,7 @@ import { backupDatabase } from './db/backup';
 import { loadAlertsConfig, startAlerting, type AlertingService } from './alerts/index';
 import { loadPricing } from './db/pricing';
 import { openDatabase, type SqliteDatabase } from './db/connection';
+import { secureDataFiles } from './db/file-modes';
 import { SqliteEventStore } from './db/event-store';
 import { currentSchemaVersion, runMigrations } from './db/migrations';
 import { createReplayCheckpointStore } from './db/replay-checkpoints';
@@ -39,6 +40,7 @@ import {
 } from './ingest/corpus-watcher';
 import { toIngestFailureEvent, toRealtimeEvent } from './realtime/bridge';
 import { RealtimeHub } from './realtime/hub';
+import { defaultJournalPath } from './retention/journal';
 import { signedRetentionPolicy } from './retention/policy';
 import type { RetentionPort } from './retention/port';
 import { createRetentionRunner, RetentionRunError } from './retention/runner';
@@ -800,6 +802,12 @@ export async function start(
   // database it protects. Validated here, at wiring time; reported at boot as
   // a dry run; run for real only by the daily timer, after that cycle's backup.
   const backupsDir = join(dirname(config.dbPath), 'backups');
+  // R4 / SEC-2: an install from before private modes is tightened here, and a
+  // data file that cannot be made private stops the boot.
+  secureDataFiles(
+    { dbPath: config.dbPath, backupsDir, journalPath: defaultJournalPath(config.dbPath) },
+    console.error,
+  );
   const retention = createRetentionRunner(db, signedRetentionPolicy(config.retention, backupsDir));
   reportRetentionAtBoot(retention);
 

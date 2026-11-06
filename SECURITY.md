@@ -275,6 +275,14 @@ being handed to the rest of the app (`apps/server/src/db/connection.ts`). Backup
 written by an in-process daily timer next to the database, and the restore path refuses
 any image that fails `PRAGMA integrity_check`.
 
+The stored data is no more readable than the transcripts it comes from. The database, its
+`-wal` and `-shm` sidecars, every backup and the retention journal are `0600`, and a
+directory the server creates is `0700` (`apps/server/src/db/file-modes.ts`). Each boot
+tightens files an older install left open and refuses to continue if one stays readable
+beyond its owner, as on a filesystem that ignores modes. The server chmods its own
+`backups` directory but never the directory `DASHBOARD_DB_PATH` lives in: if that one is
+open, the boot logs the `chmod 700` to run.
+
 ### 9. No outbound network requests - except the opt-in Telegram alert
 
 By default the server makes no outbound request of any kind: no telemetry, no update

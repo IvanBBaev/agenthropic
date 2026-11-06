@@ -6,14 +6,31 @@
  * with the WP-D2 pragma assertions and `PRAGMA integrity_check`, and only then
  * swaps it into place.
  */
-import { copyFileSync, mkdirSync, renameSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, renameSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { openDatabase, type SqliteDatabase } from './connection';
+import { ensurePrivateDir, ensurePrivateFile } from './file-modes';
 
-/** Back up an open database to `destPath` (parent directory is created). */
+/**
+ * Back up an open database to `destPath` (parent directory is created).
+ *
+ * The file exists as 0600 before the first page lands (R4 / SEC-2): the online
+ * backup yields between pages, so a mode set afterwards would leave a readable
+ * copy for the whole transfer. A failed backup removes the file it created,
+ * because `pruneBackupFiles` would count an empty one as the newest backup.
+ */
 export async function backupDatabase(db: SqliteDatabase, destPath: string): Promise<void> {
-  mkdirSync(dirname(destPath), { recursive: true });
-  await db.backup(destPath);
+  ensurePrivateDir(dirname(destPath));
+  const created = !existsSync(destPath);
+  ensurePrivateFile(destPath);
+  try {
+    await db.backup(destPath);
+  } catch (err) {
+    if (created) {
+      rmSync(destPath, { force: true });
+    }
+    throw err;
+  }
 }
 
 /** Suffix of the file a restore copies into and checks before it swaps it in. */
@@ -32,10 +49,11 @@ export const RESTORE_STAGING_SUFFIX = '.restoring';
  * would keep writing sidecars for the file being replaced underneath it.
  */
 export function restoreDatabase(srcBackup: string, destPath: string): SqliteDatabase {
-  mkdirSync(dirname(destPath), { recursive: true });
+  ensurePrivateDir(dirname(destPath));
   const staged = `${destPath}${RESTORE_STAGING_SUFFIX}`;
   rmSync(`${staged}-wal`, { force: true });
   rmSync(`${staged}-shm`, { force: true });
+  // copyFileSync takes the source's mode; openDatabase makes the copy private.
   copyFileSync(srcBackup, staged);
   const check = openDatabase(staged);
   let result: unknown;

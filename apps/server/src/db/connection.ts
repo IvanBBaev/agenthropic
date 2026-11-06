@@ -5,19 +5,25 @@
  * are ASSERTED after being set - a connection that silently fell back to a
  * weaker mode must never be handed to the rest of the app.
  */
-import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import Database from 'better-sqlite3';
+import { ensurePrivateDatabaseFiles, ensurePrivateDir } from './file-modes';
 
 export type SqliteDatabase = Database.Database;
 
 /**
  * Open (creating if needed) the SQLite database at `path`, creating the
- * parent directory first. Asserts WAL journal mode and enforced foreign keys;
- * if setup throws, the handle is closed before the error propagates.
+ * parent directory first. The directory, the database and its sidecars are
+ * private (R4 / SEC-2, see file-modes.ts). Asserts WAL journal mode and enforced
+ * foreign keys; if setup throws, the handle is closed before the error
+ * propagates.
  */
 export function openDatabase(path: string): SqliteDatabase {
-  mkdirSync(dirname(path), { recursive: true });
+  // `:memory:` and `''` name no file, so there is nothing to create or protect.
+  if (path !== '' && path !== ':memory:') {
+    ensurePrivateDir(dirname(path));
+    ensurePrivateDatabaseFiles(path);
+  }
   const db = new Database(path);
   try {
     db.pragma('journal_mode = WAL');

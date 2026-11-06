@@ -36,16 +36,9 @@
  * records `events` rows only. The receipt is written all the same: it is the
  * record that a scheduled deletion happened, and of what.
  */
-import {
-  closeSync,
-  existsSync,
-  fsyncSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  writeSync,
-} from 'node:fs';
+import { closeSync, existsSync, fsyncSync, openSync, readFileSync, writeSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { ensurePrivateDir, PRIVATE_FILE_MODE } from '../db/file-modes';
 import { RetentionPolicyError } from './policy';
 
 /** Schema tag carried by every entry, so a reader can never misread an old file. */
@@ -80,9 +73,9 @@ export function defaultJournalPath(databasePath: string): string {
  * and return normally. A write that makes no progress throws.
  */
 export function appendJournalEntry(path: string, entry: Record<string, unknown>): void {
-  mkdirSync(dirname(path), { recursive: true });
+  ensurePrivateDir(dirname(path));
   const line = Buffer.from(`${JSON.stringify({ schema: RETENTION_JOURNAL_SCHEMA, ...entry })}\n`);
-  const fd = openSync(path, 'a');
+  const fd = openSync(path, 'a', PRIVATE_FILE_MODE);
   try {
     for (let offset = 0; offset < line.length;) {
       const written = writeSync(fd, line, offset, line.length - offset);

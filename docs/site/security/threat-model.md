@@ -92,7 +92,7 @@ here, because none of the four rival findings involve it:
 | Model | Definition | Defeated by |
 |---|---|---|
 | **LAN peer** | Any device on the same network segment as the Mac Mini — another laptop on the same Wi-Fi, a compromised IoT device, a guest on the same router — reaching the dashboard's port directly, no credential required beyond network access. | Loopback-only bind (`127.0.0.1`): there is nothing at a routable address to connect to. |
-| **Local multi-user** | Another OS account *on the same host* connecting to `127.0.0.1:<port>`. This attacker model **survives a perfect loopback bind** — bind alone only stops the network; it does not stop a second account on the same Mac Mini. | Mandatory auth token, `timingSafeEqual`-compared, checked independently of bind. |
+| **Local multi-user** | Another OS account *on the same host* connecting to `127.0.0.1:<port>`. This attacker model **survives a perfect loopback bind** — bind alone only stops the network; it does not stop a second account on the same Mac Mini. | Mandatory auth token, `timingSafeEqual`-compared, checked independently of bind. The same account can skip the port and read the files, so the database, its sidecars, the backups and the retention journal are `0600` (R4 / SEC-2). |
 | **Malicious event payload** | A client that can submit — or, worse, does not even need authorization to submit — an event/webhook-registration payload whose *contents* the server later acts on, e.g. dialing a URL the payload names. | Never deriving an outbound-dial target from event-payload data; outbound targets are operator-configured only. |
 
 > **As built — an honest amendment to the local-multi-user row (M-11, fixed

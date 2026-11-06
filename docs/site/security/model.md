@@ -534,6 +534,16 @@ packages and Definition-of-Done that turn each rule into CI-blocking code).
   > `DASHBOARD_RETENTION_TOKEN_USAGE_DAYS` refuses startup), and `events_raw` stays
   > append-only (OPEN-1's `archive-segments` branch is declared but unbuilt and
   > refused loudly). A cycle whose backup failed deletes nothing.
+  >
+  > **File modes** (R4 / SEC-2): the store is as private as the corpus it copies
+  > (`0600` files under `0700` directories). `apps/server/src/db/file-modes.ts` sets
+  > `0600` on the database, its `-wal`/`-shm` sidecars, each backup and the retention
+  > journal, and `0700` on any directory the server creates. A backup file is `0600`
+  > before its first page is written, because a mode set afterwards would leave a
+  > readable copy for the whole transfer. Each boot tightens what an older install left
+  > open and refuses to continue if a data file stays readable beyond its owner. The
+  > one directory it does not chmod is the parent of `DASHBOARD_DB_PATH`, which may be
+  > shared for other reasons: an open one gets a boot warning with the fix.
 
 ## CI gates enforcing this
 
