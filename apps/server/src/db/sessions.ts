@@ -7,6 +7,7 @@
  * root. Uses a named-parameter prepared statement. `last_activity_at` never
  * moves backwards and `status` follows the CASE below — see {@link upsertSession}.
  */
+import type { FormatCensus } from '@agenthropic/core';
 import type { AgentStatus } from '@agenthropic/shared';
 import type { SqliteDatabase } from './connection';
 import { earlierInstantSql, isLaterInstantSql, laterInstantSql } from './instant-order';
@@ -32,6 +33,18 @@ export interface SessionUpsert {
    * on every pass like the two fields above.
    */
   readonly usageRecordsDropped?: number;
+  /**
+   * R13 / DAT-11 - the sorted `version` stamps of this pass's transcripts,
+   * stored as a JSON array. Omitted means null (not known). Overwritten on
+   * every pass.
+   */
+  readonly claudeCodeVersions?: readonly string[] | null;
+  /**
+   * R13 - this pass's format-drift census (`FormatCensus` from
+   * @agenthropic/core), stored as JSON. Omitted means null (not known).
+   * Overwritten on every pass; a partial pass censuses only what it read.
+   */
+  readonly formatCensus?: FormatCensus | null;
 }
 
 /**
@@ -52,15 +65,21 @@ const SESSION_STATUS_CASE = `CASE
 export function upsertSession(db: SqliteDatabase, row: SessionUpsert): void {
   db.prepare(
     `INSERT INTO sessions (id, project_slug, started_at, last_activity_at, status,
-                           partial_reason, partial_skipped_bytes, usage_records_dropped)
+                           partial_reason, partial_skipped_bytes, usage_records_dropped,
+                           claude_code_versions, format_census)
      VALUES (@id, @projectSlug, @startedAt, @lastActivityAt, @status,
-             @partialReason, @partialSkippedBytes, @usageRecordsDropped)
+             @partialReason, @partialSkippedBytes, @usageRecordsDropped,
+             @claudeCodeVersions, @formatCensus)
      ON CONFLICT(id) DO UPDATE SET
        project_slug     = excluded.project_slug,
        -- Honesty facts about THIS pass, not accumulations: overwritten, so a
        -- session read whole again stops claiming to be partial.
        partial_reason        = excluded.partial_reason,
        partial_skipped_bytes = excluded.partial_skipped_bytes,
+       -- R13: the census of THIS pass (deterministic JSON, so an identical
+       -- replay writes identical bytes).
+       claude_code_versions  = excluded.claude_code_versions,
+       format_census         = excluded.format_census,
        -- One exception to "overwritten". A partial pass did not read the main,
        -- so its count misses the main's id-less records - while the totals
        -- still hold the main's usage from the passes that did read it, with
@@ -102,6 +121,9 @@ export function upsertSession(db: SqliteDatabase, row: SessionUpsert): void {
     partialReason: row.partialReason ?? null,
     partialSkippedBytes: row.partialSkippedBytes ?? null,
     usageRecordsDropped: row.usageRecordsDropped ?? 0,
+    claudeCodeVersions:
+      row.claudeCodeVersions == null ? null : JSON.stringify([...row.claudeCodeVersions].sort()),
+    formatCensus: row.formatCensus == null ? null : JSON.stringify(row.formatCensus),
   });
 }
 

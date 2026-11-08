@@ -38,3 +38,12 @@ export type {
   ParsedAgentType,
 } from './parser/types';
 export type { SessionSubstrate, SubstrateFile } from './parser/substrate';
+export {
+  censusFormat,
+  KNOWN_CACHE_CREATION_KEYS,
+  KNOWN_RECORD_TYPES,
+  KNOWN_USAGE_KEYS,
+  MISSING_RECORD_TYPE,
+  UNVERSIONED,
+} from './parser/format-census';
+export type { CensusFile, FormatCensus, VersionFormatCensus } from './parser/format-census';

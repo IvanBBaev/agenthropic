@@ -37,6 +37,7 @@ import {
   type Migration,
   type MigrationRunResult,
 } from './db/migrations';
+import { readFormatDrift } from './db/format-drift';
 import { createReplayCheckpointStore } from './db/replay-checkpoints';
 import { applyHookLiveness } from './hooks/liveness-status';
 import { registerHookRoutes } from './hooks/routes';
@@ -1243,6 +1244,9 @@ export async function start(
         backup: backups.state(),
         hookDeliveries,
       }),
+    // R13: format-drift census over the stored sessions. Wired with ingest off
+    // too: it reads stored rows, so zeros are a real answer, not a fake one.
+    formatDrift: () => readFormatDrift(db),
   });
   appRef = app;
   // WP-IN3 hook receiver, registered before listen so the global /api/* auth

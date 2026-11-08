@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Transcript format-drift census (R13).** `/api/health` gains `formatDrift`: the Claude
+  Code versions seen per session, and per version the unknown record types, unknown
+  `usage` keys and all-zero usage records — so an upstream rename that would read tokens
+  as zero shows up before the dollar figures go wrong. Both facts are persisted per
+  session (migration 26). A non-JSON transcript line is now skipped and counted
+  (`malformedLinesSkipped`) instead of quarantining the whole session.
 - **Transcript retention modelled (R12).** At boot the server reads Claude Code's
   `cleanupPeriodDays` from `settings.json` (`$CLAUDE_CONFIG_DIR` honoured) and logs it:
   info at 365 days or more, a warning below that, when unset (Claude Code's 30-day

@@ -41,8 +41,8 @@ export {
   isAllowedOrigin,
   redactTokenInUrl,
 } from './security/index';
-export { HealthSchema } from './schemas/health';
-export type { HealthDto } from './schemas/health';
+export { HealthSchema, VersionFormatDriftSchema } from './schemas/health';
+export type { FormatDriftDto, HealthDto, VersionFormatDriftDto } from './schemas/health';
 export {
   nullable,
   ApiErrorSchema,

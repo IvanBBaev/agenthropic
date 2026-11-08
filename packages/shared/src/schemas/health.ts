@@ -12,6 +12,21 @@
  */
 import { Type, type Static } from '@sinclair/typebox';
 
+const Count = Type.Integer({ minimum: 0 });
+
+/** Format drift on the records of one Claude Code version (R13). */
+export const VersionFormatDriftSchema = Type.Object(
+  {
+    // Record `type` -> records whose type the corpus census of record has never seen.
+    unknownRecordTypes: Type.Record(Type.String(), Count),
+    // Usage key (`cache_creation.<key>` for a nested one) -> usage blocks carrying it.
+    unknownUsageKeys: Type.Record(Type.String(), Count),
+    // Non-synthetic assistant records whose usage reads as zero in every bucket.
+    zeroUsageRecords: Count,
+  },
+  { additionalProperties: false },
+);
+
 export const HealthSchema = Type.Object(
   {
     // 'replaying' from the loopback bind until the startup replay has finished,
@@ -97,8 +112,37 @@ export const HealthSchema = Type.Object(
         { additionalProperties: false },
       ),
     ),
+    // R13 (ARC-6, QA-3, DAT-7, DAT-11): format-drift census over the stored
+    // sessions, aggregated at request time from each session's latest parse.
+    // The parser tolerates unknown record types and usage keys and skips a
+    // non-JSON line; these counts are what keeps that tolerance from being
+    // silent. A rise in `byClaudeCodeVersion` under a new version is the
+    // signal that an upstream format change may be under-reporting tokens.
+    // Always present: it is a stored fact, and all zeros is a real answer.
+    formatDrift: Type.Optional(
+      Type.Object(
+        {
+          // Sessions whose latest parse carried a census (hook-only sessions
+          // and rows not re-parsed since the census existed are not counted).
+          sessionsCensused: Count,
+          // The subset with any skipped line or any drift.
+          sessionsWithDrift: Count,
+          // Non-JSON lines skipped across those sessions (DAT-7). Each may
+          // have carried tokens, so a non-zero value makes totals a lower bound.
+          malformedLinesSkipped: Count,
+          // Claude Code version -> sessions whose transcripts carry it (DAT-11).
+          claudeCodeVersions: Type.Record(Type.String(), Count),
+          // Claude Code version -> drift summed over sessions; only versions
+          // with drift appear.
+          byClaudeCodeVersion: Type.Record(Type.String(), VersionFormatDriftSchema),
+        },
+        { additionalProperties: false },
+      ),
+    ),
   },
   { additionalProperties: false },
 );
 
 export type HealthDto = Static<typeof HealthSchema>;
+export type FormatDriftDto = NonNullable<HealthDto['formatDrift']>;
+export type VersionFormatDriftDto = Static<typeof VersionFormatDriftSchema>;

@@ -19,7 +19,7 @@
  *
  * Loud vs tolerant (a MUST distinction):
  * - THROW {@link SubstrateError} on structurally malformed / contradictory
- *   substrate: a non-JSON line, an `agent-<hex>.jsonl` whose inline `agentId`
+ *   substrate: an `agent-<hex>.jsonl` whose inline `agentId`
  *   disagrees with the filename hex, two agent files sharing a hex, a
  *   `sessionId` contradiction across records, or a transcript with no
  *   timestamped record.
@@ -30,12 +30,16 @@
  *   and the model settles to the greatest-output row.
  * - TOLERATE records of an unknown/unrecognized `type` (stored, not crashed):
  *   the parser simply ignores record types it has no rule for.
+ * - SKIP AND COUNT a non-JSON line (DAT-7, R13): the rest of the file still
+ *   parses. Skips, unknown record types, unknown usage keys and all-zero usage
+ *   blocks are counted on `formatCensus`, so tolerance is never silent.
  */
 import type { AgentOutcomeCause } from '@agenthropic/shared';
 import type { DedupedUsage, TokenBuckets, UsageRow } from '../types';
 import { parseTimestampMs } from '../time';
 import { dedupeUsageByMessageId } from '../usage/dedupe';
 import { classifyAgentOutcomeCause } from './agent-outcome';
+import { censusFormat } from './format-census';
 import { LEGACY_EXPLORE_EDGE_SOURCE } from './types';
 import type {
   ParsedAgent,
@@ -165,22 +169,30 @@ function recordValues(records: readonly ParsedRecord[]): unknown[] {
   return records.map((record) => record.value);
 }
 
-/** Parses one file's lines to JSON, throwing loudly (with file + line) on any non-JSON line. */
-function parseFile(relativePath: string, lines: readonly string[]): ParsedRecord[] {
+/**
+ * Parses one file's lines to JSON. A non-JSON line (a torn write, a
+ * half-flushed tail, a byte-level corruption) is skipped and counted, never
+ * thrown (DAT-7, R13): one bad line used to discard the whole session, which
+ * is a worse ground-truth loss than the line itself. The count surfaces on the
+ * session's format census, so the skip is never silent.
+ */
+function parseFile(
+  relativePath: string,
+  lines: readonly string[],
+): { records: ParsedRecord[]; malformedLines: number } {
   const records: ParsedRecord[] = [];
+  let malformedLines = 0;
   lines.forEach((line, index) => {
     if (line.trim() === '') {
       return; // Tolerate blank lines (e.g. a trailing newline from the disk adapter).
     }
     try {
       records.push({ value: JSON.parse(line), line: index + 1 });
-    } catch (error) {
-      throw new SubstrateError(
-        `${relativePath}:${index + 1}: line is not valid JSON (${String(error)})`,
-      );
+    } catch {
+      malformedLines += 1;
     }
   });
-  return records;
+  return { records, malformedLines };
 }
 
 // --- Transcript model -------------------------------------------------------
@@ -974,7 +986,7 @@ function extractUsageRows(transcripts: readonly Transcript[]): ExtractedUsage {
  * Reconstructs one session's agents, spawn edges, message-deduped usage and
  * outcomes from already-read file contents. Pure: no I/O, no mutation of the input.
  *
- * @throws {SubstrateError} on a non-JSON line, an inline-agentId / filename-hex
+ * @throws {SubstrateError} on an inline-agentId / filename-hex
  *   disagreement, a duplicated agent hex, a `sessionId` contradiction, or a
  *   transcript with no timestamped record.
  * @throws {UsageConflictError} (from {@link dedupeUsageByMessageId}) when rows
@@ -983,11 +995,16 @@ function extractUsageRows(transcripts: readonly Transcript[]): ExtractedUsage {
  *   collapse to the per-bucket maximum.
  */
 export function parseSession(substrate: SessionSubstrate): ParsedSession {
-  const files: ParsedFile[] = substrate.files.map((file) => ({
-    relativePath: file.relativePath,
-    classification: classifyFile(file.relativePath),
-    records: parseFile(file.relativePath, file.lines),
-  }));
+  let malformedLines = 0;
+  const files: ParsedFile[] = substrate.files.map((file) => {
+    const parsed = parseFile(file.relativePath, file.lines);
+    malformedLines += parsed.malformedLines;
+    return {
+      relativePath: file.relativePath,
+      classification: classifyFile(file.relativePath),
+      records: parsed.records,
+    };
+  });
 
   const sessionId = deriveSessionId(files);
   const agentFiles = collectAgentFiles(files);
@@ -1063,6 +1080,13 @@ export function parseSession(substrate: SessionSubstrate): ParsedSession {
     outcomes,
     claudeCodeVersions: collectClaudeCodeVersions(files),
     usageRecordsDropped: extracted.dropped,
+    formatCensus: censusFormat(
+      files.map((file) => ({
+        isTranscript: file.classification.kind === 'main' || file.classification.kind === 'agent',
+        records: recordValues(file.records),
+      })),
+      malformedLines,
+    ),
   };
 }
 

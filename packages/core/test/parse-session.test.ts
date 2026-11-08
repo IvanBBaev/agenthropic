@@ -8,13 +8,12 @@
  *   grandchild's parent is the depth-1 agent, NOT the main root (gate #4).
  * - Negative substrates prove each loud `SubstrateError` (and the propagated
  *   `UsageConflictError`), while unknown record types and non-JSON-object
- *   lines are tolerated, not fatal.
+ *   lines are tolerated and non-JSON lines are skipped and counted (DAT-7).
  */
 import { describe, expect, it } from 'vitest';
 import {
   LEGACY_EXPLORE_EDGE_SOURCE,
   parseSession,
-  SubstrateError,
   UsageConflictError,
   type ParsedEdge,
   type ParsedSession,
@@ -928,12 +927,6 @@ describe('parseSession — tolerates unknown records and non-transcript files', 
 // --- loud failures ----------------------------------------------------------
 
 describe('parseSession — loud SubstrateError failures', () => {
-  it('throws with file:line on a non-JSON line', () => {
-    const input = substrate([{ path: 'session.jsonl', lines: ['{"ok":true}', 'not json {'] }]);
-    expect(() => parseSession(input)).toThrow(SubstrateError);
-    expect(() => parseSession(input)).toThrow('session.jsonl:2');
-  });
-
   it('throws when an agent file has no sessionId on any record', () => {
     const input = substrate([
       {
@@ -1081,11 +1074,19 @@ describe('parseSession — SubstrateError line numbers survive blank lines', () 
     );
   });
 
-  it('reports the real file line of a non-JSON line after blanks', () => {
+  it('keeps the real file line of a later record when a non-JSON line precedes it', () => {
     const input = substrate([
-      { path: 'session.jsonl', lines: ['', '{"ok":true}', '', 'not json {'] },
+      {
+        path: 'session.jsonl',
+        lines: [
+          jline({ sessionId: 'sess-a', type: 'user', timestamp: '2026-01-01T00:00:00Z' }),
+          'not json {',
+          '',
+          jline({ sessionId: 'sess-b', type: 'user', timestamp: '2026-01-01T00:00:01Z' }),
+        ],
+      },
     ]);
-    expect(() => parseSession(input)).toThrow('session.jsonl:4: line is not valid JSON');
+    expect(() => parseSession(input)).toThrow('session.jsonl:4');
   });
 });
 

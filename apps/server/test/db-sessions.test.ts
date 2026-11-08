@@ -11,11 +11,22 @@ interface SessionRow {
   readonly partial_reason: string | null;
   readonly partial_skipped_bytes: number | null;
   readonly usage_records_dropped: number;
+  readonly claude_code_versions: string | null;
+  readonly format_census: string | null;
   readonly ingest_seq: number;
 }
 
-/** What an upsert that names no honesty field records: a whole read, nothing dropped. */
-const WHOLE = { partial_reason: null, partial_skipped_bytes: null, usage_records_dropped: 0 };
+/**
+ * What an upsert that names no honesty field records: a whole read, nothing
+ * dropped, no census known.
+ */
+const WHOLE = {
+  partial_reason: null,
+  partial_skipped_bytes: null,
+  usage_records_dropped: 0,
+  claude_code_versions: null,
+  format_census: null,
+};
 
 describe('upsertSession (WP-D4)', () => {
   let temp: TempDb;
@@ -121,5 +132,79 @@ describe('upsertSession (WP-D4)', () => {
       ...WHOLE,
       ingest_seq: 1,
     });
+  });
+});
+
+describe('upsertSession - R13 format census columns', () => {
+  let temp: TempDb;
+
+  beforeEach(() => {
+    temp = createMigratedTempDb();
+  });
+
+  afterEach(() => {
+    temp.cleanup();
+  });
+
+  const BASE: SessionUpsert = {
+    id: 'session-c',
+    projectSlug: 'agenthropic',
+    startedAt: '2026-07-11T00:00:00Z',
+    lastActivityAt: '2026-07-11T00:05:00Z',
+    status: 'active',
+  };
+
+  function census(): { claude_code_versions: string | null; format_census: string | null } {
+    return temp.db
+      .prepare('SELECT claude_code_versions, format_census FROM sessions WHERE id = ?')
+      .get('session-c') as { claude_code_versions: string | null; format_census: string | null };
+  }
+
+  it('stores sorted versions and the census as JSON, overwritten by the next pass', () => {
+    upsertSession(temp.db, {
+      ...BASE,
+      claudeCodeVersions: ['2.1.81', '2.1.80'],
+      formatCensus: { malformedLines: 2, byVersion: {} },
+    });
+    expect(census()).toEqual({
+      claude_code_versions: '["2.1.80","2.1.81"]',
+      format_census: '{"malformedLines":2,"byVersion":{}}',
+    });
+
+    upsertSession(temp.db, {
+      ...BASE,
+      claudeCodeVersions: ['2.1.81'],
+      formatCensus: { malformedLines: 0, byVersion: {} },
+    });
+    expect(census()).toEqual({
+      claude_code_versions: '["2.1.81"]',
+      format_census: '{"malformedLines":0,"byVersion":{}}',
+    });
+  });
+
+  it('writes byte-identical JSON on an identical replay and does not bump ingest_seq', () => {
+    const row: SessionUpsert = {
+      ...BASE,
+      claudeCodeVersions: ['2.1.80'],
+      formatCensus: {
+        malformedLines: 0,
+        byVersion: {
+          '2.1.80': { unknownRecordTypes: { novel: 1 }, unknownUsageKeys: {}, zeroUsageRecords: 0 },
+        },
+      },
+    };
+    upsertSession(temp.db, row);
+    const first = temp.db.prepare('SELECT * FROM sessions').get();
+    upsertSession(temp.db, row);
+    expect(temp.db.prepare('SELECT * FROM sessions').get()).toEqual(first);
+  });
+
+  it('rejects a non-JSON value at the column CHECK', () => {
+    upsertSession(temp.db, BASE);
+    expect(() =>
+      temp.db
+        .prepare("UPDATE sessions SET format_census = 'not json' WHERE id = 'session-c'")
+        .run(),
+    ).toThrow(/CHECK constraint failed/);
   });
 });

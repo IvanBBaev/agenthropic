@@ -34,8 +34,8 @@
  *
  *   vitest (vite's esbuild transform, what this file pins) and `tsx` (what
  *   `pnpm start`, `pnpm dev` and `pnpm bench` run) now produce an IDENTICAL
- *   checksum for TWENTY of the twenty-five migrations - ids 1-6, 8, 9, 10,
- *   12, 13, 17, 18, 19, 20, 21, 22, 23, 24 and 25. They differ on ids 7, 11, 14, 15 and 16. Running the pre-H-1
+ *   checksum for TWENTY-ONE of the twenty-six migrations - ids 1-6, 8, 9, 10,
+ *   12, 13, 17, 18, 19, 20, 21, 22, 23, 24, 25 and 26. They differ on ids 7, 11, 14, 15 and 16. Running the pre-H-1
  *   whitespace-only formula over the SAME two transform outputs puts the
  *   agreement at ZERO, so the agreeing set is what H-1 bought.
  *
@@ -73,6 +73,11 @@
  * the same five-row pricing shape and was measured identical under tsx and
  * vitest
  * (85bf302cb1957935241ebae03b417c88002074e4175337ba3e2414e741b7efb8) on the
+ * day it was written.
+ * Migration 26 (`sessions-format-census`, appended 2026-11-08) is one `db.exec`
+ * of a single template literal of two `ALTER TABLE` statements and was measured
+ * identical under tsx and vitest
+ * (084792449b0fe890e12a21ffa04037f4096f6ac4d14b1ceb736e68cfa8cf5e27) on the
  * day it was written.
  * The residual five are still exactly ids 7, 11, 14,
  * 15 and 16.
@@ -325,6 +330,11 @@ const PINNED: readonly PinnedChecksum[] = [
     name: 'model-pricing-haiku-5-5-base-tier',
     checksum: '85bf302cb1957935241ebae03b417c88002074e4175337ba3e2414e741b7efb8',
   },
+  {
+    id: 26,
+    name: 'sessions-format-census',
+    checksum: '084792449b0fe890e12a21ffa04037f4096f6ac4d14b1ceb736e68cfa8cf5e27',
+  },
 ];
 
 /** The literal whitespace normalisation `migrationChecksum` applies. */
@@ -406,7 +416,7 @@ describe('migration checksum pin', () => {
     // One `toEqual` over the whole table rather than a loop of assertions: the
     // failure output then shows every literal that moved at once, which
     // separates "someone edited migration 11" from "the transform changed" at a
-    // glance - one row versus twenty-five.
+    // glance - one row versus twenty-six.
     expect(computed).toEqual(PINNED);
   });
 

@@ -76,8 +76,12 @@ import type { SqliteDatabase } from './connection';
  *    those facts, so a revision-1 checkpoint would have kept every finished
  *    session at "not partial, nothing dropped" for good. The bump costs one
  *    full corpus re-read on the first boot after the upgrade.
+ *  - 3: R13 / migration 26 added `sessions.claude_code_versions` and
+ *    `format_census`, and the parser began skipping (and counting) non-JSON
+ *    lines instead of failing the session. A revision-2 checkpoint would leave
+ *    every finished session with a NULL census, invisible to /api/health.
  */
-export const REPLAY_CHECKPOINT_REVISION = 2;
+export const REPLAY_CHECKPOINT_REVISION = 3;
 
 export interface ReplayCheckpointStore {
   /**

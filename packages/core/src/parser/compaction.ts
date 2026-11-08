@@ -63,8 +63,11 @@ function isJsonRecord(value: unknown): value is Record<string, unknown> {
  * then line order. Consumers needing temporal order per transcript sort by
  * timestamp (see `computeCompactionAwareCost`).
  *
- * @throws {SubstrateError} on a non-JSON line in a transcript file, or on a
- *   `compact_boundary` record whose `timestamp` is missing or not a string.
+ * A non-JSON line is skipped, as in `parseSession` (DAT-7, R13) - it is
+ * counted on the session's format census there, not here.
+ *
+ * @throws {SubstrateError} on a `compact_boundary` record whose `timestamp` is
+ *   missing or not a string.
  */
 export function extractCompactionBoundaries(substrate: SessionSubstrate): CompactionBoundary[] {
   const boundaries: CompactionBoundary[] = [];
@@ -82,10 +85,8 @@ export function extractCompactionBoundaries(substrate: SessionSubstrate): Compac
       let parsed: unknown;
       try {
         parsed = JSON.parse(line);
-      } catch (error) {
-        throw new SubstrateError(
-          `${file.relativePath}:${index + 1}: line is not valid JSON (${String(error)})`,
-        );
+      } catch {
+        return; // Skipped and counted by parseSession's format census.
       }
       if (!isJsonRecord(parsed)) {
         return; // Tolerate non-object lines — no rule for them, same as parseSession.

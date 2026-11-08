@@ -1569,6 +1569,41 @@ export const migrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    id: 26,
+    name: 'sessions-format-census',
+    up(db) {
+      // WHY. R13 (ARC-6, QA-3, DAT-7, DAT-11, 2026-11-08). The parser
+      // tolerates what it has no rule for - an unknown record type, an unknown
+      // usage key, a renamed bucket read as zero - and now skips a non-JSON
+      // line instead of discarding the whole session. Tolerance without a
+      // count is silent drift, so each session keeps the census of its latest
+      // parse, and /api/health aggregates it.
+      //
+      // claude_code_versions: the sorted JSON array of the `version` stamps in
+      // the session's transcripts (parser gate #10). Before this column the
+      // parser computed it and nothing stored it, so a drift report could not
+      // be tied to the Claude Code release that introduced it (DAT-11).
+      //
+      // format_census: the JSON census object (`FormatCensus` in
+      // @agenthropic/core) - malformed lines skipped, plus unknown record
+      // types, unknown usage keys and all-zero usage records by version.
+      //
+      // Both are written by the ingest upsert on every pass and describe that
+      // pass alone (the latest parse is the truth, as for migration 21's
+      // columns). NULL means the row was never re-parsed since this migration
+      // or was created by a hook. The JSON is built with sorted keys, so an
+      // identical replay rewrites identical bytes. Neither column is listed in
+      // migration 22's ingest_seq trigger: a census change is not a change
+      // /api/changes reports.
+      db.exec(`
+        ALTER TABLE sessions ADD COLUMN claude_code_versions TEXT
+          CHECK (claude_code_versions IS NULL OR json_valid(claude_code_versions));
+        ALTER TABLE sessions ADD COLUMN format_census TEXT
+          CHECK (format_census IS NULL OR json_valid(format_census));
+      `);
+    },
+  },
 ];
 
 export interface MigrationRunResult {

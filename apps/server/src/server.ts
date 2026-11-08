@@ -21,6 +21,7 @@ import Fastify, {
 } from 'fastify';
 import type { TypeBoxTypeProvider } from '@fastify/type-provider-typebox';
 import {
+  type FormatDriftDto,
   type HealthDto,
   HealthSchema,
   isAllowedHost,
@@ -151,6 +152,11 @@ export interface BuildServerOptions {
    * faked. Absent on a server built without that wiring.
    */
   readonly operationalHealth?: () => OperationalHealth;
+  /**
+   * R13: the format-drift census over the stored sessions (db/format-drift.ts).
+   * Absent on a server built without that wiring, so the field is omitted.
+   */
+  readonly formatDrift?: () => FormatDriftDto;
   /**
    * Directory holding the built SPA, served from this same loopback origin so
    * the product is one command and one port. When absent no static route is
@@ -382,6 +388,7 @@ export function buildServer(options: BuildServerOptions) {
             sessionsQuarantined: exclusions.quarantined,
           }),
       ...options.operationalHealth?.(),
+      ...(options.formatDrift === undefined ? {} : { formatDrift: options.formatDrift() }),
     };
   });
 

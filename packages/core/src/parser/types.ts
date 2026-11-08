@@ -5,6 +5,7 @@
  */
 import type { AgentOutcomeCause, OrchestrationEdgeSource } from '@agenthropic/shared';
 import type { DedupedUsage } from '../types';
+import type { FormatCensus } from './format-census';
 
 export type ParsedAgentType = 'main' | 'subagent';
 
@@ -154,4 +155,11 @@ export interface ParsedSession {
    * same additive reason as `outcomes`; `0` means nothing was dropped.
    */
   usageRecordsDropped?: number;
+  /**
+   * Format-drift census of this parse (R13): skipped non-JSON lines, unknown
+   * record types, unknown usage keys and all-zero usage blocks, by Claude
+   * Code version. Optional on the type, always present on `parseSession`'s
+   * output, for the same additive reason as `outcomes`.
+   */
+  formatCensus?: FormatCensus;
 }

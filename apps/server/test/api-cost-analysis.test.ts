@@ -356,8 +356,12 @@ describe('/api/sessions/:id/cost-analysis (WP-C4 + WP-C5)', () => {
   it('replies 422 on a poisoned transcript without echoing corpus internals', async () => {
     const corpusRoot = newCorpusRoot();
     materializeFixture(corpusRoot, getFixture('task-notification-recovery'), (rel, line) =>
-      // Poison the FIRST main-transcript line with non-JSON garbage.
-      !rel.includes('/') && line.includes('compact_boundary') ? '{this is not json' : line,
+      // Poison a main-transcript line with a contradicting sessionId - a
+      // structural SubstrateError. (A non-JSON line no longer is one: since
+      // R13 it is skipped and counted, DAT-7.)
+      !rel.includes('/') && line.includes('compact_boundary')
+        ? JSON.stringify({ sessionId: 'contradicting-session', type: 'user' })
+        : line,
     );
     const { app, db } = await startApp(providerFor(corpusRoot));
     seedPricing(db, 'synthetic-model-a', 1);

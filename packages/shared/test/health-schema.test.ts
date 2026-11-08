@@ -63,6 +63,42 @@ describe('HealthSchema', () => {
     );
   });
 
+  it('accepts a formatDrift census and rejects a fractional or extra drift field', () => {
+    const formatDrift = {
+      sessionsCensused: 4,
+      sessionsWithDrift: 1,
+      malformedLinesSkipped: 2,
+      claudeCodeVersions: { '2.1.80': 3, '2.2.0': 1 },
+      byClaudeCodeVersion: {
+        '2.2.0': {
+          unknownRecordTypes: { 'brand-new': 1 },
+          unknownUsageKeys: { prompt_tokens: 2 },
+          zeroUsageRecords: 2,
+        },
+      },
+    };
+    expect(Value.Check(HealthSchema, { status: 'ok', schemaVersion: 26, formatDrift })).toBe(true);
+    expect(
+      Value.Check(HealthSchema, {
+        status: 'ok',
+        schemaVersion: 26,
+        formatDrift: { ...formatDrift, malformedLinesSkipped: 0.5 },
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(HealthSchema, {
+        status: 'ok',
+        schemaVersion: 26,
+        formatDrift: {
+          ...formatDrift,
+          byClaudeCodeVersion: {
+            '2.2.0': { unknownRecordTypes: {}, unknownUsageKeys: {}, zeroUsageRecords: 0, x: 1 },
+          },
+        },
+      }),
+    ).toBe(false);
+  });
+
   it('requires exactly status and schemaVersion, so an optional field cannot silently become required', () => {
     expect(HealthSchema.required).toEqual(['status', 'schemaVersion']);
   });

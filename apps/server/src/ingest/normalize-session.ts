@@ -322,6 +322,8 @@ export function normalizeSession(
       partialReason: options.partial?.reason ?? null,
       partialSkippedBytes: options.partial?.skippedBytes ?? null,
       usageRecordsDropped: parsed.usageRecordsDropped ?? 0,
+      claudeCodeVersions: parsed.claudeCodeVersions ?? null,
+      formatCensus: parsed.formatCensus ?? null,
     },
     agents,
     edges: parsed.edges.map((edge) => ({

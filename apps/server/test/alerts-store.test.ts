@@ -95,7 +95,7 @@ describe('migration 23 (alerts-core)', () => {
 
   it('creates the four alert tables and both delivery indexes on a fresh database', () => {
     temp = createMigratedTempDb();
-    expect(currentSchemaVersion(temp.db)).toBe(25);
+    expect(currentSchemaVersion(temp.db)).toBe(26);
     expect(tableNames(temp.db)).toEqual(expect.arrayContaining(ALERT_TABLES));
     const indexes = temp.db
       .prepare(

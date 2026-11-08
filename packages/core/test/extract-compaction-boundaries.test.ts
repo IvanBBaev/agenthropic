@@ -4,8 +4,9 @@
  * The extractor is the parser-gap fill for WP-C4: `parseSession` does not
  * surface `compact_boundary` records, so a separate pure pass over the raw
  * substrate must find them, attribute each to its owning transcript, and stay
- * loud on structural corruption (non-JSON line, unplaceable boundary) while
- * tolerating benign shape drift (missing `compactMetadata`).
+ * loud on structural corruption (an unplaceable boundary) while tolerating
+ * benign shape drift (missing `compactMetadata`) and skipping a non-JSON line
+ * (DAT-7, R13 - `parseSession` counts it on the format census).
  */
 import { describe, expect, it } from 'vitest';
 import { extractCompactionBoundaries, SubstrateError } from '../src/index';
@@ -159,10 +160,13 @@ describe('extractCompactionBoundaries', () => {
     expect(result).toEqual([]);
   });
 
-  it('throws SubstrateError on a non-JSON line in a transcript file', () => {
-    const bad = substrate([{ path: `${SESSION}.jsonl`, lines: ['{not json'] }]);
-    expect(() => extractCompactionBoundaries(bad)).toThrow(SubstrateError);
-    expect(() => extractCompactionBoundaries(bad)).toThrow(/not valid JSON/);
+  it('skips a non-JSON line in a transcript file and still finds later boundaries (DAT-7)', () => {
+    const boundary = boundaryLine('2026-02-01T10:00:00.000Z', { trigger: 'auto', preTokens: 1 });
+    const result = extractCompactionBoundaries(
+      substrate([{ path: `${SESSION}.jsonl`, lines: ['{not json', boundary] }]),
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0]?.timestamp).toBe('2026-02-01T10:00:00.000Z');
   });
 
   it('throws SubstrateError on a boundary without a string timestamp', () => {

@@ -19,9 +19,9 @@
  * The normaliser cancels the classes a transform is free to vary - comments
  * (including annotations a transform INJECTS, such as vite's `@__PURE__` block
  * annotation), whitespace, and separators that are redundant before a closing
- * bracket. After it, vitest agrees with tsx on 20 of the 25, up from 0 - and
+ * bracket. After it, vitest agrees with tsx on 21 of the 26, up from 0 - and
  * `node --experimental-strip-types` agrees on the same ids (1-6, 8, 9, 10, 12,
- * 13, 17, 18, 19, 20), also up from 0 (migrations 21-25 measured under
+ * 13, 17, 18, 19, 20), also up from 0 (migrations 21-26 measured under
  * tsx and vitest only). Re-measured 2026-09-01 by running all
  * three, again on 2026-09-10 when migration 18 was appended, and again under
  * tsx and vitest on 2026-09-26 when migration 19 was appended, and under all
@@ -30,7 +30,8 @@
  * 2026-10-23 when migration 22 was appended, and under tsx and vitest on
  * 2026-10-24 when migration 23 was appended, and under tsx and vitest on
  * 2026-10-28 when migration 24 was appended, and under tsx and vitest on
- * 2026-10-30 when migration 25 was appended.
+ * 2026-10-30 when migration 25 was appended, and under tsx and vitest on
+ * 2026-11-08 when migration 26 was appended.
  *
  * Migration 17 (`agents-outcome-cause`) is the twelfth, appended after the H-1
  * measurement above, and it agrees for a reason its body states: one `db.exec`
@@ -54,6 +55,8 @@
  * pricing shape of 19 and 20, with `0.1` and `2.5` in the SQL text.
  * Migration 25 (`model-pricing-haiku-5-5-base-tier`) is the twentieth, the
  * same shape, with `0.1`, `0.5`, `0.01`, `0.125` and `0.2` in the SQL text.
+ * Migration 26 (`sessions-format-census`) is the twenty-first: one `db.exec`
+ * of a single template literal of two `ALTER TABLE` statements.
  *
  * It does NOT reach full executor independence, and that is not fixable while
  * the recorded checksums must stay byte-identical. The differences that survive
@@ -107,7 +110,7 @@
  * one `scripts/check-licenses.mjs` uses for its sanctioned `pnpm licenses` call
  * - and it is per-line, so any OTHER forbidden line added to this file is still
  * caught. The alternative was to delete the tsx runs, which would demote
- * OPERATOR_CHECKSUMS from a measurement re-taken on every CI run to twenty-five
+ * OPERATOR_CHECKSUMS from a measurement re-taken on every CI run to twenty-six
  * transcribed strings that nothing checks against the shipped file. That trade
  * is not worth making: the pins exist precisely to be a measurement.
  */
@@ -151,10 +154,11 @@ const OPERATOR_CHECKSUMS: Readonly<Record<number, string>> = {
   23: 'fd2b7de682727403689df5cefc879d7cf8a691cfe356578b8af38de3c91acd4e',
   24: '29a6e5a896eec71b9c1dee327267c2f3f0ca0889eee22ee31e1398180412b1f2',
   25: '85bf302cb1957935241ebae03b417c88002074e4175337ba3e2414e741b7efb8',
+  26: '084792449b0fe890e12a21ffa04037f4096f6ac4d14b1ceb736e68cfa8cf5e27',
 };
 
 /**
- * The same twenty-five, computed inside this vitest process. Spelled as the
+ * The same twenty-six, computed inside this vitest process. Spelled as the
  * operator table plus the five overrides, so a migration the two executors
  * agree on - which is every one not listed here, migrations 17 to 23
  * included - cannot drift in one table without drifting in the other.

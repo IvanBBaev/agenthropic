@@ -152,16 +152,17 @@ describe('Scenario #3 — missing parent id => orphan, no fabricated root (CD-4,
 });
 
 // --- Scenario #4 — malformed JSON (JSONL substrate facet) -------------------
-// Catalogue: malformed input is rejected loudly, never silently swallowed
-// (CD-2, FR-01). The HTTP 400 facet lives in hook-receiver.negative.test.ts;
-// here a poisoned JSONL line must abort THIS session's parse with a
-// SubstrateError naming file and line — the corpus runner then isolates the
-// failure per-session (proved in ingest-restart.negative.test.ts).
+// Catalogue: malformed input is never silently swallowed (CD-2, FR-01). The
+// HTTP 400 facet lives in hook-receiver.negative.test.ts. On the JSONL
+// substrate a poisoned line is skipped AND counted (DAT-7, R13): aborting the
+// whole session for one torn line lost more ground truth than the line
+// itself, so the skip is surfaced on the session's format census and on
+// /api/health instead. A session with no parseable record still fails loudly.
 
-describe('Scenario #4 — malformed JSONL line fails loudly with file:line (CD-2, FR-01)', () => {
+describe('Scenario #4 — malformed JSONL line is skipped and counted, never silent (CD-2, FR-01, DAT-7)', () => {
   const SESSION = '88888888-9999-4aaa-8bbb-cccccccccccc';
 
-  it('throws SubstrateError citing the exact file and line number', () => {
+  it('skips the torn line, keeps the session and counts the skip', () => {
     const substrate: SessionSubstrate = {
       files: [
         {
@@ -180,9 +181,16 @@ describe('Scenario #4 — malformed JSONL line fails loudly with file:line (CD-2
         },
       ],
     };
+    const result = parseSession(substrate);
+    expect(result.sessionId).toBe(SESSION);
+    expect(result.formatCensus?.malformedLines).toBe(1);
+  });
+
+  it('still throws SubstrateError when no line of the transcript parses', () => {
+    const substrate: SessionSubstrate = {
+      files: [{ relativePath: `${SESSION}.jsonl`, lines: ['{"type": "assistant", "sessionId":'] }],
+    };
     expect(() => parseSession(substrate)).toThrowError(SubstrateError);
-    expect(() => parseSession(substrate)).toThrowError(/:2: line is not valid JSON/);
-    expect(() => parseSession(substrate)).toThrowError(new RegExp(`${SESSION}\\.jsonl`));
   });
 
   it('distinguishes malformed JSON from UNKNOWN record types, which are tolerated (CD-2)', () => {
