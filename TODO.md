@@ -1153,7 +1153,7 @@ synthesis, not on this board._
   `dbBytes`/`walBytes` and `hookDeliveries` on `/api/health` (`operationalHealth` in
   `apps/server/src/index.ts`); `DASHBOARD_LOG_LEVEL`, default `warn`. Log rotation
   (newsyslog) is not documented yet.
-- [ ] **R12** model `cleanupPeriodDays`; fix `overview.md:154` (Ivan: D12) [ARC-3, OPS-11] _(D12 done 2026-10-30 — setting raised to 99999; the code/doc half is open)_
+- [x] **R12** model `cleanupPeriodDays`; fix `overview.md:154` (Ivan: D12) [ARC-3, OPS-11] _(D12 done 2026-10-30 — setting raised to 99999; done 2026-11-08: boot line reads `cleanupPeriodDays` from Claude Code's `settings.json` and warns below 365 days; a vanished transcript is pinned to keep its rows; overview, backup-restore §2, getting-started step 6 and troubleshooting §7 corrected)_
 - [ ] **R13** drift census on `/health`; persist CC version; skip-and-count bad lines [ARC-6, QA-3, DAT-7, DAT-11]
 - [x] **R14** configurable file cap (256 MiB default); partial flag in API + UI [DAT-3, DAT-5, OPS-15] _(real-corpus boot 2026-10-31: 5 main transcripts skipped as oversize — 79–170 MB, all under 256 MiB; their main-agent tokens are missing from the totals)_
   — done 2026-11-08: `DEFAULT_MAX_FILE_BYTES` is 256 MiB; `DASHBOARD_MAX_FILE_MIB` (1-511)

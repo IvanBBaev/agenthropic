@@ -252,6 +252,21 @@ here:
   a reverse proxy to the open port). Full procedure, including the
   `tailscale serve` vs `tailscale funnel` distinction: [remote access](../security/remote-access.md).
 
+**Keep the transcripts (R12).** Claude Code deletes transcripts under
+`~/.claude/projects` once they are older than `cleanupPeriodDays` in
+`~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR/settings.json`) — 30 days when the
+key is unset. The server keeps every row it already projected, but a deleted transcript
+can no longer be replayed, so a parser or pricing fix never reaches those sessions.
+Raise the window before you rely on the history:
+
+```json
+{ "cleanupPeriodDays": 99999 }
+```
+
+At boot the server reads that setting and logs one line —
+`claude transcripts: cleanupPeriodDays=<n> (...)` as info at 365 days or more, a
+warning below that, when the key is unset, or when the file cannot be read.
+
 The design-era text expected step 6's hook half to be the thing that put data on the
 board, and that turned out to be false: the watcher ingests transcripts on its own, so a
 server started at step 4 fills up by itself. What it cannot do without hooks is claim an

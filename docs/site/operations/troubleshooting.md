@@ -663,6 +663,15 @@ transaction, or excluding pruned windows on re-ingest — is an open decision (O
 Until it is made, both behaviours above are the shipped truth, and this page states
 them rather than picking the more comfortable one.
 
+**Old sessions stopped changing after a parser or pricing fix (R12).** Claude Code,
+not agenthropic, deletes transcripts older than `cleanupPeriodDays` (default 30). The
+projected rows survive — ingest never deletes a session because its JSONL is gone — but
+there is nothing left to replay, so fixes reach only sessions whose files still exist.
+Check the boot line `claude transcripts: cleanupPeriodDays=...`; a warning there means
+the window is short. Raise it in Claude Code's `settings.json` (see
+[getting started, step 6](../usage/getting-started.md#6-install-the-claude-code-hooks-and-reach-the-ui-over-a-tunnel))
+and treat the backups as the record for anything already deleted.
+
 **The database file did not get smaller after a prune.** Expected: SQLite keeps freed
 pages for reuse, so the file stays at its high-water mark and new rows fill the gaps.
 The daily cycle truncates the `-wal` file; the main file shrinks only through the

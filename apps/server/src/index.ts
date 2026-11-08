@@ -18,6 +18,7 @@ import { getSessionProjectSlug } from './api/queries';
 import { createSubstrateProvider } from './api/substrate-provider';
 import { HOST, loadConfig } from './config';
 import type { SkipReason, SkippedFile } from './corpus/fs-port';
+import { reportTranscriptRetentionAtBoot } from './corpus/transcript-retention';
 import type { CorpusIngestSummary } from './corpus/ingest-corpus';
 import { nodeCorpusFs } from './corpus/node-corpus-fs';
 import { createTailCachingFs } from './corpus/tail-cache';
@@ -1009,6 +1010,9 @@ export async function start(
   );
   const retention = createRetentionRunner(db, signedRetentionPolicy(config.retention, backupsDir));
   reportRetentionAtBoot(retention);
+  // R12: Claude Code's own transcript cleanup bounds how far back the corpus
+  // can rebuild these tables; say at boot which side of that line we are on.
+  reportTranscriptRetentionAtBoot({ env });
 
   // ONE hub shared by the ingest loop and the SSE route: watcher events are
   // bridged onto the shared RealtimeEvent DTOs and fan out to every stream

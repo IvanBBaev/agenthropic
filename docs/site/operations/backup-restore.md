@@ -323,7 +323,13 @@ deleted): events: would prune <n> row(s) older than <cutoff>; ...`.
 
 **Why any of this exists.** Every projected table (`sessions`, `agents`,
 `orchestration_edges`, `token_usage`) can be rebuilt by re-reading
-`~/.claude/projects/*.jsonl` — that is precisely what replay-on-startup does.
+`~/.claude/projects/*.jsonl` — that is precisely what replay-on-startup does — but
+only for as long as those files exist. Claude Code deletes transcripts older than its
+`cleanupPeriodDays` setting (default 30 days), so past that window the database and its
+backups are the only record of those sessions, and a later parser or pricing fix can no
+longer be back-applied to them by a replay. Ingest never deletes rows because a
+transcript vanished; the boot log says which side of that line an install is on (R12,
+[getting started, step 6](../usage/getting-started.md#6-install-the-claude-code-hooks-and-reach-the-ui-over-a-tunnel)).
 `events_raw` cannot: hook envelopes arrive over HTTP once and are re-derivable from
 nothing. Losing the database file loses that table permanently, which is why a backup
 capability that nothing ever ran was treated as a defect to fix rather than a

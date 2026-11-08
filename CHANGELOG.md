@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Transcript retention modelled (R12).** At boot the server reads Claude Code's
+  `cleanupPeriodDays` from `settings.json` (`$CLAUDE_CONFIG_DIR` honoured) and logs it:
+  info at 365 days or more, a warning below that, when unset (Claude Code's 30-day
+  default) or when unreadable. A test pins that re-ingesting after a transcript was
+  deleted keeps every projected row. The docs no longer claim the projection is
+  replayable without bound: it is replayable only within the transcript window, and the
+  database and backups are the record past it.
 - **SQLite maintenance (R19).** Every connection sets `synchronous = NORMAL` and
   `busy_timeout = 5000`; the daily backup cycle ends with `wal_checkpoint(TRUNCATE)`
   whatever the backup did (busy or failed checkpoints are logged, never thrown). New

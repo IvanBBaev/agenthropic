@@ -151,7 +151,7 @@ around:
 | `HookSource` | Accept Claude Code lifecycle events | Per-runtime strategy class (Claude Code now; the same seam is what would let a Codex adapter be added later without a core rewrite) |
 | `TokenReader` / `TokenSource` | Read ground-truth token counts | `~/.claude/projects/*.jsonl` reader |
 | `EventStore` | Append-only write/read of `events_raw` | SQLite table with no `UPDATE`/`DELETE` path |
-| Normalizer / Projection | Pure function: raw events → normalized state | In-process projection, replayable from `events_raw` alone |
+| Normalizer / Projection | Pure function: raw events → normalized state | In-process projection. The DAG and token tables are projected from the JSONL corpus, so they are replayable only while Claude Code keeps the transcripts (`cleanupPeriodDays`, default 30 days; R12); past that window the database and its backups are the record |
 | `StoragePort` | Persisted read/write of projected tables | `better-sqlite3`, WAL mode — single driver *(the `node:sqlite` fallback was dropped per best-path §6.3, applied 2026-07-06)* |
 | `RealtimeHub` | Push projected-state deltas to connected clients | SSE endpoint, same-origin enforced |
 | `AlertSink` | Match rules against state, deliver outbound | Webhook target → Telegram formatter |
