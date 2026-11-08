@@ -95,4 +95,59 @@ describe('parseSession — transcript timespan is min/max by instant (C-3)', () 
       expect(() => parseSession(substrate)).toThrow(/unparsable ISO-8601 timestamp "yesterday"/);
     }
   });
+
+  it('does not end the span on the post-Stop hook summary, but still validates it', () => {
+    const summary = (timestamp: string): string =>
+      jline({ sessionId: SESSION, type: 'system', subtype: 'stop_hook_summary', timestamp });
+    const base = mainWith(['2026-09-01T00:00:00.000Z', '2026-09-01T00:00:05.000Z']);
+    const withSummary = (...extra: string[]): SessionSubstrate => ({
+      files: base.files.map((file) => ({ ...file, lines: [...file.lines, ...extra] })),
+    });
+
+    expect(mainSpan(withSummary(summary('2026-09-01T00:00:06.000Z')))).toEqual({
+      startedAt: '2026-09-01T00:00:00.000Z',
+      endedAt: '2026-09-01T00:00:05.000Z',
+    });
+    // Two summaries: neither ends the span, whatever their order.
+    expect(
+      mainSpan(
+        withSummary(summary('2026-09-01T00:00:08.000Z'), summary('2026-09-01T00:00:07.000Z')),
+      ).endedAt,
+    ).toBe('2026-09-01T00:00:05.000Z');
+    // Any other `system` subtype still counts as a boundary.
+    expect(
+      mainSpan(
+        withSummary(
+          jline({
+            sessionId: SESSION,
+            type: 'system',
+            subtype: 'other',
+            timestamp: '2026-09-01T00:00:09.000Z',
+          }),
+        ),
+      ).endedAt,
+    ).toBe('2026-09-01T00:00:09.000Z');
+    expect(() => parseSession(withSummary(summary('later')))).toThrow(SubstrateError);
+  });
+
+  it('falls back to the hook summary when the transcript has nothing else', () => {
+    const only = (timestamps: string[]): SessionSubstrate => ({
+      files: [
+        {
+          relativePath: `${SESSION}.jsonl`,
+          lines: timestamps.map((timestamp) =>
+            jline({ sessionId: SESSION, type: 'system', subtype: 'stop_hook_summary', timestamp }),
+          ),
+        },
+      ],
+    });
+    expect(
+      mainSpan(
+        only(['2026-09-01T00:00:02.000Z', '2026-09-01T00:00:04.000Z', '2026-09-01T00:00:03.000Z']),
+      ),
+    ).toEqual({
+      startedAt: '2026-09-01T00:00:02.000Z',
+      endedAt: '2026-09-01T00:00:04.000Z',
+    });
+  });
 });

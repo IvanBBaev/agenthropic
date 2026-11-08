@@ -771,12 +771,21 @@ interface Timespan {
  * (canonicalized downstream); an instant tie keeps the first spelling. Every
  * timestamp is a candidate boundary, so an unparsable one anywhere is a
  * {@link SubstrateError}: skipping it could silently narrow the span.
+ *
+ * One exception on the END side: a {@link isAfterStopRecord} record is not
+ * agent activity. Claude Code writes it after the `Stop` hooks finish, so it
+ * is stamped after the turn ended; counting it would advance `last_seen_at`
+ * past the hook's 'waiting' and the status CASE would read it as new work.
+ * Its timestamp is still validated, and it still ends the span when the
+ * transcript has nothing else.
  */
 function transcriptTimespan(records: readonly unknown[], context: string): Timespan {
   let earliest: { value: string; ms: number } | undefined;
   let latest: { value: string; ms: number } | undefined;
+  let latestAfterStop: { value: string; ms: number } | undefined;
   for (const rawRecord of records) {
-    const value = asString(asRecord(rawRecord)?.['timestamp']);
+    const record = asRecord(rawRecord);
+    const value = asString(record?.['timestamp']);
     if (value === undefined) {
       continue;
     }
@@ -789,14 +798,28 @@ function transcriptTimespan(records: readonly unknown[], context: string): Times
     if (earliest === undefined || ms < earliest.ms) {
       earliest = { value, ms };
     }
-    if (latest === undefined || ms > latest.ms) {
+    if (isAfterStopRecord(record)) {
+      if (latestAfterStop === undefined || ms > latestAfterStop.ms) {
+        latestAfterStop = { value, ms };
+      }
+    } else if (latest === undefined || ms > latest.ms) {
       latest = { value, ms };
     }
   }
-  if (earliest === undefined || latest === undefined) {
+  const end = latest ?? latestAfterStop;
+  if (earliest === undefined || end === undefined) {
     throw new SubstrateError(`${context}: transcript has no timestamped record`);
   }
-  return { startedAt: earliest.value, endedAt: latest.value };
+  return { startedAt: earliest.value, endedAt: end.value };
+}
+
+/**
+ * The `system` record Claude Code appends once the `Stop` hooks have run
+ * (`subtype: "stop_hook_summary"`, carrying hook counts and errors). It is
+ * bookkeeping about the hooks, written after the turn ended, never activity.
+ */
+function isAfterStopRecord(record: JsonRecord | undefined): boolean {
+  return record?.['type'] === 'system' && record['subtype'] === 'stop_hook_summary';
 }
 
 // --- Usage extraction -------------------------------------------------------

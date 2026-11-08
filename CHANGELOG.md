@@ -332,6 +332,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An idle main agent now stays `waiting` after its turn.** Claude Code writes a
+  `stop_hook_summary` record once the `Stop` hooks have run. Its later timestamp moved the
+  agent's last activity forward, so the next ingest read it as new work and flipped the
+  agent from `waiting` back to `working` seconds after every turn. That record no longer
+  ends an agent's timespan (parser spec §6.4 amendment); a real new turn still wakes it.
 - **`SIGTERM` and `SIGINT` now shut the server down cleanly (R8 / OPS-2).** Before, a
   signal killed the process with the database open and SSE streams cut mid-write. The
   server now runs the same close path a failed boot runs and exits `0`. It exits `1` on a

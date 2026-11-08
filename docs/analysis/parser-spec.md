@@ -532,6 +532,16 @@ is a candidate boundary, so an unparsable one **anywhere** is a `SubstrateError`
 could silently narrow the span; 0 such timestamps in the 1.28 M on the real corpus). The §6.3 "first-record timestamp" reads as this
 earliest instant.
 
+**Amendment (2026-11-08): the post-`Stop` hook summary does not end the span.** Claude Code
+appends a `{"type":"system","subtype":"stop_hook_summary"}` record once the `Stop` hooks
+have run, so it is stamped after the turn ended. Counting it as `endedAt` advanced
+`last_seen_at` past the hook's `'waiting'`, and the status CASE then read it as new activity
+and flipped an idle main agent back to `'working'`. That record is excluded from the
+**latest** boundary only. Its timestamp is still validated (an unparsable one is still a
+`SubstrateError`), it can still be the earliest instant, and it ends the span when the
+transcript has no other timestamped record. Every other record type, including every other
+`system` subtype, still counts.
+
 ---
 
 ## 7. Edits to fold into the site docs — the gate has opened

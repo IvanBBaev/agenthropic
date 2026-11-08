@@ -86,6 +86,36 @@ function withAdvancedActivity(substrate: SessionSubstrate, timestamp: string): S
   return { files: [{ ...main, lines: [...main.lines, extra] }, ...rest] };
 }
 
+/**
+ * Append the `system` record Claude Code writes once the `Stop` hooks have
+ * run. Copied from a real transcript (2026-09-16), ids replaced. It is stamped
+ * AFTER the turn ended, so it must not read as new activity.
+ */
+function withStopHookSummary(substrate: SessionSubstrate, timestamp: string): SessionSubstrate {
+  const [main, ...rest] = substrate.files;
+  if (main === undefined) {
+    throw new Error('fixture has no main transcript');
+  }
+  const summary = JSON.stringify({
+    parentUuid: null,
+    isSidechain: false,
+    type: 'system',
+    subtype: 'stop_hook_summary',
+    hookCount: 1,
+    hookInfos: [{ command: 'node hooks/agenthropic-hook.mjs' }],
+    hookErrors: [],
+    preventedContinuation: false,
+    stopReason: '',
+    hasOutput: false,
+    level: 'suggestion',
+    timestamp,
+    uuid: 'aaaaaaaa-0000-4000-8000-00000000eeee',
+    userType: 'external',
+    sessionId: SESSION_ID,
+  });
+  return { files: [{ ...main, lines: [...main.lines, summary] }, ...rest] };
+}
+
 function statusOfAgent(temp: TempDb, id: string): string | null {
   const row = temp.db.prepare('SELECT status FROM agents WHERE id = ?').get(id) as
     { status: string | null } | undefined;
@@ -395,6 +425,29 @@ describe('status lifecycle', () => {
       ]);
       expect(statusOfAgent(temp, SESSION_ID)).toBe('waiting');
       expect(statusOfSession(temp, SESSION_ID)).toBe('waiting');
+    });
+
+    it("keeps 'waiting' when the transcript only gains the post-Stop hook summary", () => {
+      // Claude Code appends `system`/`stop_hook_summary` after the Stop hooks
+      // finish, so it lands in the transcript AFTER the hook set 'waiting'. Its
+      // later timestamp used to advance last_seen_at and the OPEN-2 rule then
+      // flipped the idle main agent straight back to 'working'.
+      ingestSession(getFixture('flat-tool-use'), deps());
+      applyHookLiveness(temp.db, 'Stop', { session_id: SESSION_ID });
+
+      const summarized = withStopHookSummary(
+        getFixture('flat-tool-use'),
+        '2030-01-01T00:00:00.000Z',
+      );
+      expect(ingestSession(summarized, deps()).ok).toBe(true);
+
+      expect(statusOfAgent(temp, SESSION_ID)).toBe('waiting');
+      expect(statusOfSession(temp, SESSION_ID)).toBe('waiting');
+
+      // The next real turn still wakes it (OPEN-2).
+      ingestSession(withAdvancedActivity(summarized, '2030-01-01T00:00:01.000Z'), deps());
+      expect(statusOfAgent(temp, SESSION_ID)).toBe('working');
+      expect(statusOfSession(temp, SESSION_ID)).toBe('working');
     });
 
     it("SubagentStop marks the named subagent 'completed' and leaves the session alone", () => {
