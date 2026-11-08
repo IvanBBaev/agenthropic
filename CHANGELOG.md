@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Browser hardening headers and a Host allowlist (R18).** Every response, SSE
+  included, now carries
+  `Content-Security-Policy: default-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'`,
+  `X-Frame-Options: DENY` and `Referrer-Policy: no-referrer`. A request whose `Host`
+  hostname is not `127.0.0.1`, `localhost` or the hostname of a
+  `DASHBOARD_ALLOWED_ORIGINS` entry gets `421` on every route, before the token gate,
+  which blocks DNS rebinding. A front end that forwards the browser's Host unchanged
+  now needs its `DASHBOARD_ALLOWED_ORIGINS` entry for the whole dashboard, not only for
+  the stream.
+
 - **Explicit test timeouts in every package.** Each `vitest.config.ts` sets
   `testTimeout`/`hookTimeout` (server 60 s, web 30 s, the pure packages 15 s) instead of
   Vitest's 5 s default, which timed tests out on a loaded machine. No retries.

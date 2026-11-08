@@ -545,9 +545,34 @@ packages and Definition-of-Done that turn each rule into CI-blocking code).
   > one directory it does not chmod is the parent of `DASHBOARD_DB_PATH`, which may be
   > shared for other reasons: an open one gets a boot warning with the fix.
 
+### 10. Browser hardening headers and a Host allowlist (R18, 2026-11-08)
+
+Two defences for the one client that is a browser:
+
+- **Headers on every response** (SEC-3). `apps/server/src/http/security-headers.ts`
+  holds the set, and a root `onSend` hook adds it to every response: the SPA shell,
+  assets, JSON, errors and 404s. The hijacked SSE stream writes the same set into its
+  own head. The set is
+  `Content-Security-Policy: default-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'`,
+  `X-Frame-Options: DENY` and `Referrer-Policy: no-referrer`. No other page can
+  frame the dashboard to clickjack the token screen. A future XSS could not send the
+  `sessionStorage` token to another origin. The built SPA has no inline code, so the
+  policy needs no `unsafe-*` source.
+- **Host allowlist** (SEC-4, DNS rebinding). A root `onRequest` hook runs before the
+  token gate. It answers `421 Misdirected Request` (`{"error":"Unrecognized Host header."}`)
+  unless the `Host` hostname is `127.0.0.1`, `localhost`, or the hostname of a
+  `DASHBOARD_ALLOWED_ORIGINS` entry. A missing Host is refused as well. Only the hostname
+  is compared, not the port. A rebinding page arrives under its own name, and an SSH
+  forward legitimately arrives as `localhost:<any port>`. This covers the
+  unauthenticated static SPA as well, so a rebinding page cannot even confirm that
+  the service exists.
+
+`apps/server/test/security-headers-host.test.ts` asserts both, response class by
+response class.
+
 ## CI gates enforcing this
 
-None of the nine rules above rely on a reviewer remembering to check for them. Each
+None of the ten rules above rely on a reviewer remembering to check for them. Each
 has a named work package, in `docs/analysis/development-plan.md`, whose Done-when is a
 CI-observable condition:
 

@@ -92,7 +92,7 @@ resolver.
 | `DASHBOARD_RETENTION_BACKUP_DAYS` | optional | `30` — signed v1.0 policy | Age window for backup files in `<dirname(DASHBOARD_DB_PATH)>/backups` | Non-negative integer up to `36500` (100 years); `0` disables the rule; empty counts as unset |
 | `DASHBOARD_RETENTION_BACKUP_KEEP_MIN` | optional | `7` — signed v1.0 policy | Keep-minimum floor for backup files: the newest N survive whatever the window says; the floor wins over the age | Positive integer (never below 1) |
 | `DASHBOARD_WEB_ROOT` | optional | `apps/web/dist`, resolved from the server module's own location (`import.meta.url`), not from the working directory | Directory of the built SPA that the single-port server serves alongside `/api`; when the bundle is absent every non-`/api` path answers `503` with a "not built yet, run `pnpm start`" message | Free-form path; empty string counts as unset |
-| `DASHBOARD_ALLOWED_ORIGINS` | optional | empty — the stream admits only `http://127.0.0.1:<port>` and `http://localhost:<port>` | Extra browser origins the `/api/stream` same-origin check admits, for a tunnel whose browser-visible origin is not the server's own loopback port (C-2, 2026-10-23). Never changes the bind host and never relaxes the token | Comma-separated; each entry must be an exact serialized `http`/`https` origin (lower-case host, no default port, no path or trailing slash, no credentials) — anything else, including `*` and `null`, is a startup error; empty counts as unset |
+| `DASHBOARD_ALLOWED_ORIGINS` | optional | empty — the stream admits only `http://127.0.0.1:<port>` and `http://localhost:<port>` | Extra browser origins the `/api/stream` same-origin check admits, for a tunnel whose browser-visible origin is not the server's own loopback port (C-2, 2026-10-23). Since R18 (2026-11-08) each entry's hostname is also admitted by the Host-header allowlist (`421` for any other name except `127.0.0.1`/`localhost`). Never changes the bind host and never relaxes the token | Comma-separated; each entry must be an exact serialized `http`/`https` origin (lower-case host, no default port, no path or trailing slash, no credentials) — anything else, including `*` and `null`, is a startup error; empty counts as unset |
 | `DASHBOARD_ALERTS_CONFIG` | optional | unset — alerting off; the server builds no rules engine, no dispatcher and no sink, and nothing in the process dials out | Path to the v2.0 alerts JSON file (targets + rules, see [Telegram alerts](telegram.md)); read and validated at boot, synced into `webhook_targets` / `alert_rules`, then evaluated every poll interval | Must be an absolute path — a relative one is a startup error; empty counts as unset. The file must be owned by the server user or root and not group/other-writable. An unreadable, malformed or schema-invalid file, or a `tokenRef` that does not resolve, fails startup with a message naming the file and the JSON path but never a value |
 | `DASHBOARD_LOG_LEVEL` | optional | `warn` | Server log level (R11 / OPS-6, 2026-11-08). `warn` logs failures only; `info` adds one line per request, with the token redacted from the URL; `silent` turns the logger off | One of `fatal`, `error`, `warn`, `info`, `debug`, `trace`, `silent`; anything else is a startup error; empty counts as unset |
 | `DASHBOARD_MAX_FILE_MIB` | optional | `256` | Per-file corpus read cap in MiB (R14 / DAT-3, 2026-11-08). A larger file is skipped as `oversize`; an oversize **main** transcript leaves its session ingested from its subagents and marked `partial` (a lower bound). Both the watcher and the cost-analysis view use this one value | Integer in `[1, 511]`; the ceiling keeps a whole transcript under V8's single-string limit. Larger values mean more RAM per read |
@@ -273,6 +273,13 @@ exact origin a browser sends (`https://host.example`, not `https://host.example/
 `https://Host.example:443`) would silently never match, so it is a startup error instead;
 `*` and `null` can never pass. The variable only widens which browser pages may *open*
 the stream: the token is still required, and the bind host is still `127.0.0.1`.
+
+Since R18 (2026-11-08) the **hostname** of each entry is also admitted by the Host-header
+allowlist. That allowlist answers `421` on every route for any other name except
+`127.0.0.1` and `localhost`. A front end that forwards the browser's Host unchanged
+(`tailscale serve`, a reverse proxy) therefore needs its entry here for the whole
+dashboard, not only for the stream. An SSH forward needs no entry, because it arrives as
+`localhost`/`127.0.0.1` on any port.
 
 ```
 DASHBOARD_ALLOWED_ORIGINS=https://<tailscale-host>
@@ -548,7 +555,7 @@ restrictive option, never the more permissive one:
   `chmod 600` file; a raw secret is never accepted as a config value that gets written
   to SQLite, sent over SSE, or logged.
 
-The full nine-rule catalogue — rule → why → how each is enforced, with the CI gate
+The full ten-rule catalogue — rule → why → how each is enforced, with the CI gate
 backing every one — lives in [the security model](../security/model.md); this page
 only restates the subset that is directly configuration-shaped.
 
@@ -572,7 +579,7 @@ only restates the subset that is directly configuration-shaped.
 
 ## See also
 
-- [Security model](../security/model.md) — the full nine-rule invariant catalogue this
+- [Security model](../security/model.md) — the full ten-rule invariant catalogue this
   page's security defaults are drawn from.
 - [Data model](../architecture/data-model.md) — the schema `model_pricing`,
   `webhook_targets.token_ref`, and the WAL-mode store hold.

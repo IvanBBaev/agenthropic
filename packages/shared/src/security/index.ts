@@ -164,3 +164,41 @@ export function isAllowedOrigin(
     allowedOrigins.includes(origin)
   );
 }
+
+/** Hostnames that always name this server: it binds 127.0.0.1 and nothing else. */
+const LOOPBACK_HOSTNAMES: readonly string[] = ['127.0.0.1', 'localhost'];
+
+/**
+ * `host[:port]` as a browser sends it in a Host header: a registered name or
+ * IPv4 literal, or a bracketed IPv6 literal, then an optional numeric port.
+ * Anything else (userinfo, a path, whitespace, an empty name) fails to match.
+ */
+const HOST_HEADER = /^([^\s:/@[\]]+|\[[0-9A-Fa-f:.]+\])(?::\d{1,5})?$/;
+
+/**
+ * Host-header allowlist (SEC-4, DNS rebinding). A rebinding page reaches this
+ * loopback server under ITS OWN name - `evil.example` re-pointed at 127.0.0.1 -
+ * and the browser sends that name as Host, so refusing every name that is not
+ * one of ours closes rebinding for the whole surface, static SPA included.
+ *
+ * Only the HOSTNAME is compared, never the port: the port is not what a
+ * rebinding attacker controls, and an SSH tunnel legitimately arrives as
+ * `localhost:<any local port>`. Allowed: `127.0.0.1`, `localhost`, and the
+ * hostname of each operator `allowedOrigins` entry (C-2: the `tailscale serve`
+ * or reverse-proxy name the browser actually uses). Matching is
+ * case-insensitive, as DNS names are; a missing or malformed Host is refused.
+ */
+export function isAllowedHost(
+  host: string | undefined,
+  allowedOrigins: readonly string[] = [],
+): boolean {
+  const match = host === undefined ? null : HOST_HEADER.exec(host);
+  if (match === null) {
+    return false;
+  }
+  const hostname = (match[1] as string).toLowerCase();
+  return (
+    LOOPBACK_HOSTNAMES.includes(hostname) ||
+    allowedOrigins.some((origin) => new URL(origin).hostname.toLowerCase() === hostname)
+  );
+}

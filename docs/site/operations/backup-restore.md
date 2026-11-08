@@ -716,7 +716,7 @@ them as the design's first sketch, not as shipped operational procedure.
 ## See also
 
 - [Security model](../security/model.md) — rule 9 (WAL + tested restore) and rule 8
-  (`ANTHROPIC_API_KEY` isolation) in the full nine-rule security invariant set; the
+  (`ANTHROPIC_API_KEY` isolation) in the full ten-rule security invariant set; the
   no-spawner rule this page's "never a restore HTTP endpoint" callout restates.
 - [Data model](../architecture/data-model.md) — the `events_raw` append-only DDL and
   the retention-vs-no-delete tension this page restates rather than resolves.

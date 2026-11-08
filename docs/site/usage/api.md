@@ -104,9 +104,16 @@ The only write route is `POST /api/hooks/event`, which crosses the identical gat
 
 There is no route in this design — present or planned — that is reachable without
 crossing both checks that apply to it. See the [security model](../security/model.md)
-for the full nine-rule catalogue this API sits inside, and
+for the full ten-rule catalogue this API sits inside, and
 [configuration](configuration.md) for how `DASHBOARD_TOKEN` itself is supplied to the
 running server.
+
+**Every route, before either check (R18, 2026-11-08).** A request whose `Host` hostname
+is not `127.0.0.1`, `localhost`, or the hostname of a `DASHBOARD_ALLOWED_ORIGINS` entry
+gets `421` `{"error":"Unrecognized Host header."}`. This guards against DNS rebinding,
+and the check runs before the token gate. Every response, `421` and SSE included,
+carries `Content-Security-Policy`, `X-Frame-Options: DENY` and
+`Referrer-Policy: no-referrer`. See [security model](../security/model.md) rule 10.
 
 ## Liveness and ingest visibility — `GET /api/health`
 
@@ -736,7 +743,7 @@ code actually does.
 
 ## See also
 
-- [Security model](../security/model.md) — the full nine-rule catalogue this API
+- [Security model](../security/model.md) — the full ten-rule catalogue this API
   inherits in its entirety: loopback bind, mandatory token, no spawner, same-origin
   realtime, no unauthenticated endpoints, no SSRF, tunnel-only remote access,
   `ANTHROPIC_API_KEY` isolation, WAL + tested restore.

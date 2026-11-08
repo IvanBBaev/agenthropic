@@ -417,7 +417,7 @@ config file.
 
 ## See also
 
-- [Security model](../security/model.md) — the full nine-rule control catalogue,
+- [Security model](../security/model.md) — the full ten-rule control catalogue,
   including rule 6 (no SSRF) and the secret-handling posture this page applies to
   Telegram specifically.
 - [Troubleshooting](../operations/troubleshooting.md) — the stuck-session watchdog

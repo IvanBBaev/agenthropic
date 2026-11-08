@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   MIN_TOKEN_LENGTH,
   assertLoopbackHost,
+  isAllowedHost,
   isAllowedOrigin,
   redactTokenInUrl,
   requireDashboardToken,
@@ -268,5 +269,62 @@ describe('isAllowedOrigin', () => {
       expect(isAllowedOrigin('null', PORT, [TUNNEL])).toBe(false);
       expect(isAllowedOrigin('', PORT, [TUNNEL])).toBe(false);
     });
+  });
+});
+
+describe('isAllowedHost (SEC-4, DNS rebinding)', () => {
+  const TUNNEL = 'https://mini.tailnet.ts.net';
+
+  it.each(['127.0.0.1:7341', 'localhost:7341', '127.0.0.1', 'localhost', 'LocalHost:80'])(
+    'allows the loopback name %s on any port',
+    (host) => {
+      expect(isAllowedHost(host)).toBe(true);
+    },
+  );
+
+  it('allows an SSH-tunnel arrival on a different local port', () => {
+    expect(isAllowedHost('localhost:18080')).toBe(true);
+  });
+
+  it('rejects a rebinding name even on the server port', () => {
+    expect(isAllowedHost('evil.example:7341')).toBe(false);
+  });
+
+  it('rejects a missing Host header', () => {
+    expect(isAllowedHost(undefined)).toBe(false);
+  });
+
+  it.each([
+    '',
+    ':7341',
+    'evil@127.0.0.1',
+    '127.0.0.1/x',
+    '127.0.0.1:port',
+    '127.0.0.1:123456',
+    'local host',
+  ])('rejects the malformed Host %j', (host) => {
+    expect(isAllowedHost(host)).toBe(false);
+  });
+
+  it('rejects names that merely contain a loopback name', () => {
+    expect(isAllowedHost('localhost.evil.example')).toBe(false);
+    expect(isAllowedHost('127.0.0.1.nip.io')).toBe(false);
+  });
+
+  it('rejects the IPv6 loopback: the server never binds it', () => {
+    expect(isAllowedHost('[::1]:7341')).toBe(false);
+  });
+
+  it('allows the hostname of an operator allowedOrigins entry, any case or port', () => {
+    expect(isAllowedHost('mini.tailnet.ts.net', [TUNNEL])).toBe(true);
+    expect(isAllowedHost('MINI.tailnet.ts.net:443', [TUNNEL])).toBe(true);
+  });
+
+  it('allows a bracketed IPv6 hostname taken from an allowedOrigins entry', () => {
+    expect(isAllowedHost('[fd7a:115c::1]:8443', ['https://[fd7a:115c::1]:8443'])).toBe(true);
+  });
+
+  it('rejects a name that is not on the allowlist', () => {
+    expect(isAllowedHost('other.tailnet.ts.net', [TUNNEL])).toBe(false);
   });
 });

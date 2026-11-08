@@ -23,6 +23,7 @@ import type { TypeBoxTypeProvider } from '@fastify/type-provider-typebox';
 import {
   type HealthDto,
   HealthSchema,
+  isAllowedHost,
   isAllowedOrigin,
   redactTokenInUrl,
   timingSafeTokenEqual,
@@ -34,6 +35,7 @@ import type { SkipReason } from './corpus/fs-port';
 import type { LogLevel } from './config';
 import type { SqliteDatabase } from './db/connection';
 import { NOT_FOUND_MESSAGE, registerStaticSite } from './http/static-site';
+import { SECURITY_HEADERS } from './http/security-headers';
 import { RealtimeHub } from './realtime/hub';
 
 /**
@@ -166,6 +168,9 @@ export interface BuildServerOptions {
 }
 
 const STREAM_PATH = '/api/stream';
+
+/** Body of the SEC-4 Host-allowlist refusal; names the header, echoes nothing. */
+const MISDIRECTED_MESSAGE = 'Unrecognized Host header.';
 
 /**
  * Ceiling on one subscriber's un-flushed outbound bytes, past which its stream
@@ -303,6 +308,25 @@ export function buildServer(options: BuildServerOptions) {
     void reply.code(statusCode).send({ error: message });
   });
 
+  // R18 / SEC-3: hardening headers on every response that goes through
+  // `reply.send` - routes, static files, errors, 404s and the 421 below. The
+  // hijacked SSE stream writes its own head and adds the same set there.
+  app.addHook('onSend', async (_request, reply, payload) => {
+    void reply.headers(SECURITY_HEADERS);
+    return payload;
+  });
+
+  // R18 / SEC-4: Host allowlist against DNS rebinding, ahead of the token gate
+  // and for EVERY route - the static SPA included, which is unauthenticated
+  // and so the one thing a rebinding page could otherwise load and probe. 421
+  // Misdirected Request: the request reached a server that is not the one its
+  // Host names. See `isAllowedHost` for why only the hostname is compared.
+  app.addHook('onRequest', async (request, reply) => {
+    if (!isAllowedHost(request.headers.host, options.allowedOrigins)) {
+      return reply.code(421).send({ error: MISDIRECTED_MESSAGE });
+    }
+  });
+
   // Security gate - registered before ANY route so no /api/* route can ever
   // be reached unauthenticated.
   //
@@ -380,6 +404,7 @@ export function buildServer(options: BuildServerOptions) {
       'cache-control': 'no-cache, no-transform',
       connection: 'keep-alive',
       'x-accel-buffering': 'no',
+      ...SECURITY_HEADERS,
     });
     raw.write(`retry: ${sseRetryMs}\n\n`);
     let closed = false;

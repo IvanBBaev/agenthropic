@@ -193,6 +193,15 @@ the stream answers `403` while the rest of the dashboard works. Name that origin
 [configuration](../usage/configuration.md)); nothing else about the check, the token or
 the bind changes. An SSH forward that keeps the same port number needs nothing.
 
+**The Host header (R18, 2026-11-08).** Every route also refuses (`421`) a `Host` whose
+hostname is not `127.0.0.1`, `localhost`, or the hostname of a
+`DASHBOARD_ALLOWED_ORIGINS` entry. This is the DNS-rebinding guard. An SSH forward
+arrives as `localhost:<port>` or `127.0.0.1:<port>` and needs nothing. A front end that
+passes the browser's host through needs the same `DASHBOARD_ALLOWED_ORIGINS` entry the
+stream already needs; without it the whole dashboard answers `421`, not only the stream.
+This applies to `tailscale serve` if it passes the host through, and to a reverse proxy
+that preserves Host.
+
 ## The token requirement does not relax over a tunnel
 
 Whichever carrier you use, the tunnel is transport only. It does not touch, weaken, or

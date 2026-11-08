@@ -1167,7 +1167,7 @@ synthesis, not on this board._
   (server 60 s, web 30 s, core/shared/test-fixtures 15 s). No projects split: ~100 of ~125
   server test files are integration, so the split would buy nothing (testing.md §6.2).
 - [ ] **R17** opt-in real-corpus contract suite [QA-2]
-- [ ] **R18** CSP, `frame-ancestors`, XFO, Referrer-Policy; Host allowlist [SEC-3, SEC-4]
+- [x] **R18** CSP, `frame-ancestors`, XFO, Referrer-Policy; Host allowlist [SEC-3, SEC-4] _(done 2026-11-08: root `onSend` header set (SSE head too) + `onRequest` Host allowlist → 421, hostname-only, `allowedOrigins` hostnames admitted; `isAllowedHost` in shared; security model rule 10)_
 - [ ] **R19** pragmas, periodic checkpoint, vacuum policy [DAT-16, OPS-7, OPS-19]
 - [ ] **R20** replay yields; hook receiver stays responsive [OPS-8]
 - [ ] **R21** UX minimum: deep links, ATTENTION band, live tree, node tokens/$, session labels, local Today, collapsed honesty prose [UX-1/2/3/5/6/8/9]

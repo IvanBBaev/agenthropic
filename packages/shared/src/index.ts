@@ -37,6 +37,7 @@ export {
   requireDashboardToken,
   timingSafeTokenEqual,
   assertLoopbackHost,
+  isAllowedHost,
   isAllowedOrigin,
   redactTokenInUrl,
 } from './security/index';

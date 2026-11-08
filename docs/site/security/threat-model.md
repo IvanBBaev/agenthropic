@@ -522,6 +522,11 @@ undecided rather than gloss over it:
   in code and covered by tests, but the numbers themselves remain **PROVISIONAL** — they
   were chosen, never measured against a real corpus, and no owner has ratified them.
   Treat them as working defaults rather than as a sized bound.
+- **Browser-side hardening is built** *(resolved 2026-11-08, R18)*. Every response now
+  carries a CSP with `frame-ancestors 'none'`, plus `X-Frame-Options: DENY` and
+  `Referrer-Policy: no-referrer`; that closes clickjacking and limits what an XSS could
+  exfiltrate. A Host-header allowlist answers `421` to DNS-rebinding names on every
+  route, the static SPA included. See [security model](model.md) rule 10.
 - **`GET`/read endpoints are token-gated, not left to the loopback bind alone** —
   resolved in [security model](model.md) (rule 5), which closes exactly the gap
   flagged in the `cast` section above.
