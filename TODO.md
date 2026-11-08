@@ -1169,7 +1169,7 @@ synthesis, not on this board._
 - [ ] **R17** opt-in real-corpus contract suite [QA-2]
 - [x] **R18** CSP, `frame-ancestors`, XFO, Referrer-Policy; Host allowlist [SEC-3, SEC-4] _(done 2026-11-08: root `onSend` header set (SSE head too) + `onRequest` Host allowlist → 421, hostname-only, `allowedOrigins` hostnames admitted; `isAllowedHost` in shared; security model rule 10)_
 - [x] **R19** pragmas, periodic checkpoint, vacuum policy [DAT-16, OPS-7, OPS-19] _(done 2026-11-08: `synchronous=NORMAL` + `busy_timeout=5000` on every connection; end-of-cycle `wal_checkpoint(TRUNCATE)`; offline `db:vacuum` command with a kept pre-vacuum backup; no automatic VACUUM by design)_
-- [ ] **R20** replay yields; hook receiver stays responsive [OPS-8]
+- [x] **R20** replay yields; hook receiver stays responsive [OPS-8] _(done 2026-11-08: replay passes capped at 32 MiB as well as 25 sessions (an oversized session is read alone); a 10 ms timer window before every pass instead of one `setImmediate` turn; an e2e test pins that a hook POST sent mid-replay is answered 202 before the next pass and stored)_
 - [ ] **R21** UX minimum: deep links, ATTENTION band, live tree, node tokens/$, session labels, local Today, collapsed honesty prose [UX-1/2/3/5/6/8/9]
 - [ ] **R22** release mechanics + docs refresh (CHANGELOG cut, `gh release`, SECURITY channel, RELEASE state, landing page, README ~120 lines) [OSS-3/4/6/7/8]
 - [ ] **R23** every `[HUMAN]` box: do or waive in writing by 2026-11-16 (Ivan, D9) [OSS-9, PRD-2]
