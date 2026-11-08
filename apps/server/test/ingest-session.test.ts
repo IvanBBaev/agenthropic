@@ -181,14 +181,27 @@ describe('ingestSession (WP-IN9)', () => {
     expect(root?.costUsd).toBeGreaterThan(0);
   });
 
-  it('HALT GATE: empty pricing fails before any write, leaving the database untouched', () => {
-    const outcome = ingestSession(getFixture('flat-tool-use'), makeDeps({ pricing: [] }));
+  it('R2: empty pricing still projects the session, counting every token as unpriced', () => {
+    const fixture = getFixture('flat-tool-use');
+    const outcome = ingestSession(fixture, makeDeps({ pricing: [] }));
+
+    expect(outcome.ok).toBe(true);
+    expect(outcome.costUsd).toBe(0);
+    const stored = count(temp, 'SELECT COALESCE(SUM(tokens), 0) AS n FROM token_usage');
+    expect(stored).toBeGreaterThan(0);
+    expect(outcome.unpricedTokens).toBe(stored);
+    expect(count(temp, 'SELECT COUNT(*) AS n FROM sessions')).toBe(1);
+  });
+
+  it('HALT GATE: a malformed pricing table fails before any write, leaving the database untouched', () => {
+    const malformed = [{ ...pricing[0]!, usdPerMtok: -1 }];
+    const outcome = ingestSession(getFixture('flat-tool-use'), makeDeps({ pricing: malformed }));
 
     expect(outcome.ok).toBe(false);
     expect(outcome.sessionId).toBeNull();
     expect(outcome.costUsd).toBeNull();
-    expect(outcome.error).toBeTruthy();
-    expect(outcome.error ?? '').toMatch(/model|pricing/i);
+    expect(outcome.unpricedTokens).toBeNull();
+    expect(outcome.error ?? '').toMatch(/usdPerMtok must be a non-negative finite number/);
 
     // Proves cost halts BEFORE the transaction: nothing is committed.
     expect(count(temp, 'SELECT COUNT(*) AS n FROM sessions')).toBe(0);
@@ -236,6 +249,7 @@ describe('ingestSession (WP-IN9)', () => {
       ok: false,
       sessionId: null,
       costUsd: null,
+      unpricedTokens: null,
       agentsUpserted: 0,
       edgesInserted: 0,
       usageRowsInserted: 0,

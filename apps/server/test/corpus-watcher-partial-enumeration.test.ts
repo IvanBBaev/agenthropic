@@ -123,6 +123,7 @@ describe('corpus watcher: an unreadable slug or transcript hides sessions, it do
         ok: true,
         sessionId,
         costUsd: 0,
+        unpricedTokens: 0,
         agentsUpserted: 0,
         edgesInserted: 0,
         usageRowsInserted: 0,

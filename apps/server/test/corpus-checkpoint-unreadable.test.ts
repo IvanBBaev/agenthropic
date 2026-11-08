@@ -63,6 +63,7 @@ describe('replay checkpoint vs. a file the build could not read', () => {
         ok: true,
         sessionId: SESSION,
         costUsd: 0,
+        unpricedTokens: 0,
         agentsUpserted: 0,
         edgesInserted: 0,
         usageRowsInserted: 0,

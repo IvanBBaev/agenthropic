@@ -3,10 +3,21 @@
  * turns a read substrate into persisted rows.
  *
  * Pipeline order is load-bearing:
- *   parseSession -> computeCostUsd (the HALT GATE) -> normalizeSession -> projectSession
- * The cost call runs BEFORE any DB write, so an unknown model id throws
- * PricingError while the database is still untouched - no partial session,
- * agent or usage rows are ever committed for an unpriceable substrate.
+ *   parseSession -> priceUsage -> normalizeSession -> projectSession
+ *
+ * R2 (ARC-1 / DAT-2, 2026-11-08): pricing no longer gates projection. A model
+ * with no price row (a new model id, a missing bucket, a rate not yet
+ * effective) used to throw here and refuse the WHOLE session - its agents,
+ * edges and tokens, which are ground truth whatever they cost. Now those
+ * tokens are stored and reported as unpriced, exactly as the read path
+ * (`pricedCte`) already treats them, so "no silent $0" is kept on the read
+ * side instead of by withholding the session.
+ *
+ * What still refuses before any write: a malformed pricing table, and a
+ * tiered model's prompt over its seeded base tier - the read path cannot tell
+ * such a row from a base-tier one, so storing it would price it at the lower
+ * tier (migration 25). Both throw PricingError while the database is still
+ * untouched.
  *
  * The two steps after the gate are the WP-IN6 / WP-IN7 pair, and the split is
  * the point:
@@ -16,7 +27,7 @@
  *     database.
  *   - {@link projectSession} does nothing but write that value inside ONE
  *     transaction, stamping each edge from the injected clock.
- * This module keeps only what belongs to neither: the halt gate, the clock
+ * This module keeps only what belongs to neither: the price, the clock
  * default, and the never-throw contract.
  *
  * ingestSession NEVER rethrows: every failure path collapses to an
@@ -25,8 +36,8 @@
  * STATUS: ingest NEVER concludes completion - see `normalize-session.ts`.
  */
 import {
-  computeCostUsd,
   parseSession,
+  priceUsage,
   type PricingEntry,
   type SessionSubstrate,
 } from '@agenthropic/core';
@@ -58,10 +69,15 @@ export interface IngestOutcome {
   /**
    * Dollars for the messages this session OWNS after the M-12 cross-session
    * exclusions (PAR-3): a fork's replayed history is priced once, under its
-   * owner, and never announced a second time here. The halt gate still prices
-   * the WHOLE substrate first, so an unknown model id halts before any write.
+   * owner, and never announced a second time here. Priced buckets only - see
+   * `unpricedTokens` for the rest.
    */
   readonly costUsd: number | null;
+  /**
+   * R2: tokens of the messages this session owns that had no price row in
+   * force, so they are in no dollar figure. Null exactly when `costUsd` is.
+   */
+  readonly unpricedTokens: number | null;
   readonly agentsUpserted: number;
   readonly edgesInserted: number;
   readonly usageRowsInserted: number;
@@ -85,6 +101,7 @@ function failure(error: string): IngestOutcome {
     ok: false,
     sessionId: null,
     costUsd: null,
+    unpricedTokens: null,
     agentsUpserted: 0,
     edgesInserted: 0,
     usageRowsInserted: 0,
@@ -95,7 +112,7 @@ function failure(error: string): IngestOutcome {
 }
 
 /**
- * Parse, price (halt gate), normalize, then transactionally persist one
+ * Parse, price, normalize, then transactionally persist one
  * session's substrate. Idempotent: replaying the same substrate upserts the
  * session and agents in place and INSERT-OR-IGNOREs edges and usage, so a
  * second call reports `edgesInserted === 0` and `usageRowsInserted === 0`.
@@ -104,10 +121,10 @@ export function ingestSession(substrate: SessionSubstrate, deps: IngestDeps): In
   try {
     const parsed = parseSession(substrate);
 
-    // HALT GATE: price BEFORE opening a transaction. An unknown model id throws
-    // PricingError here, so no partial rows are ever written for a substrate we
-    // cannot cost. Moving this call inside the transaction breaks that invariant.
-    const gateCostUsd = computeCostUsd(parsed.usage, deps.pricing);
+    // Price BEFORE opening a transaction: what still throws here (a malformed
+    // pricing table, a tiered prompt over its base tier) must leave no partial
+    // rows. Moving this call inside the transaction breaks that invariant.
+    const whole = priceUsage(parsed.usage, deps.pricing);
 
     const now = deps.now ?? ((): string => new Date().toISOString());
     const normalized = normalizeSession(parsed, {
@@ -119,14 +136,14 @@ export function ingestSession(substrate: SessionSubstrate, deps: IngestDeps): In
     const counts = projectSession(deps.db, normalized, now);
 
     // PAR-3: the projection may have refused messages another session owns
-    // (M-12). Announce only the dollars this session keeps. The gate above
-    // already priced every model id in the substrate, so this narrower call
-    // cannot throw; it is skipped entirely when nothing was excluded.
+    // (M-12). Announce only the dollars this session keeps. The call above
+    // already priced a superset of these messages, so this narrower one cannot
+    // throw; it is skipped entirely when nothing was excluded.
     const skipped = new Set(counts.crossSessionUsageMessageIds);
-    const costUsd =
+    const owned =
       skipped.size === 0
-        ? gateCostUsd
-        : computeCostUsd(
+        ? whole
+        : priceUsage(
             parsed.usage.filter((u) => !skipped.has(u.messageId)),
             deps.pricing,
           );
@@ -134,7 +151,8 @@ export function ingestSession(substrate: SessionSubstrate, deps: IngestDeps): In
     return {
       ok: true,
       sessionId: parsed.sessionId,
-      costUsd,
+      costUsd: owned.costUsd,
+      unpricedTokens: owned.unpricedTokens,
       agentsUpserted: counts.agentsUpserted,
       edgesInserted: counts.edgesInserted,
       usageRowsInserted: counts.usageRowsInserted,

@@ -59,6 +59,14 @@ dedicated CI gate will not be built. `WP-C6` now reads "unknown model halts inge
 page. The CI fixtures are synthetic and use models the seed deliberately leaves unpriced,
 so a CI step could not detect a stale seed; only the real, local corpus can.)*
 
+*(Amended 2026-11-08, R2: ingest no longer halts on an unknown model id or a missing bucket
+price. It prices through `priceUsage`, stores the session, and counts the uncovered tokens
+as `unpricedTokens`, which every cost rollup already serves; the startup replay warns and
+the Cost page names the models. Refusing whole sessions cost more truth than it protected:
+one new model id hid every token of every session that touched it. `$0` is still never
+silent. `computeCostUsd` keeps the throwing contract for `GET /api/sessions/:id/cost-analysis`,
+and ingest still halts on a malformed pricing table or an over-tier request.)*
+
 *(Amended 2026-09-30, owner decision D19(a): the "flag on the row" in the table above is
 never set. `is_compaction_baseline` is documented as **reserved** — written as `0`, read
 by nothing — and the guarantee is met by repricing at analysis time in

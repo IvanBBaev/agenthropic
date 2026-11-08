@@ -357,7 +357,11 @@ scan."**
          the `corpus replay:` line. `0 failed` is the pass. Any
          `corpus replay failure:` line carrying a `PricingError` message (`unknown model id`,
          `has no price for bucket`, `no price effective at`) is a red box: seed the rate and
-         boot again.
+         boot again. _(Amended 2026-11-08, R2: an unknown model no longer fails the replay -
+         the session is stored and its tokens counted unpriced - so the red box is now
+         **either** that failure line **or** a `corpus replay: N tokens have no price row in
+         force` warning. Both mean: seed the rate and boot again. The only `PricingError`
+         left at ingest is a malformed table or an over-100k `claude-haiku-5-5` request.)_
 
       **Done by an agent 2026-10-31 on `dcf3aee` (D9):** `0 failed`, 360/362 sessions ok,
       6 files skipped (1 empty main, 5 over the 64 MiB cap — R14), cold replay ≈120 s for
@@ -367,8 +371,8 @@ scan."**
 
       Why this and not a CI job: the CI corpus is synthetic and uses `synthetic-model-a/b`,
       which the seed deliberately does not price, so a CI "every corpus model has a row"
-      check would be red or circular. The runtime `PricingError` halt plus this boot is what
-      actually caught the stale-seed outages that migrations 18–20 repaired.
+      check would be red or circular. The runtime `PricingError` halt (since R2: the unpriced-token
+      warning) plus this boot is what actually caught the stale-seed outages that migrations 18–20 repaired.
 - [ ] **README truth pass.** **Resolved 2026-07-30** — the "Pre-code… no application
       code yet" Status section was replaced with what actually runs, and the CI badge
       now attests to the full build: CI is `success` on `9b6c6b3`, the first pushed

@@ -238,6 +238,12 @@ function logReplaySummary(replay: CorpusIngestSummary): void {
       `${String(replay.usageRowsInserted)} usage rows, ` +
       `${String(replay.filesSkipped)} files skipped`,
   );
+  if (replay.totalUnpricedTokens > 0) {
+    console.warn(
+      `corpus replay: ${String(replay.totalUnpricedTokens)} tokens have no price row in force; ` +
+        'they are stored and shown as unpriced, never as $0 - seed model_pricing to price them',
+    );
+  }
   for (const failure of replay.failures) {
     console.error(
       `corpus replay failure: session ${failure.sessionId} (${failure.projectSlug}): ${failure.error}`,
@@ -260,6 +266,7 @@ export function mergeReplaySummaries(
     usageRowsInserted: a.usageRowsInserted + b.usageRowsInserted,
     filesSkipped: a.filesSkipped + b.filesSkipped,
     totalCostUsd: a.totalCostUsd + b.totalCostUsd,
+    totalUnpricedTokens: a.totalUnpricedTokens + b.totalUnpricedTokens,
     failures: [...a.failures, ...b.failures],
   };
 }

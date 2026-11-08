@@ -6,7 +6,8 @@
 export const CORE_PACKAGE_NAME = '@agenthropic/core';
 
 export { dedupeUsageByMessageId, UsageConflictError } from './usage/dedupe';
-export { computeCostUsd, PricingError } from './cost/compute-cost';
+export { computeCostUsd, priceUsage, PricingError } from './cost/compute-cost';
+export type { PricedUsage } from './cost/compute-cost';
 export { computeCompactionAwareCost } from './cost/compaction-repricing';
 export type { CompactionSegment, CompactionRepricingResult } from './cost/compaction-repricing';
 export { computeDelegationSavings } from './cost/delegation-savings';

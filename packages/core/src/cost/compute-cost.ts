@@ -96,18 +96,24 @@ function resolveRate(rates: readonly DatedRate[], usageMs: number): DatedRate | 
   return resolved;
 }
 
+/** What {@link priceUsage} could price, and what it could not. */
+export interface PricedUsage {
+  /** USD over the priced buckets only - an unpriced bucket adds $0, never a guess. */
+  readonly costUsd: number;
+  /** Tokens in buckets with no price row in force at the message timestamp. */
+  readonly unpricedTokens: number;
+}
+
 /**
- * Sums the USD cost of already-deduped usage (see `dedupeUsageByMessageId`;
- * feeding raw rows here reintroduces the ~2.4-2.7x over-count).
- *
- * Throws {@link PricingError} when a message's model has no pricing rows at
- * all, when a tiered model's prompt exceeds its seeded base tier
- * ({@link BASE_TIER_PROMPT_LIMITS}), or when any bucket with a nonzero token count has no price row
- * effective at the message timestamp. Zero-token buckets need no price row.
+ * The one pricing loop. `onUnpriced` decides what a bucket with no resolvable
+ * price means: {@link computeCostUsd} throws, {@link priceUsage} counts it.
+ * Everything else - a malformed pricing table, an unparsable timestamp, a
+ * tiered prompt over its seeded base tier - throws in both modes.
  */
-export function computeCostUsd(
+function priceEntries(
   dedupedUsage: readonly DedupedUsage[],
   pricing: readonly PricingEntry[],
+  onUnpriced: (message: string, tokens: number) => void,
 ): number {
   const index = buildPricingIndex(pricing);
   let totalUsd = 0;
@@ -116,9 +122,12 @@ export function computeCostUsd(
     const usageMs = parseTimestampMs(entry.timestamp, `usage message "${entry.messageId}"`);
     const buckets = index.get(entry.model);
     if (buckets === undefined) {
-      throw new PricingError(
+      const tokens = BUCKET_MAP.reduce((sum, { key }) => sum + entry.usage[key], 0);
+      onUnpriced(
         `unknown model id "${entry.model}" (message "${entry.messageId}") — refusing to price at $0; seed an explicit pricing row instead`,
+        tokens,
       );
+      continue;
     }
     const promptLimit = BASE_TIER_PROMPT_LIMITS.get(entry.model);
     if (promptLimit !== undefined) {
@@ -137,19 +146,65 @@ export function computeCostUsd(
       }
       const rates = buckets.get(bucket);
       if (rates === undefined) {
-        throw new PricingError(
+        onUnpriced(
           `model "${entry.model}" has no price for bucket "${bucket}" (message "${entry.messageId}") — refusing to price at $0`,
+          tokens,
         );
+        continue;
       }
       const rate = resolveRate(rates, usageMs);
       if (rate === undefined) {
-        throw new PricingError(
+        onUnpriced(
           `model "${entry.model}" bucket "${bucket}": no price effective at ${entry.timestamp} (message "${entry.messageId}")`,
+          tokens,
         );
+        continue;
       }
       totalUsd += (tokens * rate.usdPerMtok) / USD_PER_TOKEN_DIVISOR;
     }
   }
 
   return totalUsd;
+}
+
+/**
+ * Sums the USD cost of already-deduped usage (see `dedupeUsageByMessageId`;
+ * feeding raw rows here reintroduces the ~2.4-2.7x over-count).
+ *
+ * Throws {@link PricingError} when a message's model has no pricing rows at
+ * all, when a tiered model's prompt exceeds its seeded base tier
+ * ({@link BASE_TIER_PROMPT_LIMITS}), or when any bucket with a nonzero token count has no price row
+ * effective at the message timestamp. Zero-token buckets need no price row.
+ */
+export function computeCostUsd(
+  dedupedUsage: readonly DedupedUsage[],
+  pricing: readonly PricingEntry[],
+): number {
+  return priceEntries(dedupedUsage, pricing, (message) => {
+    throw new PricingError(message);
+  });
+}
+
+/**
+ * The ingest-side price (R2 / ARC-1): the same per-bucket resolution as
+ * {@link computeCostUsd}, but a bucket with no price row in force - an unknown
+ * model, a missing bucket, a rate not yet effective - is COUNTED in
+ * `unpricedTokens` instead of halting. This is exactly the read path's rule
+ * (`pricedCte` resolves such a row to a NULL rate), so the figure ingest
+ * announces equals the one the dashboard later reads back.
+ *
+ * Still throws {@link PricingError} on a malformed pricing table and on a
+ * tiered model's prompt over its seeded base tier: the read path cannot tell
+ * an over-limit row from a base-tier one, so storing it would price it at the
+ * lower tier.
+ */
+export function priceUsage(
+  dedupedUsage: readonly DedupedUsage[],
+  pricing: readonly PricingEntry[],
+): PricedUsage {
+  let unpricedTokens = 0;
+  const costUsd = priceEntries(dedupedUsage, pricing, (_message, tokens) => {
+    unpricedTokens += tokens;
+  });
+  return { costUsd, unpricedTokens };
 }

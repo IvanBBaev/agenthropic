@@ -583,6 +583,11 @@ still raises `PricingError` from `packages/core/src/cost/compute-cost.ts` and ha
 stored rate degrades to unpriced; an absent price halts. Those are different endpoints and
 different answers.
 
+**AMENDED 2026-11-08 (R2).** "An absent price halts" now applies to this endpoint only.
+Ingest prices through `priceUsage` instead of `computeCostUsd`: a session whose model has
+no row is stored, and its tokens appear as `unpricedTokens` in every rollup above. Only a
+malformed pricing table or an over-tier `claude-haiku-5-5` request still halts ingest.
+
 **AMENDED 2026-09-30 (owner decisions D13(a), D18(a)).** Two names in the second bullet above
 describe things that were never built and now will not be. There is no `PricingProvider`
 interface: `WP-C2` was accepted as met by `loadPricing` (`apps/server/src/db/pricing.ts`) plus

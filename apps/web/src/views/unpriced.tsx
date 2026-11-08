@@ -26,7 +26,7 @@
  * A negative count is as impossible as a NaN one and is shown rather than
  * swallowed.
  */
-import { formatTokens } from '../format';
+import { formatTokens, nameOrBlank } from '../format';
 
 /**
  * The clause for a hover `<title>`, ready to concatenate onto the figure it
@@ -57,5 +57,36 @@ export function UnpricedNote({ tokens, lead }: { readonly tokens: number; readon
     <span className="unpriced">
       {lead}~ {formatTokens(tokens)} unpriced
     </span>
+  );
+}
+
+/**
+ * R2 (2026-11-08): the page-level pricing status. Ingest no longer refuses a
+ * session whose model has no price row in force - it stores the tokens and the
+ * read path counts them as unpriced. The KPI tile says HOW MANY tokens sit
+ * outside the dollar figures; this banner says WHICH models they belong to, so
+ * the fix (seed a `model_pricing` row) is obvious rather than a hunt.
+ *
+ * The same zero-is-silent rule as the rest of this module: a model is named
+ * when its count is anything but a measured zero, including an unreadable one.
+ */
+export function UnpricedModelsBanner({
+  perModel,
+}: {
+  readonly perModel: readonly { readonly model: string; readonly unpricedTokens: number }[];
+}) {
+  const missing = perModel.filter((m) => m.unpricedTokens !== 0);
+  if (missing.length === 0) return null;
+  const named = missing
+    .map((m) =>
+      Number.isFinite(m.unpricedTokens)
+        ? `${nameOrBlank(m.model, 'model name')} (~${formatTokens(m.unpricedTokens)} tokens)`
+        : `${nameOrBlank(m.model, 'model name')} (${formatTokens(m.unpricedTokens)})`,
+    )
+    .join(', ');
+  return (
+    <p className="truncation-banner" data-testid="unpriced-models-banner">
+      {`No price row is in force for ${named}. Those tokens are stored and counted, but no dollar figure on this page includes them - add a model_pricing row to price them.`}
+    </p>
   );
 }

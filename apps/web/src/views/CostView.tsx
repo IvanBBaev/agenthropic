@@ -60,6 +60,7 @@ import { snapshotAge } from './snapshot';
 import { NO_FIGURE_META } from './status';
 import { rankTopBurners } from './top-burners';
 import type { ViewProps } from './types';
+import { UnpricedModelsBanner } from './unpriced';
 
 /**
  * Label of the re-read control (KK3). A constant because the "not measured"
@@ -990,6 +991,10 @@ export function CostView({ token, onAuthRejected, replayEpoch }: ViewProps) {
             {quarantinedClause(summary.coverage)}
           </p>
         )}
+      {/* R2 (2026-11-08): which models the unpriced KPI is about. Ingest stores
+          a session whose model has no price row instead of refusing it, so
+          this is where that gap surfaces. */}
+      <UnpricedModelsBanner perModel={summary.perModel} />
       {/* Owner decisions 1 and 2: every total on this page is a lower bound
           while any session is partial, and excludes usage records that had no
           dedupe key. Corpus-wide, not per slice, so it sits with the totals

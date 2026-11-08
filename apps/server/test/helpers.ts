@@ -113,3 +113,19 @@ export function networkAddress(app: FastifyInstance, index = 0): AddressInfo {
   }
   return entry;
 }
+
+/**
+ * R2 (2026-11-08): the poison for tests that need ingest to REFUSE a session.
+ * A model with no price row no longer does - its tokens are stored and counted
+ * unpriced - so these move a fixture line onto the one tiered model with a
+ * seeded base tier (migration 25) and push its prompt past the 100k limit,
+ * the usage shape ingest still refuses before any write.
+ */
+export const TIERED_MODEL = 'claude-haiku-5-5';
+export const OVER_TIER_REASON = /exceeds the 100000-token base tier/;
+
+export function overTierLine(line: string): string {
+  return line
+    .replace(/synthetic-model-[ab]/g, TIERED_MODEL)
+    .replace(/"input_tokens":\d+/g, '"input_tokens":200000');
+}

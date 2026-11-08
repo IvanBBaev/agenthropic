@@ -119,6 +119,7 @@ describe('corpus watcher: chunked passes and rejectionOf', () => {
           ok: !fails,
           sessionId: fails ? null : id,
           costUsd: fails ? null : 0,
+          unpricedTokens: fails ? null : 0,
           agentsUpserted: 0,
           edgesInserted: 0,
           usageRowsInserted: 0,

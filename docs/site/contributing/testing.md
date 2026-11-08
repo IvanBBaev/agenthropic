@@ -438,7 +438,9 @@ the negative-test angle: #5/#6 ↔ "Server fails startup when `DASHBOARD_TOKEN` 
 the timing-safe compare (one CD-7 control, three distinct assertions — keep all three);
 #7 ↔ "SSE rejects a cross-origin connection"; #8 ↔ "a fixture model with no price row
 FAILS CI" (`WP-C6`, the hardened build-time facet — amended 2026-09-30 to a runtime halt plus a
-pre-tag real-corpus boot, see row 8); #10 ↔ "kill+restart resumes JSONL
+pre-tag real-corpus boot, see row 8; amended again 2026-11-08, R2: an unknown model is now
+stored and counted unpriced, and the halt half of #8 is a malformed table or an over-tier
+request); #10 ↔ "kill+restart resumes JSONL
 tail-follow at the persisted offset" + P0 test #2.
 
 Where the recovered scenarios fill a **gap** — EXPANDED entries with *no* row in §5's

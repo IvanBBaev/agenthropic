@@ -18,7 +18,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getFixture } from '@agenthropic/test-fixtures';
 import { openDatabase, runMigrations, start } from '../src/index';
 import { buildServer } from '../src/server';
-import { createMigratedTempDb, TEST_TOKEN, type TempDb } from './helpers';
+import { createMigratedTempDb, overTierLine, TEST_TOKEN, type TempDb } from './helpers';
 
 const AUTH = { authorization: `Bearer ${TEST_TOKEN}` };
 
@@ -178,9 +178,9 @@ describe('the exclusion counts over a corpus that cannot be priced', () => {
     runMigrations(db);
     db.close();
 
-    // The fixture prices against `synthetic-model-a`, and the rows for it are
-    // deliberately NOT seeded: this is the real 16-of-52 failure the dashboard
-    // hits on a live corpus whenever a new model ships before its price does.
+    // Every prompt pushed past the tiered model's seeded base tier: the one
+    // usage shape ingest still refuses since R2 (a model with no price row is
+    // now stored and counted unpriced - see the test below).
     const fixture = getFixture('flat-tool-use');
     const sessionId = fixture.files
       .find((f) => !f.relativePath.includes('/'))!
@@ -191,7 +191,7 @@ describe('the exclusion counts over a corpus that cannot be priced', () => {
         : f.relativePath;
       const abs = join(corpusRoot, SLUG, rel);
       mkdirSync(dirname(abs), { recursive: true });
-      writeFileSync(abs, f.lines.join('\n') + '\n');
+      writeFileSync(abs, f.lines.map(overTierLine).join('\n') + '\n');
     }
 
     vi.spyOn(console, 'log').mockImplementation(() => undefined);
@@ -228,6 +228,74 @@ describe('the exclusion counts over a corpus that cannot be priced', () => {
       // look complete, and only `coverage` says they are not.
       expect(body.totals).toEqual({ tokens: 0, costUsd: 0, unpricedTokens: 0 });
       expect(body.coverage).toEqual({ sessionsExcluded: 1, sessionsQuarantined: 0 });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('R2: a model with no price row is ingested and counted unpriced, never excluded', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agenthropic-unpriced-'));
+    dirs.push(dir);
+    const dbPath = join(dir, 'agent.db');
+    const corpusRoot = join(dir, 'projects');
+
+    const db = openDatabase(dbPath);
+    runMigrations(db);
+    db.close();
+
+    // The fixture prices against `synthetic-model-a`, and the rows for it are
+    // deliberately NOT seeded: the real 16-of-52 failure the dashboard hit on
+    // a live corpus whenever a new model shipped before its price did. Since
+    // R2 the session lands, and the gap shows as unpriced tokens instead.
+    const fixture = getFixture('flat-tool-use');
+    const sessionId = fixture.files
+      .find((f) => !f.relativePath.includes('/'))!
+      .relativePath.slice(0, -'.jsonl'.length);
+    for (const f of fixture.files) {
+      const rel = f.relativePath.includes('/')
+        ? join(sessionId, ...f.relativePath.split('/'))
+        : f.relativePath;
+      const abs = join(corpusRoot, SLUG, rel);
+      mkdirSync(dirname(abs), { recursive: true });
+      writeFileSync(abs, f.lines.join('\n') + '\n');
+    }
+
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const server = await start({
+      DASHBOARD_TOKEN: TEST_TOKEN,
+      DASHBOARD_PORT: '0',
+      DASHBOARD_DB_PATH: dbPath,
+      CLAUDE_PROJECTS_DIR: corpusRoot,
+      DASHBOARD_POLL_INTERVAL_MS: '600000', // park the poll loop: one replay only
+    });
+    try {
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('tokens have no price row in force'),
+      );
+      const health = await server.app.inject({
+        method: 'GET',
+        url: '/api/health',
+        headers: AUTH,
+      });
+      expect(health.json()).toMatchObject({ sessionsExcluded: 0, sessionsQuarantined: 0 });
+
+      const summary = await server.app.inject({
+        method: 'GET',
+        url: '/api/cost/summary',
+        headers: AUTH,
+      });
+      const body = summary.json();
+      expect(body.totals.tokens).toBeGreaterThan(0);
+      expect(body.totals).toEqual({
+        tokens: body.totals.tokens,
+        costUsd: 0,
+        unpricedTokens: body.totals.tokens,
+      });
+      expect(body.perModel).toContainEqual(
+        expect.objectContaining({ model: 'synthetic-model-a', costUsd: 0 }),
+      );
     } finally {
       await server.close();
     }

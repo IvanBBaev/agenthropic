@@ -36,7 +36,14 @@ import {
   type IngestRejection,
 } from '../src/api/ingest-rejections';
 import type { SubstrateProvider } from '../src/api/substrate-provider';
-import { createMigratedTempDb, insertSession, TEST_TOKEN, type TempDb } from './helpers';
+import {
+  createMigratedTempDb,
+  insertSession,
+  OVER_TIER_REASON,
+  overTierLine,
+  TEST_TOKEN,
+  type TempDb,
+} from './helpers';
 
 const AUTH = { authorization: `Bearer ${TEST_TOKEN}` };
 
@@ -336,8 +343,9 @@ describe('end to end: a corpus session that cannot be priced', () => {
     runMigrations(db);
     db.close();
 
-    // Priced against `synthetic-model-a`, whose rows are deliberately NOT
-    // seeded - the halt gate refuses the session on every pass.
+    // Every prompt pushed past the tiered model's seeded base tier - the halt
+    // gate refuses the session on every pass. (Since R2 a model with no price
+    // row is stored and counted unpriced, so it no longer serves as poison.)
     const fixture = getFixture('flat-tool-use');
     const sessionId = fixture.files
       .find((f) => !f.relativePath.includes('/'))!
@@ -348,7 +356,7 @@ describe('end to end: a corpus session that cannot be priced', () => {
         : f.relativePath;
       const abs = join(corpusRoot, SLUG, rel);
       mkdirSync(dirname(abs), { recursive: true });
-      writeFileSync(abs, f.lines.join('\n') + '\n');
+      writeFileSync(abs, f.lines.map(overTierLine).join('\n') + '\n');
     }
 
     vi.spyOn(console, 'log').mockImplementation(() => undefined);
@@ -370,7 +378,7 @@ describe('end to end: a corpus session that cannot be priced', () => {
       expect(failing.statusCode).toBe(409);
       const failingBody = failing.json<SessionRejectedErrorDto>();
       expect(failingBody.code).toBe('ingest-failing');
-      expect(failingBody.reason).toContain('synthetic-model-a');
+      expect(failingBody.reason).toMatch(OVER_TIER_REASON);
       // Corpus-relative at most: the temp directory never reaches the body.
       expect(JSON.stringify(failingBody)).not.toContain(dir);
 

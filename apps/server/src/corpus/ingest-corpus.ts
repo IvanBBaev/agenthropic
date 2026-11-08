@@ -149,6 +149,8 @@ export interface CorpusIngestSummary {
   readonly usageRowsInserted: number;
   readonly filesSkipped: number;
   readonly totalCostUsd: number;
+  /** R2: tokens ingested with no price row in force - stored, but in no dollar figure. */
+  readonly totalUnpricedTokens: number;
   readonly failures: readonly CorpusIngestFailure[];
 }
 
@@ -163,6 +165,7 @@ function emptySummary(): CorpusIngestSummary {
     usageRowsInserted: 0,
     filesSkipped: 0,
     totalCostUsd: 0,
+    totalUnpricedTokens: 0,
     failures: [],
   };
 }
@@ -205,6 +208,7 @@ export function runCorpusIngest(deps: CorpusIngestDeps): CorpusIngestSummary {
   let edgesInserted = 0;
   let usageRowsInserted = 0;
   let totalCostUsd = 0;
+  let totalUnpricedTokens = 0;
   const failures: CorpusIngestFailure[] = [];
 
   for (const ref of refs) {
@@ -284,6 +288,7 @@ export function runCorpusIngest(deps: CorpusIngestDeps): CorpusIngestSummary {
       edgesInserted += outcome.edgesInserted;
       usageRowsInserted += outcome.usageRowsInserted;
       totalCostUsd += outcome.costUsd ?? 0;
+      totalUnpricedTokens += outcome.unpricedTokens ?? 0;
       deps.onSessionIngested?.({
         type: 'session-ingested',
         sessionId: outcome.sessionId ?? ref.sessionId,
@@ -319,6 +324,7 @@ export function runCorpusIngest(deps: CorpusIngestDeps): CorpusIngestSummary {
     usageRowsInserted,
     filesSkipped,
     totalCostUsd,
+    totalUnpricedTokens,
     failures,
   };
 }

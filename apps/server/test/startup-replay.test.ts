@@ -73,6 +73,7 @@ function summary(n: number, overrides: Partial<CorpusIngestSummary> = {}): Corpu
     usageRowsInserted: n,
     filesSkipped: 0,
     totalCostUsd: n,
+    totalUnpricedTokens: 0,
     failures: [],
     ...overrides,
   };
@@ -101,12 +102,14 @@ describe('mergeReplaySummaries', () => {
       sessionsFailed: 1,
       sessionsSkipped: 1,
       filesSkipped: 2,
+      totalUnpricedTokens: 10,
       failures: [{ sessionId: 'a', projectSlug: 's', error: 'x' }],
     });
     const b = summary(3, {
       sessionsFailed: 2,
       sessionsSkipped: 0,
       filesSkipped: 1,
+      totalUnpricedTokens: 30,
       failures: [{ sessionId: 'b', projectSlug: 's', error: 'y' }],
     });
 
@@ -120,6 +123,7 @@ describe('mergeReplaySummaries', () => {
       usageRowsInserted: 5,
       filesSkipped: 3,
       totalCostUsd: 5,
+      totalUnpricedTokens: 40,
       failures: [
         { sessionId: 'a', projectSlug: 's', error: 'x' },
         { sessionId: 'b', projectSlug: 's', error: 'y' },

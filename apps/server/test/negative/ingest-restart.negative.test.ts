@@ -7,7 +7,8 @@
  *
  *   #1 (token facet)  double ingest    -> no double token total
  *   #3 (db facet)     missing parent   -> parent_agent_id NULL, zero edges
- *   #8 (halt facet)   unpriced model   -> HALT before any write; isolation
+ *   #8 (halt facet)   unpriced model   -> stored + counted unpriced (R2);
+ *                     tier overflow    -> HALT before any write; isolation
  *   #9 (corpus facet) oversize file    -> skipped + surfaced, never a crash
  *   #10               server restart   -> resume, no dupes, watchdog 'unknown',
  *                                         events_raw untouchable
@@ -27,7 +28,14 @@ import {
   type SkippedFile,
   type SqliteDatabase,
 } from '../../src/index';
-import { createMigratedTempDb, insertAgent, TEST_TOKEN } from '../helpers';
+import {
+  createMigratedTempDb,
+  insertAgent,
+  OVER_TIER_REASON,
+  overTierLine,
+  TEST_TOKEN,
+  TIERED_MODEL,
+} from '../helpers';
 
 // --- shared scaffolding (mirrors apps/server/test/index.test.ts) ------------
 
@@ -43,6 +51,31 @@ const PRICING: PricingEntry[] = ['synthetic-model-a', 'synthetic-model-b'].flatM
     effectiveFrom: '2020-01-01T00:00:00.000Z',
   })),
 );
+
+/** PRICING plus base-tier rows for the one tiered model (migration 25). */
+const TIERED_PRICING: PricingEntry[] = [
+  ...PRICING,
+  ...BUCKETS.map((bucket) => ({
+    model: TIERED_MODEL,
+    bucket,
+    usdPerMtok: 1,
+    effectiveFrom: '2020-01-01T00:00:00.000Z',
+  })),
+];
+
+/**
+ * The fixture moved onto the tiered model with every prompt over its
+ * 100k-token base tier - the one usage shape ingest still refuses (R2).
+ */
+function tierOverflow(fixture: Fixture): Fixture {
+  const files = fixture.files.map((f) => ({
+    relativePath: f.relativePath,
+    lines: f.lines.map(overTierLine),
+  }));
+  // Guard: a fixture without usage would make the refusal vacuous.
+  expect(files.some((f) => f.lines.some((l) => l.includes('"input_tokens":200000')))).toBe(true);
+  return { ...fixture, files };
+}
 
 function jline(record: Record<string, unknown>): string {
   return JSON.stringify(record);
@@ -194,11 +227,14 @@ describe('WP-X4 ingest/restart negative catalogue', () => {
     expect(countRows(db, 'orchestration_edges')).toBe(0); // and never a fake edge
   });
 
-  // --- Scenario #8 (halt facet) — unpriced model ----------------------------
+  // --- Scenario #8 (halt facet) — unpriced model / tier overflow -----------
   // Catalogue (hardened): "token counts shown; cost NOT silently zero" —
-  // CD-3, CD-4, WP-C6. The halt gate runs BEFORE the write transaction:
-  // an unpriceable session leaves the database completely untouched.
-  it('Scenario #8 — an unpriced model HALTS ingest BEFORE any write (CD-3, CD-4, WP-C6)', () => {
+  // CD-3, CD-4, WP-C6. R2 (2026-11-08): a model with no price row no longer
+  // halts ingest - its tokens are stored and the read path counts them as
+  // unpriced, never as $0. What still halts BEFORE the write transaction is a
+  // request the read path would misprice: a prompt over a tiered model's
+  // seeded base tier.
+  it('Scenario #8 — an unpriced model is STORED and counted unpriced, never priced at $0 (R2, CD-4)', () => {
     const db = freshDb();
     const fixture = getFixture('flat-tool-use');
     const unpriced = {
@@ -209,9 +245,22 @@ describe('WP-X4 ingest/restart negative catalogue', () => {
     };
 
     const outcome = ingestSession(unpriced, depsFor(db));
+    expect(outcome.ok).toBe(true);
+    expect(outcome.costUsd).toBe(0);
+    expect(outcome.unpricedTokens).toBe(sumTokens(db));
+    expect(outcome.unpricedTokens).toBeGreaterThan(0);
+    expect(countRows(db, 'sessions')).toBe(1);
+    expect(countRows(db, 'token_usage')).toBe(10);
+  });
+
+  it('Scenario #8 — a prompt over the seeded base tier HALTS ingest BEFORE any write (CD-3, CD-4)', () => {
+    const db = freshDb();
+    const outcome = ingestSession(tierOverflow(getFixture('flat-tool-use')), {
+      ...depsFor(db),
+      pricing: TIERED_PRICING,
+    });
     expect(outcome.ok).toBe(false);
-    expect(outcome.error).toMatch(/refusing to price at \$0/);
-    expect(outcome.error).toMatch(/unpriced-model-z/);
+    expect(outcome.error).toMatch(OVER_TIER_REASON);
 
     // Not one partial row — sessions, agents, edges and usage all stay empty.
     expect(countRows(db, 'sessions')).toBe(0);
@@ -229,21 +278,17 @@ describe('WP-X4 ingest/restart negative catalogue', () => {
 
     const fixture = getFixture('flat-tool-use');
     materializeFixture(corpusRoot, fixture, mainSessionIdOf(fixture));
-    const mainLines = fixture.files.find((f) => !f.relativePath.includes('/'))!.lines;
+    const poisoned = tierOverflow(fixture);
+    const mainLines = poisoned.files.find((f) => !f.relativePath.includes('/'))!.lines;
     writeFileSync(
       join(corpusRoot, SLUG, `${SESSION_BAD}.jsonl`),
-      mainLines
-        .map((line) =>
-          line
-            .replace(/synthetic-model-[ab]/g, 'unpriced-model-z')
-            .replaceAll(mainSessionIdOf(fixture), SESSION_BAD),
-        )
-        .join('\n') + '\n',
+      mainLines.map((line) => line.replaceAll(mainSessionIdOf(fixture), SESSION_BAD)).join('\n') +
+        '\n',
     );
 
     const summary = runCorpusIngest({
       db,
-      pricing: PRICING,
+      pricing: TIERED_PRICING,
       env: { CLAUDE_PROJECTS_DIR: corpusRoot },
     });
     expect(summary.sessionsDiscovered).toBe(2);
@@ -251,7 +296,7 @@ describe('WP-X4 ingest/restart negative catalogue', () => {
     expect(summary.sessionsFailed).toBe(1);
     expect(summary.failures).toHaveLength(1);
     expect(summary.failures[0]?.sessionId).toBe(SESSION_BAD);
-    expect(summary.failures[0]?.error).toMatch(/refusing to price at \$0/);
+    expect(summary.failures[0]?.error).toMatch(OVER_TIER_REASON);
 
     // The healthy session landed in full despite its poisoned sibling.
     expect(countRows(db, 'sessions')).toBe(1);

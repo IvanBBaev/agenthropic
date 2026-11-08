@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Unpriced models are projected, not refused (R2).** A session whose model has no
+  `model_pricing` row in force used to fail ingest whole with a `PricingError`, so one new
+  model id hid every token of every session that touched it. Ingest now prices through
+  `priceUsage`: the session is stored, the uncovered tokens contribute `$0` and are served
+  as `unpricedTokens` as before, the startup replay logs
+  `corpus replay: N tokens have no price row in force`, and the Cost page shows a banner
+  naming each unpriced model. Ingest still halts on a malformed pricing table or a
+  `claude-haiku-5-5` request over its 100,000-token base tier (a tier dimension, R2b, is
+  still to come). `GET /api/sessions/:id/cost-analysis` still answers `422` on an unknown
+  model. The `RELEASE.md` §6 real-corpus boot now treats that warning as a red box.
+
 - **launchd service installer (R1 / OPS-1).** `node scripts/service-install.mjs` prints,
   and with `--write` writes, a per-user launchd agent that starts the server at login and
   restarts it after a crash. The plist is `0600` because it holds the token. It pins an

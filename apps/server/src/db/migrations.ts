@@ -1551,8 +1551,8 @@ export const migrations: readonly Migration[] = [
       // BASE TIER ONLY. model_pricing has no tier dimension, so these five rows
       // are the <= 100k tier and nothing else. A claude-haiku-5-5 request whose
       // prompt exceeds 100,000 tokens must never be priced from them: core's
-      // computeCostUsd (BASE_TIER_PROMPT_LIMITS) halts such a request with a
-      // PricingError at the ingest gate, so no over-limit row ever reaches
+      // BASE_TIER_PROMPT_LIMITS (enforced by computeCostUsd and priceUsage)
+      // halts such a request with a PricingError at the ingest gate, so no over-limit row ever reaches
       // token_usage, where the read path could price it at these rates.
       //
       // FLOOR. Same canonical instant, ON CONFLICT idempotence and PROVISIONAL

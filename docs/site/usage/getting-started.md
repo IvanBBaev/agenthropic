@@ -290,7 +290,9 @@ summarizes the shape, not the diagram, to avoid drifting out of sync with it:
 > transcript is parsed by the pure parser (`packages/core/src/parser`) and written
 > straight into `sessions` / `agents` / `orchestration_edges` / `token_usage` in a
 > **single transaction per session** (`apps/server/src/ingest/ingest-session.ts`),
-> with the cost computation acting as a halt gate before any row is written. A hook
+> with the cost computation acting as a halt gate before any row is written (since R2 it
+> refuses only a malformed pricing table or an over-tier request; an unknown model is
+> stored and counted unpriced). A hook
 > envelope lands in `events_raw` plus one identifier-only liveness row in `events`
 > in the same transaction. Replay stays idempotent and CD-1 (JSONL-primary) holds —
 > hooks contribute liveness, never structure. The separate normalizer/projection

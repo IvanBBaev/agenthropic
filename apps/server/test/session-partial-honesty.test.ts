@@ -218,6 +218,7 @@ describe('runCorpusIngest hands the partial fact to ingest', () => {
             ok: true,
             sessionId: SID,
             costUsd: 0,
+            unpricedTokens: 0,
             agentsUpserted: 0,
             edgesInserted: 0,
             usageRowsInserted: 0,

@@ -51,6 +51,7 @@ function outcome(overrides: Partial<IngestOutcome> = {}): IngestOutcome {
     ok: true,
     sessionId: 'stub-session',
     costUsd: 0,
+    unpricedTokens: 0,
     agentsUpserted: 0,
     edgesInserted: 0,
     usageRowsInserted: 0,

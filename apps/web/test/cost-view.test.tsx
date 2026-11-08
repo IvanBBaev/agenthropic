@@ -243,6 +243,52 @@ describe('CostView', () => {
     expect(dayTable.querySelectorAll('td.unpriced')).toHaveLength(2);
   });
 
+  // R2 (2026-11-08): ingest projects a session whose model has no price row,
+  // so the page names WHICH models the unpriced KPI is about.
+  it('names the models with no price row in force in the unpriced-models banner', async () => {
+    routeFetch();
+    renderView();
+    const banner = await screen.findByTestId('unpriced-models-banner');
+    expect(banner.textContent).toBe(
+      'No price row is in force for claude-mystery (~4,000 tokens). Those tokens are stored and counted, but no dollar figure on this page includes them - add a model_pricing row to price them.',
+    );
+    expect(banner.textContent).not.toContain('claude-opus-4');
+  });
+
+  it('renders no unpriced-models banner when every model is priced', async () => {
+    routeFetch({
+      summary: jsonResponse(
+        200,
+        costSummary({
+          totals: { tokens: 1000, costUsd: 1, unpricedTokens: 0 },
+          perModel: [{ model: 'claude-opus-4', tokens: 1000, costUsd: 1, unpricedTokens: 0 }],
+        }),
+      ),
+    });
+    renderView();
+    await screen.findByLabelText('totals');
+    expect(screen.queryByTestId('unpriced-models-banner')).toBeNull();
+  });
+
+  it('names an unreadable unpriced count and a blank model name rather than hiding them', async () => {
+    routeFetch({
+      summary: jsonResponse(
+        200,
+        costSummary({
+          totals: { tokens: 2000, costUsd: 0, unpricedTokens: 2000 },
+          perModel: [
+            { model: 'claude-future-1', tokens: 1000, costUsd: 0, unpricedTokens: Number.NaN },
+            { model: '', tokens: 1000, costUsd: 0, unpricedTokens: 1000 },
+          ],
+        }),
+      ),
+    });
+    renderView();
+    const banner = await screen.findByTestId('unpriced-models-banner');
+    expect(banner.textContent).toContain('claude-future-1 (tokens unreadable)');
+    expect(banner.textContent).toContain('blank model name ("") (~1,000 tokens)');
+  });
+
   it('says honestly when nothing is priced instead of drawing an empty sankey', async () => {
     routeFetch({
       summary: jsonResponse(

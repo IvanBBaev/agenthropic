@@ -334,6 +334,15 @@ enforces it. Two honest departures from the CD-4 sketch:
   over-limit row is ever stored. Real tier-2 pricing needs a tier dimension (DAT-1/DAT-4
   follow-up), not a row.
 
+  _Amended 2026-11-08 (R2):_ an unpriced model no longer halts ingest. The ingest path
+  now prices through `priceUsage` (same file), which returns the dollar figure **and** the
+  count of tokens no row in force covers, instead of throwing on an unknown model id or a
+  missing bucket rate. The session is written, those tokens contribute `$0`, and the read
+  layer already surfaces them as `unpricedTokens`. The over-limit `claude-haiku-5-5`
+  request above is the exception that still halts: its model *is* priced, at a tier that
+  would be wrong, so storing it would be a confident wrong dollar, not a visible gap. That
+  halt stays until a tier dimension lands (R2b).
+
 **What is genuinely undecided:** the *authoritative dated source* for these rates and
 the *refresh cadence* that keeps the staleness-fails-CI test honest as the model lineup
 churns is an open Phase-0 input, not yet answered (concept-analysis-v2 §7, question 7:
@@ -447,6 +456,15 @@ ground-truth tokens × dated price" (development plan §3, Phase 4 exit gate), a
 > the write transaction, so a `PricingError` means **no row of any kind is written** —
 > a session is never persisted with silently unpriceable tokens. The same error
 > surfaces as a `422` from `GET /api/sessions/:id/cost-analysis`.
+>
+> **Amended 2026-11-08 (R2):** ingest no longer halts on an unknown model id or a
+> missing bucket rate. It prices through `priceUsage`, stores the session, and counts the
+> uncovered tokens as unpriced — the replay logs a `tokens have no price row in force`
+> warning and the Cost page names the models in a banner. The halt gate now covers only a
+> malformed pricing table (a negative or non-finite rate) and a `claude-haiku-5-5` request
+> over its 100,000-token base tier; both still mean no row is written.
+> `GET /api/sessions/:id/cost-analysis` still calls `computeCostUsd` and still answers
+> `422` on an unknown model.
 
 ## 6. Compaction-baseline repricing
 
@@ -671,6 +689,11 @@ criteria alongside the three P0 reconciliation tests).
 > which the seed deliberately leaves unpriced, so the models that can actually go stale
 > only ever appear in the real corpus, which stays local. The acceptance wording "FAILS
 > CI" quoted above is history, not a live criterion.
+>
+> **Amended 2026-11-08 (R2).** The runtime half no longer halts: an unknown model is
+> ingested and its tokens counted unpriced, and the boot logs
+> `corpus replay: N tokens have no price row in force`. That warning is now the red box in
+> `RELEASE.md` §6, alongside any remaining `PricingError` failure line.
 
 ## 10. Read surface (as built: shipped)
 

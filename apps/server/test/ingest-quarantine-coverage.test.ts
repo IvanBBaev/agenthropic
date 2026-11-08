@@ -14,9 +14,10 @@
  * corpus produces on its own without anybody doing anything wrong:
  *
  *   1. a session ingests cleanly and its rows commit;
- *   2. the transcript - which is append-only - gains lines naming a model with
- *      no price row (a new model shipping ahead of its price is the commonest
- *      halt-gate refusal there is);
+ *   2. the transcript - which is append-only - gains a request whose prompt
+ *      is over a tiered model's seeded base tier (since R2 the one usage
+ *      shape the halt gate still refuses; a model with no price row is now
+ *      stored and counted unpriced instead);
  *   3. every later pass halts on the price gate before the transaction, so the
  *      committed rows from step 1 are neither updated nor removed;
  *   4. the retry budget runs out and the session is quarantined.
@@ -42,7 +43,7 @@ import {
   type CorpusWatcherDeps,
 } from '../src/ingest/corpus-watcher';
 import type { SqliteDatabase } from '../src/db/connection';
-import { createMigratedTempDb, TEST_TOKEN, type TempDb } from './helpers';
+import { createMigratedTempDb, TEST_TOKEN, TIERED_MODEL, type TempDb } from './helpers';
 import { dir, file, makeFakeCorpusFs, type NodeSpec } from './corpus/fake-corpus-fs';
 
 const ROOT = '/fake/corpus';
@@ -54,8 +55,8 @@ const NOW_MS = Date.parse('2026-07-12T00:00:00Z');
 
 /** Priced in the seed below; the model the healthy first pass runs on. */
 const PRICED_MODEL = 'synthetic-model-a';
-/** Deliberately absent from pricing: the halt gate's whole reason to exist. */
-const UNPRICED_MODEL = 'synthetic-model-shipped-early';
+/** The day-2 model: tiered, so a prompt over its base tier is refused (R2). */
+const OVER_TIER_MODEL = TIERED_MODEL;
 
 const BUCKETS = ['input', 'output', 'cache_read', 'cache_write_5m', 'cache_write_1h'] as const;
 const PRICING: readonly PricingEntry[] = BUCKETS.map((bucket) => ({
@@ -64,6 +65,20 @@ const PRICING: readonly PricingEntry[] = BUCKETS.map((bucket) => ({
   usdPerMtok: 1,
   effectiveFrom: '2020-01-01',
 }));
+/**
+ * The watcher's table also carries the tiered model's base tier, so the day-2
+ * reply is refused for its tier rather than counted unpriced. `model_pricing`
+ * already holds those rows from migration 25.
+ */
+const WATCHER_PRICING: readonly PricingEntry[] = [
+  ...PRICING,
+  ...BUCKETS.map((bucket) => ({
+    model: TIERED_MODEL,
+    bucket,
+    usdPerMtok: 1,
+    effectiveFrom: '2020-01-01',
+  })),
+];
 
 function jsonLine(value: unknown): string {
   return JSON.stringify(value);
@@ -106,7 +121,7 @@ const DAY_ONE_LINES = [
   }),
 ];
 
-/** The day-2 append: one more reply, on a model no price row covers. */
+/** The day-2 append: one more reply, its prompt over the base tier. */
 const DAY_TWO_LINE = jsonLine({
   parentUuid: 'cccccccc-0000-4000-8000-000000000002',
   isSidechain: false,
@@ -116,8 +131,8 @@ const DAY_TWO_LINE = jsonLine({
     id: 'msg_synth_quarantine_0002',
     type: 'message',
     role: 'assistant',
-    model: UNPRICED_MODEL,
-    content: [{ type: 'text', text: 'Synthetic reply from a model that shipped early.' }],
+    model: OVER_TIER_MODEL,
+    content: [{ type: 'text', text: 'Synthetic reply over the base tier.' }],
     usage: {
       input_tokens: 2_000_000,
       cache_creation_input_tokens: 0,
@@ -152,7 +167,7 @@ describe('a session that ingested, then began failing, then was quarantined', ()
     };
     deps = {
       db: temp.db,
-      pricing: PRICING,
+      pricing: WATCHER_PRICING,
       env: { CLAUDE_PROJECTS_DIR: ROOT },
       intervalMs: 1000,
       watchdogThresholdMs: THRESHOLD_MS,

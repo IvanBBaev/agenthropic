@@ -364,12 +364,14 @@ the moment the row is seeded. Failure reasons are sanitized before they are reco
 paths replaced with `<path>`, whitespace collapsed, capped at 300 characters — so an error
 message cannot leak a filesystem layout into a durable record.
 
-**Halt gate** — the pipeline's refusal to write a session it cannot price. The order
-inside one session is load-bearing: parse → **compute cost** → normalize → project, with
-pricing computed *before* the transaction opens. An unknown model id or a missing bucket
-rate raises `PricingError` while the database is still untouched, so the session fails
-whole instead of landing as a confident `$0`. There is no partial write to reconcile
-later.
+**Halt gate** — the pipeline's refusal to write a session it cannot price correctly. The
+order inside one session is load-bearing: parse → **compute cost** → normalize → project,
+with pricing computed *before* the transaction opens. A malformed pricing table or a
+request over a model's base-tier prompt limit raises `PricingError` while the database is
+still untouched, so the session fails whole instead of landing with a wrong dollar figure.
+There is no partial write to reconcile later. Since 2026-11-08 (R2) an unknown model id
+or a missing bucket rate is **not** a halt: the session is written and those tokens are
+counted as unpriced tokens.
 
 **Unpriced tokens** — tokens the read layer counted but could not price, because no
 `model_pricing` row covers their model at their timestamp. They are surfaced as their own
@@ -380,7 +382,7 @@ honest if the missing tokens are visible next to it.
 **`<synthetic>`** — the model id the CLI uses for its own internal messages. It is priced
 at zero through **explicit seed rows**, not through a fallback: the distinction matters
 because a general "unknown model costs nothing" rule would silently absorb real models
-too, which is exactly what the halt gate exists to prevent. Delegation-savings analysis
+too, which is exactly what the unpriced-token count exists to prevent. Delegation-savings analysis
 keeps `<synthetic>` rows on their own zero-rate model rather than re-pricing them at a
 top-tier rate.
 

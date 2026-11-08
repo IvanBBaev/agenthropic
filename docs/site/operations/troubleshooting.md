@@ -578,7 +578,8 @@ corpus ingest failure: session <id> (attempt 3/3, quarantined: re-read on a chan
 The retry budget is three consecutive failed passes, whether or not the file changed
 between them; after that the session is quarantined. A quarantined session is re-read
 only when its bytes change, and then on a cadence that doubles with every failed
-re-read (1, 2, 4... passes, capped at 32), so a live transcript the halt gate refuses
+re-read (1, 2, 4... passes, capped at 32), so a live transcript the halt gate refuses (an over-tier
+`claude-haiku-5-5` request, since R2 the only model-driven refusal)
 costs a bounded number of re-parses instead of one every poll. Each failed re-read
 logs again as `attempt 3/3`. The verdict in the parentheses is the useful half —
 `will retry` means the watcher intends another pass, `quarantined` means it will

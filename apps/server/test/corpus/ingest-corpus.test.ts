@@ -76,6 +76,7 @@ function outcome(overrides: Partial<IngestOutcome> = {}): IngestOutcome {
     ok: true,
     sessionId: 'stub-session',
     costUsd: 0,
+    unpricedTokens: 0,
     agentsUpserted: 0,
     edgesInserted: 0,
     usageRowsInserted: 0,
@@ -159,6 +160,7 @@ describe('runCorpusIngest (WP-IN5)', () => {
         usageRowsInserted: 0,
         filesSkipped: 0,
         totalCostUsd: 0,
+        totalUnpricedTokens: 0,
         failures: [],
       });
       expect(calls).toHaveLength(0);
@@ -224,6 +226,7 @@ describe('runCorpusIngest (WP-IN5)', () => {
         usageRowsInserted: 12,
         filesSkipped: 0,
         totalCostUsd: 0.75,
+        totalUnpricedTokens: 0,
         failures: [],
       });
     });
@@ -241,6 +244,21 @@ describe('runCorpusIngest (WP-IN5)', () => {
 
       expect(summary.sessionsOk).toBe(2);
       expect(summary.totalCostUsd).toBe(1.5);
+    });
+
+    it('sums unpricedTokens across ok outcomes, treating a null count as zero (R2)', () => {
+      const fs = makeFakeCorpusFs(ROOT, {
+        [SLUG]: dir(soleSession(SESSION_A)),
+        [SLUG_B]: dir(soleSession(SESSION_B)),
+      });
+      const outcomes = [outcome({ unpricedTokens: null }), outcome({ unpricedTokens: 40 })];
+
+      const summary = runCorpusIngest(
+        makeDeps({ fs, ingest: recorder([], (_call, index) => outcomes[index]!) }),
+      );
+
+      expect(summary.sessionsOk).toBe(2);
+      expect(summary.totalUnpricedTokens).toBe(40);
     });
 
     it('skips a session whose substrate cannot be built, and still ingests the others', () => {

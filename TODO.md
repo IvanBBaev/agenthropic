@@ -1110,7 +1110,12 @@ synthesis, not on this board._
   — agent half done 2026-11-08: `scripts/service-install.mjs` writes the launchd plist (0600, absolute
   Node 22, one `node --import <tsx loader>` process, KeepAlive on failure) and prints the launchctl steps without running them.
   Open: Ivan runs `--write` + `launchctl bootstrap`, installs the hooks, starts the friction log.
-- [ ] **R2** decouple projection from pricing; `pricing_status` + unpriced banner [ARC-1, DAT-2, PRD-3]
+- [x] **R2** decouple projection from pricing; `pricing_status` + unpriced banner [ARC-1, DAT-2, PRD-3]
+  — R2a done 2026-11-08: ingest prices through `priceUsage` and stores a session whose model has no row,
+  counting those tokens unpriced (`IngestOutcome.unpricedTokens`, `totalUnpricedTokens` + a startup warning
+  as the pricing status); the Cost page names unpriced models in a banner. Ingest still halts on a malformed
+  table or an over-100k `claude-haiku-5-5` request. **R2b open (v1.x):** a `model_pricing` tier dimension so
+  tier-2 prompts are priced instead of refused.
 - [x] **R3** fix the `ENV_ASSIGNMENT` ReDoS in `hooks/redact.ts`; length cap; time-budget test [SEC-1]
   — done 2026-10-31 (`d310067`): JWT and `ENV_ASSIGNMENT` rewritten to linear, output pinned to the
   originals by a 20k-input differential test; 256 KiB adversarial time-budget test. The length cap was

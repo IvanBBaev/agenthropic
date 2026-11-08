@@ -73,6 +73,7 @@ function okOutcome(sessionId: string): IngestOutcome {
     ok: true,
     sessionId,
     costUsd: 0,
+    unpricedTokens: 0,
     agentsUpserted: 0,
     edgesInserted: 0,
     usageRowsInserted: 0,

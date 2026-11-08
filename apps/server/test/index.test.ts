@@ -207,15 +207,13 @@ describe('composition root (src/index)', () => {
       const fixture = getFixture('flat-tool-use');
       const sessionId = mainSessionIdOf(fixture);
       materializeFixture(corpusRoot, fixture, sessionId);
-      // A second session priced against a model NO seed row covers: the cost
-      // halt gate fails it, exercising the failure-log branch — while the
-      // healthy session must still land (per-session isolation).
+      // A second session copied under another file name: it still carries the
+      // original sessionId, so the session-identity gate fails it, exercising
+      // the failure-log branch — while the healthy session must still land
+      // (per-session isolation). (Since R2 an unpriced model no longer fails a
+      // session, so it is not the poison here.)
       const mainLines = fixture.files.find((f) => !f.relativePath.includes('/'))!.lines;
-      writeFileSync(
-        join(corpusRoot, SLUG, `${SESSION_BAD}.jsonl`),
-        mainLines.map((l) => l.replace(/synthetic-model-[ab]/g, 'unpriced-model-z')).join('\n') +
-          '\n',
-      );
+      writeFileSync(join(corpusRoot, SLUG, `${SESSION_BAD}.jsonl`), mainLines.join('\n') + '\n');
 
       const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
       const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -700,6 +698,7 @@ describe('composition root (src/index)', () => {
       usageRowsInserted: 1,
       filesSkipped: 0,
       totalCostUsd: 0,
+      totalUnpricedTokens: 0,
       failures: [],
     };
 
@@ -797,6 +796,7 @@ describe('composition root (src/index)', () => {
       usageRowsInserted: 1,
       filesSkipped: 0,
       totalCostUsd: 0,
+      totalUnpricedTokens: 0,
       failures: [],
     };
 

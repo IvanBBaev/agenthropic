@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeCostUsd, dedupeUsageByMessageId, PricingError } from '../src/index';
+import { computeCostUsd, dedupeUsageByMessageId, priceUsage, PricingError } from '../src/index';
 import type { DedupedUsage, PricingEntry, TokenBuckets } from '../src/index';
 
 const EPOCH = '2020-01-01T00:00:00.000Z';
@@ -267,5 +267,55 @@ describe('computeCostUsd', () => {
       const entry = usage({}, { cacheRead: 1_000_000 });
       expect(computeCostUsd([entry], sonnetPricing())).toBeCloseTo(0.3, 10);
     });
+  });
+});
+
+describe('priceUsage (R2 - the ingest-side price never halts on a missing price)', () => {
+  it('equals computeCostUsd with nothing unpriced when every bucket resolves', () => {
+    const entry = usage({}, { input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000 });
+    expect(priceUsage([entry], sonnetPricing())).toEqual({
+      costUsd: computeCostUsd([entry], sonnetPricing()),
+      unpricedTokens: 0,
+    });
+  });
+
+  it('counts every token of an unknown model as unpriced and prices the rest', () => {
+    const known = usage({ messageId: 'msg_known' }, { input: 1_000_000 });
+    const unknown = usage(
+      { messageId: 'msg_unknown', model: 'claude-unknown-99' },
+      { input: 10, output: 20, cacheRead: 30, cacheWrite5m: 40, cacheWrite1h: 50 },
+    );
+    const priced = priceUsage([known, unknown], sonnetPricing());
+    expect(priced.costUsd).toBeCloseTo(3, 10);
+    expect(priced.unpricedTokens).toBe(150);
+  });
+
+  it('counts only the bucket that has no price row, pricing its siblings', () => {
+    const pricing: PricingEntry[] = [
+      { model: 'claude-sonnet-5', bucket: 'input', usdPerMtok: 3, effectiveFrom: EPOCH },
+    ];
+    const priced = priceUsage([usage({}, { input: 1_000_000, output: 7 })], pricing);
+    expect(priced.costUsd).toBeCloseTo(3, 10);
+    expect(priced.unpricedTokens).toBe(7);
+  });
+
+  it('counts a bucket whose only rate is not yet effective at the usage timestamp', () => {
+    const priced = priceUsage([usage({}, { input: 42 })], sonnetPricing('2027-01-01T00:00:00Z'));
+    expect(priced).toEqual({ costUsd: 0, unpricedTokens: 42 });
+  });
+
+  it('still halts a tiered prompt over its seeded base tier - the read path could not tell it apart', () => {
+    const pricing: PricingEntry[] = [
+      { model: 'claude-haiku-5-5', bucket: 'input', usdPerMtok: 0.1, effectiveFrom: EPOCH },
+    ];
+    const entry = usage({ model: 'claude-haiku-5-5' }, { input: 100_001 });
+    expect(() => priceUsage([entry], pricing)).toThrow(/exceeds the 100000-token base tier/);
+  });
+
+  it('still halts on a malformed pricing table', () => {
+    const pricing: PricingEntry[] = [
+      { model: 'claude-sonnet-5', bucket: 'input', usdPerMtok: -1, effectiveFrom: EPOCH },
+    ];
+    expect(() => priceUsage([usage({}, { input: 1 })], pricing)).toThrow(PricingError);
   });
 });
