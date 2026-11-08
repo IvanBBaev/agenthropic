@@ -44,6 +44,7 @@ import { registerHookRoutes } from './hooks/routes';
 import {
   createCorpusWatcher,
   MAX_INGEST_ATTEMPTS,
+  REPLAY_MAX_BYTES_PER_PASS,
   REPLAY_MAX_SESSIONS_PER_PASS,
   REREAD_BACKOFF_CAP_PASSES,
   type CorpusWatcher,
@@ -293,17 +294,34 @@ export interface StartupReplayOptions {
   /** The per-pass session cap handed to every replay tick. */
   readonly maxSessionsPerPass: number;
   /**
+   * The per-pass byte budget handed to every replay tick (OPS-8): what keeps
+   * one pass - and with it the wait of a hook delivery that lands during the
+   * replay - well inside the hook's `curl --max-time 3`. Absent, passes are
+   * bounded by the session cap alone.
+   */
+  readonly maxBytesPerPass?: number;
+  /**
    * Resolves after one event-loop turn; awaited before EVERY pass, the first
    * included, so connections accepted during the bind - and every request that
    * arrives while the replay runs - are answered between passes. Defaults to
-   * `setImmediate`; a test seam.
+   * a `REPLAY_YIELD_MS` timer window; a test seam.
    */
   readonly yieldTurn?: () => Promise<void>;
 }
 
+/**
+ * The pause before every replay pass (OPS-8). A single `setImmediate` turn is
+ * not enough to serve a hook POST that queued up while the previous pass held
+ * the loop: accepting the socket, reading the body and writing the reply span
+ * two to three turns, so the delivery would wait several passes. A short timer
+ * window lets the loop drain that pending I/O before the next pass starts; at
+ * about 0.7 s per 32 MiB pass the window costs ~1.5 % of the replay.
+ */
+export const REPLAY_YIELD_MS = 10;
+
 function nextTurn(): Promise<void> {
   return new Promise<void>((resolve) => {
-    setImmediate(resolve);
+    setTimeout(resolve, REPLAY_YIELD_MS);
   });
 }
 
@@ -336,7 +354,10 @@ export async function runStartupReplay(
   let outcome: TickOutcome;
   for (;;) {
     await yieldTurn();
-    outcome = watcher.tick({ maxSessions: options.maxSessionsPerPass });
+    outcome = watcher.tick({
+      maxSessions: options.maxSessionsPerPass,
+      ...(options.maxBytesPerPass === undefined ? {} : { maxBytes: options.maxBytesPerPass }),
+    });
     if (outcome.kind !== 'ingested') {
       break;
     }
@@ -1305,6 +1326,7 @@ export async function start(
     // passes, and the phase turns 'idle' only once the whole sweep is done.
     const replay = await runStartupReplay(watcher, {
       maxSessionsPerPass: REPLAY_MAX_SESSIONS_PER_PASS,
+      maxBytesPerPass: REPLAY_MAX_BYTES_PER_PASS,
     });
     if (replay.kind === 'read-error' || replay.kind === 'no-corpus-root') {
       tickTrouble = replay.kind;

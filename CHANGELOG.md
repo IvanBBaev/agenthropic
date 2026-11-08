@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Hook receiver stays responsive during the startup replay (R20, OPS-8).** Replay passes
+  are now capped at 32 MiB of transcript as well as 25 sessions (a larger session is read
+  alone), and the replay pauses 10 ms before every pass instead of one `setImmediate` turn,
+  so a hook delivery that arrives mid-replay is stored before the next pass instead of
+  timing out against the hook's 3-second `curl` limit.
 - **Transcript format-drift census (R13).** `/api/health` gains `formatDrift`: the Claude
   Code versions seen per session, and per version the unknown record types, unknown
   `usage` keys and all-zero usage records — so an upstream rename that would read tokens

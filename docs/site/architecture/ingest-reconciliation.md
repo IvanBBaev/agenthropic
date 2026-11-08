@@ -321,7 +321,8 @@ restart, for sessions whose bytes have not moved in months.
 > stall**, not as many small ones. *(Amended 2026-10-08: the measurement stands as a reading
 > of the replay as it was then. Since 2026-10-01 the startup replay is chunked — 25 sessions
 > per pass, with an event-loop yield between passes — so the stall is now per pass, not one
-> for the whole corpus.)*
+> for the whole corpus.)* *(Amended 2026-11-08, R20: passes are also capped at 32 MiB of
+> transcript, about 0.7 s each at the measured rate.)*
 >
 > **Resolved 2026-09-01 — the ≈137 s is retired as wrong, not carried as "unverified".**
 > This paragraph used to say the two figures "must not be rescaled into each other", the
@@ -521,8 +522,12 @@ achievable at all: **"replay-from-fixtures needs a deterministic durable source"
 
 > **As built: replay-on-startup is a sweep of capped watcher ticks.** There is no separate
 > replay mode — `runStartupReplay` (`apps/server/src/index.ts`) runs the watcher's own tick
-> in passes of at most 25 sessions (`REPLAY_MAX_SESSIONS_PER_PASS` in `corpus-watcher.ts`),
-> yielding to the event loop between passes, after the loopback bind and before the
+> in passes of at most 25 sessions and at most 32 MiB of transcript
+> (`REPLAY_MAX_SESSIONS_PER_PASS` / `REPLAY_MAX_BYTES_PER_PASS` in `corpus-watcher.ts`; a
+> single session larger than the budget is admitted alone), pausing `REPLAY_YIELD_MS`
+> (10 ms) before every pass so a hook delivery that queued up during a pass is answered
+> before the next one — one pass stays well inside the hook's `curl --max-time 3` (OPS-8,
+> R20). The replay runs after the loopback bind and before the
 > scheduled poll starts; `/api/health` answers `status: "replaying"` until the sweep drains.
 > Every session a pass reads goes through the same parse → cost halt-gate → one-transaction
 > path as a live change; a replay summary is logged. With the checkpoint store wired (§6.1;

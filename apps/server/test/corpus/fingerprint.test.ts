@@ -8,7 +8,7 @@
  */
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { fingerprintSession } from '../../src/corpus/fingerprint';
+import { fingerprintBytes, fingerprintSession } from '../../src/corpus/fingerprint';
 import {
   ContainmentError,
   DEFAULT_READ_LIMITS,
@@ -223,5 +223,37 @@ describe('fingerprintSession', () => {
     });
 
     expect(() => fingerprintSession(fs, refFor(SESSION), LIMITS)).toThrow(ContainmentError);
+  });
+});
+
+describe('fingerprintBytes', () => {
+  it('sums the size of the main transcript and every subagent file', () => {
+    const fs = fsOver({
+      [`${SESSION}.jsonl`]: file('{"a":1}\n', { size: 100, mtimeMs: 1 }),
+      [SESSION]: dir({
+        subagents: dir({
+          'agent-1.jsonl': file('{"b":2}\n', { size: 20, mtimeMs: 2 }),
+          nested: dir({ 'agent-2.jsonl': file('{"c":3}\n', { size: 3, mtimeMs: 3.5 }) }),
+        }),
+      }),
+    });
+
+    expect(fingerprintBytes(fingerprintSession(fs, refFor(SESSION), LIMITS))).toBe(123);
+  });
+
+  it('counts an absent main transcript as zero', () => {
+    expect(fingerprintBytes('main:absent')).toBe(0);
+    expect(fingerprintBytes('main:absent\nsubagents/agent-1.jsonl:7:1')).toBe(7);
+  });
+
+  it('reads the size from the end of the line, so a colon in the path is harmless', () => {
+    expect(fingerprintBytes('subagents/a:b:c.jsonl:11:2')).toBe(11);
+  });
+
+  it('counts a line without two numeric trailing fields as zero', () => {
+    expect(fingerprintBytes('')).toBe(0);
+    expect(fingerprintBytes('nocolon')).toBe(0);
+    expect(fingerprintBytes(':5')).toBe(0);
+    expect(fingerprintBytes('x:NaN:1\ny:-4:1\nz:9:1')).toBe(9);
   });
 });

@@ -60,9 +60,12 @@
  * Sessions that yield no substrate at all (`sessionsSkipped`) are not failures
  * and are not retried.
  *
- * CHUNKED PASSES (opt-in, per call). `tick({ maxSessions })` admits at most
- * that many changed sessions, in enumeration order, and reports the rest as
- * `pending` on the 'ingested' outcome. The composition root uses it for the
+ * CHUNKED PASSES (opt-in, per call). `tick({ maxSessions, maxBytes })` admits
+ * at most that many changed sessions, in enumeration order, and only while
+ * their bytes on disk fit the byte budget (the first session always fits), and
+ * reports the rest as `pending` on the 'ingested' outcome. The byte budget is
+ * what actually bounds a pass (OPS-8): parse time follows bytes, and 25 real
+ * sessions took 33-38 s. The composition root uses it for the
  * startup replay only, yielding to the event loop between passes so the
  * server answers requests (and /api/health says 'replaying') while a large
  * corpus is read; the scheduled poll passes no cap of its own. A deferred session is
@@ -97,7 +100,7 @@ import type { SessionRejectionCode } from '@agenthropic/shared';
 import { resolveCorpusRoot } from '../corpus/corpus-paths';
 import { enumerateSessions } from '../corpus/disk-substrate';
 import type { EnumeratedSessions } from '../corpus/fs-port';
-import { fingerprintSession } from '../corpus/fingerprint';
+import { fingerprintBytes, fingerprintSession } from '../corpus/fingerprint';
 import {
   ContainmentError,
   DEFAULT_READ_LIMITS,
@@ -151,6 +154,76 @@ export const REREAD_BACKOFF_CAP_PASSES = 32;
  * knob only: the replay RESULT is the same for every cap (see the module doc).
  */
 export const REPLAY_MAX_SESSIONS_PER_PASS = 25;
+
+/**
+ * Default per-pass BYTE budget for the chunked startup replay (OPS-8, R20):
+ * the bytes on disk of the transcripts one pass may admit, summed off their
+ * fingerprints (see {@link fingerprintBytes}). The session cap alone does not
+ * bound a pass: real sessions run 1.3-1.5 s each to parse, so 25 of them held
+ * the event loop for 33-38 s - ten times the hook's `curl --max-time 3`, which
+ * then gave up and lost the one dataset that cannot be re-derived
+ * (`events_raw`). Parse cost tracks bytes, not sessions: the 2026-10-31
+ * re-measure (R25) read 5.70 GiB in about 120 s on a loaded machine, roughly
+ * 48 MiB/s, so 32 MiB is about 0.7 s of loop time per pass - well inside the
+ * hook's 3 s, with headroom for a slower machine or a heavier load. A corpus
+ * of 5.7 GiB needs about 180 passes; each one re-fingerprints the corpus
+ * (lstat only), a cost that stays small next to the parse.
+ *
+ * A session larger than the budget is still admitted, alone: the pass must
+ * make progress, and a transcript is the smallest unit ingest can project.
+ * Such a pass blocks for as long as that one transcript takes to parse
+ * (bounded by the file cap); only streaming incremental parse (DAT-6, v2)
+ * retires that residue. Like the session cap, a responsiveness knob only: the
+ * replay RESULT is the same for every budget.
+ */
+export const REPLAY_MAX_BYTES_PER_PASS = 32 * 1024 * 1024;
+
+/** The limits of one capped pass; an absent field is no limit. */
+interface PassCap {
+  readonly maxSessions: number | undefined;
+  readonly maxBytes: number | undefined;
+}
+
+/** The cap a call names, or undefined when it names none (the scheduled poll). */
+function passCapOf(options: TickOptions): PassCap | undefined {
+  if (options.maxSessions === undefined && options.maxBytes === undefined) {
+    return undefined;
+  }
+  return { maxSessions: options.maxSessions, maxBytes: options.maxBytes };
+}
+
+/**
+ * Trim `changed` to the longest prefix, in enumeration order, that fits the
+ * cap; returns whether anything was left out. The first session always fits,
+ * however large, so every pass makes progress. Admission stops at the first
+ * session that does not fit rather than skipping past it to a smaller one:
+ * the sweep then drains in enumeration order whatever the sizes, and a large
+ * session can never be starved by a stream of small ones behind it.
+ */
+function applyPassCap(
+  changed: Set<string>,
+  bytesOf: (sessionId: string) => number,
+  cap: PassCap,
+): boolean {
+  let admitted = 0;
+  let bytes = 0;
+  let pending = false;
+  for (const sessionId of [...changed]) {
+    const size = bytesOf(sessionId);
+    const fits =
+      admitted === 0 ||
+      ((cap.maxSessions === undefined || admitted < cap.maxSessions) &&
+        (cap.maxBytes === undefined || bytes + size <= cap.maxBytes));
+    if (!pending && fits) {
+      admitted += 1;
+      bytes += size;
+      continue;
+    }
+    pending = true;
+    changed.delete(sessionId);
+  }
+  return pending;
+}
 
 /** Maximum length of a reported failure reason, after sanitization. */
 const MAX_REASON_LENGTH = 300;
@@ -304,6 +377,13 @@ export interface TickOptions {
    * the module doc). Must be a positive integer.
    */
   readonly maxSessions?: number;
+  /**
+   * Admit sessions only while the bytes on disk of those admitted so far stay
+   * within this budget (the first session is admitted whatever its size). Same
+   * pending, sweep and carry-over rules as `maxSessions`; a call naming either
+   * limit replaces the whole carried cap. Must be a positive integer.
+   */
+  readonly maxBytes?: number;
 }
 
 /**
@@ -455,7 +535,7 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
    * pass drains the working set or the root is lost or replaced. Undefined in
    * steady state, so the scheduled poll is uncapped exactly as before.
    */
-  let carriedCap: number | undefined;
+  let carriedCap: PassCap | undefined;
   /** Corpus root the persisted checkpoint was hydrated from; null = not yet. */
   let hydratedRoot: string | null = null;
   /** Pricing content seen by the previous pass; null = no pass yet. */
@@ -617,11 +697,11 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
    * ContainmentError only; every other end is named in the returned outcome.
    */
   function ingestChanged(
-    maxSessions: number | undefined,
+    callCap: PassCap | undefined,
   ): Extract<TickOutcome, { kind: 'ingested' | 'unchanged' | 'no-corpus-root' | 'read-error' }> {
     // Before anything that can throw: a pass that fails to read the corpus has
     // drained nothing, so its cap must still be there for the retry.
-    carriedCap = maxSessions ?? carriedCap;
+    carriedCap = callCap ?? carriedCap;
     const corpusRoot = resolveCorpusRoot(deps.env, fs, deps.homedir);
     if (corpusRoot === null) {
       // No corpus (yet / any more): forget every fingerprint and retry budget so
@@ -651,7 +731,7 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
         // A REPLACED root abandons the sweep and its cap with it; this call's
         // own cap stands. A first adoption abandons nothing: the cap of a
         // replay pass that failed before it could hydrate is still owed.
-        carriedCap = maxSessions;
+        carriedCap = callCap;
       }
       for (const [sessionId, fingerprint] of deps.checkpoints.load(corpusRoot)) {
         fingerprints.set(sessionId, fingerprint);
@@ -713,16 +793,13 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
     pruneMissing(rereadSchedule, present);
     pruneMissing(slugs, present);
 
-    // The cap: admit the first `maxSessions` in enumeration order and leave the
-    // rest unsettled - their fingerprints stay uncommitted, so the next pass of
-    // this sweep sees them as changed again.
-    let pending = false;
-    if (carriedCap !== undefined && changed.size > carriedCap) {
-      pending = true;
-      for (const sessionId of [...changed].slice(carriedCap)) {
-        changed.delete(sessionId);
-      }
-    }
+    // The cap: admit changed sessions in enumeration order while both limits
+    // hold, and leave the rest unsettled - their fingerprints stay
+    // uncommitted, so the next pass of this sweep sees them as changed again.
+    // Every changed id was fingerprinted into `next` above.
+    const pending =
+      carriedCap !== undefined &&
+      applyPassCap(changed, (sessionId) => fingerprintBytes(next.get(sessionId)!), carriedCap);
     // Recorded LAST (2026-10-08), on each of the two ways out of this pass -
     // never before the runner below has run. This used to be settled right
     // here, so a throw anywhere below it (the runner resolves the root a second
@@ -830,7 +907,7 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
     try {
       let outcome: TickOutcome;
       try {
-        outcome = ingestChanged(options.maxSessions);
+        outcome = ingestChanged(passCapOf(options));
       } catch (error) {
         if (error instanceof ContainmentError) {
           stop(); // a crafted corpus is a stop-everything signal — no more polls

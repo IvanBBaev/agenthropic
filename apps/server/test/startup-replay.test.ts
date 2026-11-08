@@ -17,10 +17,16 @@ import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getFixture } from '@agenthropic/test-fixtures';
 import type { CorpusIngestSummary } from '../src/corpus/ingest-corpus';
-import type { TickOptions, TickOutcome } from '../src/ingest/corpus-watcher';
+import { HOOK_EVENT_PATH } from '../src/hooks/routes';
+import {
+  REPLAY_MAX_BYTES_PER_PASS,
+  type TickOptions,
+  type TickOutcome,
+} from '../src/ingest/corpus-watcher';
 import {
   mergeReplaySummaries,
   openDatabase,
+  REPLAY_YIELD_MS,
   runMigrations,
   runStartupReplay,
   start,
@@ -165,6 +171,22 @@ describe('runStartupReplay', () => {
     expect(lines).toEqual([expect.stringContaining('corpus replay: 5/5 sessions ok')]);
   });
 
+  it('hands the byte budget to every pass when one is given', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const watcher = fakeWatcher([ingested(summary(1), true), ingested(summary(1), false)]);
+
+    await runStartupReplay(watcher, {
+      maxSessionsPerPass: 25,
+      maxBytesPerPass: 1024,
+      yieldTurn: () => Promise.resolve(),
+    });
+
+    expect(watcher.calls).toEqual([
+      { maxSessions: 25, maxBytes: 1024 },
+      { maxSessions: 25, maxBytes: 1024 },
+    ]);
+  });
+
   it('logs the outcome line when the first pass ingests nothing', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const final = await runStartupReplay(fakeWatcher([{ kind: 'unchanged' }]), {
@@ -216,12 +238,12 @@ describe('runStartupReplay', () => {
     expect(error).toHaveBeenCalledWith(expect.stringContaining('could not be read this pass'));
   });
 
-  it('yields with setImmediate by default', async () => {
+  it('yields with a REPLAY_YIELD_MS timer window by default', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => undefined);
-    const spy = vi.spyOn(globalThis, 'setImmediate');
+    const spy = vi.spyOn(globalThis, 'setTimeout');
     await runStartupReplay(fakeWatcher([{ kind: 'unchanged' }]), { maxSessionsPerPass: 1 });
 
-    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith(expect.any(Function), REPLAY_YIELD_MS);
   });
 });
 
@@ -378,6 +400,74 @@ describe('start(): the chunked replay end to end', () => {
       );
     } finally {
       await server.close();
+    }
+  });
+
+  it('the hook receiver answers between passes and stores every delivery (OPS-8)', async () => {
+    const { dbPath, corpusRoot } = seedCorpus();
+
+    // A hook delivery is POSTed just before each pass, as Claude Code would
+    // while the replay runs. It must be answered - and stored - before the
+    // NEXT pass starts: a pass is what holds the event loop, so an answer
+    // between passes is an answer within one pass, not after the whole replay.
+    const statuses: (number | null)[] = [];
+    const answeredBeforePass: (number | null)[] = [];
+    const budgets: (number | undefined)[] = [];
+    hooks.beforeTick = (options) => {
+      budgets.push(options?.maxBytes);
+      answeredBeforePass.push(statuses.at(-1) ?? null);
+      const slot = statuses.length;
+      statuses.push(null);
+      void (hooks.app as FastifyInstance)
+        .inject({
+          method: 'POST',
+          url: HOOK_EVENT_PATH,
+          headers: auth,
+          payload: {
+            hook_event_name: 'SubagentStop',
+            session_id: `replay-hook-${String(slot)}`,
+            transcript_path: `/tmp/replay-hook-${String(slot)}.jsonl`,
+          },
+        })
+        .then((response) => {
+          statuses[slot] = response.statusCode;
+        });
+    };
+
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const server = await start({
+      DASHBOARD_TOKEN: TEST_TOKEN,
+      DASHBOARD_PORT: '0',
+      DASHBOARD_DB_PATH: dbPath,
+      CLAUDE_PROJECTS_DIR: corpusRoot,
+      DASHBOARD_POLL_INTERVAL_MS: '600000',
+    });
+    try {
+      // Every replay pass carries the production byte budget.
+      expect(budgets).toEqual([
+        REPLAY_MAX_BYTES_PER_PASS,
+        REPLAY_MAX_BYTES_PER_PASS,
+        REPLAY_MAX_BYTES_PER_PASS,
+      ]);
+      // Before passes 2 and 3 the delivery issued before the previous pass
+      // had already been accepted, mid-replay.
+      expect(answeredBeforePass).toEqual([null, 202, 202]);
+      await vi.waitFor(() => {
+        expect(statuses).toEqual([202, 202, 202]);
+      });
+    } finally {
+      await server.close();
+    }
+    const db = openDatabase(dbPath);
+    try {
+      const row = db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM events_raw WHERE source = 'hook' AND payload LIKE '%replay-hook-%'",
+        )
+        .get() as { n: number };
+      expect(row.n).toBe(3);
+    } finally {
+      db.close();
     }
   });
 

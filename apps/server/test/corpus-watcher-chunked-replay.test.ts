@@ -16,6 +16,7 @@ import type { CorpusFs } from '../src/corpus/fs-port';
 import {
   createCorpusWatcher,
   MAX_INGEST_ATTEMPTS,
+  REPLAY_MAX_BYTES_PER_PASS,
   REPLAY_MAX_SESSIONS_PER_PASS,
   type IngestFailureReport,
   type TickOutcome,
@@ -54,8 +55,12 @@ describe('corpus watcher: chunked passes and rejectionOf', () => {
    * the session ids ingest was run for, in order; `failing` holds the ids whose
    * ingest fails. `touch(id)` grows a transcript, as Claude Code does.
    */
-  function harness(count: number, options: { checkpoints?: boolean } = {}) {
+  function harness(
+    count: number,
+    options: { checkpoints?: boolean; sizes?: readonly number[] } = {},
+  ) {
     const sizes = new Map<string, number>();
+    options.sizes?.forEach((size, n) => sizes.set(sessionId(n), size));
     const tree: Record<string, NodeSpec> = {};
     const place = (id: string): void => {
       const size = sizes.get(id) ?? 10;
@@ -165,6 +170,81 @@ describe('corpus watcher: chunked passes and rejectionOf', () => {
   it('defaults to a positive per-pass cap', () => {
     expect(Number.isInteger(REPLAY_MAX_SESSIONS_PER_PASS)).toBe(true);
     expect(REPLAY_MAX_SESSIONS_PER_PASS).toBeGreaterThan(0);
+  });
+
+  it('defaults to a byte budget that keeps a pass inside the hook timeout', () => {
+    // 32 MiB is about 0.7 s of parse at the R25 rate (~48 MiB/s); the hook
+    // gives up after 3 s.
+    expect(REPLAY_MAX_BYTES_PER_PASS).toBe(32 * 1024 * 1024);
+  });
+
+  describe('byte budget (OPS-8)', () => {
+    it('admits sessions while their bytes fit, then leaves the rest pending', () => {
+      const corpus = harness(4, { sizes: [40, 50, 30, 20] });
+      const outcomes = [
+        corpus.watcher.tick({ maxBytes: 100 }),
+        corpus.watcher.tick({ maxBytes: 100 }),
+      ];
+
+      expect(outcomes.map((o) => (o.kind === 'ingested' ? o.pending : null))).toEqual([
+        true,
+        false,
+      ]);
+      // 40 + 50 fit; + 30 would not. The second pass takes 30 + 20.
+      expect(outcomes.map(ingestedIds)).toEqual([2, 2]);
+      expect(corpus.reads).toEqual([0, 1, 2, 3].map(sessionId));
+    });
+
+    it('admits one session larger than the budget on its own, so every pass progresses', () => {
+      const corpus = harness(3, { sizes: [500, 10, 10] });
+      expect(corpus.watcher.tick({ maxBytes: 100 })).toMatchObject({ pending: true });
+      expect(corpus.reads).toEqual([sessionId(0)]);
+
+      expect(corpus.watcher.tick({ maxBytes: 100 })).toMatchObject({ pending: false });
+      expect(corpus.reads).toEqual([0, 1, 2].map(sessionId));
+    });
+
+    it('stops at the first session that does not fit instead of skipping past it', () => {
+      // Session 1 does not fit after session 0; session 2 would. Admission is
+      // a prefix in enumeration order, so a large session is never starved.
+      const corpus = harness(3, { sizes: [60, 60, 10] });
+      expect(corpus.watcher.tick({ maxBytes: 100 })).toMatchObject({ pending: true });
+      expect(corpus.reads).toEqual([sessionId(0)]);
+    });
+
+    it('applies both limits together: whichever is reached first ends the pass', () => {
+      const corpus = harness(4, { sizes: [10, 10, 10, 90] });
+      expect(corpus.watcher.tick({ maxSessions: 2, maxBytes: 100 })).toMatchObject({
+        pending: true,
+      });
+      expect(corpus.reads).toEqual([0, 1].map(sessionId));
+      expect(corpus.watcher.tick({ maxSessions: 2, maxBytes: 50 })).toMatchObject({
+        pending: true,
+      });
+      expect(corpus.reads).toEqual([0, 1, 2].map(sessionId));
+    });
+
+    it('carries the byte budget into the uncapped poll until the sweep drains', () => {
+      const corpus = harness(3, { sizes: [80, 80, 80] });
+      expect(corpus.watcher.tick({ maxBytes: 100 })).toMatchObject({ pending: true });
+
+      expect(corpus.watcher.tick()).toMatchObject({ kind: 'ingested', pending: true });
+      expect(corpus.watcher.tick()).toMatchObject({ kind: 'ingested', pending: false });
+      expect(corpus.reads).toEqual([0, 1, 2].map(sessionId));
+
+      // Drained: the next uncapped pass is a plain one again.
+      for (const n of [0, 1, 2]) {
+        corpus.touch(sessionId(n));
+      }
+      expect(ingestedIds(corpus.watcher.tick())).toBe(3);
+    });
+
+    it('a call naming only a session cap replaces a carried byte budget', () => {
+      const corpus = harness(4, { sizes: [80, 80, 80, 80] });
+      expect(corpus.watcher.tick({ maxBytes: 100 })).toMatchObject({ pending: true });
+      expect(corpus.watcher.tick({ maxSessions: 3 })).toMatchObject({ pending: false });
+      expect(corpus.reads).toEqual([0, 1, 2, 3].map(sessionId));
+    });
   });
 
   it('an uncapped tick admits every changed session and reports nothing pending', () => {

@@ -112,3 +112,29 @@ export function fingerprintSession(fs: CorpusFs, ref: SessionRef, limits: ReadLi
 
   return [mainPart, ...entries].join('\n');
 }
+
+/**
+ * Total bytes on disk of the files a {@link fingerprintSession} string covers:
+ * the sum of the `size` field of every `<path>:<size>:<mtime>` line, with
+ * `main:absent` counting zero. Read back off the fingerprint rather than off a
+ * second walk, so the byte budget of a capped pass (OPS-8, see
+ * ingest/corpus-watcher.ts) costs no extra `lstat` and measures exactly the
+ * files the pass is about to read. The path half may itself contain `:`, so
+ * the size is located from the END of the line. A line that does not end in
+ * two numeric fields counts zero: the number is a scheduling hint, never data.
+ */
+export function fingerprintBytes(fingerprint: string): number {
+  let total = 0;
+  for (const line of fingerprint.split('\n')) {
+    const mtimeAt = line.lastIndexOf(':');
+    const sizeAt = mtimeAt > 0 ? line.lastIndexOf(':', mtimeAt - 1) : -1;
+    if (sizeAt < 0) {
+      continue;
+    }
+    const size = Number(line.slice(sizeAt + 1, mtimeAt));
+    if (Number.isFinite(size) && size > 0) {
+      total += size;
+    }
+  }
+  return total;
+}
