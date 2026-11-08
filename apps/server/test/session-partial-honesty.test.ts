@@ -1,8 +1,8 @@
 /**
  * Owner decisions on two silent undercounts, persisted and served.
  *
- * DECISION 1 — an oversize main transcript makes a PARTIAL session. The 64 MiB
- * read cap stays; what changes is that a session whose `<uuid>.jsonl` main was
+ * DECISION 1 — an oversize main transcript makes a PARTIAL session. The read cap
+ * (256 MiB by default) stays; what changes is that a session whose `<uuid>.jsonl` main was
  * skipped for size (while its subagents still ingested) is no longer presented
  * as whole. The session row carries `partial_reason = 'main-transcript-oversize'`
  * and the skipped file's byte size, and every API DTO that shows a session
@@ -36,8 +36,8 @@ const ROOT = '/fake/corpus';
 const SLUG = '-Users-synthetic-partial-project';
 const SID = 'cafecafe-0000-4000-8000-000000000021';
 const AGENT_HEX = 'facade21';
-/** 70 MiB — over the DEFAULT 64 MiB cap, so the test exercises the real limit. */
-const OVERSIZE_BYTES = 70 * 1024 * 1024;
+/** 300 MiB — over the DEFAULT 256 MiB cap, so the test exercises the real limit. */
+const OVERSIZE_BYTES = 300 * 1024 * 1024;
 
 const PRICING: readonly PricingEntry[] = (
   ['input', 'output', 'cache_read', 'cache_write_5m', 'cache_write_1h'] as const

@@ -5,7 +5,7 @@
  *
  * The tail cache (M-15) keys its byte offsets per DECORATOR INSTANCE, so a
  * provider holding its own instance shares nothing: every cost-analysis click
- * re-read the whole transcript (synchronously, up to the 64 MiB cap) even
+ * re-read the whole transcript (synchronously, up to the per-file cap) even
  * though the watcher had just read the same bytes. That is invisible to any
  * black-box assertion — the ANSWER is identical either way — so this test
  * observes the composition instead: `createTailCachingFs` is intercepted and

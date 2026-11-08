@@ -512,7 +512,7 @@ There are eight skip reasons, and they fall into two groups:
 
 | Reason | Group | What happened |
 |---|---|---|
-| `oversize` | read hazard | The file is larger than the per-file read cap (64 MiB, PROVISIONAL) and was deliberately not read. When the file is a session's **main** transcript and the session still has subagent transcripts to read, the session is ingested and marked `partial` (`main-transcript-oversize`, with the skipped size) - see below. |
+| `oversize` | read hazard | The file is larger than the per-file read cap (256 MiB by default; raise it with `DASHBOARD_MAX_FILE_MIB`, up to 511) and was deliberately not read. When the file is a session's **main** transcript and the session still has subagent transcripts to read, the session is ingested and marked `partial` (`main-transcript-oversize`, with the skipped size) - see below. |
 | `symlink` | read hazard | The path is (or was swapped to) a symlink; the open uses `O_NOFOLLOW`, so it failed with `ELOOP` rather than following the link out of the corpus. |
 | `not-regular-file` | read hazard | The open descriptor turned out to be a directory or a character device — a TOCTOU re-check on the *open* file, not on the path. |
 | `unreadable` | read hazard | Any other filesystem error (`EACCES`, `EIO`, …); the `code` is carried in the log line. |

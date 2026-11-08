@@ -1155,7 +1155,12 @@ synthesis, not on this board._
   (newsyslog) is not documented yet.
 - [ ] **R12** model `cleanupPeriodDays`; fix `overview.md:154` (Ivan: D12) [ARC-3, OPS-11] _(D12 done 2026-10-30 — setting raised to 99999; the code/doc half is open)_
 - [ ] **R13** drift census on `/health`; persist CC version; skip-and-count bad lines [ARC-6, QA-3, DAT-7, DAT-11]
-- [ ] **R14** configurable file cap (256 MiB default); partial flag in API + UI [DAT-3, DAT-5, OPS-15] _(real-corpus boot 2026-10-31: 5 main transcripts skipped as oversize — 79–170 MB, all under 256 MiB; their main-agent tokens are missing from the totals)_
+- [x] **R14** configurable file cap (256 MiB default); partial flag in API + UI [DAT-3, DAT-5, OPS-15] _(real-corpus boot 2026-10-31: 5 main transcripts skipped as oversize — 79–170 MB, all under 256 MiB; their main-agent tokens are missing from the totals)_
+  — done 2026-11-08: `DEFAULT_MAX_FILE_BYTES` is 256 MiB; `DASHBOARD_MAX_FILE_MIB` (1-511)
+  overrides it and `apps/server/src/index.ts` passes one `readLimits` to the watcher and the
+  substrate provider (`apps/server/test/max-file-cap.test.ts`). The partial flag was already
+  served by the API and shown in the UI. Re-checking the five sessions on the real corpus is
+  Ivan's to run.
 - [ ] **R15** operator pricing CLI with audit row; re-decide haiku-5-5 (D1, D3) [DAT-1, DAT-4] _(haiku half done 2026-10-31 — migration 25 seeds the ≤100k base tier, `computeCostUsd` halts a longer prompt; the pricing CLI half is open)_
 - [ ] **R16** Vitest `testTimeout` / projects split [QA-4]
 - [ ] **R17** opt-in real-corpus contract suite [QA-2]

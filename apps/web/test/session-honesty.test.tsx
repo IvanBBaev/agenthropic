@@ -1,6 +1,6 @@
 /**
  * Owner decisions 1 and 2 (NN1) on screen. A session whose main transcript was
- * over the 64 MiB read cap is PARTIAL: every total it shows is a lower bound,
+ * over the per-file read cap is PARTIAL: every total it shows is a lower bound,
  * and the page must say so wherever that total is printed. Usage records with
  * no `message.id` cannot be deduplicated and are excluded from the totals; the
  * count of them is disclosed beside the session. Zero / `null` is the only

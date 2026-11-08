@@ -202,8 +202,13 @@ export interface ReadLimits {
   readonly maxDepth: number;
 }
 
-/** 64 MiB — comfortably above any observed transcript, small enough to bound RAM. PROVISIONAL. */
-export const DEFAULT_MAX_FILE_BYTES = 64 * 1024 * 1024;
+/**
+ * 256 MiB (R14 / DAT-3): the first real-corpus boot found five main transcripts
+ * of 79-170 MB, all skipped under the old 64 MiB cap; 256 MiB reads them with
+ * headroom while still bounding RAM. Overridable via `DASHBOARD_MAX_FILE_MIB`.
+ * PROVISIONAL.
+ */
+export const DEFAULT_MAX_FILE_BYTES = 256 * 1024 * 1024;
 /** Real artifacts reach depth 3 under a session dir (subagents/workflows/wf_<id>/agent); 4 is slack. PROVISIONAL. */
 export const DEFAULT_MAX_DEPTH = 4;
 

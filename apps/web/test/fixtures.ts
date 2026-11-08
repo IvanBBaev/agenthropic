@@ -208,7 +208,7 @@ export function sessionCost(overrides: Partial<SessionCostDto> = {}): SessionCos
   };
 }
 
-/** Owner decision 1: the main transcript was over the 64 MiB read cap. */
+/** Owner decision 1: the main transcript was over the per-file read cap. */
 export const OVERSIZE_PARTIAL: SessionPartialDto = {
   reason: 'main-transcript-oversize',
   skippedBytes: 73_400_320,

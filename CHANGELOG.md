@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The per-file corpus read cap is configurable and defaults to 256 MiB** (was a fixed
+  64 MiB). `DASHBOARD_MAX_FILE_MIB` (1-511) sets it; the watcher and the cost-analysis
+  provider share the value. The first real-corpus boot had skipped five main transcripts
+  of 79-170 MB; they are now read. A file over the cap is still skipped and its session
+  marked `partial`, as before.
+
 - **The RELEASE §5 drill is now one command.** `pnpm --filter @agenthropic/server
   drill:restore` backs up the server's database read-only with the shipped
   `backupDatabase()`, restores it with `restoreDatabase()` into a scratch directory and

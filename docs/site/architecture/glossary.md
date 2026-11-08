@@ -333,7 +333,7 @@ crashes** (any checkpoint-store problem falls back to full replay). The rule in 
 a checkpoint may change how much *work* a boot does, never what the boot *results in*.
 
 **Tail read** — reading the newly-appended portion of a transcript rather than the whole
-file. Bounded by `DEFAULT_MAX_FILE_BYTES` (64 MiB) and `DEFAULT_MAX_DEPTH` (4) — both
+file. Bounded by `DEFAULT_MAX_FILE_BYTES` (256 MiB, overridable via `DASHBOARD_MAX_FILE_MIB`) and `DEFAULT_MAX_DEPTH` (4) — both
 **PROVISIONAL (LABEL-ME)**, chosen as sane ceilings rather than measured limits.
 
 **Tail cache** — the optimization that keeps the parsed head of a file in memory so a tail

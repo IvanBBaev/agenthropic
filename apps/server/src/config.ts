@@ -16,6 +16,7 @@
 import { isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { requireDashboardToken } from '@agenthropic/shared';
+import { DEFAULT_MAX_FILE_BYTES } from './corpus/fs-port';
 import { MAX_RETENTION_DAYS, type SignedRetentionValues } from './retention/policy';
 
 /** The one and only bind host. Loopback, constant, no configuration path. */
@@ -59,6 +60,15 @@ export const DEFAULT_WATCHDOG_MINUTES = 10;
 export const DEFAULT_RETENTION_EVENTS_DAYS = 90;
 export const DEFAULT_RETENTION_BACKUP_DAYS = 30;
 export const DEFAULT_RETENTION_BACKUP_KEEP_MIN = 7;
+
+/** Bytes per MiB — `DASHBOARD_MAX_FILE_MIB` is given in whole MiB. */
+const MIB = 1024 * 1024;
+/**
+ * Ceiling for `DASHBOARD_MAX_FILE_MIB`: a whole transcript is decoded into ONE
+ * JS string, and V8 caps a string at 2^29 - 24 characters (just under 512 MiB
+ * of ASCII). A larger cap would turn a clean `oversize` skip into a crash.
+ */
+export const MAX_FILE_MIB_CEILING = 511;
 
 /** Pino levels accepted by `DASHBOARD_LOG_LEVEL`; 'silent' turns logging off. */
 export const LOG_LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'] as const;
@@ -118,6 +128,12 @@ export interface ServerConfig {
   readonly alertsConfigPath: string | null;
   /** Server log level (`DASHBOARD_LOG_LEVEL`), default {@link DEFAULT_LOG_LEVEL}. */
   readonly logLevel: LogLevel;
+  /**
+   * Per-file corpus read cap in bytes (`DASHBOARD_MAX_FILE_MIB`, R14), default
+   * {@link DEFAULT_MAX_FILE_BYTES}. A larger file is skipped as `oversize`; an
+   * oversize MAIN transcript leaves its session ingested and marked `partial`.
+   */
+  readonly maxFileBytes: number;
 }
 
 /**
@@ -147,6 +163,13 @@ export function loadConfig(env: Record<string, string | undefined>): ServerConfi
   const retention = loadRetentionValues(env);
   const alertsConfigPath = parseAlertsConfigPath(env['DASHBOARD_ALERTS_CONFIG']);
   const logLevel = parseLogLevel(env['DASHBOARD_LOG_LEVEL']);
+  const maxFileBytes =
+    parsePositiveInt(
+      'DASHBOARD_MAX_FILE_MIB',
+      env['DASHBOARD_MAX_FILE_MIB'],
+      DEFAULT_MAX_FILE_BYTES / MIB,
+      MAX_FILE_MIB_CEILING,
+    ) * MIB;
   return {
     token,
     port,
@@ -160,6 +183,7 @@ export function loadConfig(env: Record<string, string | undefined>): ServerConfi
     retention,
     alertsConfigPath,
     logLevel,
+    maxFileBytes,
   };
 }
 

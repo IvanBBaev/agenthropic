@@ -46,6 +46,7 @@ describe('config (WP-U0)', () => {
       allowedOrigins: [],
       alertsConfigPath: null,
       logLevel: 'warn',
+      maxFileBytes: 256 * 1024 * 1024,
       retention: {
         eventsDays: DEFAULT_RETENTION_EVENTS_DAYS,
         backupDays: DEFAULT_RETENTION_BACKUP_DAYS,

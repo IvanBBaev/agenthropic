@@ -2,7 +2,7 @@
  * Owner decisions 1 and 2 (NN1): the one place that says a session total is
  * not the whole story.
  *
- * - PARTIAL (decision 1). The main transcript was over the 64 MiB read cap, so
+ * - PARTIAL (decision 1). The main transcript was over the per-file read cap, so
  *   ingest read the subagent transcripts and skipped the main one. Every total
  *   the session shows is therefore a LOWER BOUND. The server says so with
  *   `partial: { reason: 'main-transcript-oversize', skippedBytes }`; `null`

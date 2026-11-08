@@ -359,7 +359,7 @@ usage_records_dropped INTEGER NOT NULL DEFAULT 0  -- >= 0
 ```
 
 - `partial_reason = 'main-transcript-oversize'` means the session's main transcript was
-  larger than the per-file read cap (64 MiB, PROVISIONAL) and was skipped while its subagent
+  larger than the per-file read cap (256 MiB by default, `DASHBOARD_MAX_FILE_MIB`) and was skipped while its subagent
   transcripts were read. Every total for that session is a **lower bound**.
   `partial_skipped_bytes` is the size the reader saw, or `NULL` when it is unknown. The cap
   itself is unchanged; the column only makes the skip visible on the session instead of in

@@ -1019,7 +1019,7 @@ export async function start(
   // M-15/M-18: ONE tail-caching read port, shared by the ingest watcher and the
   // cost-analysis substrate provider below. The byte-offset cache is per
   // DECORATOR INSTANCE, so a provider with its own instance re-read every
-  // transcript in full (up to 64 MiB, synchronously, on the request thread) on
+  // transcript in full (up to the per-file cap, synchronously, on the request thread) on
   // every click; sharing the watcher's instance means a cost-analysis lookup
   // reads only the bytes appended since the last poll pass.
   //
@@ -1035,8 +1035,8 @@ export async function start(
   //    `nodeCorpusFs.readFileTailConfined` re-opens with `O_NOFOLLOW` and
   //    re-applies the CALLER'S OWN `maxBytes` via fstat on every call, cache hit
   //    included — so a shared entry can never serve one caller a file that
-  //    exceeds another caller's `OversizeError` limit. (Both callers here use
-  //    `DEFAULT_READ_LIMITS` anyway: neither passes a `limits` override.)
+  //    exceeds another caller's `OversizeError` limit. (Both callers here
+  //    pass the same `readLimits` - the configured cap - anyway.)
   //  - Shared budget costs speed only: the 128 MiB / 512-entry LRU caps are now
   //    shared, so the two paths can evict each other's entries. An evicted entry
   //    is a full read — the same read the bare adapter always did.
@@ -1045,6 +1045,10 @@ export async function start(
   // Built unconditionally (not inside the ingest branch): with ingest off the
   // provider is the sole user and still gets the repeat-click benefit.
   const corpusFs = createTailCachingFs(nodeCorpusFs());
+  // R14 / DAT-3: the per-file cap is configuration (`DASHBOARD_MAX_FILE_MIB`),
+  // and the watcher and the cost-analysis provider must agree on it, or one
+  // path would read a session the other reports as partial.
+  const readLimits = { maxFileBytes: config.maxFileBytes };
   if (config.ingestEnabled) {
     watcher = createCorpusWatcher({
       db,
@@ -1052,6 +1056,7 @@ export async function start(
       // not O(corpus bytes). The decorator only ever falls back to the same
       // full read the bare adapter would have done.
       fs: corpusFs,
+      limits: readLimits,
       // A RESOLVER, not a snapshot: the watcher re-reads the pricing table
       // every pass, so seeding a missing model row unblocks parked sessions
       // without a restart (review M-2).
@@ -1186,6 +1191,7 @@ export async function start(
       // removes the O(file bytes) synchronous re-read that remained. See the
       // sharing-safety argument at `corpusFs`.
       fs: corpusFs,
+      limits: readLimits,
       // Persisted-slug hint (review M-18): lets the provider try the session's
       // recorded project directory first instead of scanning every slug.
       slugOf: (id) => getSessionProjectSlug(db, id),

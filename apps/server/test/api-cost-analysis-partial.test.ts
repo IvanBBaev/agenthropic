@@ -42,8 +42,8 @@ const ROOT = '/fake/corpus';
 const SLUG = '-Users-synthetic-analysis-partial';
 const SID = 'cafecafe-0000-4000-8000-000000000031';
 const AGENT_HEX = 'facade31';
-/** 70 MiB - over the DEFAULT 64 MiB cap, so the real limit is exercised. */
-const OVERSIZE_BYTES = 70 * 1024 * 1024;
+/** 300 MiB - over the DEFAULT 256 MiB cap, so the real limit is exercised. */
+const OVERSIZE_BYTES = 300 * 1024 * 1024;
 const MODEL = 'synthetic-model-a';
 
 function assistantLine(second: number, messageId: string | undefined, input: number): string {

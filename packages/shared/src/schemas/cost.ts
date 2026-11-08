@@ -50,7 +50,7 @@ export type DailyCostDto = Static<typeof DailyCostSchema>;
 /**
  * Why a session's totals are a LOWER BOUND. `main-transcript-oversize`: the
  * session's `<uuid>.jsonl` main transcript was over the ingest read cap
- * (64 MiB), so only its subagent transcripts were read - the main agent's own
+ * (256 MiB by default), so only its subagent transcripts were read - the main agent's own
  * usage is missing from every total. `skippedBytes` is the skipped file's size
  * as observed at read time (null when unknown). A closed union on purpose:
  * a new cause is a schema change the dashboard must learn to explain.

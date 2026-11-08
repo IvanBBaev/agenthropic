@@ -397,7 +397,8 @@ all four mitigations above leave in place. The reader is therefore built to be
   guidance for the resulting log line is in
   [troubleshooting §6](../operations/troubleshooting.md#6-reading-the-ingest-log--skips-quarantines-and-the-one-fatal).
 - **Reads are bounded, and the bounds are admitted to be arbitrary.** A single file is
-  capped at 64 MiB, and the cap is enforced against the whole file even when only its
+  capped at 256 MiB by default (`DASHBOARD_MAX_FILE_MIB`, at most 511 MiB; raised from a
+  fixed 64 MiB on 2026-11-08, R14), and the cap is enforced against the whole file even when only its
   tail is being read; the directory walk refuses to descend past depth 4, as
   belt-and-braces against a symlink cycle the `lstat` guard has already blocked. Both
   numbers are **PROVISIONAL** —
@@ -515,7 +516,7 @@ undecided rather than gloss over it:
   behind a floor of 7, `token_usage` is never pruned (an env override for it refuses
   startup), and `events_raw` stays append-only pending OPEN-1's `archive-segments`
   branch, which is declared but unbuilt.)*
-- **The corpus reader's limits are built but unratified.** The 64 MiB per-file cap and
+- **The corpus reader's limits are built but unratified.** The per-file cap (256 MiB by default) and
   the depth-4 walk limit in
   [section 5](#5-the-corpus-read-surface--agenthropics-own-untrusted-input) are enforced
   in code and covered by tests, but the numbers themselves remain **PROVISIONAL** — they

@@ -622,7 +622,7 @@ whole and had nothing excluded.
 
 - **"partial — main transcript too large to read; totals are a lower bound"**, followed by
   the size that was not read when it is known. The session's main transcript was over the
-  per-file read cap (64 MiB, PROVISIONAL), so only its subagent transcripts were read. It
+  per-file read cap (256 MiB by default, `DASHBOARD_MAX_FILE_MIB`), so only its subagent transcripts were read. It
   appears on the live board card, the session list row, above the subagent tree's
   unattributed line, on the session's row in the cost view's top-sessions table, and in
   the per-session cost-analysis panel. *(Amended 2026-10-08: until then this list had four

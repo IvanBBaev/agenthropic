@@ -130,8 +130,8 @@ compaction baseline so a context rewrite mid-session doesn't corrupt history.
 "Ground truth" is only as whole as what was read, so three known gaps are disclosed on
 the figures they affect rather than left silent:
 
-- **Partial sessions.** A main transcript larger than the per-file read cap (64 MiB,
-  PROVISIONAL) is not read; its subagent transcripts still are. The session is then marked
+- **Partial sessions.** A main transcript larger than the per-file read cap (256 MiB
+  by default, `DASHBOARD_MAX_FILE_MIB`) is not read; its subagent transcripts still are. The session is then marked
   `partial` (`reason: 'main-transcript-oversize'`, with the skipped byte size), and every
   total it contributes to is a **lower bound**. The dashboard says so on the session and
   the cost summary says how many partial sessions its totals include.

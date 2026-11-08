@@ -460,7 +460,8 @@ session that really vanished under a readable slug is still pruned on the same p
 with no unreadable entries prunes exactly as before.
 
 The read caps are bounds, not truths, and are labelled as such: `DEFAULT_MAX_FILE_BYTES` is
-64 MiB and `DEFAULT_MAX_DEPTH` is 4 (real artifacts reach depth 3 under a session directory),
+256 MiB (overridable via `DASHBOARD_MAX_FILE_MIB`; it was 64 MiB until 2026-11-08, when
+the first real-corpus boot showed main transcripts of 79-170 MB) and `DEFAULT_MAX_DEPTH` is 4 (real artifacts reach depth 3 under a session directory),
 both **PROVISIONAL (LABEL-ME)** — chosen to be comfortably above anything observed, not
 derived from a measured distribution.
 
