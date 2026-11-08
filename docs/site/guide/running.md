@@ -324,8 +324,11 @@ is the long-form page.
 
 For daily use the server should start at login and come back after a crash.
 `scripts/service-install.mjs` writes a per-user launchd agent for that. It runs
-`node <tsx cli> src/index.ts` from `apps/server` directly, with no `pnpm` wrapper in
-between, so `launchctl bootout` signals the server itself.
+`node --import <tsx loader> src/index.ts` from `apps/server`: one process, with no
+`pnpm` wrapper and no `tsx` CLI parent in between, so `launchctl bootout` signals the
+server itself and it shuts down cleanly. The `tsx` CLI is avoided on purpose. It runs
+the server as a child and kills it with `SIGKILL` if the child does not acknowledge a
+`SIGTERM` within about 30 ms, which a busy machine misses.
 
 Run it from the checkout you want the service to serve, with Node 22 active and the SPA
 built once:

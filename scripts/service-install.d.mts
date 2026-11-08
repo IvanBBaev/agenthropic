@@ -22,7 +22,7 @@ export interface ServiceOptions {
 export interface ServicePaths {
   plist: string;
   serverDir: string;
-  tsxCli: string;
+  tsxLoader: string;
   db: string;
   webIndex: string;
   logDir: string;

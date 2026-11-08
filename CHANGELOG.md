@@ -14,7 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **launchd service installer (R1 / OPS-1).** `node scripts/service-install.mjs` prints,
   and with `--write` writes, a per-user launchd agent that starts the server at login and
   restarts it after a crash. The plist is `0600` because it holds the token. It pins an
-  absolute Node 22 path and runs `tsx` on the source without a `pnpm` wrapper. The script
+  absolute Node 22 path and runs the source as one `node --import <tsx loader>` process,
+  so a `launchctl bootout` reaches the server instead of a wrapper. The script
   never runs `launchctl`; it prints the commands instead.
 
 - **Observed outcome causes on the Live board (D9).** Every session summary from

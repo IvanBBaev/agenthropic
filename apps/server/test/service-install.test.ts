@@ -128,7 +128,7 @@ describe('helpers', () => {
     const paths = servicePaths({ home: HOME, repoRoot: REPO, label: DEFAULT_LABEL });
     expect(paths.db).toBe(`${REPO}/apps/server/data/agenthropic.db`);
     expect(paths.plist).toBe(`${HOME}/Library/LaunchAgents/${DEFAULT_LABEL}.plist`);
-    expect(paths.tsxCli).toBe(`${REPO}/apps/server/node_modules/tsx/dist/cli.mjs`);
+    expect(paths.tsxLoader).toBe(`${REPO}/apps/server/node_modules/tsx/dist/loader.mjs`);
     expect(servicePaths({ home: HOME, repoRoot: REPO, label: 'x', db: '/data/a.db' }).db).toBe(
       '/data/a.db',
     );
@@ -146,7 +146,7 @@ describe('helpers', () => {
 describe('buildPlist', () => {
   const paths = servicePaths({ home: HOME, repoRoot: REPO, label: DEFAULT_LABEL });
 
-  it('runs tsx on the source with an absolute Node, from apps/server', () => {
+  it('runs the source in ONE Node process under the tsx loader, from apps/server', () => {
     const plist = buildPlist({
       label: DEFAULT_LABEL,
       node: '/opt/node22/bin/node',
@@ -155,7 +155,7 @@ describe('buildPlist', () => {
       token: TOKEN,
     });
     expect(plist).toContain(
-      `<string>/opt/node22/bin/node</string>\n      <string>${paths.tsxCli}</string>\n      <string>src/index.ts</string>`,
+      `<string>/opt/node22/bin/node</string>\n      <string>--import</string>\n      <string>file://${paths.tsxLoader}</string>\n      <string>src/index.ts</string>`,
     );
     expect(plist).toContain(
       `<key>WorkingDirectory</key>\n    <string>${REPO}/apps/server</string>`,
@@ -239,7 +239,7 @@ describe('run', () => {
     expect(err).toContain('error: launchd is macOS only (this is linux).');
     expect(err).toContain('is Node v26.1.0; the service needs Node 22');
     expect(err).toContain('error: DASHBOARD_TOKEN is not set');
-    expect(err).toContain('tsx/dist/cli.mjs is missing');
+    expect(err).toContain('tsx/dist/loader.mjs is missing');
     expect(err).toContain('warning: The SPA is not built');
   });
 

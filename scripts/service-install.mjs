@@ -6,9 +6,13 @@
 // It never runs them: this repo has no subprocess surface (see
 // scripts/check-no-spawner.mjs), and loading a service is the operator's call.
 //
-// What the plist runs is exactly what `pnpm --filter @agenthropic/server start`
-// runs - tsx on the TypeScript source from apps/server - because the migration
-// checksums are pinned to the tsx transform (apps/server/package.json "//").
+// The plist runs the TypeScript source from apps/server under tsx's loader, the
+// same transform `pnpm --filter @agenthropic/server start` uses, because the
+// migration checksums are pinned to it (apps/server/package.json "//"). It runs
+// `node --import <tsx loader> src/index.ts`, ONE process, not the tsx CLI: the
+// CLI runs the server as a child, and on SIGTERM it waits only ~30 ms for the
+// child to acknowledge before it SIGKILLs it, so a loaded machine lost the
+// graceful shutdown on every `launchctl bootout` (observed 2026-11-08, exit 143).
 // Node is the absolute path of a Node 22 binary, never whatever `node` the
 // login PATH resolves to (on this machine that is Node 26, which cannot load the
 // better-sqlite3 build).
@@ -27,7 +31,7 @@
 import { chmodSync, existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 export const DEFAULT_LABEL = 'io.github.ivanbbaev.agenthropic';
 export const REQUIRED_NODE_MAJOR = 22;
@@ -130,7 +134,7 @@ export function servicePaths({ home, repoRoot, label, db }) {
   return {
     plist: join(home, 'Library', 'LaunchAgents', `${label}.plist`),
     serverDir,
-    tsxCli: join(serverDir, 'node_modules', 'tsx', 'dist', 'cli.mjs'),
+    tsxLoader: join(serverDir, 'node_modules', 'tsx', 'dist', 'loader.mjs'),
     // The same file `pnpm --filter @agenthropic/server start` uses (its cwd is
     // apps/server and DASHBOARD_DB_PATH defaults to data/agenthropic.db), so a
     // manual run and the service share one database.
@@ -151,8 +155,7 @@ export function buildPlist({ label, node, paths, home, token, port }) {
     ['DASHBOARD_TOKEN', token],
     ['DASHBOARD_DB_PATH', paths.db],
     ['HOME', home],
-    // tsx starts its worker with process.execPath, but anything that shells
-    // through PATH must still find Node 22 first.
+    // Anything that resolves `node` through PATH must still find Node 22 first.
     ['PATH', `${dirname(node)}:/usr/bin:/bin:/usr/sbin:/sbin`],
   ];
   if (port !== undefined) {
@@ -169,7 +172,8 @@ export function buildPlist({ label, node, paths, home, token, port }) {
     <key>ProgramArguments</key>
     <array>
       ${s(node)}
-      ${s(paths.tsxCli)}
+      ${s('--import')}
+      ${s(pathToFileURL(paths.tsxLoader).href)}
       ${s('src/index.ts')}
     </array>
     <key>WorkingDirectory</key>
@@ -241,8 +245,8 @@ export function preflight({ node, nodeVersion, token, paths, platform, exists })
   if (tokenProblem !== null) {
     errors.push(tokenProblem);
   }
-  if (!exists(paths.tsxCli)) {
-    errors.push(`${paths.tsxCli} is missing. Run \`pnpm install\` in the repo first.`);
+  if (!exists(paths.tsxLoader)) {
+    errors.push(`${paths.tsxLoader} is missing. Run \`pnpm install\` in the repo first.`);
   }
   if (!exists(paths.webIndex)) {
     warnings.push(

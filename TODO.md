@@ -1108,7 +1108,7 @@ synthesis, not on this board._
 **P0 — tag blockers**
 - [ ] **R1** run it: launchd service + hooks installed, friction log day 1 on 2026-10-30 (Ivan; agent writes plist + install script) [PRD-1, OPS-1]
   — agent half done 2026-11-08: `scripts/service-install.mjs` writes the launchd plist (0600, absolute
-  Node 22, tsx on source, KeepAlive on failure) and prints the launchctl steps without running them.
+  Node 22, one `node --import <tsx loader>` process, KeepAlive on failure) and prints the launchctl steps without running them.
   Open: Ivan runs `--write` + `launchctl bootstrap`, installs the hooks, starts the friction log.
 - [ ] **R2** decouple projection from pricing; `pricing_status` + unpriced banner [ARC-1, DAT-2, PRD-3]
 - [x] **R3** fix the `ENV_ASSIGNMENT` ReDoS in `hooks/redact.ts`; length cap; time-budget test [SEC-1]
