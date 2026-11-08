@@ -49,7 +49,10 @@ in-process daily timer rather than the shell-plus-`launchd` shape sketched in §
 > backup succeeded; boot performs a dry run and logs the counts without deleting — see
 > §4, which is the section that matters most for reading this page correctly.
 >
-> **Not built:** the operator-level release drill (`WP-X9`). The live database default
+> **Built 2026-11-08:** the operator-level release drill is one command,
+> `pnpm --filter @agenthropic/server drill:restore` — see the as-built note in §3.
+>
+> **Not built:** a drill that boots a scratch server (step 5 of §3). The live database default
 > is `data/agenthropic.db`, overridable via `DASHBOARD_DB_PATH` (not the
 > `AGENTHROPIC_DB_PATH` placeholder this page originally used). The prose below is
 > kept as the design record.
@@ -345,6 +348,19 @@ concrete enough to write down as a runbook regardless of who or what runs it:
 > candidate and recorded in `RELEASE.md` (`WP-X9`) — remains a manual checklist
 > obligation; a CI-exercised restore is necessary but not sufficient for it, and this
 > page cannot attest it has been performed against real production data.
+>
+> **As built, moment 2 (2026-11-08):** `pnpm --filter @agenthropic/server drill:restore`
+> (`apps/server/src/db/restore-drill.ts`) runs steps 1–4 and 6 with the shipped code.
+> It opens the database the server runs on (`DASHBOARD_DB_PATH`, else
+> `apps/server/data/agenthropic.db`) **read-only**, takes a verified 0600 backup with
+> `backupDatabase()` to `backups/drill-<ts>.db`, restores it with `restoreDatabase()`
+> into a scratch directory, and fails unless every table's row count in the restored
+> copy equals the backup's. It prints the schema version and warns when the database is
+> behind the build — the sign of a drill run on the wrong file. The `drill-` name is
+> outside the retention pattern, so the file is kept until you delete it. The
+> comparison is backup against restore, not against the live database, which may have
+> moved on since the backup. Step 5 (booting a scratch server) and step 7 (recording the
+> result) are still manual.
 
 ```
 ┌────────────────────────────┐

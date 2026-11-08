@@ -290,35 +290,23 @@ scan."**
       ([`apps/server/src/db/backup.ts`](apps/server/src/db/backup.ts)).
 - [ ] **Live drill on the real database** — actually exercised once for real, per the
       Phase-6 exit-gate wording "an exercised backup restore" (development-plan §3).
-      The command below uses the same better-sqlite3 online-backup API that
-      `backupDatabase`/`restoreDatabase` wrap (the wrappers themselves are proven by
-      `backup.test.ts` above; the repo build is declaration-only, so the drill drives
-      the underlying API directly). It opens the live DB **read-only**, backs it up,
-      reopens the copy and fails unless `PRAGMA integrity_check` reads `ok`:
+      Run the drill with the shipped code. It opens the server's database
+      **read-only** (`DASHBOARD_DB_PATH`, else `apps/server/data/agenthropic.db`),
+      takes a verified 0600 backup with `backupDatabase()`, restores it with
+      `restoreDatabase()` into a scratch directory, and fails unless every table's row
+      count matches. *(Amended 2026-11-08: this replaces a `node -e` snippet that
+      defaulted to the stale repo-root `data/agenthropic.db` and wrote 0644 copies.)*
 
       ```bash
-      node --input-type=module -e '
-      import { createRequire } from "node:module";
-      import { mkdirSync } from "node:fs";
-      const require = createRequire(process.cwd() + "/apps/server/");
-      const Database = require("better-sqlite3");
-      const src = process.env.DASHBOARD_DB_PATH ?? "data/agenthropic.db";
-      mkdirSync("data/backups", { recursive: true });
-      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-      const backupPath = `data/backups/pre-v1.0-${stamp}.db`;
-      const live = new Database(src, { readonly: true });
-      await live.backup(backupPath);
-      live.close();
-      const restored = new Database(backupPath);
-      const result = restored.pragma("integrity_check", { simple: true });
-      restored.close();
-      if (result !== "ok") { console.error("integrity_check FAILED:", result); process.exit(1); }
-      console.log("restore drill OK:", backupPath);
-      '
+      DASHBOARD_DB_PATH=/absolute/path/to/the/release/agenthropic.db \
+        pnpm --filter @agenthropic/server drill:restore
       ```
 
-      "restore drill OK" printed **is** the drill passing. (Online backup is safe
-      under WAL — the server may stay up. Verified working against the live
+      A `WARNING: the database is behind this build` line means the drill ran on the
+      wrong file or before the release's first boot; fix that before ticking the box.
+
+      "restore drill OK: <backup>" printed **is** the drill passing; that path is
+      the backup to keep. (Online backup is safe under WAL — the server may stay up. Verified working against the live
       `data/agenthropic.db` on 2026-07-29.)
 
       **Exercised by an agent 2026-10-31 (D9), on copies:** the command above plus the

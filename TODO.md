@@ -1145,6 +1145,9 @@ synthesis, not on this board._
   checks `schema_version`. A backup at every boot was left out: the first backup still comes
   after 24 h, and adding one at boot needs a decision on how it counts toward retention.
 - [x] **R10** RELEASE §5 drill on the real DB, with a real restore [OPS-10, OSS-5] _(done 2026-10-31 by an agent (D9) on a copy of a 342 MB real-corpus DB — drill + shipped `restoreDatabase()` OK, counts identical; re-run at the tag — `docs/measurement/real-corpus-boot-2026-10-31.md`)_
+  — 2026-11-08: the drill is now `pnpm --filter @agenthropic/server drill:restore`
+  (`apps/server/src/db/restore-drill.ts`): read-only source, shipped backup + restore,
+  per-table row-count compare, 0600 `drill-<ts>.db` kept. RELEASE §5 rewritten to use it.
 - [x] **R11** `/health` reflects watcher/backup/DB/corpus state; logger on [OPS-5, OPS-6]
   — done 2026-11-08: `lastTickAt`, `corpusTrouble`, `lastBackupAt`/`lastBackupError`,
   `dbBytes`/`walBytes` and `hookDeliveries` on `/api/health` (`operationalHealth` in

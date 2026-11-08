@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The RELEASE §5 drill is now one command.** `pnpm --filter @agenthropic/server
+  drill:restore` backs up the server's database read-only with the shipped
+  `backupDatabase()`, restores it with `restoreDatabase()` into a scratch directory and
+  compares every table's row count. It keeps the backup as `backups/drill-<ts>.db`
+  (0600, never pruned) and warns when the database is behind the build's schema. It
+  replaces a `node -e` snippet that read the stale repo-root database and wrote 0644
+  copies.
+
 - **Health reports what the server is doing, not only that it is up (R11).**
   `GET /api/health` gains optional fields: `lastTickAt` and `corpusTrouble` for the
   corpus watcher, `lastBackupAt` and `lastBackupError` for the daily backup (seeded at
