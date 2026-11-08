@@ -1117,7 +1117,10 @@ synthesis, not on this board._
   creation (retention journal included) and created directories 0700. Each boot tightens an older
   install and refuses a file that stays exposed. The parent of `DASHBOARD_DB_PATH` is warned about,
   never chmod-ed, since it may be a shared folder.
-- [ ] **R5** `pnpm audit --prod` free of high (fastify ≥5.12.7) [OSS-2]
+- [x] **R5** `pnpm audit --prod` free of high (fastify ≥5.12.7) [OSS-2]
+  — done 2026-11-08: fastify 5.12.8 and type-provider-typebox 6.3.0, lockfile deduped (fast-uri and
+  find-my-way on patched lines); `pnpm audit --prod --audit-level=high` is clean and now a CI step.
+  The loopback check fails closed on a pipe or socket path, which fastify 5.12 types in `addresses()`.
 - [x] **R6** npm: `private: true` + remove the claim, or publish (Ivan decides, D7) [OSS-1] _(done 2026-10-30, `1229091` — D7 answered `private: true`)_
 - [ ] **R7** LABEL-ME ≥52 agents by 2026-11-16, or written waiver in RELEASE §3 (Ivan, D8) [QA-1, PRD-8] _(D8 2026-10-30: waiver written in RELEASE §3 + agent cross-check recorded; Ivan may still label and lift it)_
 

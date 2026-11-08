@@ -320,6 +320,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The production dependency audit is clean of high and critical advisories (R5 / OSS-2). fastify
+  moves to 5.12.8 and `@fastify/type-provider-typebox` to 6.3.0; the lockfile is deduped so the
+  patched `fast-uri` and `find-my-way` are the only copies. CI now runs
+  `pnpm audit --prod --audit-level=high` before the typecheck, cancels superseded runs on the same
+  ref and caps the job at 30 minutes. The loopback startup check also refuses a pipe or socket
+  listener, which the new fastify types report as a plain string. Open live streams are now ended
+  in a `preClose` hook: fastify 5.12 no longer drops active sockets on close by default, so a
+  connected browser would otherwise hold a shutdown open forever.
 - The stored data is now as private as the transcripts it comes from (R4 / SEC-2). The database,
   its `-wal` and `-shm` sidecars, the backups and the retention journal were created with umask
   defaults (0644 in 0755), so another account on the host could read them past the auth token.

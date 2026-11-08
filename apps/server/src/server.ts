@@ -445,7 +445,12 @@ export function buildServer(options: BuildServerOptions) {
     });
   });
 
-  app.addHook('onClose', (_instance, done) => {
+  // `preClose`, not `onClose`: fastify's own close step (`server.close()`, which
+  // waits for every open connection) runs before user `onClose` hooks. Up to
+  // 5.10 the default `forceCloseConnections: 'idle'` also tore down active
+  // sockets; since 5.12 it closes idle ones only. A live SSE stream never ends on
+  // its own, so ending the streams in `onClose` deadlocks `app.close()`.
+  app.addHook('preClose', (done) => {
     for (const close of [...activeStreams]) {
       close();
     }

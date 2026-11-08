@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildServer, parseLastEventId } from '../src/server';
 import { RealtimeHub, type RealtimeEvent } from '../src/realtime/hub';
-import { TEST_TOKEN } from './helpers';
+import { networkAddress, TEST_TOKEN } from './helpers';
 
 const testEvent: RealtimeEvent = {
   type: 'session-ingested',
@@ -38,8 +38,7 @@ describe('/api/stream with RealtimeHub', () => {
       allowedOrigins,
     });
     await app.listen({ host: '127.0.0.1', port: 0 });
-    const address = app.addresses()[0];
-    return `http://127.0.0.1:${address?.port}`;
+    return `http://127.0.0.1:${networkAddress(app).port}`;
   }
 
   async function readUntil(
@@ -217,7 +216,7 @@ describe('/api/stream with RealtimeHub', () => {
       maxStreamBacklogBytes: 1,
     });
     await app.listen({ host: '127.0.0.1', port: 0 });
-    const baseUrl = `http://127.0.0.1:${app.addresses()[0]?.port}`;
+    const baseUrl = `http://127.0.0.1:${networkAddress(app).port}`;
     hub.publish(testEvent);
     hub.publish(testEvent);
 

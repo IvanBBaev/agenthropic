@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server';
 import { RealtimeHub, type SessionIngestedEvent } from '../src/realtime/hub';
-import { TEST_TOKEN } from './helpers';
+import { networkAddress, TEST_TOKEN } from './helpers';
 
 describe('buildServer (WP-U0)', () => {
   let app: FastifyInstance | undefined;
@@ -29,8 +29,7 @@ describe('buildServer (WP-U0)', () => {
   async function listen(options: Parameters<typeof buildServer>[0]): Promise<string> {
     app = buildServer(options);
     await app.listen({ host: '127.0.0.1', port: 0 });
-    const address = app.addresses()[0];
-    return `http://127.0.0.1:${address?.port}`;
+    return `http://127.0.0.1:${networkAddress(app).port}`;
   }
 
   it('sends the retry hint and periodic heartbeat comments on the SSE stream', async () => {

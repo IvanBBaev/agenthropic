@@ -1,8 +1,10 @@
 import { mkdtempSync, rmSync } from 'node:fs';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDatabase, type SqliteDatabase } from '../src/db/connection';
 import { runMigrations } from '../src/db/migrations';
+import type { FastifyInstance } from 'fastify';
 
 export interface TempDb {
   readonly db: SqliteDatabase;
@@ -97,4 +99,17 @@ export function countRows(
   table: 'events' | 'token_usage' | 'events_raw',
 ): number {
   return (db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
+}
+
+/**
+ * The IP listener at `index` of `app.addresses()`. Since fastify 5.12 an entry
+ * may be a pipe or socket path string; the server only ever listens on an IP,
+ * so a string here is a test failure, not a case to handle.
+ */
+export function networkAddress(app: FastifyInstance, index = 0): AddressInfo {
+  const entry = app.addresses()[index];
+  if (entry === undefined || typeof entry === 'string') {
+    throw new Error(`expected an IP listener at index ${String(index)}, got ${String(entry)}`);
+  }
+  return entry;
 }

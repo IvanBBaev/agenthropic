@@ -168,13 +168,25 @@ export function isLoopbackAddress(address: string): boolean {
 }
 
 /**
+ * One entry of `app.addresses()`. Since fastify 5.12 the list may also hold a
+ * plain string: the path of a pipe or Unix socket. The server never listens on
+ * one, so a string entry is never a verified loopback IP.
+ */
+export type BoundAddress = string | { readonly address: string; readonly port?: number };
+
+/** `host:port` for an IP listener, the path itself for a pipe or socket. */
+export function describeBoundAddress(entry: BoundAddress): string {
+  return typeof entry === 'string' ? entry : `${entry.address}:${String(entry.port)}`;
+}
+
+/**
  * Post-listen defence in depth: if ANY bound address is not loopback, log
  * (without secrets) and terminate the process. An EMPTY address list fails
  * closed the same way: nothing was verified, so "every address is loopback"
  * would be a vacuous pass. Exported for direct testing.
  */
 export async function enforceLoopbackOrExit(
-  addresses: ReadonlyArray<{ address: string }>,
+  addresses: readonly BoundAddress[],
   cleanup: () => Promise<void>,
 ): Promise<void> {
   if (addresses.length === 0) {
@@ -185,13 +197,16 @@ export async function enforceLoopbackOrExit(
     await cleanup();
     process.exit(1);
   }
-  const offenders = addresses.filter((entry) => !isLoopbackAddress(entry.address));
+  // A pipe or socket path is not a loopback IP: fail closed on it as well.
+  const offenders = addresses.filter(
+    (entry) => typeof entry === 'string' || !isLoopbackAddress(entry.address),
+  );
   if (offenders.length === 0) {
     return;
   }
   console.error(
     `FATAL: server bound non-loopback address(es): ${offenders
-      .map((entry) => entry.address)
+      .map((entry) => (typeof entry === 'string' ? entry : entry.address))
       .join(', ')}. Loopback-only is a hard invariant; shutting down.`,
   );
   await cleanup();
@@ -1110,10 +1125,7 @@ export function isMainModule(entryPath: string | undefined, moduleUrl: string): 
 export async function runCli(boot: () => Promise<RunningServer> = start): Promise<void> {
   try {
     const { app } = await boot();
-    const bound = app
-      .addresses()
-      .map((entry) => `${entry.address}:${entry.port}`)
-      .join(', ');
+    const bound = app.addresses().map(describeBoundAddress).join(', ');
     console.log(`agenthropic server listening on ${bound}`);
   } catch (error) {
     console.error(error instanceof Error ? error.message : error);

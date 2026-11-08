@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { loadConfig } from '../src/config';
 import { start, type RunningServer } from '../src/index';
-import { TEST_TOKEN } from './helpers';
+import { networkAddress, TEST_TOKEN } from './helpers';
 
 /** Markup for the stand-in SPA shell; recognisable in an assertion. */
 const SPA_INDEX_MARKUP = '<!doctype html><title>agenthropic</title><div id="root"></div>';
@@ -36,11 +36,7 @@ describe('security contract (WP-F7)', () => {
       DASHBOARD_INGEST: '0', // tests must never resolve the real ~/.claude/projects
       DASHBOARD_WEB_ROOT: join(dir, 'web'),
     });
-    const address = server.app.addresses()[0];
-    if (address === undefined) {
-      throw new Error('server reported no bound addresses');
-    }
-    port = address.port;
+    port = networkAddress(server.app).port;
     baseUrl = `http://127.0.0.1:${port}`;
   });
 
@@ -53,7 +49,8 @@ describe('security contract (WP-F7)', () => {
     const addresses = server.app.addresses();
     expect(addresses.length).toBeGreaterThan(0);
     for (const entry of addresses) {
-      expect(entry.address).toBe('127.0.0.1');
+      // A pipe or socket path string fails this match as well.
+      expect(entry).toMatchObject({ address: '127.0.0.1' });
     }
   });
 

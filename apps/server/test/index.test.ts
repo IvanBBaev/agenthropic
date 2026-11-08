@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getFixture, type Fixture } from '@agenthropic/test-fixtures';
 import {
   ContainmentError,
+  describeBoundAddress,
   enforceLoopbackOrExit,
   exitOnCorpusFatal,
   isLoopbackAddress,
@@ -18,7 +19,7 @@ import {
   tickTroubleTransition,
 } from '../src/index';
 import type { CorpusIngestSummary } from '../src/corpus/ingest-corpus';
-import { TEST_TOKEN } from './helpers';
+import { networkAddress, TEST_TOKEN } from './helpers';
 
 describe('composition root (src/index)', () => {
   const dirs: string[] = [];
@@ -46,7 +47,11 @@ describe('composition root (src/index)', () => {
         .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'events_raw'")
         .all();
       expect(tables).toHaveLength(1);
-      expect(server.app.addresses().every((entry) => entry.address === '127.0.0.1')).toBe(true);
+      expect(
+        server.app
+          .addresses()
+          .every((entry) => typeof entry !== 'string' && entry.address === '127.0.0.1'),
+      ).toBe(true);
     } finally {
       await server.close();
     }
@@ -66,7 +71,7 @@ describe('composition root (src/index)', () => {
       DASHBOARD_INGEST: '0',
     });
     try {
-      const takenPort = first.app.addresses()[0]?.port;
+      const takenPort = networkAddress(first.app).port;
       await expect(
         start({
           DASHBOARD_TOKEN: TEST_TOKEN,
@@ -126,6 +131,28 @@ describe('composition root (src/index)', () => {
     expect(cleanup).toHaveBeenCalledTimes(1);
     expect(exit).toHaveBeenCalledWith(1);
     expect(error).toHaveBeenCalledWith(expect.stringContaining('no bound address'));
+  });
+
+  it('enforceLoopbackOrExit fails closed on a pipe or socket path: not a loopback IP', async () => {
+    const cleanup = vi.fn().mockResolvedValue(undefined);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => {
+      throw new Error('process.exit called');
+    }) as never);
+
+    await expect(
+      enforceLoopbackOrExit([{ address: '127.0.0.1' }, '/tmp/agenthropic.sock'], cleanup),
+    ).rejects.toThrow('process.exit called');
+
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('/tmp/agenthropic.sock'));
+    expect(error).not.toHaveBeenCalledWith(expect.stringContaining('127.0.0.1'));
+  });
+
+  it('describeBoundAddress prints host:port for an IP and the path for a pipe', () => {
+    expect(describeBoundAddress({ address: '127.0.0.1', port: 4317 })).toBe('127.0.0.1:4317');
+    expect(describeBoundAddress('/tmp/agenthropic.sock')).toBe('/tmp/agenthropic.sock');
   });
 
   describe('WP-IN10 replay-on-startup', () => {

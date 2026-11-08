@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { loadConfig, start, type RunningServer } from '../../src/index';
-import { TEST_TOKEN } from '../helpers';
+import { networkAddress, TEST_TOKEN } from '../helpers';
 
 describe('WP-X4 security/stream negative catalogue', () => {
   let dir: string;
@@ -28,11 +28,7 @@ describe('WP-X4 security/stream negative catalogue', () => {
       DASHBOARD_DB_PATH: join(dir, 'agent.db'),
       DASHBOARD_INGEST: '0', // tests must never resolve the real ~/.claude/projects
     });
-    const address = server.app.addresses()[0];
-    if (address === undefined) {
-      throw new Error('server reported no bound addresses');
-    }
-    port = address.port;
+    port = networkAddress(server.app).port;
     baseUrl = `http://127.0.0.1:${port}`;
   });
 
