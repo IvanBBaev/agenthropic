@@ -60,6 +60,15 @@ export const DEFAULT_RETENTION_EVENTS_DAYS = 90;
 export const DEFAULT_RETENTION_BACKUP_DAYS = 30;
 export const DEFAULT_RETENTION_BACKUP_KEEP_MIN = 7;
 
+/** Pino levels accepted by `DASHBOARD_LOG_LEVEL`; 'silent' turns logging off. */
+export const LOG_LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'] as const;
+export type LogLevel = (typeof LOG_LEVELS)[number];
+/**
+ * R11 / OPS-6: 'warn' by default, so a daemon's log carries failures and
+ * nothing per request. 'info' adds one line per request (token redacted).
+ */
+export const DEFAULT_LOG_LEVEL: LogLevel = 'warn';
+
 export interface ServerConfig {
   /** Mandatory dashboard auth token. Never logged, never persisted. */
   readonly token: string;
@@ -107,6 +116,8 @@ export interface ServerConfig {
    * the alert surface never depends on the directory the server started in.
    */
   readonly alertsConfigPath: string | null;
+  /** Server log level (`DASHBOARD_LOG_LEVEL`), default {@link DEFAULT_LOG_LEVEL}. */
+  readonly logLevel: LogLevel;
 }
 
 /**
@@ -135,6 +146,7 @@ export function loadConfig(env: Record<string, string | undefined>): ServerConfi
   const allowedOrigins = parseAllowedOrigins(env['DASHBOARD_ALLOWED_ORIGINS']);
   const retention = loadRetentionValues(env);
   const alertsConfigPath = parseAlertsConfigPath(env['DASHBOARD_ALERTS_CONFIG']);
+  const logLevel = parseLogLevel(env['DASHBOARD_LOG_LEVEL']);
   return {
     token,
     port,
@@ -147,6 +159,7 @@ export function loadConfig(env: Record<string, string | undefined>): ServerConfi
     allowedOrigins,
     retention,
     alertsConfigPath,
+    logLevel,
   };
 }
 
@@ -324,4 +337,17 @@ function parseNonNegativeInt(
     );
   }
   return value;
+}
+
+function parseLogLevel(raw: string | undefined): LogLevel {
+  if (raw === undefined || raw === '') {
+    return DEFAULT_LOG_LEVEL;
+  }
+  const level = LOG_LEVELS.find((candidate) => candidate === raw);
+  if (level === undefined) {
+    throw new Error(
+      `Invalid DASHBOARD_LOG_LEVEL "${raw}": expected one of ${LOG_LEVELS.join('/')}.`,
+    );
+  }
+  return level;
 }

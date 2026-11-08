@@ -56,6 +56,47 @@ export const HealthSchema = Type.Object(
     // The subset that will not be retried until the session's bytes or the
     // pricing table change — the ones needing a human, typically a missing price.
     sessionsQuarantined: Type.Optional(Type.Integer({ minimum: 0 })),
+    // R11 / OPS-5 (2026-11-08): the operational state `status` does not carry.
+    // `status` keeps its two values so existing clients are unaffected; a probe
+    // that wants "is it working, not just up" reads these instead.
+    //
+    // When the last corpus pass finished (ISO 8601). Omitted until one has, and
+    // on a boot with ingest off. A value far older than the poll interval means
+    // the watcher has stopped ticking.
+    lastTickAt: Type.Optional(Type.String()),
+    // The corpus trouble the poll loop is currently in: 'read-error' (the root
+    // or a transcript could not be read) or 'no-corpus-root'. Omitted while
+    // the last pass read the corpus cleanly, and on a boot with ingest off.
+    corpusTrouble: Type.Optional(
+      Type.Union([Type.Literal('read-error'), Type.Literal('no-corpus-root')]),
+    ),
+    // Newest successful database backup (ISO 8601): one this process wrote,
+    // or else the newest `agenthropic-*.db` already in the backups directory
+    // at boot. Omitted when there is none.
+    lastBackupAt: Type.Optional(Type.String()),
+    // Message of the most recent backup attempt, when that attempt failed.
+    // Omitted once a later backup succeeds.
+    lastBackupError: Type.Optional(Type.String()),
+    // Size of the database file and of its WAL in bytes, read at request
+    // time. `walBytes` is 0 when no WAL file exists.
+    dbBytes: Type.Optional(Type.Integer({ minimum: 0 })),
+    walBytes: Type.Optional(Type.Integer({ minimum: 0 })),
+    // Hook deliveries since boot: stored (a new events_raw row), duplicate (a
+    // redelivery that stored nothing), unauthorized (401: the hook holds a
+    // stale or missing token), rejected (any other 4xx) and failed (5xx: the
+    // append or the liveness update threw).
+    hookDeliveries: Type.Optional(
+      Type.Object(
+        {
+          stored: Type.Integer({ minimum: 0 }),
+          duplicate: Type.Integer({ minimum: 0 }),
+          unauthorized: Type.Integer({ minimum: 0 }),
+          rejected: Type.Integer({ minimum: 0 }),
+          failed: Type.Integer({ minimum: 0 }),
+        },
+        { additionalProperties: false },
+      ),
+    ),
   },
   { additionalProperties: false },
 );

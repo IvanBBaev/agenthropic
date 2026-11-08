@@ -10,6 +10,7 @@
  * hits the port during it should see 'replaying' on /api/health rather than
  * connection refused.
  */
+import { readdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { FastifyInstance } from 'fastify';
@@ -54,7 +55,7 @@ import { signedRetentionPolicy } from './retention/policy';
 import type { RetentionPort } from './retention/port';
 import { createRetentionRunner, RetentionRunError } from './retention/runner';
 import { describeRetentionPolicy, retentionRunLine } from './retention/summary';
-import { buildServer } from './server';
+import { buildServer, type OperationalHealth } from './server';
 
 export {
   HOST,
@@ -706,6 +707,92 @@ export interface BackupScheduler {
   runOnce(): Promise<void>;
   /** Clear the daily timer. Idempotent; wired into server close. */
   stop(): void;
+  /**
+   * R11: the newest successful backup and the most recent failure, for
+   * /api/health. `lastError` is cleared by the next successful backup.
+   */
+  state(): BackupState;
+}
+
+export interface BackupState {
+  readonly lastBackupAt: Date | null;
+  readonly lastError: string | null;
+}
+
+/**
+ * Assemble the R11 / OPS-5 health fields. Pure apart from two `stat` calls,
+ * so it is tested directly. `ingest: null` (ingest off) omits the tick
+ * fields; `backup: null` (scheduler not yet created) omits the backup fields;
+ * an unreadable database file omits the size fields. A missing WAL file is a
+ * genuine 0 (checkpointed and truncated), not an unknown.
+ */
+export function operationalHealth(input: {
+  readonly dbPath: string;
+  readonly ingest: {
+    readonly lastTickAt: Date | null;
+    readonly corpusTrouble: TickTroubleKind | null;
+  } | null;
+  readonly backup: BackupState | null;
+  readonly hookDeliveries: NonNullable<OperationalHealth['hookDeliveries']>;
+}): OperationalHealth {
+  const result: { -readonly [K in keyof OperationalHealth]: OperationalHealth[K] } = {};
+  if (input.ingest?.lastTickAt) {
+    result.lastTickAt = input.ingest.lastTickAt.toISOString();
+  }
+  if (input.ingest?.corpusTrouble) {
+    result.corpusTrouble = input.ingest.corpusTrouble;
+  }
+  if (input.backup?.lastBackupAt) {
+    result.lastBackupAt = input.backup.lastBackupAt.toISOString();
+  }
+  if (input.backup?.lastError) {
+    result.lastBackupError = input.backup.lastError;
+  }
+  const dbBytes = fileSize(input.dbPath);
+  if (dbBytes !== null) {
+    result.dbBytes = dbBytes;
+    result.walBytes = fileSize(`${input.dbPath}-wal`) ?? 0;
+  }
+  result.hookDeliveries = { ...input.hookDeliveries };
+  return result;
+}
+
+function fileSize(path: string): number | null {
+  try {
+    return statSync(path).size;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Newest finished backup already in `directory` (by mtime), so /api/health
+ * knows the last backup from the moment of boot, not only after the first
+ * daily cycle of this process. A missing or unreadable directory is `null`;
+ * an in-flight `.partial` is not a backup.
+ */
+export function newestBackupTime(directory: string): Date | null {
+  let names: string[];
+  try {
+    names = readdirSync(directory);
+  } catch {
+    return null;
+  }
+  let newest: Date | null = null;
+  for (const name of names) {
+    if (!name.startsWith('agenthropic-') || !name.endsWith('.db')) {
+      continue;
+    }
+    try {
+      const mtime = statSync(join(directory, name)).mtime;
+      if (newest === null || mtime > newest) {
+        newest = mtime;
+      }
+    } catch {
+      // Removed between readdir and stat (retention, an operator) - skip it.
+    }
+  }
+  return newest;
 }
 
 /**
@@ -737,6 +824,8 @@ export function scheduleDailyBackups(
     readonly backup?: (db: SqliteDatabase, destPath: string) => Promise<void>;
     readonly log?: (line: string) => void;
     readonly logError?: (line: string) => void;
+    /** Seed for `state().lastBackupAt`, normally {@link newestBackupTime}. */
+    readonly lastBackupAt?: Date | null;
   } = {},
 ): BackupScheduler {
   const intervalMs = options.intervalMs ?? BACKUP_INTERVAL_MS;
@@ -745,6 +834,8 @@ export function scheduleDailyBackups(
   const log = options.log ?? console.log;
   const logError = options.logError ?? console.error;
   let running = false;
+  let lastBackupAt = options.lastBackupAt ?? null;
+  let lastError: string | null = null;
 
   function runRetention(at: Date): void {
     try {
@@ -772,11 +863,14 @@ export function scheduleDailyBackups(
       const at = now();
       const destPath = join(directory, `agenthropic-${at.toISOString().replace(/[:.]/g, '-')}.db`);
       await backup(db, destPath);
+      lastBackupAt = at;
+      lastError = null;
       log(`database backup: wrote ${destPath}.`);
       // Reached only after a successful backup - the contract above.
       runRetention(at);
     } catch (error) {
-      logError(`database backup failed: ${error instanceof Error ? error.message : String(error)}`);
+      lastError = error instanceof Error ? error.message : String(error);
+      logError(`database backup failed: ${lastError}`);
     } finally {
       running = false;
     }
@@ -791,6 +885,9 @@ export function scheduleDailyBackups(
     runOnce,
     stop(): void {
       clearInterval(timer);
+    },
+    state(): BackupState {
+      return { lastBackupAt, lastError };
     },
   };
 }
@@ -915,6 +1012,10 @@ export async function start(
   // rather than in the writer so /api/health can report the running total; an
   // ingest-less boot omits the field, since nothing was there to collide.
   let crossSessionUsageCollisions = 0;
+  // R11: when the last corpus pass finished; null until one did.
+  let lastTickAt: Date | null = null;
+  // R11: hook delivery outcomes since boot, for /api/health.
+  const hookDeliveries = { stored: 0, duplicate: 0, unauthorized: 0, rejected: 0, failed: 0 };
   // M-15/M-18: ONE tail-caching read port, shared by the ingest watcher and the
   // cost-analysis substrate provider below. The byte-offset cache is per
   // DECORATOR INSTANCE, so a provider with its own instance re-read every
@@ -1022,6 +1123,7 @@ export async function start(
       },
       onTickDuration: (durationMs) => {
         lastTickDurationMs = durationMs;
+        lastTickAt = new Date();
       },
     });
   }
@@ -1033,6 +1135,8 @@ export async function start(
 
   const app = buildServer({
     token: config.token,
+    // R11 / OPS-6: DASHBOARD_LOG_LEVEL, 'warn' by default.
+    logger: config.logLevel,
     schemaVersion: currentSchemaVersion(db),
     db,
     hub,
@@ -1086,6 +1190,18 @@ export async function start(
       // recorded project directory first instead of scanning every slug.
       slugOf: (id) => getSessionProjectSlug(db, id),
     }),
+    // R11 / OPS-5: "is it working", not just "is it up". The tick fields are
+    // omitted with ingest off, like the ingest seams above.
+    operationalHealth: () =>
+      operationalHealth({
+        dbPath: config.dbPath,
+        ingest: ingestWatcher === null ? null : { lastTickAt, corpusTrouble: tickTrouble },
+        // `backups` is declared below, next to the hook routes; this closure
+        // only runs on a request, and requests start after listen, which is
+        // after the scheduler exists.
+        backup: backups.state(),
+        hookDeliveries,
+      }),
   });
   appRef = app;
   // WP-IN3 hook receiver, registered before listen so the global /api/* auth
@@ -1099,11 +1215,16 @@ export async function start(
         hub.publish(toRealtimeEvent(event, new Date().toISOString()));
       }
     },
+    onDelivery: (outcome) => {
+      hookDeliveries[outcome] += 1;
+    },
   });
   // Daily backups of the one non-re-derivable table's home (review M-20) -
   // scheduled regardless of ingest, next to the database it protects - with
   // the retention pass chained after each successful backup (L9).
-  const backups = scheduleDailyBackups(db, backupsDir, retention);
+  const backups = scheduleDailyBackups(db, backupsDir, retention, {
+    lastBackupAt: newestBackupTime(backupsDir),
+  });
   // v2.0 alerting (AD-1): built only when the operator named a config file.
   // Started inside the try below so a tokenRef that does not resolve fails the
   // boot through the same close path as a failed bind.

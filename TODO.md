@@ -1145,7 +1145,11 @@ synthesis, not on this board._
   checks `schema_version`. A backup at every boot was left out: the first backup still comes
   after 24 h, and adding one at boot needs a decision on how it counts toward retention.
 - [x] **R10** RELEASE §5 drill on the real DB, with a real restore [OPS-10, OSS-5] _(done 2026-10-31 by an agent (D9) on a copy of a 342 MB real-corpus DB — drill + shipped `restoreDatabase()` OK, counts identical; re-run at the tag — `docs/measurement/real-corpus-boot-2026-10-31.md`)_
-- [ ] **R11** `/health` reflects watcher/backup/DB/corpus state; logger on [OPS-5, OPS-6]
+- [x] **R11** `/health` reflects watcher/backup/DB/corpus state; logger on [OPS-5, OPS-6]
+  — done 2026-11-08: `lastTickAt`, `corpusTrouble`, `lastBackupAt`/`lastBackupError`,
+  `dbBytes`/`walBytes` and `hookDeliveries` on `/api/health` (`operationalHealth` in
+  `apps/server/src/index.ts`); `DASHBOARD_LOG_LEVEL`, default `warn`. Log rotation
+  (newsyslog) is not documented yet.
 - [ ] **R12** model `cleanupPeriodDays`; fix `overview.md:154` (Ivan: D12) [ARC-3, OPS-11] _(D12 done 2026-10-30 — setting raised to 99999; the code/doc half is open)_
 - [ ] **R13** drift census on `/health`; persist CC version; skip-and-count bad lines [ARC-6, QA-3, DAT-7, DAT-11]
 - [ ] **R14** configurable file cap (256 MiB default); partial flag in API + UI [DAT-3, DAT-5, OPS-15] _(real-corpus boot 2026-10-31: 5 main transcripts skipped as oversize — 79–170 MB, all under 256 MiB; their main-agent tokens are missing from the totals)_

@@ -272,9 +272,11 @@ Four properties of this scheduler matter before you rely on it:
   `database backup failed: <message>` on stderr, **and the retention pass of that
   cycle is skipped**: nothing is ever pruned in a cycle whose backup did not land. The
   trade is deliberate — the server outliving its backup beats the reverse — but it
-  means that log line, plus the age of the newest file in the backup directory, is the
-  *only* signal that backups have stopped working. Nothing else surfaces it;
-  `/api/health` reports neither backup nor retention state.
+  means backups can stop working without the server stopping. **AMENDED 2026-11-08
+  (R11):** `/api/health` now reports `lastBackupAt` (the newest successful backup,
+  seeded at boot from the newest file in the backup directory) and `lastBackupError`
+  (the last attempt's message, while that attempt is the most recent). Retention state
+  is still reported only by the log lines.
 - **A failed retention pass logs and never crashes.** `retention failed: <message>`
   on stderr; the backup of that cycle is already on disk, and the next tick retries.
 - **Symlinks in the backup directory are skipped, never followed** (since 2026-10-10).

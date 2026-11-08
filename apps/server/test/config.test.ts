@@ -45,6 +45,7 @@ describe('config (WP-U0)', () => {
       webRoot: DEFAULT_WEB_ROOT,
       allowedOrigins: [],
       alertsConfigPath: null,
+      logLevel: 'warn',
       retention: {
         eventsDays: DEFAULT_RETENTION_EVENTS_DAYS,
         backupDays: DEFAULT_RETENTION_BACKUP_DAYS,

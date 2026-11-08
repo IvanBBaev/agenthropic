@@ -421,6 +421,12 @@ replay pass finishes and `"ok"` after it, and `schemaVersion`. Everything else i
 | `crossSessionUsageCollisions` | the ownership-rule seam is wired (ingest is on) | Messages skipped since boot because another session had already ingested them. A genuine `0` **is** reported here. |
 | `sessionsExcluded` | the ingest-exclusions seam is wired | Sessions whose latest ingest attempt failed — each is either absent from every stored total or present in it only at an older extent than the corpus now holds (a session quarantined after a clean ingest keeps its last good pass), so dollar totals are a lower bound while this is non-zero. `status` stays `"ok"`: the server is surviving correctly, it is just not complete. *(Amended 2026-09-25 (OO): this used to say "counted nowhere".)* |
 | `sessionsQuarantined` | the ingest-exclusions seam is wired | The subset of excluded sessions that will not be retried until the session's bytes or the pricing table change — the ones that need a human, typically a missing price. |
+| `lastTickAt` | ingest is on and a corpus pass has finished | When the last corpus pass finished. Compare it with the poll interval (`DASHBOARD_POLL_INTERVAL_MS`): a value minutes old means the watcher has stopped ticking. *(Added 2026-11-08, R11.)* |
+| `corpusTrouble` | ingest is on and the last pass could not read the corpus | `"read-error"` (the corpus root or a transcript could not be read; the log line says which) or `"no-corpus-root"` (the root does not exist — check `CLAUDE_PROJECTS_DIR`). Disappears on the first clean pass. *(Added 2026-11-08, R11.)* |
+| `lastBackupAt` | a backup exists | The newest successful backup: one this process wrote, or the newest `agenthropic-*.db` in the backups directory at boot. Older than a day means the daily backup is not landing. *(Added 2026-11-08, R11.)* |
+| `lastBackupError` | the most recent backup attempt failed | That attempt's error message; the full line is `database backup failed: <message>` on stderr. Disappears once a backup succeeds. *(Added 2026-11-08, R11.)* |
+| `dbBytes`, `walBytes` | the database file can be read | File sizes in bytes. A WAL that keeps growing means a checkpoint is being held back — usually a long read. *(Added 2026-11-08, R11.)* |
+| `hookDeliveries` | always, on the real server | Hook deliveries since boot by outcome. A rising `unauthorized` count means a hook is sending a token the server does not accept — re-run the hook installer with the current `DASHBOARD_TOKEN`; the hook never shows this itself. A rising `failed` count means the append is failing; see the server log. *(Added 2026-11-08, R11.)* |
 
 The omissions carry information, and it is not the information a zero would carry.
 `lastTickDurationMs` is the clearest case: the server code comments that *"no pass
@@ -481,7 +487,8 @@ the file changes). The body's `reason` is the sanitized failure; the errno and f
 context are in the server log (§6). A `404` still means the session id is unknown.
 
 One thing you might expect on health is **deliberately not there**, and one is there
-only as a count:
+only as a count *(amended 2026-11-08, R11: backup state was a third, and is now
+reported)*:
 
 - **Per-session ingest failure detail.** Health answers "is this process serving
   requests". One poisoned session does not make an otherwise healthy server degraded, and
@@ -490,10 +497,9 @@ only as a count:
   (`sessionsExcluded`, `sessionsQuarantined`, above) while `status` stays `"ok"`; the
   which-session-and-why goes to the server log and to the SSE stream every connected
   client is already listening on (§6).
-- **Backup state.** A failed backup logs and waits for the next tick; nothing on
-  `/api/health` reports whether the last backup succeeded. See
-  [Scheduling, as built](backup-restore.md#scheduling-as-built) — the honest way to
-  check is to look at the backup directory.
+- **Backup state** is no longer in this list: since 2026-11-08 (R11) `lastBackupAt` and
+  `lastBackupError` report it. Retention state is still log-only. See
+  [Scheduling, as built](backup-restore.md#scheduling-as-built).
 
 ## 6. Reading the ingest log — skips, quarantines and the one fatal
 

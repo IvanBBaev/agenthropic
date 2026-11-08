@@ -21,6 +21,7 @@ import Fastify, {
 } from 'fastify';
 import type { TypeBoxTypeProvider } from '@fastify/type-provider-typebox';
 import {
+  type HealthDto,
   HealthSchema,
   isAllowedOrigin,
   redactTokenInUrl,
@@ -30,9 +31,25 @@ import { apiRoutes } from './api/routes';
 import type { IngestRejection } from './api/ingest-rejections';
 import type { SubstrateProvider } from './api/substrate-provider';
 import type { SkipReason } from './corpus/fs-port';
+import type { LogLevel } from './config';
 import type { SqliteDatabase } from './db/connection';
 import { NOT_FOUND_MESSAGE, registerStaticSite } from './http/static-site';
 import { RealtimeHub } from './realtime/hub';
+
+/**
+ * The R11 / OPS-5 health fields the composition root supplies. Every one is
+ * optional: a field the caller does not know is left out, not zeroed.
+ */
+export type OperationalHealth = Pick<
+  HealthDto,
+  | 'lastTickAt'
+  | 'corpusTrouble'
+  | 'lastBackupAt'
+  | 'lastBackupError'
+  | 'dbBytes'
+  | 'walBytes'
+  | 'hookDeliveries'
+>;
 
 export interface BuildServerOptions {
   /** Mandatory auth token (already validated by loadConfig). */
@@ -48,7 +65,11 @@ export interface BuildServerOptions {
    * bytes. See `MAX_STREAM_BACKLOG_BYTES` for why a bound has to exist.
    */
   readonly maxStreamBacklogBytes?: number;
-  readonly logger?: boolean;
+  /**
+   * Request logging: false (default) is off, true is 'info', a level string
+   * is that level (config.logLevel, DASHBOARD_LOG_LEVEL).
+   */
+  readonly logger?: boolean | LogLevel;
   /**
    * Open, migrated database handle (WP-U2). When absent, the read API routes
    * are not registered and unknown /api/* paths 404 exactly as before.
@@ -122,6 +143,13 @@ export interface BuildServerOptions {
    */
   readonly ingestRejection?: (sessionId: string) => IngestRejection | undefined;
   /**
+   * R11 / OPS-5: operational state for /api/health — last tick time, corpus
+   * trouble, last backup, DB/WAL size, hook delivery counters. The composition
+   * root returns only the fields it knows; an absent field is omitted, never
+   * faked. Absent on a server built without that wiring.
+   */
+  readonly operationalHealth?: () => OperationalHealth;
+  /**
    * Directory holding the built SPA, served from this same loopback origin so
    * the product is one command and one port. When absent no static route is
    * registered at all and every non-API path 404s exactly as before, which is
@@ -183,11 +211,14 @@ export function redactedRequestSerializer(request: LoggableRequest): {
  * Build the Fastify `logger` option. Logging is OFF by default; when enabled,
  * the request serializer redacts the token so it never lands in a log line.
  */
-export function buildLoggerOptions(logger: boolean): FastifyServerOptions['logger'] {
-  if (!logger) {
+export function buildLoggerOptions(logger: boolean | LogLevel): FastifyServerOptions['logger'] {
+  if (logger === false || logger === 'silent') {
     return false;
   }
-  return { serializers: { req: redactedRequestSerializer } };
+  return {
+    level: logger === true ? 'info' : logger,
+    serializers: { req: redactedRequestSerializer },
+  };
 }
 
 /** `Bearer ` followed by the token; the scheme name matches in any case. */
@@ -326,6 +357,7 @@ export function buildServer(options: BuildServerOptions) {
             sessionsExcluded: exclusions.failing,
             sessionsQuarantined: exclusions.quarantined,
           }),
+      ...options.operationalHealth?.(),
     };
   });
 

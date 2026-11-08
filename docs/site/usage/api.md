@@ -112,7 +112,7 @@ running server.
 
 `/api/health` is auth-gated like everything else — there is no unauthenticated probe
 path — and it answers `200` with a payload whose schema declares two required fields and
-six optional ones:
+thirteen optional ones *(amended 2026-11-08, R11: six until then)*:
 
 | Field | Type | Always present? | Meaning |
 |---|---|---|---|
@@ -124,6 +124,12 @@ six optional ones:
 | `crossSessionUsageCollisions` | integer | no | Usage messages skipped since boot because another session had already claimed them. |
 | `sessionsExcluded` | integer | no | Sessions whose latest ingest attempt failed — each is either absent from every stored total or present in it only at an older extent than the corpus now holds (a session quarantined after a clean ingest keeps its last good pass), so dollar totals are a lower bound while this is non-zero. `status` stays `"ok"`: the server is surviving correctly, it is just not complete. *(Amended 2026-09-25 (OO): this used to say "counted nowhere".)* |
 | `sessionsQuarantined` | integer | no | The subset of excluded sessions that will not be retried until the session's bytes or the pricing table change — the ones that need a human, typically a missing price. |
+| `lastTickAt` | ISO 8601 string | no | When the last corpus pass finished. Omitted until one has, and with ingest off. A value much older than the poll interval means the watcher has stopped. *(Added 2026-11-08, R11.)* |
+| `corpusTrouble` | `"read-error"` or `"no-corpus-root"` | no | The corpus trouble the poll loop is in right now: the corpus or a transcript could not be read, or the corpus root does not exist. Omitted while the last pass read the corpus cleanly, and with ingest off. `status` stays `"ok"`. *(Added 2026-11-08, R11.)* |
+| `lastBackupAt` | ISO 8601 string | no | The newest successful database backup: one this process wrote, or else the newest `agenthropic-*.db` already in the backups directory at boot. Omitted when there is none. *(Added 2026-11-08, R11.)* |
+| `lastBackupError` | string | no | The message of the most recent backup attempt, if that attempt failed. Omitted once a later backup succeeds. *(Added 2026-11-08, R11.)* |
+| `dbBytes`, `walBytes` | integer | no | Size of the database file and of its `-wal` file in bytes, read at request time. `walBytes` is `0` when there is no WAL file. *(Added 2026-11-08, R11.)* |
+| `hookDeliveries` | `{ stored, duplicate, unauthorized, rejected, failed }` | no | Hook deliveries since boot: `stored` added an `events_raw` row, `duplicate` was a redelivery that added none, `unauthorized` was a `401` (a hook holding a stale or missing token — the one failure the hook itself never shows, because it runs with `\|\| true`), `rejected` any other `4xx`, `failed` a `5xx`. *(Added 2026-11-08, R11.)* |
 
 **An absent field is never a zero, and that distinction is the point of the endpoint.**
 Each optional field is backed by a seam the composition root wires in only when ingest is

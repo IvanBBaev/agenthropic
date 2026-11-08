@@ -77,6 +77,24 @@ export interface HookRoutesOptions {
    * construction (CD-1: hooks move liveness, never structure).
    */
   readonly applyStatus?: (hookName: string, payload: unknown) => void;
+  /**
+   * R11: told how each delivery ended, for the /api/health counters.
+   * 'stored' / 'duplicate' are a 202 whose append did / did not add a row;
+   * 'unauthorized' is a 401 (a hook holding a stale or missing token — the
+   * one failure the sender never surfaces, because hooks run with `|| true`);
+   * 'rejected' any other 4xx; 'failed' a 5xx.
+   */
+  readonly onDelivery?: (outcome: HookDeliveryOutcome) => void;
+}
+
+export type HookDeliveryOutcome = 'stored' | 'duplicate' | 'unauthorized' | 'rejected' | 'failed';
+
+/** Map a non-202 response status to its delivery outcome. */
+export function errorDeliveryOutcome(statusCode: number): HookDeliveryOutcome {
+  if (statusCode === 401) {
+    return 'unauthorized';
+  }
+  return statusCode >= 500 ? 'failed' : 'rejected';
 }
 
 const HookAcceptedResponseSchema = Type.Object(
@@ -147,6 +165,16 @@ export async function registerHookRoutes(
           500: ApiErrorSchema,
         },
       },
+      // Error outcomes are counted here, not in the handler, because the
+      // handler never runs for most of them: the global auth gate answers 401
+      // and schema validation 400 before it, and a throwing append reaches the
+      // root error handler. The 202 outcomes are counted in the handler, which
+      // alone knows whether the append stored a row.
+      onResponse: async (_request, reply) => {
+        if (reply.statusCode !== 202) {
+          options.onDelivery?.(errorDeliveryOutcome(reply.statusCode));
+        }
+      },
     },
     async (request, reply) => {
       // A request that carried no body carried no hook event. This is NOT a
@@ -183,6 +211,7 @@ export async function registerHookRoutes(
       // path, and the seam's same-status guard makes the common duplicate a
       // no-op.
       options.applyStatus?.(envelope.hookName, envelope.payload);
+      options.onDelivery?.(result.inserted ? 'stored' : 'duplicate');
       return reply.code(202).send({ stored: result.inserted });
     },
   );

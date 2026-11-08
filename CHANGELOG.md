@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Health reports what the server is doing, not only that it is up (R11).**
+  `GET /api/health` gains optional fields: `lastTickAt` and `corpusTrouble` for the
+  corpus watcher, `lastBackupAt` and `lastBackupError` for the daily backup (seeded at
+  boot from the newest backup file), `dbBytes` and `walBytes`, and `hookDeliveries`
+  (`stored`, `duplicate`, `unauthorized`, `rejected`, `failed` since boot). A rising
+  `unauthorized` count is the first visible sign of a hook holding a stale token.
+  `status` keeps its two values. The server logger is now on, at the level set by the
+  new `DASHBOARD_LOG_LEVEL` (default `warn`, `info` for one line per request).
+
 - **Atomic, verified backups and schema guards (R9).** A backup is written to
   `<name>.db.partial`, checked with `PRAGMA integrity_check` and only then renamed, so a
   crash or a corrupt copy never leaves a file that retention counts as the newest backup.
