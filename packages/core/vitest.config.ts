@@ -6,8 +6,12 @@ import { defineConfig } from 'vitest/config';
 // This package carries the parser, whose contract (docs/analysis/parser-spec.md)
 // is normative for all ingest work — it is the last place where a silently
 // uncovered branch is acceptable.
+// Timeouts (R16 / QA-4): pure in-memory tests, so a modest explicit bound
+// rather than Vitest's 5 s default, which a loaded machine can exceed.
 export default defineConfig({
   test: {
+    testTimeout: 15_000,
+    hookTimeout: 15_000,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'lcov', 'json-summary'],

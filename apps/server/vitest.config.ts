@@ -13,8 +13,17 @@ import { defineConfig } from 'vitest/config';
 // would have removed BOTH arms of the operator from the denominator and bought
 // a cosmetic 100 - the wrong trade for a project whose whole claim is that its
 // numbers are ground truth.
+//
+// Timeouts (R16 / QA-4): Vitest's 5 s default timed tests out on a loaded
+// machine. Nearly every file here is integration - a real temp-dir SQLite with
+// the full migration chain, a booted server, real sockets - so one generous
+// bound for the whole package beats a unit/integration projects split that
+// would sort ~100 of ~125 files into the slow bucket anyway. A real hang still
+// fails, just later. No retries: they would hide real races.
 export default defineConfig({
   test: {
+    testTimeout: 60_000,
+    hookTimeout: 60_000,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'lcov', 'json-summary'],

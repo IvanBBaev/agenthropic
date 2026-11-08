@@ -642,6 +642,24 @@ gives this suite its actual weight is the material in §3.1, §4 and §5 — an 
 reader in the token proof, byte-identical replay snapshots, and twelve enumerated ways
 the system is expected to fail well.
 
+## 6.2 As built: test timeouts (R16, 2026-11-08)
+
+Every `vitest.config.ts` now sets `testTimeout` and `hookTimeout` explicitly. Before, all
+five packages ran at Vitest's 5 s default, and on a loaded machine (load average ~100) web
+tests timed out while the same tests passed at load 12-16 (QA-4).
+
+| Package | Bound | Why |
+|---|---|---|
+| `apps/server` | 60 s | Nearly every file is integration: a temp-dir SQLite with the full migration chain, a booted server, real sockets |
+| `apps/web` | 30 s | jsdom rendering, the suite that actually timed out |
+| `packages/core`, `packages/shared`, `packages/test-fixtures` | 15 s | Pure in-memory tests |
+
+The suggested unit/integration `projects` split was not built: about 100 of the ~125
+server test files touch a real database or server, so the "unit" project would hold a
+handful of files and buy nothing. No retries were added either, because a retry hides a
+real race. A genuine hang still fails, just later, and CI's job timeout bounds the run.
+`pnpm test` no longer needs `--testTimeout` flags.
+
 ## 7. Where this lands on the roadmap
 
 | Phase | Wave(s) | Testing-relevant exit gate |

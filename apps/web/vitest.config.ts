@@ -18,9 +18,14 @@ import { defineConfig } from 'vitest/config';
 // file fails if the pragma ever comes back, and since 2026-09-26 it also pins
 // the thresholds below and the exact exclude list: a change here that lowers a
 // bar or takes another file out of the denominator must change that test too.
+// Timeouts (R16 / QA-4): jsdom renders timed out at Vitest's 5 s default under
+// a load average of ~100 (9 tests in 7 files) and passed at 12-16. 30 s absorbs
+// load without letting a real hang pass. No retries: they would hide races.
 export default defineConfig({
   test: {
     environment: 'jsdom',
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'lcov', 'json-summary'],
