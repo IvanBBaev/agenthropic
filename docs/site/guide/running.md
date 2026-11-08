@@ -68,8 +68,13 @@ git clone https://github.com/IvanBBaev/agenthropic.git
 cd agenthropic
 pnpm install
 
-# One line, one time: a real random token. Print it — you paste it into the SPA once.
-export DASHBOARD_TOKEN="$(openssl rand -hex 32)"
+# One time: a stable random token in a private file, exported from your shell profile.
+# The server and the Claude Code hooks must see the SAME value, so a token that lives
+# only in this terminal leaves every hook answered 401, silently.
+mkdir -p ~/.config/agenthropic
+(umask 077 && openssl rand -hex 32 > ~/.config/agenthropic/token)
+echo 'export DASHBOARD_TOKEN="$(cat ~/.config/agenthropic/token)"' >> ~/.zshrc
+source ~/.zshrc
 echo "$DASHBOARD_TOKEN"
 
 pnpm start
@@ -455,6 +460,23 @@ token was exported in the shell that ran `pnpm start` but a *different* value wa
 into the browser — the SPA then reports the gate as unauthorized while the server is
 perfectly healthy. `echo "$DASHBOARD_TOKEN"` in the server's own shell is the
 disambiguator.
+
+### The dashboard works but agents never leave `working`
+
+The hooks are the only signal that an agent stopped, and they authenticate with the
+`DASHBOARD_TOKEN` of the Claude Code process that fires them. If Claude Code was
+started from a shell without that variable, or with a different value than the server,
+every delivery gets **401** and the fail-silent hook drops it without a word. Agents
+then age from `working` to `unknown` and never read `completed` or `waiting`. Export the
+token from your shell profile, as in [the one-command run](#the-one-command-run), and
+restart Claude Code from a fresh shell. A GUI-launched editor reads its environment when
+it starts, so quit and reopen it after changing the profile. The check, from the shell
+that starts Claude Code:
+
+```sh
+curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $DASHBOARD_TOKEN" \
+  http://127.0.0.1:7341/api/health   # 200, not 401
+```
 
 ### The SPA has not been built yet
 

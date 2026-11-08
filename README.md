@@ -47,7 +47,13 @@ cd agenthropic
 pnpm install
 
 # The auth token is mandatory (16+ characters); the server refuses to start without it.
-export DASHBOARD_TOKEN="$(openssl rand -hex 32)"
+# One time: a stable random token in a private file, exported from your shell profile.
+# The server and the Claude Code hooks must see the SAME value, so a token that lives
+# only in this terminal leaves every hook answered 401, silently.
+mkdir -p ~/.config/agenthropic
+(umask 077 && openssl rand -hex 32 > ~/.config/agenthropic/token)
+echo 'export DASHBOARD_TOKEN="$(cat ~/.config/agenthropic/token)"' >> ~/.zshrc
+source ~/.zshrc
 echo "$DASHBOARD_TOKEN"   # you paste this into the dashboard once
 
 pnpm start
@@ -109,6 +115,16 @@ keys, and `--dry-run` prints the result without writing anything. The token valu
 never enters any process's argv: curl reads the environment variable itself at
 fire time (which needs curl ≥ 8.3.0; on an older curl the hook delivers nothing
 rather than leaking).
+
+The hooks run inside Claude Code, so Claude Code must be started from a shell that
+exports the same `DASHBOARD_TOKEN` as the server. Otherwise every delivery is
+refused with 401 and, because the hooks are fail-silent, nothing tells you. Check
+from the shell you start Claude Code in:
+
+```sh
+curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $DASHBOARD_TOKEN" \
+  http://127.0.0.1:7341/api/health   # 200, not 401
+```
 
 Installing them is optional but consequential, because **hooks are the only
 terminal signal this dashboard has.** Reading a transcript proves that activity
