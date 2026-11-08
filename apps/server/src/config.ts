@@ -187,7 +187,7 @@ export function loadConfig(env: Record<string, string | undefined>): ServerConfi
   };
 }
 
-function parsePort(raw: string | undefined): number {
+export function parsePort(raw: string | undefined): number {
   if (raw === undefined || raw === '') {
     return DEFAULT_PORT;
   }

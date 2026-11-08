@@ -663,6 +663,12 @@ transaction, or excluding pruned windows on re-ingest — is an open decision (O
 Until it is made, both behaviours above are the shipped truth, and this page states
 them rather than picking the more comfortable one.
 
+**The database file did not get smaller after a prune.** Expected: SQLite keeps freed
+pages for reuse, so the file stays at its high-water mark and new rows fill the gaps.
+The daily cycle truncates the `-wal` file; the main file shrinks only through the
+offline `db:vacuum` command — see
+[backup & restore, *Reclaiming disk space*](backup-restore.md#reclaiming-disk-space--dbvacuum-r19-2026-11-08).
+
 ## Why remediation deepens once the code lands
 
 This section was written before any code existed; the "concretely blocked" list it

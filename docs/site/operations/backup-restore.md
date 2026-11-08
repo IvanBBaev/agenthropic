@@ -83,6 +83,18 @@ committed data still sitting in the `-wal` file, or copy a torn, inconsistent
 snapshot. **Never `cp` the raw database file as a backup strategy** — the backup
 mechanism must go through SQLite's own online-backup path (§2).
 
+> **As built — connection tuning and checkpoints (R19, 2026-11-08).** Besides the two
+> asserted pragmas, every connection sets `synchronous = NORMAL` (the documented safe
+> pairing with WAL: a power cut can lose the last commits, never corrupt the file, and
+> the hot ingest path saves an fsync per commit) and `busy_timeout = 5000`, so a writer
+> that meets another connection's lock — the restore drill's read-only handle, an
+> operator's `sqlite3` shell — waits up to five seconds instead of failing at once.
+> SQLite's autocheckpoint folds the `-wal` file back in, but never shrinks it; the daily
+> cycle (§2, *Scheduling*) therefore ends with `wal_checkpoint(TRUNCATE)`, whether or not
+> its backup succeeded. It is silent when it works; a checkpoint a reader kept from
+> finishing logs `wal checkpoint: busy (a reader held the WAL); retrying next cycle.`,
+> and one that throws logs `wal checkpoint failed: <reason>` without stopping the timer.
+
 ## 2. Backup approach
 
 Reference layout as this page first sketched it (placeholders — the real paths were
@@ -316,6 +328,35 @@ deleted): events: would prune <n> row(s) older than <cutoff>; ...`.
 nothing. Losing the database file loses that table permanently, which is why a backup
 capability that nothing ever ran was treated as a defect to fix rather than a
 nice-to-have to schedule later.
+
+### Reclaiming disk space — `db:vacuum` (R19, 2026-11-08)
+
+Retention deletes rows; it does not shrink the file. SQLite keeps the freed pages and
+reuses them for new rows, so a store under the signed policy **plateaus** rather than
+growing without bound — the file simply stays at its high-water mark. The server never
+runs `VACUUM` on its own: `VACUUM` rewrites the whole file synchronously on the one
+connection the server has, and on a multi-GiB store that would freeze the hook receiver,
+the API and the live stream for as long as it runs.
+
+Giving the space back to the disk is an occasional, offline operator step:
+
+```bash
+# Stop the server first; the command refuses while anything answers on DASHBOARD_PORT.
+pnpm --filter @agenthropic/server db:vacuum
+```
+
+It resolves the database like the server does (`DASHBOARD_DB_PATH`, else
+`data/agenthropic.db` under `apps/server`) and:
+
+1. refuses if the database does not exist (it never creates one), or if anything answers
+   HTTP on `127.0.0.1:<DASHBOARD_PORT>/api/health` (default 7341) — a 401 counts;
+2. takes a verified, `0600` backup to `backups/pre-vacuum-<timestamp>.db` — outside the
+   retention pattern, so it is kept until you delete it;
+3. runs `VACUUM` and `wal_checkpoint(TRUNCATE)`, then prints the file size and the free
+   pages before and after, ending with `vacuum OK: <backup path>`.
+
+Any failure prints `vacuum FAILED: <reason>` and exits 1. `VACUUM` needs free disk space
+of about the database's size on top of the backup.
 
 ## 3. The tested-restore drill
 

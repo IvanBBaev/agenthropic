@@ -2,7 +2,12 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { assertConnectionPragmas, openDatabase, type SqliteDatabase } from '../src/db/connection';
+import {
+  assertConnectionPragmas,
+  BUSY_TIMEOUT_MS,
+  openDatabase,
+  type SqliteDatabase,
+} from '../src/db/connection';
 
 describe('openDatabase (WP-D2)', () => {
   let dir: string;
@@ -24,6 +29,16 @@ describe('openDatabase (WP-D2)', () => {
     expect(existsSync(nested)).toBe(true);
     expect(db.pragma('journal_mode', { simple: true })).toBe('wal');
     expect(db.pragma('foreign_keys', { simple: true })).toBe(1);
+  });
+
+  it('sets synchronous=NORMAL and a busy timeout (R19)', () => {
+    dir = mkdtempSync(join(tmpdir(), 'agenthropic-conn-'));
+    db = openDatabase(join(dir, 'agent.db'));
+
+    // 1 = NORMAL: safe with WAL, one fsync per checkpoint instead of per commit.
+    expect(db.pragma('synchronous', { simple: true })).toBe(1);
+    expect(db.pragma('busy_timeout', { simple: true })).toBe(BUSY_TIMEOUT_MS);
+    expect(BUSY_TIMEOUT_MS).toBe(5000);
   });
 });
 

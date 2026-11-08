@@ -814,6 +814,18 @@ export function newestBackupTime(directory: string): Date | null {
  * process that already closed its server alive. A failed run logs and waits
  * for the next tick - the server outliving its backup beats the reverse.
  */
+/** One `PRAGMA wal_checkpoint` row, as better-sqlite3 returns it. */
+export interface WalCheckpointResult {
+  /** True when the checkpoint could not complete because another connection held the WAL. */
+  readonly busy: boolean;
+}
+
+/** Fold the WAL into the database and truncate the -wal file to zero bytes. */
+export function checkpointWal(db: SqliteDatabase): WalCheckpointResult {
+  const rows = db.pragma('wal_checkpoint(TRUNCATE)') as { busy: number }[];
+  return { busy: rows.some((row) => row.busy === 1) };
+}
+
 export function scheduleDailyBackups(
   db: SqliteDatabase,
   directory: string,
@@ -826,6 +838,8 @@ export function scheduleDailyBackups(
     readonly logError?: (line: string) => void;
     /** Seed for `state().lastBackupAt`, normally {@link newestBackupTime}. */
     readonly lastBackupAt?: Date | null;
+    /** The end-of-cycle WAL checkpoint; {@link checkpointWal} unless a test needs a busy one. */
+    readonly checkpoint?: (db: SqliteDatabase) => WalCheckpointResult;
   } = {},
 ): BackupScheduler {
   const intervalMs = options.intervalMs ?? BACKUP_INTERVAL_MS;
@@ -833,6 +847,7 @@ export function scheduleDailyBackups(
   const backup = options.backup ?? backupDatabase;
   const log = options.log ?? console.log;
   const logError = options.logError ?? console.error;
+  const checkpoint = options.checkpoint ?? checkpointWal;
   let running = false;
   let lastBackupAt = options.lastBackupAt ?? null;
   let lastError: string | null = null;
@@ -872,7 +887,23 @@ export function scheduleDailyBackups(
       lastError = error instanceof Error ? error.message : String(error);
       logError(`database backup failed: ${lastError}`);
     } finally {
+      runCheckpoint();
       running = false;
+    }
+  }
+
+  function runCheckpoint(): void {
+    // R19: every cycle, whatever the backup did. Autocheckpoint folds the WAL
+    // back in but never shrinks the file; after a day of ingest and a
+    // retention pass, TRUNCATE gives the -wal file's space back. Quiet when it
+    // succeeds - a busy or failed one is worth a line, the next cycle retries.
+    try {
+      const result = checkpoint(db);
+      if (result.busy) {
+        log('wal checkpoint: busy (a reader held the WAL); retrying next cycle.');
+      }
+    } catch (error) {
+      logError(`wal checkpoint failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 

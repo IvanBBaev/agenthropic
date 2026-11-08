@@ -14,6 +14,7 @@
     "dev": "node ../../scripts/check-node-version.mjs && tsx watch src/index.ts",
     "start": "node ../../scripts/check-node-version.mjs && tsx src/index.ts",
     "bench": "node ../../scripts/check-node-version.mjs && tsx bench/corpus-scale.ts",
+    "db:vacuum": "node ../../scripts/check-node-version.mjs && tsx bin/vacuum.ts",
     "drill:restore": "node ../../scripts/check-node-version.mjs && tsx bin/restore-drill.ts",
     "test": "node ../../scripts/check-node-version.mjs && vitest run --coverage"
   },

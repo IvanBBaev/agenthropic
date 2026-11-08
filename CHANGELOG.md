@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **SQLite maintenance (R19).** Every connection sets `synchronous = NORMAL` and
+  `busy_timeout = 5000`; the daily backup cycle ends with `wal_checkpoint(TRUNCATE)`
+  whatever the backup did (busy or failed checkpoints are logged, never thrown). New
+  offline command `pnpm --filter @agenthropic/server db:vacuum`: refuses while a server
+  answers on `DASHBOARD_PORT`, keeps a verified `pre-vacuum-<timestamp>.db` backup, then
+  vacuums and reports the space given back. No automatic `VACUUM` — it would block the
+  single-connection server.
+
 - **Browser hardening headers and a Host allowlist (R18).** Every response, SSE
   included, now carries
   `Content-Security-Policy: default-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'`,
