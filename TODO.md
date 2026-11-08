@@ -1128,7 +1128,11 @@ synthesis, not on this board._
 - [ ] **R7** LABEL-ME ≥52 agents by 2026-11-16, or written waiver in RELEASE §3 (Ivan, D8) [QA-1, PRD-8] _(D8 2026-10-30: waiver written in RELEASE §3 + agent cross-check recorded; Ivan may still label and lift it)_
 
 **P1 — by 2026-11-22**
-- [ ] **R8** SIGTERM/SIGINT → `close()` [OPS-2]
+- [x] **R8** SIGTERM/SIGINT → `close()` [OPS-2]
+  — done 2026-11-08: `installShutdown` in `apps/server/src/index.ts` runs `close()` once, exits 0;
+  a second signal, a throwing close or a 10 s overrun exits 1. Verified on a real process: exit 0
+  under `node --import tsx`. The tsx CLI parent SIGKILLs its child ~30 ms after relaying SIGTERM
+  (exit 143), so the launchd plist now runs one `node --import <tsx loader>` process.
 - [ ] **R9** atomic + verified backups, backup at start, pre-migration backup, downgrade guard, restore schema check [OPS-3/4/9, ARC-8, DAT-16]
 - [x] **R10** RELEASE §5 drill on the real DB, with a real restore [OPS-10, OSS-5] _(done 2026-10-31 by an agent (D9) on a copy of a 342 MB real-corpus DB — drill + shipped `restoreDatabase()` OK, counts identical; re-run at the tag — `docs/measurement/real-corpus-boot-2026-10-31.md`)_
 - [ ] **R11** `/health` reflects watcher/backup/DB/corpus state; logger on [OPS-5, OPS-6]

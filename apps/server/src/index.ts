@@ -1122,14 +1122,77 @@ export function isMainModule(entryPath: string | undefined, moduleUrl: string): 
  * `boot` is injectable so the announcement and the fail-closed exit can both be
  * driven without a process of their own.
  */
-export async function runCli(boot: () => Promise<RunningServer> = start): Promise<void> {
+export async function runCli(
+  boot: () => Promise<RunningServer> = start,
+  proc: ShutdownProcess = process,
+): Promise<void> {
   try {
-    const { app } = await boot();
+    const { app, close } = await boot();
     const bound = app.addresses().map(describeBoundAddress).join(', ');
     console.log(`agenthropic server listening on ${bound}`);
+    installShutdown(close, proc);
   } catch (error) {
     console.error(error instanceof Error ? error.message : error);
     process.exit(1);
+  }
+}
+
+/** The slice of `process` that graceful shutdown needs, injectable for tests. */
+export interface ShutdownProcess {
+  on(signal: NodeJS.Signals, listener: () => void): unknown;
+  exit(code: number): void;
+}
+
+/** How long a signalled shutdown may take before the process gives up and exits 1. */
+export const SHUTDOWN_GRACE_MS = 10_000;
+
+/**
+ * R8 / OPS-2: SIGTERM (launchd `bootout`, `kill`) and SIGINT (Ctrl-C) run the
+ * same `close()` a failed boot runs - alerting deliveries are recorded, the
+ * backup timer and watcher stop, SSE streams end, and the database closes -
+ * before the process exits 0. A clean exit 0 is also what tells launchd's
+ * `KeepAlive { SuccessfulExit: false }` not to restart a deliberate stop.
+ *
+ * A second signal while closing, a close that throws, or a close that outlives
+ * the grace period exits 1 at once. Before `boot()` resolves no handler is
+ * installed, so a signal during startup replay keeps the default (immediate)
+ * exit; SQLite in WAL mode rolls back the open transaction on the next boot.
+ */
+export function installShutdown(
+  close: () => Promise<void>,
+  proc: ShutdownProcess,
+  graceMs: number = SHUTDOWN_GRACE_MS,
+): void {
+  let stopping = false;
+  const onSignal = (signal: NodeJS.Signals): void => {
+    if (stopping) {
+      console.error(`agenthropic server: second ${signal}, exiting without waiting`);
+      proc.exit(1);
+      return;
+    }
+    stopping = true;
+    console.log(`agenthropic server: ${signal} received, shutting down`);
+    const timer = setTimeout(() => {
+      console.error(`agenthropic server: shutdown took longer than ${graceMs} ms, exiting`);
+      proc.exit(1);
+    }, graceMs);
+    timer.unref();
+    close().then(
+      () => {
+        clearTimeout(timer);
+        proc.exit(0);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        console.error(error instanceof Error ? error.message : error);
+        proc.exit(1);
+      },
+    );
+  };
+  for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+    proc.on(signal, () => {
+      onSignal(signal);
+    });
   }
 }
 

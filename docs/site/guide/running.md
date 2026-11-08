@@ -123,7 +123,10 @@ Signal the server process, not the wrapper: find it by its port,
 lsof -nP -iTCP:7341 -sTCP:LISTEN
 ```
 
-and `kill -TERM` that PID. A launchd or systemd unit that runs the wrapper inherits the
+and `kill -TERM` that PID. The server treats `SIGTERM` and `SIGINT` alike: it records
+any in-flight alert delivery, stops the backup timer and the watcher, ends open SSE
+streams, closes the database and exits `0`. A close that takes longer than 10 seconds,
+or a second signal, exits `1` at once. A launchd or systemd unit that runs the wrapper inherits the
 same problem; point the unit at the server command itself. The macOS service below does
 exactly that.
 

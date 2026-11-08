@@ -332,6 +332,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`SIGTERM` and `SIGINT` now shut the server down cleanly (R8 / OPS-2).** Before, a
+  signal killed the process with the database open and SSE streams cut mid-write. The
+  server now runs the same close path a failed boot runs and exits `0`. It exits `1` on a
+  second signal or after a 10-second grace period. A clean `0` keeps launchd from
+  restarting a deliberate stop.
 - The production dependency audit is clean of high and critical advisories (R5 / OSS-2). fastify
   moves to 5.12.8 and `@fastify/type-provider-typebox` to 6.3.0; the lockfile is deduped so the
   patched `fast-uri` and `find-my-way` are the only copies. CI now runs
