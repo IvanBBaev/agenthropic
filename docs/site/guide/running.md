@@ -124,7 +124,8 @@ lsof -nP -iTCP:7341 -sTCP:LISTEN
 ```
 
 and `kill -TERM` that PID. A launchd or systemd unit that runs the wrapper inherits the
-same problem; point the unit at the server command itself.
+same problem; point the unit at the server command itself. The macOS service below does
+exactly that.
 
 ### Why one origin is better than the dev proxy
 
@@ -318,6 +319,43 @@ dashboard declines to claim an ending nobody observed.
 
 `hooks/README.md` is the full runbook, and [Hooks installer](../usage/hooks-installer.md)
 is the long-form page.
+
+## Running it as a launchd service (macOS)
+
+For daily use the server should start at login and come back after a crash.
+`scripts/service-install.mjs` writes a per-user launchd agent for that. It runs
+`node <tsx cli> src/index.ts` from `apps/server` directly, with no `pnpm` wrapper in
+between, so `launchctl bootout` signals the server itself.
+
+Run it from the checkout you want the service to serve, with Node 22 active and the SPA
+built once:
+
+```sh
+pnpm --filter @agenthropic/web build
+export DASHBOARD_TOKEN="…"                 # the same token the hooks send
+node scripts/service-install.mjs           # dry run: prints the plist, token masked
+node scripts/service-install.mjs --write   # writes it and prints the launchctl steps
+```
+
+What `--write` does, and what it refuses to do:
+
+- It writes `~/Library/LaunchAgents/io.github.ivanbbaev.agenthropic.plist` with mode
+  `0600`, because the plist holds the token. Logs go to `~/Library/Logs/agenthropic/`,
+  created `0700`.
+- It records the absolute path of the Node that runs the script. A shell default of
+  Node 26 breaks `better-sqlite3`, so the script refuses any other major version. Pass
+  `--node <path>` to pick another binary.
+- The database defaults to `apps/server/data/agenthropic.db`, the same file a manual
+  `pnpm start` uses. `--db <path>` and `--port <n>` override it.
+- It never runs `launchctl`. It prints the `bootstrap`, `print`, `kickstart` and
+  `bootout` commands for you to run, as the project allows no subprocess spawning.
+- The token is read from the environment only, never from an argument, so it does not
+  land in shell history.
+
+The service restarts after a crash or a non-zero exit, at most once per 30 seconds, and
+never after a clean stop. Re-run the script after moving the checkout, changing the
+token or upgrading Node. The hooks read `DASHBOARD_TOKEN` from Claude Code's
+environment, so export the same value in your shell profile as well.
 
 ## Why there is no compiled server build
 

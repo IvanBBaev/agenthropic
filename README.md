@@ -64,6 +64,9 @@ in between.
 
 Full operator run book — every environment variable with its real default, why the
 host is fixed, and troubleshooting: [`docs/site/guide/running.md`](docs/site/guide/running.md).
+To keep it running across logins on macOS, `node scripts/service-install.mjs --write`
+installs it as a launchd service; see the
+[run book](docs/site/guide/running.md#running-it-as-a-launchd-service-macos).
 
 ### The developer path (two dev servers)
 

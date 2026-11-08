@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **launchd service installer (R1 / OPS-1).** `node scripts/service-install.mjs` prints,
+  and with `--write` writes, a per-user launchd agent that starts the server at login and
+  restarts it after a crash. The plist is `0600` because it holds the token. It pins an
+  absolute Node 22 path and runs `tsx` on the source without a `pnpm` wrapper. The script
+  never runs `launchctl`; it prints the commands instead.
+
 - **Observed outcome causes on the Live board (D9).** Every session summary from
   `GET /api/sessions` now carries `outcomeCauseCounts` — all six cause buckets
   (`concurrency_limit`, `user_interrupt`, `permission_failed`, `dispatch_unavailable`,
