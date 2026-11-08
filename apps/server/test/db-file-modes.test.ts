@@ -19,6 +19,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { backupDatabase, restoreDatabase } from '../src/db/backup';
 import { openDatabase } from '../src/db/connection';
+import { runMigrations } from '../src/db/migrations';
 import {
   assertPrivateModes,
   ensurePrivateDatabaseFiles,
@@ -155,13 +156,14 @@ describe('private file modes', () => {
       expect(modeOf(dest)).toBe(0o600);
     });
 
-    it('removes the file it created when the backup fails', async () => {
+    it('leaves no file behind when the backup fails', async () => {
       const root = tempDir();
       const dest = join(root, 'one.db');
       const db = openDatabase(join(root, 'agent.db'));
       db.close();
       await expect(backupDatabase(db, dest)).rejects.toThrow(/not open/);
       expect(existsSync(dest)).toBe(false);
+      expect(existsSync(`${dest}.partial`)).toBe(false);
     });
 
     it('keeps a file that was there before a failed backup', async () => {
@@ -178,6 +180,7 @@ describe('private file modes', () => {
     const root = tempDir();
     const backup = join(root, 'one.db');
     const db = openDatabase(join(root, 'agent.db'));
+    runMigrations(db);
     await backupDatabase(db, backup);
     db.close();
     chmodSync(backup, 0o644);

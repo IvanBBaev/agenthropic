@@ -2031,6 +2031,41 @@ export function currentSchemaVersion(db: SqliteDatabase): number {
   return row.version ?? 0;
 }
 
+/**
+ * Refuse a database written by a newer build (R9 / OPS-9). `runMigrations`
+ * skips schema_version rows it does not know, so without this check a
+ * downgraded build would boot against tables and columns it has never seen,
+ * and its writes would silently disagree with what the newer build expects.
+ */
+export function assertSchemaNotNewer(
+  db: SqliteDatabase,
+  list: readonly Migration[] = migrations,
+): void {
+  const version = currentSchemaVersion(db);
+  const known = list.reduce((max, migration) => Math.max(max, migration.id), 0);
+  if (version > known) {
+    throw new Error(
+      `Database schema version ${String(version)} is newer than this build knows ` +
+        `(${String(known)}): it was written by a newer agenthropic. Run that version, ` +
+        'or restore a backup taken before the upgrade.',
+    );
+  }
+}
+
+/** Ids of the migrations in `list` that `db` has not applied yet, in order. */
+export function pendingMigrationIds(
+  db: SqliteDatabase,
+  list: readonly Migration[] = migrations,
+): number[] {
+  if (currentSchemaVersion(db) === 0) {
+    return list.map((migration) => migration.id);
+  }
+  const applied = new Set(
+    (db.prepare('SELECT id FROM schema_version').all() as Array<{ id: number }>).map((r) => r.id),
+  );
+  return list.filter((migration) => !applied.has(migration.id)).map((migration) => migration.id);
+}
+
 function assertOrdered(list: readonly Migration[]): void {
   let previousId = 0;
   for (const migration of list) {

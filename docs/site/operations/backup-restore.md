@@ -199,6 +199,31 @@ modes (R4 / SEC-2). A backup is `0600` before its first page lands, and the serv
 creates `backups/` as `0700`. A failed backup removes the file it started, because
 retention would otherwise count an empty file as the newest backup.
 
+### Atomic, verified backups and schema guards, as built
+
+**AMENDED 2026-11-08 (R9).** A backup is now written to `<name>.db.partial`, which
+retention never counts as a backup (it does not end in `.db`). The partial copy must pass
+`PRAGMA integrity_check` before it is renamed to its final name. A crash or a failed check
+therefore never leaves a file under a backup name, and an existing file of that name is
+untouched until a verified copy replaces it.
+
+The boot guards the schema in two ways:
+
+- **Downgrade guard.** A database whose `schema_version` holds a migration this build does
+  not know was written by a newer agenthropic. The boot refuses it with
+  `Database schema version N is newer than this build knows (M)` and closes the database
+  without touching it. Run the newer version again, or restore a backup taken before the
+  upgrade.
+- **Pre-migration backup.** When an existing database has migrations pending, the boot
+  first writes a verified backup named
+  `agenthropic-<timestamp>-pre-migration-v<from>.db` into `backups/`. If that backup fails,
+  the boot stops before any migration runs. A fresh database has nothing to protect and is
+  migrated directly. These backups match the backup-file pattern, so retention prunes them
+  like the daily ones.
+
+There is still no backup at every boot: the first scheduled backup comes 24 hours after
+start, as before.
+
 **Upgrading an older install needs no migration.** The first boot on this version takes
 the database, its sidecars, the journal and every regular file directly in `backups/` to
 `0600`, and `backups/` to `0700`. Check the log for one line afterwards: the directory
@@ -368,7 +393,9 @@ Step by step:
    `restoreDatabase()` runs this check on the staged `<dest>.restoring` copy and
    **throws before touching the destination** if the answer is not `ok` — a restore
    that hands back a subtly-broken database would be worse than one that fails. The
-   rejected staged copy is kept for inspection.
+   rejected staged copy is kept for inspection. *(**AMENDED 2026-11-08 (R9)** — the
+   staged copy must also carry a `schema_version` table, and no migration newer than
+   the running build knows; otherwise the restore throws the same way.)*
 5. **Boot a scratch instance of the server against the restored file** — a second,
    throwaway process pointed at the copy with `DASHBOARD_DB_PATH=<scratch-copy>` and
    its own `DASHBOARD_PORT`, since the live instance still holds 7341. This scratch

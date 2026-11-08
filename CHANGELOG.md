@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Atomic, verified backups and schema guards (R9).** A backup is written to
+  `<name>.db.partial`, checked with `PRAGMA integrity_check` and only then renamed, so a
+  crash or a corrupt copy never leaves a file that retention counts as the newest backup.
+  The boot refuses a database written by a newer build (a `schema_version` id this build
+  does not know) instead of running against an unknown schema, and takes a verified
+  `agenthropic-<timestamp>-pre-migration-v<from>.db` backup before it migrates an existing
+  database; a failed backup stops the boot before any migration. `restoreDatabase` also
+  refuses a file without `schema_version` or with a newer schema. A backup at every boot is
+  not part of this change.
+
 - **Unpriced models are projected, not refused (R2).** A session whose model has no
   `model_pricing` row in force used to fail ingest whole with a `PricingError`, so one new
   model id hid every token of every session that touched it. Ingest now prices through

@@ -2,8 +2,9 @@
  * @agenthropic/server - composition root (WP-U0 + WP-IN10 live loop).
  *
  * loadConfig (mandatory DASHBOARD_TOKEN) -> openDatabase (WAL asserted) ->
- * runMigrations -> listen on the constant loopback host -> verify every bound
- * address is loopback or shut down hard -> corpus replay (the watcher's first
+ * prepareSchema (downgrade guard, pre-migration backup, runMigrations) -> listen
+ * on the constant loopback host -> verify every bound address is loopback or
+ * shut down hard -> corpus replay (the watcher's first
  * tick, when ingest is enabled) -> start the poll loop. The replay runs AFTER
  * the bind (review M-16): on a large corpus it takes seconds, and a probe that
  * hits the port during it should see 'replaying' on /api/health rather than
@@ -25,7 +26,15 @@ import { loadPricing } from './db/pricing';
 import { openDatabase, type SqliteDatabase } from './db/connection';
 import { secureDataFiles } from './db/file-modes';
 import { SqliteEventStore } from './db/event-store';
-import { currentSchemaVersion, runMigrations } from './db/migrations';
+import {
+  assertSchemaNotNewer,
+  currentSchemaVersion,
+  migrations,
+  pendingMigrationIds,
+  runMigrations,
+  type Migration,
+  type MigrationRunResult,
+} from './db/migrations';
 import { createReplayCheckpointStore } from './db/replay-checkpoints';
 import { applyHookLiveness } from './hooks/liveness-status';
 import { registerHookRoutes } from './hooks/routes';
@@ -73,7 +82,13 @@ export {
 export type { StaticSiteOptions } from './http/static-site';
 export { openDatabase, assertConnectionPragmas } from './db/connection';
 export type { SqliteDatabase } from './db/connection';
-export { migrations, runMigrations, currentSchemaVersion } from './db/migrations';
+export {
+  migrations,
+  runMigrations,
+  currentSchemaVersion,
+  assertSchemaNotNewer,
+  pendingMigrationIds,
+} from './db/migrations';
 export type { Migration, MigrationRunResult } from './db/migrations';
 export { SqliteEventStore } from './db/event-store';
 export { insertOrchestrationEdge } from './db/edges';
@@ -808,6 +823,35 @@ export function reportRetentionAtBoot(
   }
 }
 
+/**
+ * Bring the schema up to this build (R9 / OPS-9). A database written by a
+ * newer build is refused before anything touches it. When migrations are
+ * pending on an existing database, a verified backup is taken first, named
+ * after the version it was taken at, so a migration that goes wrong can be
+ * undone with `restoreDatabase`; a backup that fails refuses the migration.
+ * A fresh database has nothing to protect and is migrated directly.
+ */
+export async function prepareSchema(
+  db: SqliteDatabase,
+  backupsDir: string,
+  options: { readonly now?: () => Date; readonly list?: readonly Migration[] } = {},
+): Promise<MigrationRunResult> {
+  const list = options.list ?? migrations;
+  assertSchemaNotNewer(db, list);
+  const from = currentSchemaVersion(db);
+  if (from > 0 && pendingMigrationIds(db, list).length > 0) {
+    const at = (options.now ?? (() => new Date()))();
+    await backupDatabase(
+      db,
+      join(
+        backupsDir,
+        `agenthropic-${at.toISOString().replace(/[:.]/g, '-')}-pre-migration-v${String(from)}.db`,
+      ),
+    );
+  }
+  return runMigrations(db, list);
+}
+
 /** Boot the server. Throws when configuration is invalid (e.g. no token). */
 export async function start(
   env: Record<string, string | undefined> = process.env,
@@ -818,12 +862,17 @@ export async function start(
   const alertsConfig =
     config.alertsConfigPath === null ? null : loadAlertsConfig(config.alertsConfigPath);
   const db = openDatabase(config.dbPath);
-  runMigrations(db);
+  const backupsDir = join(dirname(config.dbPath), 'backups');
+  try {
+    await prepareSchema(db, backupsDir);
+  } catch (error) {
+    db.close();
+    throw error;
+  }
 
   // The signed retention policy (D3) over the backup directory next to the
   // database it protects. Validated here, at wiring time; reported at boot as
   // a dry run; run for real only by the daily timer, after that cycle's backup.
-  const backupsDir = join(dirname(config.dbPath), 'backups');
   // R4 / SEC-2: an install from before private modes is tightened here, and a
   // data file that cannot be made private stops the boot.
   secureDataFiles(
