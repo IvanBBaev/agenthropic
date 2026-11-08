@@ -307,7 +307,7 @@ None of the above helps if the deployment undoes it.
 
 - Use a long, random `DASHBOARD_TOKEN`. The 16-character minimum is an enforced floor,
   not a recommendation. Keep it out of shell history and out of version control.
-- Do not expose port 4317 (or your `DASHBOARD_PORT`) to a network. Tunnel instead.
+- Do not expose port 7341 (or your `DASHBOARD_PORT`) to a network. Tunnel instead.
 - The SQLite database and its backups contain your session content. Protect them the way
   you protect the transcripts they were built from.
 - The hooks installer (`hooks/install.mjs`) generates a `curl` command that reads the

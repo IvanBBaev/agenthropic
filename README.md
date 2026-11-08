@@ -56,7 +56,7 @@ pnpm start
 `pnpm start` builds the SPA (`vite build` → `apps/web/dist`) and then starts the
 server from TypeScript source under `tsx`. The server serves **both** the built
 dashboard and `/api` from the same loopback origin, so there is one process, one
-port and one URL: open <http://127.0.0.1:4317> and paste the token on the token
+port and one URL: open <http://127.0.0.1:7341> and paste the token on the token
 screen. It is kept in `sessionStorage` only — never `localStorage`, never a cookie —
 so you paste it again after closing the tab. Serving the UI and the API from one
 origin is also what the same-origin check on the SSE stream wants; there is no proxy
@@ -74,7 +74,7 @@ Use this one when you are **changing** the dashboard and want hot reload; use
 DASHBOARD_TOKEN="replace-with-a-long-random-secret" pnpm --filter @agenthropic/server dev
 ```
 
-The server binds `127.0.0.1:4317` (loopback only, not configurable), creates its
+The server binds `127.0.0.1:7341` (loopback only, not configurable), creates its
 SQLite database at `apps/server/data/agenthropic.db`, runs migrations on boot, and
 immediately starts ingesting the JSONL corpus from `~/.claude/projects`.
 

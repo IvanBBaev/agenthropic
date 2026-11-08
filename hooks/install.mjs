@@ -117,7 +117,7 @@ export const HOOK_EVENTS = Object.freeze([
 ]);
 
 /** Must match the server's DEFAULT_PORT (apps/server/src/config.ts). */
-export const DEFAULT_PORT = 4317;
+export const DEFAULT_PORT = 7341;
 
 /** Env var the generated command reads the token from - at fire time. */
 export const DEFAULT_TOKEN_ENV = 'DASHBOARD_TOKEN';
@@ -256,7 +256,7 @@ function assertValidTokenEnv(tokenEnv) {
  * 0, nothing written anywhere. Total failure was byte-for-byte
  * indistinguishable from the documented healthy state. `--show-error` restores
  * one line per failed firing and nothing at all on success (measured on curl
- * 8.7.1: `curl: (7) Failed to connect to 127.0.0.1 port 4317` when the server
+ * 8.7.1: `curl: (7) Failed to connect to 127.0.0.1 port 7341` when the server
  * is down, `curl: (28) Operation timed out after 3009 milliseconds` when it is
  * wedged, `curl: (22) The requested URL returned error: 413` when the payload
  * exceeds the server's 1 MiB body cap; a stored 202 prints nothing). The line

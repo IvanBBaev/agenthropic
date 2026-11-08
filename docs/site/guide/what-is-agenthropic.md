@@ -18,7 +18,7 @@ is no longer true — see the update immediately below.)*
 > "bootstrap phase" framing below is design history.
 >
 > **What runs today**, all verified against the repository: the Fastify server bound to
-> `127.0.0.1:4317` and gated by a mandatory `DASHBOARD_TOKEN`; the SQLite/WAL substrate
+> `127.0.0.1:7341` and gated by a mandatory `DASHBOARD_TOKEN`; the SQLite/WAL substrate
 > with a forward-only migration runner (eighteen migrations; 21 as of 2026-10-08) and a daily backup timer;
 > JSONL corpus ingest with replay-on-startup and tail-follow polling that re-reads only
 > new bytes; the persisted subagent DAG (`orchestration_edges`, **five** structural join

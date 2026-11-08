@@ -21,7 +21,12 @@ import { MAX_RETENTION_DAYS, type SignedRetentionValues } from './retention/poli
 /** The one and only bind host. Loopback, constant, no configuration path. */
 export const HOST = '127.0.0.1';
 
-export const DEFAULT_PORT = 4317;
+/**
+ * Not 4317: that is the OpenTelemetry OTLP/gRPC port, and Claude Code's own
+ * telemetry export (or a local collector) would collide with it.
+ * hooks/install.mjs carries the same default and a test keeps them equal.
+ */
+export const DEFAULT_PORT = 7341;
 export const DEFAULT_DB_PATH = 'data/agenthropic.db';
 /**
  * Built SPA directory served by the single-port server (`DASHBOARD_WEB_ROOT`).

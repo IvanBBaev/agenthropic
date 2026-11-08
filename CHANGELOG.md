@@ -145,6 +145,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The default port is now 7341 instead of 4317. 4317 is the OpenTelemetry OTLP/gRPC port, so a
+  local collector or Claude Code's own telemetry export would take it first. The server, the hooks
+  installer, the Vite dev proxy and the docs move together. To upgrade an install that already
+  has hooks, either re-run `node hooks/install.mjs` or keep the old port with
+  `DASHBOARD_PORT=4317` and `--port 4317`.
 - **Nothing is published to npm, and the docs now say so (D7, 2026-10-30).** The README and the
   0.3.0 notes said the root `agenthropic` package was on npm carrying documentation only; the
   registry has no such package (`npm view agenthropic` → E404). The root `package.json` is now

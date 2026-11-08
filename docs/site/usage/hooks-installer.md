@@ -187,7 +187,7 @@ exactly why this page is design-target, not a runbook you can follow today.
 > node hooks/install.mjs --out .claude/settings.json --remove
 > ```
 >
-> Other flags: `--port <n>` (default `4317`, matching the server default),
+> Other flags: `--port <n>` (default `7341`, matching the server default),
 > `--token-env <NAME>` (default `DASHBOARD_TOKEN`) — the *name* of the env var the
 > generated command expands, never its value — and `--help` / `-h`, which prints the
 > usage and exits. Four argument rules are deliberately strict rather than forgiving.
@@ -314,7 +314,7 @@ about is still safe to leave registered.
 > // The same command string is used for all four events.
 > {
 >   "hooks": {
->     "UserPromptSubmit": [{ "hooks": [{ "type": "command", "timeout": 5, "async": true, "command": "curl --silent --show-error --fail --max-time 3 --output /dev/null --request POST --header 'Content-Type: application/json' --variable '%DASHBOARD_TOKEN' --expand-header 'Authorization: Bearer {{DASHBOARD_TOKEN}}' --header \"X-Agenthropic-Delivery-Id: $$-$(date +%s)-$RANDOM\" --data-binary @- 'http://127.0.0.1:4317/api/hooks/event' || true" }] }],
+>     "UserPromptSubmit": [{ "hooks": [{ "type": "command", "timeout": 5, "async": true, "command": "curl --silent --show-error --fail --max-time 3 --output /dev/null --request POST --header 'Content-Type: application/json' --variable '%DASHBOARD_TOKEN' --expand-header 'Authorization: Bearer {{DASHBOARD_TOKEN}}' --header \"X-Agenthropic-Delivery-Id: $$-$(date +%s)-$RANDOM\" --data-binary @- 'http://127.0.0.1:7341/api/hooks/event' || true" }] }],
 >     "Stop":             [{ "hooks": [{ "type": "command", "timeout": 5, "async": true, "command": "…same…" }] }],
 >     "SubagentStop":     [{ "hooks": [{ "type": "command", "timeout": 5, "async": true, "command": "…same…" }] }],
 >     "PreCompact":       [{ "hooks": [{ "type": "command", "timeout": 5, "async": true, "command": "…same…" }] }]
@@ -553,11 +553,11 @@ marked _(planned)_ since no installer or receiver exists yet:
 > 1. `node hooks/install.mjs --out <project>/.claude/settings.json` (add `--dry-run`
 >    first to see the diff).
 > 2. Export `DASHBOARD_TOKEN` (**≥16 characters**, no padding or control characters —
->    the server refuses to start otherwise) and start the server; it binds `127.0.0.1` on port `4317`.
+>    the server refuses to start otherwise) and start the server; it binds `127.0.0.1` on port `7341`.
 > 3. Run a real Claude Code session. Submitting a prompt fires `UserPromptSubmit`;
 >    finishing fires `Stop`; a subagent finishing fires `SubagentStop`.
 > 4. `curl -H "Authorization: Bearer $DASHBOARD_TOKEN"
->    http://127.0.0.1:4317/api/sessions/<id>/events` — a **200 with an empty array**
+>    http://127.0.0.1:7341/api/sessions/<id>/events` — a **200 with an empty array**
 >    means the session is known but produced no hook events; an unknown session id
 >    gives a **404**, or a **409** when ingest refused that session (`code`
 >    `quarantined` or `ingest-failing`). The API never conflates those facts, and no raw

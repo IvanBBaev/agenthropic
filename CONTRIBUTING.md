@@ -51,7 +51,7 @@ Running it takes two terminals. The auth token is mandatory and must be at least
 characters; the server refuses to start without one.
 
 ```sh
-# terminal 1 - API server on 127.0.0.1:4317 (loopback only, not configurable)
+# terminal 1 - API server on 127.0.0.1:7341 (loopback only, not configurable)
 DASHBOARD_TOKEN="replace-with-a-long-random-secret" pnpm --filter @agenthropic/server dev
 
 # terminal 2 - dashboard on 127.0.0.1:5173, proxying /api to the server

@@ -19,8 +19,8 @@ surface).
 > constant in `apps/server/src/config.ts`, deliberately not an environment variable),
 > refuses to start without `DASHBOARD_TOKEN` — or with one shorter than 16
 > characters, see [below](#the-token-requirement-does-not-relax-over-a-tunnel) — and
-> listens on port **4317** by default
-> (`DASHBOARD_PORT` overrides it). Substitute `4317` for `<port>` in every command
+> listens on port **7341** by default
+> (`DASHBOARD_PORT` overrides it). Substitute `7341` for `<port>` in every command
 > below and the procedures apply as written. The token travels as an
 > `Authorization: Bearer <token>` header — with one accommodation: the SSE stream
 > (`/api/stream`) also accepts `?token=`, because the browser `EventSource` API
@@ -100,7 +100,7 @@ tunnel — and both leave the dashboard listening on `127.0.0.1` and nowhere els
 
 In both cases the dashboard process itself never binds anything but `127.0.0.1:<port>`
 (`<port>` was an open stack decision when this page was written; as built the default
-is **4317**, overridable via `DASHBOARD_PORT`). What differs between the two options is which
+is **7341**, overridable via `DASHBOARD_PORT`). What differs between the two options is which
 already-trusted system service — `sshd` or `tailscaled` — is allowed to hand bytes to
 that socket on the app's behalf, and over what authenticated channel. Neither option
 asks the dashboard to change how or where it listens.
@@ -257,7 +257,7 @@ something is open rather than gloss over it:
 
 - **The dashboard's listening port** is a placeholder (`<port>`) throughout this page —
   the concrete default is one of `DESIGN.md` §10's undecided stack questions.
-  *(Resolved as built: default **4317**, `DASHBOARD_PORT` overrides.)*
+  *(Resolved as built: default **7341**, `DASHBOARD_PORT` overrides.)*
 - **The token transport mechanics** (header vs. cookie vs. query parameter) are not yet
   fixed — see [security model](model.md). *(Resolved as built: `Authorization: Bearer`
   header everywhere; `?token=` accepted on `/api/stream` only, redacted from logs.)*

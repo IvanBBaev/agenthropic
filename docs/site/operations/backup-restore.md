@@ -371,7 +371,7 @@ Step by step:
    rejected staged copy is kept for inspection.
 5. **Boot a scratch instance of the server against the restored file** — a second,
    throwaway process pointed at the copy with `DASHBOARD_DB_PATH=<scratch-copy>` and
-   its own `DASHBOARD_PORT`, since the live instance still holds 4317. This scratch
+   its own `DASHBOARD_PORT`, since the live instance still holds 7341. This scratch
    instance still binds `127.0.0.1` and still fails startup without a token — the
    drill proves the backup restores into a *working, still-secure* server, not into
    a database file that merely opens. Be aware that the scratch instance starts its

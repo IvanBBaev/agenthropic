@@ -17,14 +17,14 @@
 >   `packages/test-fixtures`, plus `hooks/`. `pnpm install` with the committed
 >   `pnpm-lock.yaml` is the real step 2.
 > - **Run the server:** `DASHBOARD_TOKEN=<token> pnpm --filter @agenthropic/server dev`.
->   It binds `127.0.0.1:4317` by default — the bind host is a constant in
+>   It binds `127.0.0.1:7341` by default — the bind host is a constant in
 >   `apps/server/src/config.ts` (deliberately not configurable); the port is
->   `DASHBOARD_PORT` (default **4317**). Startup fails without `DASHBOARD_TOKEN`,
+>   `DASHBOARD_PORT` (default **7341**). Startup fails without `DASHBOARD_TOKEN`,
 >   exactly as promised.
 > - **Run the SPA:** `pnpm --filter @agenthropic/web dev` (Vite dev server; React +
 >   D3, four real views). This is the development route — a **second process on a
 >   second port**. For a single-port run, `pnpm start` at the repo root builds the SPA
->   and the server serves it from the same `127.0.0.1:4317` origin as the API (§5).
+>   and the server serves it from the same `127.0.0.1:7341` origin as the API (§5).
 >   Open the URL Vite prints and paste the same `DASHBOARD_TOKEN` into the SPA's gate.
 > - **Install the hooks:** `node hooks/install.mjs` (`WP-X8`, shipped) — generates
 >   four fail-silent hooks (`UserPromptSubmit`, `Stop`, `SubagentStop`, `PreCompact`)
@@ -51,7 +51,7 @@ port) is a **leaning**, not yet a locked decision (`CLAUDE.md` current-state;
 `(planned)` or `(leaning — unconfirmed)` rather than inventing one, per the same
 sourcing discipline as every other page under `docs/site/`. *(As built, the two fixed
 things held exactly — token-or-exit and loopback-or-nothing — and the open ones
-resolved: pnpm monorepo, Fastify, port 4317. See the update box above.)*
+resolved: pnpm monorepo, Fastify, port 7341. See the update box above.)*
 
 ## Prerequisites
 
@@ -156,12 +156,12 @@ backend framework itself, Fastify vs Express, as still open):
 
 ```bash
 DASHBOARD_TOKEN=<token> pnpm --filter @agenthropic/server dev
-# server binds 127.0.0.1:4317 only — refuses to start on 0.0.0.0, refuses to start
+# server binds 127.0.0.1:7341 only — refuses to start on 0.0.0.0, refuses to start
 # with DASHBOARD_TOKEN unset (WP-U0 / WP-F7)
 ```
 
 > **As built:** the command above is the real one, and the port question is settled —
-> default **4317**, overridable with `DASHBOARD_PORT`. Note the script names:
+> default **7341**, overridable with `DASHBOARD_PORT`. Note the script names:
 > `apps/server/package.json` defines `dev` (`tsx watch`, restarts on edit), `start`
 > (`tsx src/index.ts`, no watch), `bench` and `test`. Both run modes execute the
 > TypeScript source under tsx on purpose — there is no build step for the server,
@@ -183,7 +183,7 @@ DASHBOARD_TOKEN=<token> pnpm --filter @agenthropic/server dev
 session data is the health route:
 
 ```bash
-curl -s -H "Authorization: Bearer <token>" http://127.0.0.1:4317/api/health
+curl -s -H "Authorization: Bearer <token>" http://127.0.0.1:7341/api/health
 ```
 
 It is auth-gated like everything else, so a **401** means the token you sent is not the
@@ -206,7 +206,7 @@ The server serves the built SPA from the same origin as the API: a hand-rolled s
 handler (`apps/server/src/http/static-site.ts`, no `@fastify/static`) answers every
 path outside `/api/` from `apps/web/dist` (or `DASHBOARD_WEB_ROOT`), and answers `503`
 with a "not built yet, run `pnpm start`" message while the bundle is absent. So after
-`pnpm start` a browser at `http://127.0.0.1:4317/` gets the dashboard. During
+`pnpm start` a browser at `http://127.0.0.1:7341/` gets the dashboard. During
 development the SPA is a second process instead:
 
 ```bash
@@ -220,7 +220,7 @@ token is present. Two things worth knowing about that token in the browser:
 
 - It is held in **`sessionStorage` only** — never `localStorage`, never a cookie. Close
   the tab and it is gone; that is the intended trade, not an oversight.
-- The dev server proxies `/api` to `http://127.0.0.1:4317`, so from the browser's point
+- The dev server proxies `/api` to `http://127.0.0.1:7341`, so from the browser's point
   of view the API and the stream are same-origin. The stream's origin check accepts a
   request with no `Origin` header and otherwise only the server's own loopback origin —
   no wildcard CORS, ever. This documentation pass verified the check and the proxy
@@ -324,7 +324,7 @@ rather than gloss over it:
 > **As built:** every "fixed" row held without exception, and every "leaning / open"
 > row is now resolved — Fastify (+ TypeBox); React + Vite + D3 confirmed; pnpm
 > monorepo confirmed; commands and port are real (`pnpm install`,
-> `pnpm --filter @agenthropic/server dev`, default port 4317); ingestion resolved to
+> `pnpm --filter @agenthropic/server dev`, default port 7341); ingestion resolved to
 > **JSONL-primary** (no outbox — hooks are liveness only); and the hook-POST leg
 > authenticates with the same mandatory Bearer token as every other endpoint, sent
 > as an `Authorization: Bearer` header that curl itself expands from the

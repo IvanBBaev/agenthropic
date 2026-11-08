@@ -155,7 +155,7 @@ Options:
 | Flag | Meaning |
 | --- | --- |
 | `--out <path>` | Settings file to create/update. Without it, print to stdout. A path beginning with a literal `~` is refused (see HK-6 below). |
-| `--port <n>` | Dashboard port (default `4317`, matching the server default). Decimal digits only (see HK-6 below). |
+| `--port <n>` | Dashboard port (default `7341`, matching the server default). Decimal digits only (see HK-6 below). |
 | `--token-env <NAME>` | Env var name the command reads the token from (default `DASHBOARD_TOKEN`). |
 | `--dry-run` | Show what would be written; write nothing. |
 | `--remove` | Strip previously installed agenthropic entries, keep everything else. |
@@ -193,8 +193,8 @@ not the values the operator typed.
 - `--port` went through `Number()`, and `Number('0x1388')`, `Number('5e3')`,
   `Number(' 5000')` and `Number('+5000')` are all `5000`, so a mistyped port
   passed the integer check and was installed as if it had been typed correctly.
-  A port is now a plain run of decimal digits and nothing else; `04317` is
-  still `4317`.
+  A port is now a plain run of decimal digits and nothing else; `07341` is
+  still `7341`.
 - `--out '~/.claude/settings.json'` (quoted, so the shell did not expand the
   `~`) reached the installer unexpanded, and the write path created a directory
   literally named `~` in the current directory and installed into it. A path
@@ -286,7 +286,7 @@ dashboard cannot break a Claude Code session. Confirmation therefore has to come
 from the server side:
 
 ```sh
-curl -s -H "Authorization: Bearer $DASHBOARD_TOKEN" http://127.0.0.1:4317/api/health
+curl -s -H "Authorization: Bearer $DASHBOARD_TOKEN" http://127.0.0.1:7341/api/health
 ```
 
 A dashboard that is up but silent is almost always one of three things: the token
@@ -325,7 +325,7 @@ omits rather than faking, and the skip/quarantine lines are all documented in
 >     --variable '%DASHBOARD_TOKEN' \
 >     --expand-header 'Authorization: Bearer {{DASHBOARD_TOKEN}}' \
 >     --write-out 'HTTP %{http_code}\n' --data-binary @- \
->     'http://127.0.0.1:4317/api/hooks/event'
+>     'http://127.0.0.1:7341/api/hooks/event'
 > ```
 >
 > `HTTP 202` means the whole path works and the event was stored — it is a real

@@ -38,6 +38,7 @@ import {
   runInstall,
   type SettingsObject,
 } from '../../../hooks/install.mjs';
+import { DEFAULT_PORT as SERVER_DEFAULT_PORT } from '../src/config';
 
 interface HookEntry {
   hooks: Array<{ type: string; command: string; timeout: number }>;
@@ -107,6 +108,13 @@ function shellArgv(command: string, env: Record<string, string>): string[] {
   }
   return argv;
 }
+
+describe('default port', () => {
+  it('matches the server default, and is not the OTLP/gRPC port', () => {
+    expect(DEFAULT_PORT).toBe(SERVER_DEFAULT_PORT);
+    expect(DEFAULT_PORT).not.toBe(4317);
+  });
+});
 
 describe('buildHookCommand (WP-X8)', () => {
   it('targets loopback with the configured port and references the env var, not a token', () => {
@@ -181,7 +189,7 @@ describe('curl environment isolation (GG1, GG2)', () => {
       `--variable '%${DEFAULT_TOKEN_ENV}' ` +
       `--expand-header 'Authorization: Bearer {{${DEFAULT_TOKEN_ENV}}}' ` +
       `--header "X-Agenthropic-Delivery-Id: $$-$(date +%s)-$RANDOM" --data-binary @- ` +
-      `'http://127.0.0.1:4317/api/hooks/event' || true`;
+      `'http://127.0.0.1:7341/api/hooks/event' || true`;
     expect(classifyHookCommand(previous)).toBe('ours');
     expect(previous).not.toBe(buildHookCommand());
     const stale = {
@@ -269,7 +277,7 @@ describe('token argv hygiene (M-11)', () => {
       `curl --silent --fail --max-time 3 --output /dev/null ` +
       `--request POST --header 'Content-Type: application/json' ` +
       `--header "Authorization: Bearer \${${DEFAULT_TOKEN_ENV}}" --data-binary @- ` +
-      `'http://127.0.0.1:4317/api/hooks/event' || true`;
+      `'http://127.0.0.1:7341/api/hooks/event' || true`;
     expect(isAgenthropicHookCommand(legacy)).toBe(true);
     const stale = {
       hooks: { Stop: [{ hooks: [{ type: 'command', command: legacy, timeout: 5 }] }] },
@@ -449,7 +457,7 @@ describe('parseArgs (WP-X8)', () => {
     for (const raw of ['0x1388', '5e3', ' 5000', '+5000', '5000.0', '']) {
       expect(() => parseArgs(['--port', raw])).toThrow(/Invalid port/);
     }
-    expect(parseArgs(['--port', '04317']).port).toBe(4317);
+    expect(parseArgs(['--port', '07341']).port).toBe(7341);
   });
 
   it('refuses an --out path with a literal, unexpanded ~ (HK-6)', () => {

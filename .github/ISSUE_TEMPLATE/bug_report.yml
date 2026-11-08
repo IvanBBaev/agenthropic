@@ -106,7 +106,7 @@ body:
       label: '`GET /api/health` response body'
       description: >-
         The endpoint is token-gated like every other route, so fetch it with
-        `curl -s -H "Authorization: Bearer $DASHBOARD_TOKEN" http://127.0.0.1:4317/api/health`
+        `curl -s -H "Authorization: Bearer $DASHBOARD_TOKEN" http://127.0.0.1:7341/api/health`
         (use your own `DASHBOARD_PORT` if you changed it) - and paste only the JSON
         response, never the command with your literal token in it. The body carries
         `status` and `schemaVersion`, plus `ingest`, `ingestSkips`, `lastTickDurationMs`

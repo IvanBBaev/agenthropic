@@ -45,13 +45,13 @@ import { fileURLToPath } from 'node:url';
 const LOG_PATH = fileURLToPath(
   new URL('../docs/measurement/time-to-understand-log.md', import.meta.url),
 );
-const DEFAULT_BASE = 'http://127.0.0.1:4317';
+const DEFAULT_BASE = 'http://127.0.0.1:7341';
 const TARGET_SECONDS = 30;
 
 /**
  * The token must never leave the machine: loopback origins only, no exceptions.
  * `hostname`, not `host`: WHATWG URL keeps the brackets on an IPv6 hostname
- * (`[::1]`) and drops the port, whereas splitting `host` on ':' cuts `[::1]:4317`
+ * (`[::1]`) and drops the port, whereas splitting `host` on ':' cuts `[::1]:7341`
  * down to `[`, which silently refused the IPv6 loopback.
  */
 function resolveBase() {

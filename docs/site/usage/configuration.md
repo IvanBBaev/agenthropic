@@ -21,7 +21,7 @@
 >   `loadConfig(env)` reads twelve variables and throws on anything unparseable rather
 >   than falling back to a default.
 > - **The full env surface:** `DASHBOARD_TOKEN` (mandatory, **minimum 16 characters**),
->   `DASHBOARD_PORT` (default **4317**), `DASHBOARD_DB_PATH` (default
+>   `DASHBOARD_PORT` (default **7341**), `DASHBOARD_DB_PATH` (default
 >   **`data/agenthropic.db`**), `DASHBOARD_INGEST` (`1`/`true`/`0`/`false`, default on),
 >   **`CLAUDE_PROJECTS_DIR`** (the corpus-root override this page says may not exist —
 >   it does), `DASHBOARD_POLL_INTERVAL_MS` (default 3000),
@@ -82,7 +82,7 @@ resolver.
 | Variable | Required? | Default | What it controls | Validation |
 |---|---|---|---|---|
 | `DASHBOARD_TOKEN` | **Mandatory** | none — the process **throws at startup** if unset | Bearer token for every `/api/*` route and the SSE stream; hashed to SHA-256 then compared with `timingSafeEqual` | Must be present, **≥ 16 characters**, and free of leading/trailing whitespace and control characters (no HTTP header can carry such a value); each failure is a startup error, the short-token one naming the actual length |
-| `DASHBOARD_PORT` | optional | `4317` | TCP port on the loopback bind | Integer 0–65535; anything else is a startup error |
+| `DASHBOARD_PORT` | optional | `7341` | TCP port on the loopback bind | Integer 0–65535; anything else is a startup error |
 | `DASHBOARD_DB_PATH` | optional | `data/agenthropic.db` | Path to the WAL-mode SQLite file | Free-form path |
 | `DASHBOARD_INGEST` | optional | on | Master switch for corpus ingest. Tests boot with `0` so they never touch the real corpus | `1`/`true`/`0`/`false` only; anything else is a startup error |
 | `CLAUDE_PROJECTS_DIR` | optional | unset → the canonical `~/.claude/projects` | Corpus root override — where session transcripts are read from | Empty string counts as unset, so a stray `CLAUDE_PROJECTS_DIR=` cannot silently mean the working directory |
@@ -127,7 +127,7 @@ resolved or withdrawn; see the `As built` column.*
 |---|---|---|---|---|---|
 | `DASHBOARD_TOKEN` | **Mandatory** | none — server **refuses to start** if unset | Bearer token, compared with `timingSafeEqual`, gating every read endpoint, every write endpoint, and the SSE stream | `WP-U0`, `WP-F7`; DESIGN §8 | Holds, plus a **16-character minimum** the design did not state |
 | Listen host | **Fixed** | `127.0.0.1` — `0.0.0.0` is never an accepted value, not even behind a flag | The bind address for every listener the server opens (read API, hook-ingest receiver, `/api/stream`) | `WP-U0`, `WP-F7`; DESIGN §8 | Holds — a constant, not a defaulted option |
-| Listen port | _(planned — default undecided)_ | _(planned)_ | TCP port the Fastify server listens on, loopback-side only | `WP-U0` (stack itself leaning, unconfirmed per the project `CLAUDE.md`) | Decided: `DASHBOARD_PORT`, default **4317** |
+| Listen port | _(planned — default undecided)_ | _(planned)_ | TCP port the Fastify server listens on, loopback-side only | `WP-U0` (stack itself leaning, unconfirmed per the project `CLAUDE.md`) | Decided: `DASHBOARD_PORT`, default **7341** |
 | `~/.claude/projects` path | Fixed conventional location; an override mechanism, if any, is _(planned)_ | the standard Claude Code transcript directory | Ground-truth source of session/agent/token-usage JSONL, read by the `TokenReader`/`TokenSource` port | CD-6 (`concept-analysis-v2.md`); `WP-IN5` | An override **does** exist: `CLAUDE_PROJECTS_DIR` |
 | SQLite database path | _(planned — exact path undecided)_ | _(planned)_ | Location of the single WAL-mode SQLite file (+ its `-wal`/`-shm` siblings) | `WP-D2`; [data model](../architecture/data-model.md) | Decided: `DASHBOARD_DB_PATH`, default `data/agenthropic.db` |
 | WAL mode / `foreign_keys` | **Fixed**, not a toggle | asserted `ON` on every connection open | Journal mode and FK enforcement pragma-checked at connect time, not merely configured once | `WP-D2`; DESIGN §8 | Holds — both pragmas are set *and* read back on every open, and a mismatch throws rather than warns |
@@ -261,7 +261,7 @@ widened bind.
 The SSE stream refuses (`403`) any request whose `Origin` header is present and is not
 the server's own loopback origin, built from the port the request arrived on. A tunnel
 that changes what the browser sees breaks that equality: an SSH forward onto a different
-local port (`ssh -L 8080:127.0.0.1:4317` → `Origin: http://127.0.0.1:8080`) or a
+local port (`ssh -L 8080:127.0.0.1:7341` → `Origin: http://127.0.0.1:8080`) or a
 `tailscale serve` HTTPS front end (`Origin: https://<tailscale-host>`) gets a `403` on
 the stream while every other route works. `DASHBOARD_ALLOWED_ORIGINS` names those
 front-end origins, comma-separated, and the check admits exactly them as well — a
@@ -558,7 +558,7 @@ only restates the subset that is directly configuration-shaped.
 | Listen host `127.0.0.1`, `0.0.0.0` never accepted | **Fixed** (DESIGN §8, `WP-U0`, `WP-F7`) | Holds — a constant with no configuration path |
 | WAL mode + `foreign_keys` asserted on connect | **Fixed** (`WP-D2`, DESIGN §8) | Holds — set *and* read back; a mismatch throws |
 | Secret handling via `token_ref` (`launchd` env / `chmod 600`, `>0600` rejected) | **Fixed mechanism** (`WP-A3`, CD-10) | **Not built** — no secret exists to hold; binding only on a future v2.0 alerting build |
-| Listen port default | **Planned** — undecided | Decided: `DASHBOARD_PORT`, default 4317 |
+| Listen port default | **Planned** — undecided | Decided: `DASHBOARD_PORT`, default 7341 |
 | Config loader's env-vs-file precedence | **Planned** — `WP-U0` names a "config loader," format/precedence undecided | **Moot** — environment variables only; no file is read |
 | SQLite database path | **Planned** — undecided | Decided: `DASHBOARD_DB_PATH`, default `data/agenthropic.db` |
 | Backup directory + retention window (days) | **Planned** — requirement fixed (CD-10, `WP-F8`/`WP-D10`), numbers undecided | Backups run daily into `<dirname(DASHBOARD_DB_PATH)>/backups`. Retention is **signed** (D3, 2026-09-08) and wired after each successful backup: backup files expire at 30 days behind a floor of 7, `events` rows at 90 days, `token_usage` never — `DASHBOARD_RETENTION_BACKUP_DAYS` / `_BACKUP_KEEP_MIN` / `_EVENTS_DAYS` |

@@ -407,7 +407,7 @@ The endpoint sits behind the same auth gate as every other `/api/*` route, so a 
 needs the token:
 
 ```bash
-curl -s -H "Authorization: Bearer $DASHBOARD_TOKEN" http://127.0.0.1:4317/api/health
+curl -s -H "Authorization: Bearer $DASHBOARD_TOKEN" http://127.0.0.1:7341/api/health
 ```
 
 Two fields are always present — `status`, which is `"replaying"` until the startup

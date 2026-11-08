@@ -5,7 +5,7 @@ product, what every environment variable actually does, how to wire the Claude C
 hooks, and what to check when something is wrong. The key takeaway up front: from a
 checkout, **`pnpm start` is the whole thing** — it builds the SPA, then starts the
 loopback server, which serves the dashboard **and** the API from one origin, so the
-only URL an operator ever opens is <http://127.0.0.1:4317>. A
+only URL an operator ever opens is <http://127.0.0.1:7341>. A
 `DASHBOARD_TOKEN` of at least 16 characters must be exported first; without it the
 process refuses to boot, by design.
 
@@ -35,9 +35,9 @@ process refuses to boot, by design.
 |---|---|---|
 | Command | `pnpm start` | `pnpm --filter @agenthropic/server dev` **plus** `pnpm --filter @agenthropic/web dev` |
 | Processes | one | two |
-| Ports | `127.0.0.1:4317` only | `4317` (API) and `5173` (Vite, proxying `/api` → `4317`) |
+| Ports | `127.0.0.1:7341` only | `7341` (API) and `5173` (Vite, proxying `/api` → `7341`) |
 | SPA source | the built bundle in `apps/web/dist` | Vite dev server, hot reload |
-| Open | <http://127.0.0.1:4317> | the URL Vite prints (`http://127.0.0.1:5173` — Vite's default; `apps/web/vite.config.ts` pins the *host*, never the port, so read the printed line) |
+| Open | <http://127.0.0.1:7341> | the URL Vite prints (`http://127.0.0.1:5173` — Vite's default; `apps/web/vite.config.ts` pins the *host*, never the port, so read the printed line) |
 | Use it when | you want to **use** the dashboard | you are **changing** the dashboard |
 
 If you are here to observe your own Claude Code sessions, use the operator path. The
@@ -75,7 +75,7 @@ echo "$DASHBOARD_TOKEN"
 pnpm start
 ```
 
-Then open <http://127.0.0.1:4317>, paste the token into the gate, and you are in.
+Then open <http://127.0.0.1:7341>, paste the token into the gate, and you are in.
 
 ### What `pnpm start` actually does
 
@@ -93,7 +93,7 @@ major other than 22, before anything is built), the SPA build, then the server:
 2. **`pnpm --filter @agenthropic/server start`** runs `tsx src/index.ts` in
    `apps/server`. That is the composition root: it loads configuration (failing
    immediately if `DASHBOARD_TOKEN` is missing), opens the SQLite database in WAL mode,
-   runs the forward-only migrations, binds `127.0.0.1:4317`, re-verifies that every
+   runs the forward-only migrations, binds `127.0.0.1:7341`, re-verifies that every
    bound address is loopback (and exits hard if one is not), serves the built SPA and
    the `/api/*` routes from that one origin, replays the JSONL corpus, and then starts
    the tail-follow poll loop.
@@ -101,7 +101,7 @@ major other than 22, before anything is built), the SPA build, then the server:
 The server announces itself on stdout once the bind succeeds:
 
 ```
-agenthropic server listening on 127.0.0.1:4317
+agenthropic server listening on 127.0.0.1:7341
 ```
 
 and the startup corpus pass prints one summary line, for example
@@ -120,7 +120,7 @@ than 10 s after the wrapper got `SIGTERM`; `SIGTERM` to the child itself exited 
 Signal the server process, not the wrapper: find it by its port,
 
 ```sh
-lsof -nP -iTCP:4317 -sTCP:LISTEN
+lsof -nP -iTCP:7341 -sTCP:LISTEN
 ```
 
 and `kill -TERM` that PID. A launchd or systemd unit that runs the wrapper inherits the
@@ -133,7 +133,7 @@ The realtime stream is **SSE, never WebSocket**, and `/api/stream` enforces a
 `Origin` header is refused with `403`. Serving the SPA from the same loopback origin
 that serves `/api` means the browser sends the origin the check expects, with no proxy
 in between and no CORS relaxation anywhere. The dev proxy works too — Vite forwards
-`/api` to `127.0.0.1:4317`, so the browser still sees one origin — but the operator path
+`/api` to `127.0.0.1:7341`, so the browser still sees one origin — but the operator path
 removes the proxy from the trust story entirely. See
 [Security model](../security/model.md) for the full control catalogue.
 
@@ -164,7 +164,7 @@ environment-only, and there is no config file to leave a secret in.
 | Variable | Meaning | Default | Required |
 |---|---|---|---|
 | `DASHBOARD_TOKEN` | Bearer token for every `/api/*` route and the SPA gate. Minimum **16 characters**; no leading/trailing whitespace, no control characters. | none | **Yes — startup fails without it** |
-| `DASHBOARD_PORT` | TCP port on the fixed loopback host. Integer 0–65535; an unparseable value is a startup error. | `4317` | No |
+| `DASHBOARD_PORT` | TCP port on the fixed loopback host. Integer 0–65535; an unparseable value is a startup error. | `7341` | No |
 | `DASHBOARD_WEB_ROOT` | Directory the built SPA is served from. | `apps/web/dist`, resolved from the server module's own location — **not** from the working directory | No |
 | `DASHBOARD_DB_PATH` | SQLite database file. Relative paths resolve against the server's working directory, which `pnpm start` makes `apps/server`. | `data/agenthropic.db` (so `apps/server/data/agenthropic.db`) | No |
 | `DASHBOARD_INGEST` | Corpus ingest master switch. Accepts `1`/`true`/`0`/`false`; anything else is a startup error. | on | No |
@@ -297,7 +297,7 @@ What the installer actually does, read out of `hooks/install.mjs`:
   preserved verbatim, and re-running never duplicates agenthropic's own entries.
   `--dry-run` shows the result without writing; `--remove` strips only agenthropic's
   entries; it refuses to touch a file it cannot parse as JSON.
-- Useful flags: `--port <n>` (default `4317` — set it if you changed `DASHBOARD_PORT`)
+- Useful flags: `--port <n>` (default `7341` — set it if you changed `DASHBOARD_PORT`)
   and `--token-env <NAME>` (default `DASHBOARD_TOKEN`).
 
 **Hooks contribute liveness only, never structure.** The JSONL transcripts under
@@ -377,7 +377,7 @@ pnpm --filter @agenthropic/web dev
 ```
 
 `pnpm --filter @agenthropic/server dev` is `tsx watch src/index.ts`; the Vite dev server
-sets `server.host: '127.0.0.1'` and proxies `/api` to `http://127.0.0.1:4317`. Open the
+sets `server.host: '127.0.0.1'` and proxies `/api` to `http://127.0.0.1:7341`. Open the
 URL Vite prints and paste the same token. `vite preview`, which serves the production
 bundle, pins the same host. Wide binds are not merely a convention here: `pnpm
 gate:spawner` scans the whole tree and rejects `0.0.0.0`, `host: true`, `host: ''` and
@@ -394,7 +394,7 @@ The bind fails and the process exits non-zero with the driver's `EADDRINUSE` mes
 Find the holder and either stop it or move agenthropic:
 
 ```sh
-lsof -nP -iTCP:4317 -sTCP:LISTEN
+lsof -nP -iTCP:7341 -sTCP:LISTEN
 DASHBOARD_PORT=4400 pnpm start
 ```
 
@@ -434,7 +434,7 @@ The `/api/*` routes are unaffected either way; a missing bundle never takes the 
 down. You can confirm the server itself is healthy with a direct probe:
 
 ```sh
-curl -s -H "Authorization: Bearer $DASHBOARD_TOKEN" http://127.0.0.1:4317/api/health
+curl -s -H "Authorization: Bearer $DASHBOARD_TOKEN" http://127.0.0.1:7341/api/health
 ```
 
 ### The dashboard is up but empty
