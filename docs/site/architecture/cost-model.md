@@ -357,6 +357,54 @@ an edit. There is no staleness-fails-CI test for it to keep honest any more
 ([§9](#9-the-no-priceless-model-fails-ci-rule)). The authoritative source is still the
 pricing page read by hand, not a feed.
 
+*Amended 2026-11-14 (R15, DAT-4, owner decision D3):* a rate no longer needs a release.
+Migrations keep the seed; every rate after it is written by the operator CLI below, which
+puts one row in `pricing_audit` for each rate it changes. A migration is still the right
+place for a rate that every install must carry, but a model the seed does not know is no
+longer a wait for the next tag.
+
+### Changing a rate: the `pricing` CLI (R15)
+
+```bash
+pnpm --filter @agenthropic/server pricing unpriced   # which stored tokens no rate covers
+pnpm --filter @agenthropic/server pricing list [--model <id>]
+# Stop the server first; `set` refuses while anything answers on DASHBOARD_PORT.
+pnpm --filter @agenthropic/server pricing set claude-example-1 --effective-from 2026-01-01 \
+  --input 3 --output 15 --cache-read 0.3 --cache-write-5m 3.75 --cache-write-1h 6 \
+  --note "pricing page, 2026-11-14"
+pnpm --filter @agenthropic/server pricing audit [--model <id>] [--limit <n>]
+```
+
+The CLI resolves the database the way the server does (`DASHBOARD_DB_PATH`, else
+`data/agenthropic.db` under `apps/server`) and never creates one. Its rules:
+
+- **`unpriced` gives the floor.** It lists, per model, the tokens that no dated rate
+  covers, the session count and the first and last day of that usage. These are the same
+  tokens the API reports as `unpricedTokens`, read from the same rollup rows. A rate whose
+  `--effective-from` is later than the first day leaves the older usage unpriced, and
+  `unpriced` keeps saying so.
+- **A model with no rate needs all five.** `set` refuses a partial set for a model with no
+  rows at all, because a half-priced model shows some buckets as `$0` with nothing saying
+  why. A model that already has rates takes any subset.
+- **The same instant corrects; a later instant adds.** `set` at an `effective_from` that
+  already has a row replaces that rate, and the audit row records the old value. A later
+  instant adds a new dated row, and the earlier rate stays in force for earlier messages.
+  Instants are stored in canonical form (migration 14), so `2026-01-01` and
+  `2026-01-01T00:00:00Z` are the same row.
+- **Rates are plain decimals** (`3`, `0.3`). `1e3`, a negative number and `Infinity` are
+  refused before anything is opened. A rate that equals the stored one is reported as
+  `unchanged` and writes no audit row.
+- **`set` refuses while a server runs.** Every write to `model_pricing` fires migration
+  16's triggers, which rebuild that model's slice of `token_usage_rollup` by scanning
+  `token_usage`. On a large store that holds the write lock longer than the server's
+  `busy_timeout`. The read-only commands run at any time. A server started after the
+  write picks the new rate up on its first read; no re-ingest is needed.
+
+`pricing_audit` is append-only (triggers refuse `UPDATE` and `DELETE`, like `events_raw`).
+It records who wrote (`source = 'cli'`), when, the model, bucket, instant, the new rate,
+the rate it replaced (`NULL` for a new row) and the note. Rates seeded by migrations are not
+in it; the migrations themselves are their record.
+
 ## 4. `PricingProvider`: a dated lookup, not "the current price"
 
 Pricing a historical event correctly requires resolving the rate **that was in effect

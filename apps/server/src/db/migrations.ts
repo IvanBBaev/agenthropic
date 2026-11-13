@@ -1604,6 +1604,54 @@ export const migrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    id: 27,
+    name: 'pricing-audit',
+    up(db) {
+      // WHY. R15 (DAT-4, owner decision D3, 2026-10-30). Until now a rate
+      // could only change by shipping a migration - four reactive pricing
+      // migrations in two months, each one a release. The operator path is
+      // the `pricing` CLI (src/db/pricing-admin.ts); migrations keep the seed.
+      // A rate written outside a migration has no commit to explain it, so
+      // every CLI write leaves one row here: what was set, what it replaced,
+      // when, and the operator's note.
+      //
+      // previous_usd_per_mtok is NULL when the write created the
+      // (model, bucket, effective_from) row, and the replaced rate when it
+      // corrected one in place.
+      //
+      // APPEND-ONLY, like events_raw: the two triggers refuse UPDATE and
+      // DELETE, so the trail cannot be rewritten by the path it audits. The
+      // bucket list is spelled out rather than interpolated from
+      // TOKEN_BUCKETS, so the checksum covers it as written.
+      db.exec(`
+        CREATE TABLE pricing_audit (
+          id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+          recorded_at           TEXT NOT NULL,
+          source                TEXT NOT NULL CHECK (source IN ('cli')),
+          model                 TEXT NOT NULL,
+          bucket                TEXT NOT NULL CHECK (bucket IN
+                                  ('input', 'output', 'cache_read', 'cache_write_5m', 'cache_write_1h')),
+          effective_from        TEXT NOT NULL,
+          usd_per_mtok          REAL NOT NULL,
+          previous_usd_per_mtok REAL,
+          note                  TEXT
+        );
+
+        CREATE TRIGGER pricing_audit_no_update
+        BEFORE UPDATE ON pricing_audit
+        BEGIN
+          SELECT RAISE(ABORT, 'pricing_audit is append-only');
+        END;
+
+        CREATE TRIGGER pricing_audit_no_delete
+        BEFORE DELETE ON pricing_audit
+        BEGIN
+          SELECT RAISE(ABORT, 'pricing_audit is append-only');
+        END;
+      `);
+    },
+  },
 ];
 
 export interface MigrationRunResult {

@@ -49,6 +49,7 @@ constraint, and invariant named in the tables is sourced.
 | `token_usage` | Projection | **Built** (migration 6; attribution repaired by 8, indexed by 10, `occurred_at` canonicalized and guarded by 15) | Ground-truth token rows — as built one row per `(message_id, bucket)` over five priced buckets; never pruned | DESIGN §4, CD-3/CD-4, `WP-D8` |
 | `token_usage_rollup` | Derived (work already done) | **Built** (migration 16) | Persisted rollup of `token_usage` at grain `(session_id, model, bucket, day, rate_effective_from)` — tokens and the resolved pricing row, never dollars — kept exact by triggers on both `token_usage` and `model_pricing`; the table `GET /api/cost/summary` reads; equal to a direct grouped scan by construction and pinned to it by an equivalence suite | review M-19, `WP-U4` |
 | `model_pricing` | Reference | **Built** (migration 7, converged by 11, `effective_from` canonicalized and guarded by 14, ten rows for two models added by 18, `claude-opus-5-5` added by 19 and `claude-sonnet-5` re-priced to the official page by 20; `PROVISIONAL` seed) | Versioned per-token rates, dated, per `(model, bucket)` | CD-4, `WP-C1` |
+| `pricing_audit` | Reference (audit) | **Built** (migration 27) | Append-only record of every rate the operator `pricing` CLI wrote: model, bucket, instant, new and previous rate, note. Migration-seeded rates are not in it | R15, DAT-4, D3 |
 | `ingest_checkpoints` | Operational cache | **Built** (migration 9) | Opt-in durable replay memory: which sessions' bytes have not moved since the last run. A cache of work already done — never dashboard truth | `WP-IN10` |
 | `schema_version` | Runner bookkeeping | **Built** (the runner itself) | One row per applied migration: id, name, applied-at, sha-256 content checksum | `WP-D3` |
 | `alert_rules` | Alerting (v2.0 core) | **Built** (migration 23) | Trigger conditions mirrored from the alerts config file; `armed_at` bounds which subjects a rule considers | DESIGN §4/§7, `WP-A2` |
@@ -868,6 +869,32 @@ which would have kept the cancelled price in force for every earlier message. On
 `usd_per_mtok` changes, which migration 16's rollup trigger deliberately does not watch (the
 rate is applied at read time), so stored Sonnet 5 usage re-prices on the next read with no
 re-ingest. A Sonnet 5 row an operator wrote at any other instant is left alone.
+
+### `pricing_audit` — the operator's rate history (migration 27, R15)
+
+Since R15 a rate after the seed is written by the operator `pricing` CLI, not by a
+migration ([cost model, *Changing a rate*](cost-model.md#changing-a-rate-the-pricing-cli-r15)).
+Each rate the CLI changes writes one row here in the same transaction:
+
+```sql
+CREATE TABLE pricing_audit (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  recorded_at           TEXT NOT NULL,
+  source                TEXT NOT NULL CHECK (source IN ('cli')),
+  model                 TEXT NOT NULL,
+  bucket                TEXT NOT NULL CHECK (bucket IN
+                          ('input', 'output', 'cache_read', 'cache_write_5m', 'cache_write_1h')),
+  effective_from        TEXT NOT NULL,
+  usd_per_mtok          REAL NOT NULL,
+  previous_usd_per_mtok REAL,
+  note                  TEXT
+);
+```
+
+`previous_usd_per_mtok` is `NULL` when the write created a row, and holds the replaced rate
+when it corrected one at the same instant. Two triggers abort any `UPDATE` or `DELETE`, the
+same guard `events_raw` has. Retention never touches the table. It has no foreign key to
+`model_pricing`, so the history stays readable after a rate is replaced.
 
 ## `ingest_checkpoints` — durable replay memory
 

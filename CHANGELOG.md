@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Operator pricing CLI with an audit trail (R15, DAT-4, owner decision D3).**
+  `pnpm --filter @agenthropic/server pricing` lists the dated rate table (`list`), shows
+  which stored tokens no rate covers and from which day (`unpriced`), writes dated rates
+  for one model (`set`, all five buckets for a model with none, refused while the server
+  runs) and prints the write history (`audit`). Each changed rate writes one row in the
+  new append-only `pricing_audit` table (migration 27) with the rate it replaced. A model
+  missing from the seed no longer waits for a release.
+
 - **Threat model covers the review's gaps (R26, SEC §4).** `docs/site/security/threat-model.md`
   §6 states availability under authenticated hostile content, data at rest against other
   local accounts, the token as an ambient secret in Claude Code's environment (who can read

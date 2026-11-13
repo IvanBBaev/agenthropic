@@ -1188,7 +1188,7 @@ describe('migration runner (WP-D3)', () => {
       // The fresh database is at the latest schema; migration 20 touches only
       // claude-sonnet-5, so the opus-5-5 rows read exactly as 19 wrote them.
       temp = createMigratedTempDb();
-      expect(currentSchemaVersion(temp.db)).toBe(26);
+      expect(currentSchemaVersion(temp.db)).toBe(27);
       expect(opus55Rows(temp.db)).toEqual(
         OFFICIAL_RATES.map((row) => ({ ...row, effective_from: FLOOR })),
       );
@@ -1334,7 +1334,7 @@ describe('migration runner (WP-D3)', () => {
 
     it('prices claude-sonnet-5 at the official per-bucket rates on a fresh database', () => {
       temp = createMigratedTempDb();
-      expect(currentSchemaVersion(temp.db)).toBe(26);
+      expect(currentSchemaVersion(temp.db)).toBe(27);
       expect(sonnet5Rows(temp.db)).toEqual(at(OFFICIAL_RATES));
     });
 
@@ -1446,7 +1446,7 @@ describe('migration runner (WP-D3)', () => {
         insertSession(db, 'sess-b');
         insertSession(db, 'sess-c');
 
-        expect(runMigrations(db, migrations).appliedIds).toEqual([22, 23, 24, 25, 26]);
+        expect(runMigrations(db, migrations).appliedIds).toEqual([22, 23, 24, 25, 26, 27]);
 
         expect(stamps(db)).toEqual([
           { id: 'sess-a', ingest_seq: 1 },
@@ -1556,7 +1556,7 @@ describe('migration runner (WP-D3)', () => {
 
     it('seeds claude-sonnet-5-5 with the official per-bucket rates at the canonical floor', () => {
       temp = createMigratedTempDb();
-      expect(currentSchemaVersion(temp.db)).toBe(26);
+      expect(currentSchemaVersion(temp.db)).toBe(27);
       expect(sonnet55Rows(temp.db)).toEqual(
         OFFICIAL_RATES.map((row) => ({ ...row, effective_from: FLOOR })),
       );
@@ -1622,7 +1622,7 @@ describe('migration runner (WP-D3)', () => {
 
     it('seeds claude-haiku-5-5 with the official base-tier rates at the canonical floor', () => {
       temp = createMigratedTempDb();
-      expect(currentSchemaVersion(temp.db)).toBe(26);
+      expect(currentSchemaVersion(temp.db)).toBe(27);
       expect(haiku55Rows(temp.db)).toEqual(
         OFFICIAL_RATES.map((row) => ({ ...row, effective_from: FLOOR })),
       );
@@ -1647,7 +1647,7 @@ describe('migration runner (WP-D3)', () => {
             .all();
         const before = otherRows();
 
-        expect(runMigrations(db).appliedIds).toEqual([25, 26]);
+        expect(runMigrations(db).appliedIds).toEqual([25, 26, 27]);
         expect(haiku55Rows(db)).toHaveLength(OFFICIAL_RATES.length);
         expect(otherRows()).toEqual(before);
         expect(runMigrations(db).appliedIds).toEqual([]);
@@ -1676,7 +1676,7 @@ describe('migration runner (WP-D3)', () => {
         );
         insertSession(db, 'sess-a');
 
-        expect(runMigrations(db).appliedIds).toEqual([26]);
+        expect(runMigrations(db).appliedIds).toEqual([26, 27]);
         expect(columns(db)).toEqual([{ claude_code_versions: null, format_census: null }]);
         expect(runMigrations(db).appliedIds).toEqual([]);
       } finally {

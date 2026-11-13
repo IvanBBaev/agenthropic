@@ -19,9 +19,9 @@
  * The normaliser cancels the classes a transform is free to vary - comments
  * (including annotations a transform INJECTS, such as vite's `@__PURE__` block
  * annotation), whitespace, and separators that are redundant before a closing
- * bracket. After it, vitest agrees with tsx on 21 of the 26, up from 0 - and
+ * bracket. After it, vitest agrees with tsx on 22 of the 27, up from 0 - and
  * `node --experimental-strip-types` agrees on the same ids (1-6, 8, 9, 10, 12,
- * 13, 17, 18, 19, 20), also up from 0 (migrations 21-26 measured under
+ * 13, 17, 18, 19, 20), also up from 0 (migrations 21-27 measured under
  * tsx and vitest only). Re-measured 2026-09-01 by running all
  * three, again on 2026-09-10 when migration 18 was appended, and again under
  * tsx and vitest on 2026-09-26 when migration 19 was appended, and under all
@@ -31,7 +31,8 @@
  * 2026-10-24 when migration 23 was appended, and under tsx and vitest on
  * 2026-10-28 when migration 24 was appended, and under tsx and vitest on
  * 2026-10-30 when migration 25 was appended, and under tsx and vitest on
- * 2026-11-08 when migration 26 was appended.
+ * 2026-11-08 when migration 26 was appended, and under tsx and vitest on
+ * 2026-11-14 when migration 27 was appended.
  *
  * Migration 17 (`agents-outcome-cause`) is the twelfth, appended after the H-1
  * measurement above, and it agrees for a reason its body states: one `db.exec`
@@ -110,7 +111,7 @@
  * one `scripts/check-licenses.mjs` uses for its sanctioned `pnpm licenses` call
  * - and it is per-line, so any OTHER forbidden line added to this file is still
  * caught. The alternative was to delete the tsx runs, which would demote
- * OPERATOR_CHECKSUMS from a measurement re-taken on every CI run to twenty-six
+ * OPERATOR_CHECKSUMS from a measurement re-taken on every CI run to twenty-seven
  * transcribed strings that nothing checks against the shipped file. That trade
  * is not worth making: the pins exist precisely to be a measurement.
  */
@@ -155,10 +156,11 @@ const OPERATOR_CHECKSUMS: Readonly<Record<number, string>> = {
   24: '29a6e5a896eec71b9c1dee327267c2f3f0ca0889eee22ee31e1398180412b1f2',
   25: '85bf302cb1957935241ebae03b417c88002074e4175337ba3e2414e741b7efb8',
   26: '084792449b0fe890e12a21ffa04037f4096f6ac4d14b1ceb736e68cfa8cf5e27',
+  27: '447e64481647a9ddebcc2897a878d7fa4deecebb97d0ff128dba0d3d3544e5e8',
 };
 
 /**
- * The same twenty-six, computed inside this vitest process. Spelled as the
+ * The same twenty-seven, computed inside this vitest process. Spelled as the
  * operator table plus the five overrides, so a migration the two executors
  * agree on - which is every one not listed here, migrations 17 to 23
  * included - cannot drift in one table without drifting in the other.
