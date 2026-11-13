@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Threat model covers the review's gaps (R26, SEC §4).** `docs/site/security/threat-model.md`
+  §6 states availability under authenticated hostile content, data at rest against other
+  local accounts, the token as an ambient secret in Claude Code's environment (who can read
+  it, what a leak grants) and the scope of hook redaction, each with its open v1.x/v2.0
+  items. `SECURITY.md` now puts superlinear per-request cost (ReDoS, unbounded recursion on
+  the hook path) in scope.
 - **Hook receiver stays responsive during the startup replay (R20, OPS-8).** Replay passes
   are now capped at 32 MiB of transcript as well as 25 sessions (a larger session is read
   alone), and the replay pauses 10 ms before every pass instead of one `setImmediate` turn,

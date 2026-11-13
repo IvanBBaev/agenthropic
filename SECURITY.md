@@ -81,8 +81,9 @@ in agenthropic is designed to stand up to that, and a report whose precondition 
 
 - Findings against a deployment that deliberately widened the bind or put a reverse
   proxy in front of the port. That is not a supported configuration (see rule 5).
-- Missing rate limiting, resource exhaustion or denial of service against a
-  loopback-only, token-gated port.
+- Missing rate limiting, or volumetric resource exhaustion and denial of service
+  against a loopback-only, token-gated port. (A single request whose processing cost
+  grows superlinearly with its content is different: see "In scope".)
 - Vulnerabilities in Claude Code itself, or in the content of your own transcripts.
 - Anything requiring physical access to the machine.
 - Dependency advisories with no demonstrated path to one of the in-scope items below.
@@ -105,6 +106,15 @@ Anything that:
 - defeats redaction, so a credential present in a hook payload reaches storage or the
   browser;
 - introduces an outbound request whose URL comes from ingested data (SSRF).
+- makes one request's or one transcript's processing cost superlinear in its size, for
+  example a regular expression with catastrophic backtracking or unbounded recursion on
+  the hook path. Hook payloads carry content an attacker can influence through prompt
+  injection, so this is an availability bug even behind the token.
+
+The gaps this scope leaves for the operator to own — who can read the token from Claude
+Code's environment, what a leaked token grants, and why the database needs the same
+protection as `~/.claude` — are written out in
+[threat model §6](docs/site/security/threat-model.md#6-gaps-the-rival-findings-did-not-cover).
 
 ## The security model, as built
 

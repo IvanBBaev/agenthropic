@@ -425,6 +425,140 @@ who can already write into `~/.claude/projects` can shape what the dashboard dis
 and the only thing these guards secure is that they cannot use that position to escape
 the tree, exhaust the process, or make agenthropic write anything back.
 
+## 6. Gaps the rival findings did not cover
+
+*(Added 2026-11-13, R26, from the security role review of 2026-10-29, `SEC §4`.)*
+
+Sections 1–4 are organised around other projects' bugs, so they only model the attackers
+those bugs invited. The security review found four questions that this framing never
+asks. Each is answered below from the shipped code, with what is still open listed
+plainly.
+
+### 6.1 Availability — authenticated but hostile content
+
+**The gap.** The controls above decide *who* may send a request. They do not limit what
+an allowed request may *contain*. A hook payload is sent with the operator's valid token,
+yet its content is attacker-influenced: a prompt the user pasted, a file a hostile repo
+asked the model to print, or a `Stop` event carrying `last_assistant_message`. The server
+is a single Node event loop. One request that costs superlinear time stalls the API, the
+SSE stream and ingest together, and curl's 3-second hook timeout does not stop the
+server from finishing that work.
+
+**The rule.** Every parser and pattern on a path that untrusted content reaches must run
+in time linear in its input, and must have a size or depth budget.
+
+**As built.**
+
+- Every redaction pattern is linear (R3 / SEC-1, 2026-10-31). `ENV_ASSIGNMENT` and the
+  JWT shape were quadratic (`'a.'` × 40k characters took 35 s); both are rewritten, a
+  differential test pins the rewrites to the original output, and a time-budget test runs
+  every pattern against 256 KiB adversarial input (`apps/server/test/hooks-redact.test.ts`).
+  A new redaction pattern must pass the same time-budget test.
+- A hook body is capped by Fastify's default `bodyLimit` of 1 MiB.
+- Corpus reads are bounded (256 MiB per file, depth-4 walk; [section 5](#5-the-corpus-read-surface--agenthropics-own-untrusted-input)).
+  Startup replay runs in passes capped at 25 sessions and 32 MiB, with a 10 ms window
+  before every pass in which a hook POST is answered (R20).
+
+**Open, stated plainly.**
+
+- `redactSecrets` and `canonicalJsonStringify` recurse without a depth limit. A deeply
+  nested body under 1 MiB can overflow the stack. The result is a `RangeError` that the
+  error handler turns into a 500 for that one request. The loop does not hang, and only
+  a token holder can send such a body. The fix (a depth cap of about 64, plus an explicit
+  `bodyLimit` that is visible and tested) is SEC-7, scheduled for v1.x.
+- Route parameters such as `id` have no `maxLength` (SEC-7, v1.x).
+- A cold replay of a multi-gigabyte corpus can still delay a hook POST past curl's
+  3-second budget. The hook then fails open: Claude Code continues, and that one event is
+  lost. This costs availability of a live status, never confidentiality.
+
+### 6.2 Local multi-user confidentiality — data at rest
+
+**The gap.** The Mac Mini hosts more than one macOS account (the bot account, for
+example). The loopback bind does not stop them, and the token only guards the port. The
+files are a separate door.
+
+**The rule.** Data at rest is no more readable than its source. Claude Code writes
+`~/.claude/projects` as `0600` files in `0700` directories, so agenthropic's copy must
+match.
+
+**As built** (R4 / SEC-2, 2026-11-06). The database, its `-wal`/`-shm` sidecars, every
+backup and the retention journal are `0600` from creation. Every directory the server
+creates is `0700` (`apps/server/src/db/file-modes.ts`). Each boot tightens files that an
+older install left open, and refuses to start if a file stays readable beyond its owner,
+for example on a filesystem that ignores modes. The directory `DASHBOARD_DB_PATH` lives in
+may be shared, so it is only warned about, never chmod-ed.
+
+**Open.** Copies made outside the server keep whatever mode the copying tool gives them:
+Time Machine, a manual `cp` of a backup, the restore drill's output moved elsewhere. Those
+are the operator's to protect (see [backup & restore](../operations/backup-restore.md)).
+
+### 6.3 The token as an ambient secret
+
+**The gap.** The hook command reads `DASHBOARD_TOKEN` from Claude Code's environment at
+fire time. Since 2026-08 it never enters an argv (see the M-11 amendment above). But the
+variable has to be exported into the environment Claude Code starts from, and
+environment variables are inherited. The model so far did not say who can therefore read
+the token.
+
+**Who can read it.** The operator's own account; every process Claude Code starts,
+including each Bash tool call and every MCP server, first- or third-party; and root. A
+prompt-injected agent that runs `env`, or an MCP server that reads `process.env`, gets
+the token.
+
+**What a leaked token grants, beyond what that reader already has.** Every one of those
+readers already runs as the operator and can read `~/.claude/projects` directly. A
+leaked token therefore adds only two things:
+
+1. **Forging hook events.** The holder can post fabricated `SubagentStop`, `Stop` or
+   `UserPromptSubmit` events. That can make the live status and the agent outcome
+   causes lie. It cannot change token counts or dollars, because those come only from
+   the JSONL transcripts (the ground-truth invariant).
+2. **Reading the aggregated database through the API.** This exposes no more than the
+   corpus does, except for the hook events and the history kept after a transcript was
+   cleaned up.
+
+A leaked token never grants a spawner, a write to the corpus, or an outbound dial,
+because those surfaces do not exist. It does not reach another machine either, because
+the bind is loopback.
+
+**Open (SEC-5, v2.0).** Two changes would remove the inheritance: reading the token from
+a `0600` file through `curl --variable @file`, and splitting the ingest token from the
+dashboard token. Both are deferred until alerts make the server's state worth more. Until
+then: generate the token at random (`openssl rand -base64 32`), and treat any MCP server
+you install as able to read it.
+
+**Tunnel mode raises the stakes.** On pure loopback the token defends only the boundary
+between accounts. Over an SSH or Tailscale tunnel it is the only control. The server
+does not throttle or lock out repeated 401s, and the policy checks only length (at least
+16 characters; SEC-6). A low-entropy token is therefore guessable over a tunnel. A
+generator, a stronger minimum and 401 backoff are scheduled for v1.x; until then, use a
+32-byte random token before you enable any tunnel ([remote access](remote-access.md)).
+
+### 6.4 Redaction scope
+
+**The gap.** "Hook payloads are redacted" is easy to read as "the database holds no
+secrets". That reading is wrong.
+
+**The rule, stated explicitly.** Redaction (`apps/server/src/hooks/redact.ts`) applies
+**only to hook payloads**, before they are stored and keyed. Rows ingested from the JSONL
+corpus are stored **as read**, on purpose: they are the ground truth for tokens, models
+and structure, and a redacting rewrite would make them unverifiable against their source.
+The database therefore holds raw data derived from transcripts. It needs the same
+protection as `~/.claude` itself, which is why section 6.2 exists. Hook redaction is
+defence in depth on one path, not a property of the whole store.
+
+**Open.** The redacted field list is built as the recommended resolution of OPEN-3 and is
+still pending the owner's sign-off ([backup & restore](../operations/backup-restore.md)
+§6).
+
+### 6.5 The browser-side attacker
+
+Covered since 2026-11-08 (R18): a CSP with `frame-ancestors 'none'`,
+`X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, and a Host allowlist that
+answers `421` on every route, so DNS rebinding cannot even confirm that the service
+exists. Details are in [security model](model.md) rule 10. This subsection only closes
+the loop on the review's fourth gap.
+
 ## Traceability — finding → invariant → source
 
 | Rival finding | Attacker model | agenthropic invariant | Source |
@@ -522,6 +656,12 @@ undecided rather than gloss over it:
   in code and covered by tests, but the numbers themselves remain **PROVISIONAL** — they
   were chosen, never measured against a real corpus, and no owner has ratified them.
   Treat them as working defaults rather than as a sized bound.
+- **The review's threat-model gaps are written down** *(resolved 2026-11-13, R26)*:
+  availability under authenticated hostile content, data at rest against other local
+  accounts, the token as an ambient secret in Claude Code's environment, and the scope
+  of redaction — [section 6](#6-gaps-the-rival-findings-did-not-cover). Its open items
+  (a recursion depth cap and explicit `bodyLimit`, 401 backoff and a token generator, a
+  token file instead of an inherited env variable) are v1.x / v2.0 work, not claims.
 - **Browser-side hardening is built** *(resolved 2026-11-08, R18)*. Every response now
   carries a CSP with `frame-ancestors 'none'`, plus `X-Frame-Options: DENY` and
   `Referrer-Policy: no-referrer`; that closes clickjacking and limits what an XSS could
