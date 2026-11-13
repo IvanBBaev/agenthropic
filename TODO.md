@@ -1161,7 +1161,7 @@ synthesis, not on this board._
   substrate provider (`apps/server/test/max-file-cap.test.ts`). The partial flag was already
   served by the API and shown in the UI. Re-checking the five sessions on the real corpus is
   Ivan's to run.
-- [ ] **R15** operator pricing CLI with audit row; re-decide haiku-5-5 (D1, D3) [DAT-1, DAT-4] _(haiku half done 2026-10-31 — migration 25 seeds the ≤100k base tier, `computeCostUsd` halts a longer prompt; the pricing CLI half is open)_
+- [x] **R15** operator pricing CLI with audit row; re-decide haiku-5-5 (D1, D3) [DAT-1, DAT-4] _(haiku half done 2026-10-31 — migration 25 seeds the ≤100k base tier, `computeCostUsd` halts a longer prompt; CLI half done 2026-11-14 (`a900a50`): `pnpm --filter @agenthropic/server pricing list|unpriced|audit|set`, migration 27 `pricing_audit` (append-only, previous rate kept), `set` needs all five rates for a new model and refuses while the server answers; `unpriced` shows the floor date a new rate must reach back to)_
 - [x] **R16** Vitest `testTimeout` / projects split [QA-4]
   — done 2026-11-08: explicit `testTimeout`/`hookTimeout` in every `vitest.config.ts`
   (server 60 s, web 30 s, core/shared/test-fixtures 15 s). No projects split: ~100 of ~125
