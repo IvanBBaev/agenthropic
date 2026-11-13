@@ -115,11 +115,12 @@ describe('getGlobalDag rollup scoping (M-5)', () => {
       truncated: true,
     });
 
-    // Scoping proof: exactly ONE statement scans token_usage, and its WHERE
-    // binds an id list of the SELECTION size (2 placeholders), not the corpus.
+    // Scoping proof: exactly ONE statement scans token_usage, and it is bound
+    // to a single selected SESSION per run (row-1 per-session usage cache), so
+    // the scan follows the selection, never the corpus.
     const usageScans = statements.filter((sql) => sql.includes('FROM token_usage'));
     expect(usageScans).toHaveLength(1);
-    expect(usageScans[0]).toMatch(/FROM token_usage tu\s+WHERE tu\.agent_id IN \(\?, \?\)/);
+    expect(usageScans[0]).toMatch(/FROM token_usage tu\s+WHERE tu\.session_id = \?/);
     // No unconditional rollup remains: the scan is never left unfiltered.
     expect(usageScans[0]).not.toMatch(/FROM token_usage tu\s*\)/);
 

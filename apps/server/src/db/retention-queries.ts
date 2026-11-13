@@ -33,6 +33,7 @@
  * id-order contract stands until it is made deliberately.
  */
 import type { SqliteDatabase } from './connection';
+import { bumpLedgerEpoch } from './ledger-epoch';
 
 /** The only tables retention may delete from. */
 export type PrunableTable = 'events' | 'token_usage';
@@ -229,12 +230,20 @@ export function measureWindowCost(db: SqliteDatabase, cutoff: string, maxId: num
   };
 }
 
-/** Delete exactly the measured window. Returns the number of rows removed. */
+/**
+ * Delete exactly the measured window. Returns the number of rows removed.
+ *
+ * Bumps the ledger epoch BEFORE deleting, for every table: a DELETE moves no
+ * `ingest_seq` (migration 22), so this is the only signal an incremental read
+ * cache gets that stored rows went away. Bumping first means a delete that
+ * throws midway still invalidates; an events-only prune costs one recompute.
+ */
 export function deleteExpiredWindow(
   db: SqliteDatabase,
   table: PrunableTable,
   cutoff: string,
   maxId: number,
 ): number {
+  bumpLedgerEpoch(db);
   return db.prepare(TABLE_SQL[table].remove).run({ cutoff, maxId }).changes;
 }

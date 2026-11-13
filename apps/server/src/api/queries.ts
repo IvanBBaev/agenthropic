@@ -36,6 +36,7 @@ import {
 import { PricingError, computeDelegationSavings } from '@agenthropic/core';
 import type { DedupedUsage, ParsedAgent, ParsedSession, PricingEntry } from '@agenthropic/core';
 import type { SqliteDatabase } from '../db/connection';
+import { ledgerEpoch } from '../db/ledger-epoch';
 
 /**
  * Shared CTE: every `token_usage` row with its resolved USD/Mtok rate (NULL
@@ -84,7 +85,8 @@ function pricedCte(where = ''): string {
 // idx_token_usage_session_id` for all three, identical to the plan of an
 // explicitly scoped `pricedCte('WHERE tu.session_id = ?')`. The scoped form
 // is required only where the outer query cannot carry the predicate: the
-// LEFT JOIN onto a GROUP BY (sessionSummarySelect, getGlobalDag).
+// LEFT JOIN onto a GROUP BY (sessionSummarySelect) or a per-session
+// statement with no outer query (getGlobalDag's usage cache).
 const PRICED_CTE = pricedCte();
 
 /** USD over PRICED rows only - unpriced rows contribute $0, never a guess. */
@@ -848,6 +850,11 @@ function costSummaryStateKey(db: SqliteDatabase): string {
   const changes = (db.prepare('SELECT total_changes() AS n').get() as { n: number }).n;
   // API-6: moves on any OTHER connection's commit; see the note above.
   const dataVersion = db.pragma('data_version', { simple: true }) as number;
+  return `${changes}|${String(dataVersion)}|${pricingFingerprint(db)}`;
+}
+
+/** The `model_pricing` table, serialized in a fixed order (see above). */
+function pricingFingerprint(db: SqliteDatabase): string {
   const pricing = db
     .prepare(
       `SELECT model, bucket, usd_per_mtok, effective_from
@@ -855,7 +862,7 @@ function costSummaryStateKey(db: SqliteDatabase): string {
        ORDER BY model, bucket, effective_from`,
     )
     .all() as PricingFingerprintRow[];
-  return `${changes}|${String(dataVersion)}|${JSON.stringify(pricing)}`;
+  return JSON.stringify(pricing);
 }
 
 export function getCostSummary(
@@ -1058,6 +1065,101 @@ export function getCostSummary(
   return summary;
 }
 
+/** An agent row of the global DAG, with its session's change stamp. */
+interface DagAgentRow extends Omit<AgentNodeRow, 'total_tokens' | 'cost_usd' | 'unpriced_tokens'> {
+  /** `sessions.ingest_seq`, or null when the sessions row is missing. */
+  readonly ingest_seq: number | null;
+}
+
+/** One agent's usage rollup inside its own session. */
+interface DagAgentUsage {
+  readonly total_tokens: number;
+  readonly cost_usd: number;
+  readonly unpriced_tokens: number;
+}
+
+/** Test seam: observes every session whose agent usage is re-priced. */
+export interface GlobalDagProbe {
+  onSessionPriced(sessionId: string): void;
+}
+
+/**
+ * Row-1 performance - per-session agent usage behind `/api/dag/global`.
+ *
+ * Measured 2026-11-13 on the real corpus: the top-1000 agents own ~392k of
+ * ~1.21M usage rows, and every one of them runs the correlated pricing
+ * subquery on every DAG read. Almost all of those sessions are finished, so
+ * the rollup is cached per session and re-priced only when it can have moved.
+ *
+ * Never-stale contract, the same as the delegation-savings cache:
+ *   - a session's entry is served only while its `ingest_seq` stamp is
+ *     unchanged - migration 22 bumps it on every value-changing INSERT/UPDATE
+ *     of its sessions/agents/token_usage rows;
+ *   - DELETEs stamp nothing, so the whole cache is keyed on `data_version`
+ *     (another connection committed) and the ledger epoch (retention deleted
+ *     on this connection), plus the pricing table (rates are not stamped);
+ *   - a session with no sessions row has no stamp and is re-priced every time.
+ * The per-session map is rebuilt from the current selection on each read, so
+ * it holds at most `nodeLimit` sessions.
+ */
+const dagUsageCache = new WeakMap<
+  SqliteDatabase,
+  {
+    readonly globalKey: string;
+    readonly perSession: Map<string, { seq: number; usage: Map<string, DagAgentUsage> }>;
+  }
+>();
+
+const DAG_SESSION_USAGE_SQL = `WITH ${pricedCte('WHERE tu.session_id = ?')}
+  SELECT agent_id, SUM(tokens) AS total_tokens, ${COST_USD} AS cost_usd, ${UNPRICED} AS unpriced_tokens
+  FROM priced
+  WHERE agent_id IS NOT NULL
+  GROUP BY agent_id`;
+
+function dagUsageBySession(
+  db: SqliteDatabase,
+  agentRows: readonly DagAgentRow[],
+  probe: GlobalDagProbe | undefined,
+): Map<string, Map<string, DagAgentUsage>> {
+  // Read through `prepare`, the only surface getGlobalDag uses (the M-5
+  // scoping test wraps the connection in a prepare-only spy).
+  const { data_version: dataVersion } = db.prepare('PRAGMA data_version').get() as {
+    data_version: number;
+  };
+  const globalKey = JSON.stringify([dataVersion, ledgerEpoch(db), pricingFingerprint(db)]);
+  const cached = dagUsageCache.get(db);
+  const previous = cached?.globalKey === globalKey ? cached.perSession : undefined;
+  const perSession = new Map<string, { seq: number; usage: Map<string, DagAgentUsage> }>();
+  const usageStmt = db.prepare(DAG_SESSION_USAGE_SQL);
+  for (const row of agentRows) {
+    if (perSession.has(row.session_id)) {
+      continue;
+    }
+    const seq = row.ingest_seq ?? UNSTAMPED;
+    const hit = previous?.get(row.session_id);
+    if (hit !== undefined && seq !== UNSTAMPED && hit.seq === seq) {
+      perSession.set(row.session_id, hit);
+      continue;
+    }
+    probe?.onSessionPriced(row.session_id);
+    const usage = new Map<string, DagAgentUsage>();
+    for (const u of usageStmt.all(row.session_id) as Array<DagAgentUsage & { agent_id: string }>) {
+      usage.set(u.agent_id, {
+        total_tokens: u.total_tokens,
+        cost_usd: u.cost_usd,
+        unpriced_tokens: u.unpriced_tokens,
+      });
+    }
+    perSession.set(row.session_id, { seq, usage });
+  }
+  dagUsageCache.set(db, { globalKey, perSession });
+  const result = new Map<string, Map<string, DagAgentUsage>>();
+  for (const [sessionId, entry] of perSession) {
+    result.set(sessionId, entry.usage);
+  }
+  return result;
+}
+
 /** Recent-first agent order by instant, for an optional table alias prefix. */
 function agentRecencyOrder(alias: string): string {
   return `COALESCE(${canonicalInstant(`COALESCE(${alias}last_seen_at, ${alias}first_seen_at)`)}, '') DESC, ${alias}id ASC`;
@@ -1074,7 +1176,11 @@ function agentRecencyOrder(alias: string): string {
  * is the capped surface. `counts` carries the full totals and a `truncated`
  * flag so the cap is always visible, never silent.
  */
-export function getGlobalDag(db: SqliteDatabase, nodeLimit: number): GlobalDagDto {
+export function getGlobalDag(
+  db: SqliteDatabase,
+  nodeLimit: number,
+  probe?: GlobalDagProbe,
+): GlobalDagDto {
   const count = (table: string): number =>
     (db.prepare(`SELECT COUNT(*) AS c FROM ${table}`).get() as { c: number }).c;
   const totalSessions = count('sessions');
@@ -1087,7 +1193,8 @@ export function getGlobalDag(db: SqliteDatabase, nodeLimit: number): GlobalDagDt
   // making the response scale with corpus size instead of response size
   // (measured: 432 ms over a 752k-row usage table for the same payload).
   // The ordering key lives entirely on `agents`, so the selection itself
-  // never touches token_usage. Parameter count is bounded by
+  // never touches token_usage. Usage is then priced per SELECTED session
+  // through `dagUsageBySession` (cached by ingest_seq). Parameter count is bounded by
   // MAX_DAG_NODE_LIMIT (5000) bound twice per statement - well under
   // SQLite's default variable cap (32766).
   const ids = (
@@ -1118,35 +1225,42 @@ export function getGlobalDag(db: SqliteDatabase, nodeLimit: number): GlobalDagDt
     return { nodes: [], edges: [], counts: counts(0, 0) };
   }
   const idList = `(${ids.map(() => '?').join(', ')})`;
-  // No `agent_id IS NOT NULL` arm: NULL never matches an IN list, so rows
-  // with a NULL agent_id are excluded by the same predicate that scopes the
-  // scan (as are rows whose agent_id matches no selected agent).
-  const nodeRows = db
+  const agentRows = db
     .prepare(
-      `WITH ${pricedCte(`WHERE tu.agent_id IN ${idList}`)},
-       usage_by_agent AS (
-         SELECT agent_id, session_id, SUM(tokens) AS total_tokens, ${COST_USD} AS cost_usd, ${UNPRICED} AS unpriced_tokens
-         FROM priced
-         GROUP BY agent_id, session_id
-       )
-       SELECT
+      `SELECT
          ag.id AS id, ag.session_id AS session_id, ag.type AS type,
          ag.subagent_type AS subagent_type, ag.status AS status,
          ag.outcome_cause AS outcome_cause,
          ag.parent_agent_id AS parent_agent_id,
          ag.first_seen_at AS first_seen_at, ag.last_seen_at AS last_seen_at,
-         COALESCE(u.total_tokens, 0) AS total_tokens,
-         COALESCE(u.cost_usd, 0) AS cost_usd,
-         COALESCE(u.unpriced_tokens, 0) AS unpriced_tokens
+         s.ingest_seq AS ingest_seq
        FROM agents ag
-       -- Scoped to the agent's OWN session, as the session tree scopes it: a
-       -- usage row in another session that names this agent id is that
-       -- session's unattributed usage, never this node's (no FK forbids it).
-       LEFT JOIN usage_by_agent u ON u.agent_id = ag.id AND u.session_id = ag.session_id
+       LEFT JOIN sessions s ON s.id = ag.session_id
        WHERE ag.id IN ${idList}
        ORDER BY ${agentRecencyOrder('ag.')}`,
     )
-    .all(...ids, ...ids) as AgentNodeRow[];
+    .all(...ids) as DagAgentRow[];
+  const usage = dagUsageBySession(db, agentRows, probe);
+  const nodeRows = agentRows.map((row): AgentNodeRow => {
+    // Scoped to the agent's OWN session, as the session tree scopes it: a
+    // usage row in another session that names this agent id is that
+    // session's unattributed usage, never this node's (no FK forbids it).
+    const totals = usage.get(row.session_id)?.get(row.id);
+    return {
+      id: row.id,
+      session_id: row.session_id,
+      type: row.type,
+      subagent_type: row.subagent_type,
+      status: row.status,
+      outcome_cause: row.outcome_cause,
+      parent_agent_id: row.parent_agent_id,
+      first_seen_at: row.first_seen_at,
+      last_seen_at: row.last_seen_at,
+      total_tokens: totals?.total_tokens ?? 0,
+      cost_usd: totals?.cost_usd ?? 0,
+      unpriced_tokens: totals?.unpriced_tokens ?? 0,
+    };
+  });
   // The edge scan reuses the SAME resolved id list instead of re-deriving the
   // selection with a second ORDER BY/LIMIT subquery - nodes and edges can
   // never disagree about membership.
@@ -1208,41 +1322,55 @@ export function getGlobalDag(db: SqliteDatabase, nodeLimit: number): GlobalDagDt
  * ------------------------------------------------------------------------- */
 
 /**
- * The scan's universe. A session with no persisted subagent cannot contribute
- * a cent — the estimator sums over `type = 'subagent'` agents only — so it is
- * left out of the scan and reported as a measured zero
- * (`sessionsTotal - sessionsWithSubagents`), never as a gap.
+ * The scan's universe, with each session's change stamp. A session with no
+ * persisted subagent cannot contribute a cent — the estimator sums over
+ * `type = 'subagent'` agents only — so it is left out of the scan and
+ * reported as a measured zero (`sessionsTotal - sessionsWithSubagents`),
+ * never as a gap.
+ *
+ * LEFT JOIN, not JOIN: this connection enforces the `agents.session_id`
+ * foreign key, but a foreign writer (a hand-run sqlite3 repair) need not, and
+ * an agent whose session row is missing must still be counted exactly as it
+ * was before the cache existed. Such a session carries a NULL stamp and is
+ * never served from the cache (see {@link UNSTAMPED}).
+ *
+ * The ORDER BY is load-bearing: totals are summed in this order, and binary
+ * `session_id` order is the order the pre-cache single-scan reader summed in,
+ * so the floating-point totals stay bit-identical to it.
  */
-const DELEGATING_SESSIONS_CTE = `
-  delegating AS (SELECT DISTINCT session_id FROM agents WHERE type = 'subagent')
+const DELEGATING_SESSIONS_SQL = `
+  SELECT d.session_id AS session_id, s.ingest_seq AS ingest_seq
+  FROM (SELECT DISTINCT session_id FROM agents WHERE type = 'subagent') d
+  LEFT JOIN sessions s ON s.id = d.session_id
+  ORDER BY d.session_id ASC
 `;
+
+interface DelegatingSessionRow {
+  readonly session_id: string;
+  readonly ingest_seq: number | null;
+}
 
 interface DelegationAgentRow {
   readonly id: string;
-  readonly session_id: string;
   readonly type: ParsedAgent['type'];
   readonly subagent_type: string | null;
   readonly parent_agent_id: string | null;
 }
 
 /**
- * Agents of the delegating sessions. The `type IN (...)` filter is not
+ * Agents of ONE delegating session. The `type IN (...)` filter is not
  * cosmetic: the column is nullable and a NULL type has no meaning in the
  * estimator's tree walk. Such rows are counted separately (`untypedAgents`)
  * so their exclusion is stated rather than silently applied.
  */
 const DELEGATION_AGENTS_SQL = `
-  WITH ${DELEGATING_SESSIONS_CTE}
-  SELECT a.id AS id, a.session_id AS session_id, a.type AS type,
-         a.subagent_type AS subagent_type, a.parent_agent_id AS parent_agent_id
-  FROM agents a
-  JOIN delegating d ON d.session_id = a.session_id
-  WHERE a.type IN ('main', 'subagent')
-  ORDER BY a.session_id ASC, a.id ASC
+  SELECT id, type, subagent_type, parent_agent_id
+  FROM agents
+  WHERE session_id = ? AND type IN ('main', 'subagent')
+  ORDER BY id ASC
 `;
 
 interface DelegationUsageRow {
-  readonly session_id: string;
   readonly message_id: string;
   readonly agent_id: string | null;
   readonly model: string;
@@ -1256,8 +1384,10 @@ interface DelegationUsageRow {
 }
 
 /**
- * One row per stored message — the DB's own dedup, since ingest already
- * collapsed each `message.id` to its per-bucket maximum before writing.
+ * One row per stored message of ONE session — the DB's own dedup, since
+ * ingest already collapsed each `message.id` to its per-bucket maximum before
+ * writing. Scoped by `session_id`, so it is an `idx_token_usage_session_id`
+ * range read bounded by that session's rows, not a corpus-wide GROUP BY.
  *
  * The `MAX()`s over `agent_id`/`model`/`occurred_at` are identities on
  * anything this server wrote (the writer settles all three at MESSAGE level
@@ -1268,55 +1398,63 @@ interface DelegationUsageRow {
  * from an empty date.
  */
 const DELEGATION_USAGE_SQL = `
-  WITH ${DELEGATING_SESSIONS_CTE}
   SELECT
-    tu.session_id AS session_id,
-    tu.message_id AS message_id,
-    MAX(tu.agent_id) AS agent_id,
-    MAX(tu.model) AS model,
-    COALESCE(MAX(tu.occurred_at), '') AS occurred_at,
-    SUM(CASE WHEN tu.occurred_at IS NULL THEN 1 ELSE 0 END) AS undated_rows,
-    SUM(CASE WHEN tu.bucket = 'input' THEN tu.tokens ELSE 0 END) AS input,
-    SUM(CASE WHEN tu.bucket = 'output' THEN tu.tokens ELSE 0 END) AS output,
-    SUM(CASE WHEN tu.bucket = 'cache_read' THEN tu.tokens ELSE 0 END) AS cache_read,
-    SUM(CASE WHEN tu.bucket = 'cache_write_5m' THEN tu.tokens ELSE 0 END) AS cache_write_5m,
-    SUM(CASE WHEN tu.bucket = 'cache_write_1h' THEN tu.tokens ELSE 0 END) AS cache_write_1h
-  FROM token_usage tu
-  JOIN delegating d ON d.session_id = tu.session_id
-  GROUP BY tu.session_id, tu.message_id
-  ORDER BY tu.session_id ASC, tu.message_id ASC
+    message_id,
+    MAX(agent_id) AS agent_id,
+    MAX(model) AS model,
+    COALESCE(MAX(occurred_at), '') AS occurred_at,
+    SUM(CASE WHEN occurred_at IS NULL THEN 1 ELSE 0 END) AS undated_rows,
+    SUM(CASE WHEN bucket = 'input' THEN tokens ELSE 0 END) AS input,
+    SUM(CASE WHEN bucket = 'output' THEN tokens ELSE 0 END) AS output,
+    SUM(CASE WHEN bucket = 'cache_read' THEN tokens ELSE 0 END) AS cache_read,
+    SUM(CASE WHEN bucket = 'cache_write_5m' THEN tokens ELSE 0 END) AS cache_write_5m,
+    SUM(CASE WHEN bucket = 'cache_write_1h' THEN tokens ELSE 0 END) AS cache_write_1h
+  FROM token_usage
+  WHERE session_id = ?
+  GROUP BY message_id
+  ORDER BY message_id ASC
 `;
 
-interface ReconstructedSession {
-  readonly sessionId: string;
-  readonly agents: ParsedAgent[];
-  readonly usage: DedupedUsage[];
-  /** Stored usage rows of this session that carry no timestamp. */
-  undatedRows: number;
-}
+/** A prepared statement on {@link SqliteDatabase}. */
+type SqliteStatement = ReturnType<SqliteDatabase['prepare']>;
+
+/** What one delegating session contributes to the aggregate. */
+type SessionSavingsOutcome =
+  | {
+      readonly kind: 'priced';
+      readonly actualUsd: number;
+      readonly hypotheticalUsd: number;
+      readonly savingsUsd: number;
+      readonly subagentsPriced: number;
+      readonly subagentsSkipped: number;
+      readonly hypotheticalModels: readonly string[];
+    }
+  | { readonly kind: 'skipped'; readonly skip: AggregateSavingsSkipDto };
 
 /**
- * Rebuild a `ParsedSession`-shaped value per delegating session, straight off
- * the stored rows. Module-private on purpose: the placeholder timestamps below
- * must never reach a DTO.
+ * Rebuild one session as a `ParsedSession`-shaped value straight off the
+ * stored rows, and price it. Module-private on purpose: the placeholder
+ * timestamps below must never reach a DTO.
  */
-function reconstructDelegatingSessions(db: SqliteDatabase): Map<string, ReconstructedSession> {
-  const sessions = new Map<string, ReconstructedSession>();
-  const entryFor = (sessionId: string): ReconstructedSession => {
-    const existing = sessions.get(sessionId);
-    if (existing !== undefined) return existing;
-    const created: ReconstructedSession = { sessionId, agents: [], usage: [], undatedRows: 0 };
-    sessions.set(sessionId, created);
-    return created;
-  };
-  // Agent ids are a global PRIMARY KEY, so one set spans the whole corpus.
+function priceDelegatingSession(
+  agentsStmt: SqliteStatement,
+  usageStmt: SqliteStatement,
+  sessionId: string,
+  pricing: readonly PricingEntry[],
+  savingsOptions: { readonly topTierModel?: string },
+): SessionSavingsOutcome {
+  const agents: ParsedAgent[] = [];
+  // The main-agent ids of THIS session. Scoped per session on purpose (the
+  // pre-cache reader used one corpus-wide set): a usage row that names
+  // another session's main agent is this session's unattributed usage, never
+  // that agent's — the same rule the session tree and the global DAG apply —
+  // and per-session scope is what lets one session be repriced alone.
   // Typed to accept the nullable usage column: `has(null)` is false and the
   // false arm returns that same null, so the inversion below needs no separate
   // null guard for usage rows that carry no agent id.
   const mainAgentIds = new Set<string | null>();
-
-  for (const row of db.prepare(DELEGATION_AGENTS_SQL).all() as DelegationAgentRow[]) {
-    entryFor(row.session_id).agents.push({
+  for (const row of agentsStmt.all(sessionId) as DelegationAgentRow[]) {
+    agents.push({
       id: row.id,
       type: row.type,
       subagentType: row.subagent_type,
@@ -1331,10 +1469,11 @@ function reconstructDelegatingSessions(db: SqliteDatabase): Map<string, Reconstr
     if (row.type === 'main') mainAgentIds.add(row.id);
   }
 
-  for (const row of db.prepare(DELEGATION_USAGE_SQL).all() as DelegationUsageRow[]) {
-    const entry = entryFor(row.session_id);
-    entry.undatedRows += row.undated_rows;
-    entry.usage.push({
+  let undatedRows = 0;
+  const usage: DedupedUsage[] = [];
+  for (const row of usageStmt.all(sessionId) as DelegationUsageRow[]) {
+    undatedRows += row.undated_rows;
+    usage.push({
       messageId: row.message_id,
       model: row.model,
       timestamp: row.occurred_at,
@@ -1353,7 +1492,114 @@ function reconstructDelegatingSessions(db: SqliteDatabase): Map<string, Reconstr
       },
     });
   }
-  return sessions;
+
+  if (undatedRows > 0) {
+    // Pricing is date-driven; an empty timestamp has no rate, and inventing
+    // one (say, "now") would silently reprice history.
+    return {
+      kind: 'skipped',
+      skip: {
+        sessionId,
+        reason: 'undated-usage',
+        detail: `${String(undatedRows)} stored usage row(s) carry no timestamp, so no dated rate applies`,
+      },
+    };
+  }
+  try {
+    const result = computeDelegationSavings(
+      {
+        sessionId,
+        agents,
+        // The estimator walks `parentAgentId`; it never reads `edges`. An
+        // equivalence test guards that claim against a core change.
+        edges: [],
+        usage,
+      } satisfies ParsedSession,
+      pricing,
+      savingsOptions,
+    );
+    return {
+      kind: 'priced',
+      actualUsd: result.actualUsd,
+      hypotheticalUsd: result.hypotheticalUsd,
+      savingsUsd: result.savingsUsd,
+      subagentsPriced: result.perAgent.length,
+      subagentsSkipped: result.skippedAgentIds.length,
+      hypotheticalModels: result.perAgent.map((agent) => agent.hypotheticalModel),
+    };
+  } catch (error) {
+    if (!(error instanceof PricingError)) throw error; // → uniform detail-free 500
+    return {
+      kind: 'skipped',
+      skip: { sessionId, reason: 'unpriceable', detail: error.message },
+    };
+  }
+}
+
+/**
+ * Marker for a delegating session whose `sessions` row is missing (see
+ * {@link DELEGATING_SESSIONS_SQL}). No real stamp is negative — migration 22
+ * CHECKs `ingest_seq >= 0` — so it can never match a cached stamp, and such a
+ * session is recomputed on every request instead of trusted.
+ */
+const UNSTAMPED = -1;
+
+interface DelegationSavingsCacheEntry {
+  /** Everything that reprices EVERY session at once; see the cache note. */
+  readonly globalKey: string;
+  readonly perSession: Map<
+    string,
+    { readonly seq: number; readonly outcome: SessionSavingsOutcome }
+  >;
+}
+
+/**
+ * Incremental cache for the aggregate (row-1 performance work, 2026-11-13).
+ *
+ * WHY. The pre-cache reader re-priced every delegating session on every
+ * request: one corpus-wide GROUP BY over `token_usage` plus the estimator per
+ * session. Measured on the owner's real corpus (scratch copy, 2026-11-12)
+ * that scan alone took 80-142 s wall under machine load, and the cost-summary
+ * style key (`total_changes()`) moves on every ingest tick, so a
+ * whole-answer memo would almost never hit on a live server.
+ *
+ * HOW. Each session's outcome is cached with the session's `ingest_seq`
+ * stamp. Migration 22's triggers bump that stamp on every INSERT and every
+ * value-changing UPDATE of the session row or of its agents, usage rows or
+ * spawn edges — exactly the rows a session's figure reads, because agents and
+ * usage rows never move between sessions (both upserts leave `session_id`
+ * untouched). A request lists the delegating sessions with their stamps (one
+ * index-friendly read of `agents`), recomputes only the sessions whose stamp
+ * moved or that are new, drops sessions that stopped delegating, and sums.
+ * An actively ingesting server therefore reprices one or two live sessions
+ * per request instead of the corpus.
+ *
+ * WHAT THE STAMP CANNOT SEE, and what covers it — all folded into
+ * `globalKey`, any change of which flushes every session:
+ * - DELETEs bump no stamp. This process deletes ledger rows only through
+ *   retention, which bumps the in-process ledger epoch (`db/ledger-epoch.ts`).
+ * - Another connection's INSERTs and UPDATEs do bump stamps (the triggers
+ *   live in the schema), but its DELETEs do not and its epoch is not ours;
+ *   `PRAGMA data_version` moves on any foreign commit, so it rides in the
+ *   key exactly as it does in the cost-summary key.
+ * - Pricing and the routing override reprice every session; both ride in the
+ *   key verbatim. `pricing` is the caller's argument, not a table read, so
+ *   whatever the caller priced with is what the key fingerprints.
+ *
+ * The transaction caveat of {@link costSummaryStateKey} applies unchanged: an
+ * outcome computed INSIDE a transaction that later rolls back can outlive it.
+ * No HTTP handler can run inside ingest's or retention's transaction on this
+ * synchronous handle, so it is not reachable through the server.
+ */
+const delegationSavingsCache = new WeakMap<SqliteDatabase, DelegationSavingsCacheEntry>();
+
+/**
+ * Execution-count seam for the cache tests, in the spirit of
+ * {@link CostSummaryProbe}: `onSessionPriced` fires exactly when one session
+ * is actually rebuilt and priced, and never for a session served from cache.
+ */
+export interface DelegationSavingsProbe {
+  onSessionPriced(sessionId: string): void;
 }
 
 export interface AggregateDelegationSavingsOptions {
@@ -1376,13 +1622,33 @@ export function getAggregateDelegationSavings(
   db: SqliteDatabase,
   pricing: readonly PricingEntry[],
   options: AggregateDelegationSavingsOptions = {},
+  probe?: DelegationSavingsProbe,
 ): AggregateDelegationSavingsDto {
   const countOf = (sql: string): number => (db.prepare(sql).get() as { n: number }).n;
   const sessionsTotal = countOf('SELECT COUNT(*) AS n FROM sessions');
   const untypedAgents = countOf('SELECT COUNT(*) AS n FROM agents WHERE type IS NULL');
-  const sessions = reconstructDelegatingSessions(db);
   const savingsOptions =
     options.topTierModel === undefined ? {} : { topTierModel: options.topTierModel };
+
+  const dataVersion = db.pragma('data_version', { simple: true }) as number;
+  const globalKey = JSON.stringify([
+    dataVersion,
+    ledgerEpoch(db),
+    options.topTierModel ?? null,
+    pricing,
+  ]);
+  const previous = delegationSavingsCache.get(db);
+  const cached =
+    previous?.globalKey === globalKey
+      ? previous.perSession
+      : new Map<string, { seq: number; outcome: SessionSavingsOutcome }>();
+
+  const delegating = db.prepare(DELEGATING_SESSIONS_SQL).all() as DelegatingSessionRow[];
+  const agentsStmt = db.prepare(DELEGATION_AGENTS_SQL);
+  const usageStmt = db.prepare(DELEGATION_USAGE_SQL);
+  // Rebuilt from the listing on every request, so a session that stopped
+  // delegating (or vanished) drops out instead of lingering in the cache.
+  const perSession = new Map<string, { seq: number; outcome: SessionSavingsOutcome }>();
 
   let actualUsd = 0;
   let hypotheticalUsd = 0;
@@ -1393,42 +1659,33 @@ export function getAggregateDelegationSavings(
   const hypotheticalModels = new Set<string>();
   const skipped: AggregateSavingsSkipDto[] = [];
 
-  for (const entry of sessions.values()) {
-    if (entry.undatedRows > 0) {
-      // Pricing is date-driven; an empty timestamp has no rate, and inventing
-      // one (say, "now") would silently reprice history.
-      skipped.push({
-        sessionId: entry.sessionId,
-        reason: 'undated-usage',
-        detail: `${String(entry.undatedRows)} stored usage row(s) carry no timestamp, so no dated rate applies`,
-      });
+  for (const { session_id: sessionId, ingest_seq } of delegating) {
+    const seq = ingest_seq ?? UNSTAMPED;
+    const hit = cached.get(sessionId);
+    let outcome: SessionSavingsOutcome;
+    if (hit !== undefined && seq !== UNSTAMPED && hit.seq === seq) {
+      outcome = hit.outcome;
+    } else {
+      probe?.onSessionPriced(sessionId);
+      outcome = priceDelegatingSession(agentsStmt, usageStmt, sessionId, pricing, savingsOptions);
+    }
+    perSession.set(sessionId, { seq, outcome });
+
+    if (outcome.kind === 'skipped') {
+      skipped.push(outcome.skip);
       continue;
     }
-    try {
-      const result = computeDelegationSavings(
-        {
-          sessionId: entry.sessionId,
-          agents: entry.agents,
-          // The estimator walks `parentAgentId`; it never reads `edges`. An
-          // equivalence test guards that claim against a core change.
-          edges: [],
-          usage: entry.usage,
-        } satisfies ParsedSession,
-        pricing,
-        savingsOptions,
-      );
-      sessionsPriced += 1;
-      actualUsd += result.actualUsd;
-      hypotheticalUsd += result.hypotheticalUsd;
-      savingsUsd += result.savingsUsd;
-      subagentsPriced += result.perAgent.length;
-      subagentsSkipped += result.skippedAgentIds.length;
-      for (const agent of result.perAgent) hypotheticalModels.add(agent.hypotheticalModel);
-    } catch (error) {
-      if (!(error instanceof PricingError)) throw error; // → uniform detail-free 500
-      skipped.push({ sessionId: entry.sessionId, reason: 'unpriceable', detail: error.message });
-    }
+    sessionsPriced += 1;
+    actualUsd += outcome.actualUsd;
+    hypotheticalUsd += outcome.hypotheticalUsd;
+    savingsUsd += outcome.savingsUsd;
+    subagentsPriced += outcome.subagentsPriced;
+    subagentsSkipped += outcome.subagentsSkipped;
+    for (const model of outcome.hypotheticalModels) hypotheticalModels.add(model);
   }
+  // Stored only after every session priced: a non-pricing failure above
+  // throws out of the loop and leaves the previous entry in place.
+  delegationSavingsCache.set(db, { globalKey, perSession });
 
   return {
     actualUsd,
@@ -1437,7 +1694,7 @@ export function getAggregateDelegationSavings(
     isEstimate: true,
     basis: 'stored-usage-rows',
     sessionsTotal,
-    sessionsWithSubagents: sessions.size,
+    sessionsWithSubagents: delegating.length,
     sessionsPriced,
     // The COUNT is authoritative and uncapped; the array is a bounded sample so
     // one KPI request cannot turn a broken corpus into a huge payload.
