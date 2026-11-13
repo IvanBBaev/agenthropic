@@ -1175,7 +1175,7 @@ synthesis, not on this board._
 - [ ] **R23** every `[HUMAN]` box: do or waive in writing by 2026-11-16 (Ivan, D9) [OSS-9, PRD-2]
 - [ ] **R24** re-scope `comparison.md` against first-party OTel after the rival trial [PRD-4]
 - [x] **R25** re-measure cold replay on the current corpus [DAT-17] _(done 2026-10-31 (D9): ≈120.4 s for 5.70 GiB on a loaded machine; `cold-replay-2026-09.md` marked historical; the architecture page `ingest-reconciliation.md` refresh rides on R22)_
-- [ ] **R26** threat-model gaps (availability, multi-user, ambient token, redaction scope) [SEC §4]
+- [x] **R26** threat-model gaps (availability, multi-user, ambient token, redaction scope) [SEC §4] _(done 2026-11-13 (`2123392`): `threat-model.md` §6 — availability under authenticated hostile content, data at rest vs other local accounts, who can read the token and what a leak grants, redaction scope; open items named (SEC-7 depth cap/`bodyLimit`, SEC-6 401 backoff, SEC-5 token file); `SECURITY.md` scopes superlinear per-request cost in)_
 - [x] **Owner decisions D1–D15** answered (synthesis §6); **lane L11 frozen until KC-5** (D10) _(answered 2026-10-30 on owner delegation — synthesis §6.1)_
 
 ### WP audit 2026-09-26 — every ticked v1.0 work package against its Done-when
