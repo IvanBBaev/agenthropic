@@ -6,6 +6,8 @@ import { describe, expect, it } from 'vitest';
 import {
   agentTypeLabel,
   AHEAD_OF_CLOCK,
+  formatDuration,
+  formatLocalClock,
   formatRelativeMs,
   formatRelativeTime,
   formatTokens,
@@ -13,7 +15,10 @@ import {
   FUTURE_SKEW_TOLERANCE_MS,
   impossibleCountText,
   isImpossibleCount,
+  localDayLabel,
+  localMidnightMs,
   projectLabel,
+  sessionWhenText,
   shortId,
   UNREADABLE_TIMESTAMP,
   UNREADABLE_TOKENS,
@@ -264,5 +269,49 @@ describe('impossible counts (WEB-4 / WEB-5 / WEB-7, 2026-10-10)', () => {
     expect(impossibleCountText(Number.NaN)).toBe('unreadable');
     expect(impossibleCountText(Number.POSITIVE_INFINITY)).toBe('unreadable');
     expect(impossibleCountText(-2)).toBe('-2, a count that cannot be right');
+  });
+});
+
+describe('local wall-clock helpers (R21, UX-6/UX-8)', () => {
+  const now = new Date(2026, 10, 14, 15, 30).getTime();
+
+  it('formats a local clock time with zero padding', () => {
+    expect(formatLocalClock(new Date(2026, 10, 14, 9, 5).getTime())).toBe('09:05');
+  });
+
+  it('finds local midnight today and N days back', () => {
+    expect(localMidnightMs(now)).toBe(new Date(2026, 10, 14).getTime());
+    expect(localMidnightMs(now, 6)).toBe(new Date(2026, 10, 8).getTime());
+  });
+
+  it('labels local days as Today, Yesterday or a dated weekday', () => {
+    expect(localDayLabel(new Date(2026, 10, 14, 0, 1).getTime(), now)).toBe('Today');
+    expect(localDayLabel(new Date(2026, 10, 13, 23, 59).getTime(), now)).toBe('Yesterday');
+    expect(localDayLabel(new Date(2026, 10, 6, 12).getTime(), now)).toBe('Fri 6 Nov 2026');
+  });
+
+  it('formats durations from under a minute to days', () => {
+    expect(formatDuration(30_000)).toBe('under 1m');
+    expect(formatDuration(42 * 60_000)).toBe('42m');
+    expect(formatDuration((3 * 60 + 5) * 60_000)).toBe('3h 05m');
+    expect(formatDuration((52 * 60 + 10) * 60_000)).toBe('2d 4h');
+  });
+
+  it('says when a session started and how long it ran', () => {
+    const start = new Date(2026, 10, 14, 9, 5).toISOString();
+    const end = new Date(2026, 10, 14, 9, 47).toISOString();
+    expect(sessionWhenText(start, end, now)).toBe('started 09:05 · ran 42m');
+    const earlier = new Date(2026, 10, 13, 22, 0).toISOString();
+    expect(sessionWhenText(earlier, null, now)).toBe('started Yesterday 22:00');
+  });
+
+  it('never invents a start or a duration', () => {
+    const start = new Date(2026, 10, 14, 9, 5).toISOString();
+    expect(sessionWhenText(null, start, now)).toBeNull();
+    expect(sessionWhenText('garbage', start, now)).toBe('start timestamp unreadable');
+    expect(sessionWhenText(start, 'garbage', now)).toBe('started 09:05');
+    expect(sessionWhenText(start, new Date(2026, 10, 14, 8).toISOString(), now)).toBe(
+      'started 09:05',
+    );
   });
 });

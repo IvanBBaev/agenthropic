@@ -372,3 +372,52 @@ export function sortSessionsByRecency<T extends Pick<SessionSummaryDto, 'lastAct
     })
     .map((entry) => entry.session);
 }
+
+/**
+ * R21 / UX-2: which band of the board a session belongs to.
+ *
+ *  - `attention`: something here needs a person - an agent in `error` or
+ *    `unknown`, a session whose own status is either, a session whose latest
+ *    ingest failed (the caller passes those ids, from the failure banners), or
+ *    one whose totals are a lower bound (`partial`). An error or unknown
+ *    bucket the server did not send also lands here: a hole where the error
+ *    count belongs cannot be read as "no errors".
+ *  - `running`: anything still `working` or `waiting`.
+ *  - `recent`: the rest - finished, nothing to look at.
+ *
+ * Bands only re-order and group the board; no card is dropped, and the order
+ * inside a band stays most recent first.
+ */
+export type BoardBand = 'attention' | 'running' | 'recent';
+
+export const BOARD_BANDS: readonly BoardBand[] = ['attention', 'running', 'recent'];
+
+export const BOARD_BAND_LABEL: Readonly<Record<BoardBand, string>> = {
+  attention: 'Needs attention',
+  running: 'Running',
+  recent: 'Recent',
+};
+
+export function boardBand(
+  session: Pick<SessionSummaryDto, 'id' | 'status' | 'statusCounts' | 'partial'>,
+  failedSessionIds: ReadonlySet<string>,
+): BoardBand {
+  const counts = session.statusCounts;
+  const needsLook = (status: AgentStatus) => {
+    const count = bucketCount(counts, status);
+    return count === undefined || count > 0;
+  };
+  if (
+    failedSessionIds.has(session.id) ||
+    session.partial !== null ||
+    session.status === 'error' ||
+    session.status === 'unknown' ||
+    needsLook('error') ||
+    needsLook('unknown')
+  ) {
+    return 'attention';
+  }
+  const active = (status: AgentStatus) => (bucketCount(counts, status) ?? 0) > 0;
+  if (session.status === 'working' || session.status === 'waiting') return 'running';
+  return active('working') || active('waiting') ? 'running' : 'recent';
+}

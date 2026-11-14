@@ -67,11 +67,17 @@ import {
   formatUsd,
   nameOrBlank,
   projectLabel,
+  sessionWhenText,
   shortId,
 } from '../format';
-import type { BoardSession } from './live-model';
+import { sessionHash } from '../router';
+import { CaveatDetails } from './caveats';
+import type { BoardBand, BoardSession } from './live-model';
 import {
   applyAgentStatusChange,
+  BOARD_BAND_LABEL,
+  BOARD_BANDS,
+  boardBand,
   bucketCount,
   isAgentStatusChangedEvent,
   livePatchCount,
@@ -454,7 +460,9 @@ export function LiveView({ token, sse, onAuthRejected }: ViewProps) {
         </p>
       ))}
       {streamGap !== null && (
-        <p className="truncation-banner" role="alert" data-testid="stream-gap">
+        // R21 (UX-9): the fact (how many frames, which ids) is the banner;
+        // why it cannot be repaired folds into a disclosure, every word kept.
+        <div className="truncation-banner" role="alert" data-testid="stream-gap">
           {seamEverObserved ? 'At least ' : ''}
           {streamGap.missed} {streamGap.missed === 1 ? 'frame' : 'frames'} published by the server
           never reached this board (most recent gap:{' '}
@@ -462,31 +470,35 @@ export function LiveView({ token, sse, onAuthRejected }: ViewProps) {
             ? `id ${String(streamGap.from)}`
             : `ids ${String(streamGap.from)}-${String(streamGap.to)}`}
           ).{' '}
-          {seamEverObserved &&
-            'The stream has reconnected since this board opened, and the server restarts its id numbering on every boot, so frames published across a restart may be missing from this count. '}
-          {refetchClause(board, streamGap.observation)} An ingest failure announced in the gap
-          cannot be recovered by any refetch: a quarantined session is either missing from the read
-          API or still showing its last good pass, and neither body says which.{' '}
           <button type="button" onClick={() => setStreamGap(null)}>
             Dismiss
           </button>
-        </p>
+          <CaveatDetails summary="what this means">
+            {seamEverObserved &&
+              'The stream has reconnected since this board opened, and the server restarts its id numbering on every boot, so frames published across a restart may be missing from this count. '}
+            {refetchClause(board, streamGap.observation)} An ingest failure announced in the gap
+            cannot be recovered by any refetch: a quarantined session is either missing from the
+            read API or still showing its last good pass, and neither body says which.
+          </CaveatDetails>
+        </div>
       )}
       {interruptions > 0 && (
-        <p className="truncation-banner" role="alert" data-testid="stream-seam">
+        <div className="truncation-banner" role="alert" data-testid="stream-seam">
           The event stream dropped and reconnected {interruptions}{' '}
-          {interruptions === 1 ? 'time' : 'times'} while this board was open. The server replays
-          only its recent frame buffer after a reconnect, so frames beyond the server's replay
-          buffer, or published across a restart, never reached here. If the server restarted, the
-          frames it published during the outage and restart cannot be detected by the frame-id
-          sequence at all: the ids begin again at 1 on every boot.{' '}
-          {refetchClause(board, seamObservation)} An ingest failure announced in the break cannot be
-          recovered by any refetch: a quarantined session is either missing from the read API or
-          still showing its last good pass, and neither body says which.{' '}
+          {interruptions === 1 ? 'time' : 'times'} while this board was open.{' '}
           <button type="button" onClick={() => setInterruptions(0)}>
             Dismiss
           </button>
-        </p>
+          <CaveatDetails summary="what may be missing">
+            The server replays only its recent frame buffer after a reconnect, so frames beyond the
+            server's replay buffer, or published across a restart, never reached here. If the server
+            restarted, the frames it published during the outage and restart cannot be detected by
+            the frame-id sequence at all: the ids begin again at 1 on every boot.{' '}
+            {refetchClause(board, seamObservation)} An ingest failure announced in the break cannot
+            be recovered by any refetch: a quarantined session is either missing from the read API
+            or still showing its last good pass, and neither body says which.
+          </CaveatDetails>
+        </div>
       )}
       {unreadableFailures > 0 && (
         <p className="truncation-banner" role="alert">
@@ -527,6 +539,114 @@ export function LiveView({ token, sse, onAuthRejected }: ViewProps) {
   // read in the same response.
   const snapshotAge = formatRelativeMs(board.fetchedAtMs, nowMs);
 
+  // R21 / UX-2: the board is split into bands (see `boardBand`). A session
+  // with a failure banner up is in the attention band whatever its buckets say.
+  const failedIds = new Set(failures.map((notice) => notice.sessionId));
+  const bandOf = new Map(sessions.map((session) => [session.id, boardBand(session, failedIds)]));
+  const renderCard = (session: BoardSession, band: BoardBand) => {
+    const recency = formatRelativeTime(session.lastActivityAt, nowMs);
+    const sessionStatus = statusMeta(session.status);
+    const patches = livePatchCount(session);
+    const causeLine = outcomeCauseLine(session.outcomeCauseCounts);
+    const when = sessionWhenText(session.startedAt, session.lastActivityAt, nowMs);
+    return (
+      <li key={session.id} className={`card card-${band}`} data-band={band}>
+        <div className="card-head">
+          {/* UX-1: the card head opens this session's tree. */}
+          <a
+            className="card-link"
+            href={sessionHash(session.id)}
+            title="Open this session's agent tree"
+          >
+            <code>{shortId(session.id)}</code>{' '}
+            <span className={session.projectSlug === null ? 'muted' : undefined}>
+              {projectLabel(session.projectSlug)}
+            </span>
+          </a>
+          <span
+            className={`session-status ${sessionStatus.className}`}
+            data-testid={`session-status-${session.id}`}
+          >
+            <span aria-hidden="true">{sessionStatus.symbol}</span> {sessionStatus.label}
+          </span>
+          <span className="muted card-recency">{recency ?? 'no timestamp'}</span>
+        </div>
+        <div className="card-buckets" aria-label={`status counts for ${session.id}`}>
+          {AGENT_STATUSES.map((status) => {
+            const meta = STATUS_META[status];
+            // A bucket the server omitted is a hole in the snapshot,
+            // not a zero - it renders as NO_FIGURE_META (∅, "no figure"),
+            // never as "0 waiting".
+            const count = bucketCount(session.statusCounts, status);
+            return (
+              <span
+                key={status}
+                // UX-2: a zero bucket is visually hidden but still
+                // read out, so the card shows what is happening and
+                // a screen reader still hears every count.
+                className={count === 0 ? 'bucket bucket-zero' : 'bucket'}
+              >
+                <span className={meta.className} aria-hidden="true">
+                  {meta.symbol}
+                </span>{' '}
+                {/*
+                            LV-3 (2026-09-03). `?` is UNRECOGNISED_STATUS_SYMBOL:
+                            printing it here said "the server sent a status this
+                            build does not know", when the truth is "the server
+                            sent no count for a status we do know". NO_FIGURE_META
+                            is the vocabulary for a missing figure and already
+                            exists. Symbol AND word, like every other entry in
+                            this legend, so the fact survives for a reader who
+                            gets no glyphs.
+                          */}
+                {count ?? (
+                  <>
+                    <span className={NO_FIGURE_META.className}>{NO_FIGURE_META.symbol}</span>{' '}
+                    {NO_FIGURE_META.label}
+                  </>
+                )}{' '}
+                {meta.label}
+              </span>
+            );
+          })}
+        </div>
+        {causeLine !== null && (
+          <p className="muted card-causes" data-testid={`outcome-causes-${session.id}`}>
+            {causeLine}
+          </p>
+        )}
+        <div className="card-metrics muted">
+          {when !== null && <span data-testid={`card-when-${session.id}`}>{when}</span>}
+          <span>
+            {session.agentCount} agent{session.agentCount === 1 ? '' : 's'}
+          </span>
+          <span>{formatTokens(session.totalTokens)} tokens</span>
+          <span>{formatUsd(session.totalCostUsd)}</span>
+          {/* A3 (2026-09-23): was `session.unpricedTokens > 0 && ...`,
+                        which withdrew this whole clause when the count arrived
+                        unreadable - the card then showed a dollar figure with
+                        nothing beside it, which on this board means "fully
+                        priced". See views/unpriced.tsx. */}
+          <UnpricedNote tokens={session.unpricedTokens} lead="" />
+          {/* Owner decisions 1 and 2: see views/session-honesty.tsx. */}
+          <PartialBadge partial={session.partial} lead="" />
+          <DroppedUsageNote count={session.usageRecordsDropped} lead="" />
+        </div>
+        {/* Only on a card the stream has actually rewritten. An
+                      unpatched card is uniformly as old as the snapshot, and
+                      saying so on every row would bury the rows where it is a
+                      warning under the rows where it is a truism. */}
+        {patches > 0 && (
+          <p className="muted card-provenance" data-testid={`provenance-${session.id}`}>
+            Live from the stream: the buckets above, and the time beside them. Read {snapshotAge}{' '}
+            and not updated since: the session status, agent count, outcome causes, tokens and cost
+            ({patches} status {patches === 1 ? 'frame' : 'frames'} applied).
+          </p>
+        )}
+      </li>
+    );
+  };
+
   return (
     <section aria-label="live status board">
       {failureBanners}
@@ -561,98 +681,21 @@ export function LiveView({ token, sse, onAuthRejected }: ViewProps) {
                   ? `Most recent first. These rows outnumber the ${String(board.total)} sessions the same read counts, so the served rows and the served count disagree.`
                   : `${String(sessions.length)} session${sessions.length === 1 ? '' : 's'}, most recent first.`}
           </p>
-          <ul className="board" aria-label="sessions">
-            {sessions.map((session) => {
-              const recency = formatRelativeTime(session.lastActivityAt, nowMs);
-              const sessionStatus = statusMeta(session.status);
-              const patches = livePatchCount(session);
-              const causeLine = outcomeCauseLine(session.outcomeCauseCounts);
+          <ul className="board-bands" aria-label="sessions">
+            {BOARD_BANDS.map((band) => {
+              const members = sessions.filter((session) => bandOf.get(session.id) === band);
+              if (members.length === 0) return null;
               return (
-                <li key={session.id} className="card">
-                  <div className="card-head">
-                    <code>{shortId(session.id)}</code>
-                    <span className={session.projectSlug === null ? 'muted' : undefined}>
-                      {projectLabel(session.projectSlug)}
-                    </span>
-                    <span
-                      className={`session-status ${sessionStatus.className}`}
-                      data-testid={`session-status-${session.id}`}
-                    >
-                      <span aria-hidden="true">{sessionStatus.symbol}</span> {sessionStatus.label}
-                    </span>
-                    <span className="muted card-recency">{recency ?? 'no timestamp'}</span>
-                  </div>
-                  <div className="card-buckets" aria-label={`status counts for ${session.id}`}>
-                    {AGENT_STATUSES.map((status) => {
-                      const meta = STATUS_META[status];
-                      // A bucket the server omitted is a hole in the snapshot,
-                      // not a zero - it renders as NO_FIGURE_META (∅, "no figure"),
-                      // never as "0 waiting".
-                      const count = bucketCount(session.statusCounts, status);
-                      return (
-                        <span
-                          key={status}
-                          className={count === 0 ? 'bucket bucket-zero' : 'bucket'}
-                        >
-                          <span className={meta.className} aria-hidden="true">
-                            {meta.symbol}
-                          </span>{' '}
-                          {/*
-                            LV-3 (2026-09-03). `?` is UNRECOGNISED_STATUS_SYMBOL:
-                            printing it here said "the server sent a status this
-                            build does not know", when the truth is "the server
-                            sent no count for a status we do know". NO_FIGURE_META
-                            is the vocabulary for a missing figure and already
-                            exists. Symbol AND word, like every other entry in
-                            this legend, so the fact survives for a reader who
-                            gets no glyphs.
-                          */}
-                          {count ?? (
-                            <>
-                              <span className={NO_FIGURE_META.className}>
-                                {NO_FIGURE_META.symbol}
-                              </span>{' '}
-                              {NO_FIGURE_META.label}
-                            </>
-                          )}{' '}
-                          {meta.label}
-                        </span>
-                      );
-                    })}
-                  </div>
-                  {causeLine !== null && (
-                    <p className="muted card-causes" data-testid={`outcome-causes-${session.id}`}>
-                      {causeLine}
-                    </p>
-                  )}
-                  <div className="card-metrics muted">
-                    <span>
-                      {session.agentCount} agent{session.agentCount === 1 ? '' : 's'}
-                    </span>
-                    <span>{formatTokens(session.totalTokens)} tokens</span>
-                    <span>{formatUsd(session.totalCostUsd)}</span>
-                    {/* A3 (2026-09-23): was `session.unpricedTokens > 0 && ...`,
-                        which withdrew this whole clause when the count arrived
-                        unreadable - the card then showed a dollar figure with
-                        nothing beside it, which on this board means "fully
-                        priced". See views/unpriced.tsx. */}
-                    <UnpricedNote tokens={session.unpricedTokens} lead="" />
-                    {/* Owner decisions 1 and 2: see views/session-honesty.tsx. */}
-                    <PartialBadge partial={session.partial} lead="" />
-                    <DroppedUsageNote count={session.usageRecordsDropped} lead="" />
-                  </div>
-                  {/* Only on a card the stream has actually rewritten. An
-                      unpatched card is uniformly as old as the snapshot, and
-                      saying so on every row would bury the rows where it is a
-                      warning under the rows where it is a truism. */}
-                  {patches > 0 && (
-                    <p className="muted card-provenance" data-testid={`provenance-${session.id}`}>
-                      Live from the stream: the buckets above, and the time beside them. Read{' '}
-                      {snapshotAge} and not updated since: the session status, agent count, outcome
-                      causes, tokens and cost ({patches} status {patches === 1 ? 'frame' : 'frames'}{' '}
-                      applied).
-                    </p>
-                  )}
+                <li key={band} className={`board-band band-${band}`}>
+                  <h3 className="band-heading" data-testid={`band-${band}`}>
+                    {BOARD_BAND_LABEL[band]} <span className="muted">({members.length})</span>
+                  </h3>
+                  <ul
+                    className="board"
+                    aria-label={`${BOARD_BAND_LABEL[band].toLowerCase()} sessions`}
+                  >
+                    {members.map((session) => renderCard(session, band))}
+                  </ul>
                 </li>
               );
             })}

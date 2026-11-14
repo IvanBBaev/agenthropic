@@ -23,6 +23,11 @@
  *     the today tile summed a day the snapshot could not contain and printed
  *     the result as $0.00. The summary now carries the moment it was read, and
  *     the tile prints "not measured" rather than a zero it never measured.
+ *
+ * AMENDED 2026-11-14 (R21, UX-8): the page now LEADS with a local-time strip -
+ * today, last 7 days and saved by delegation - read from `/api/changes` with
+ * local midnight as the window start (see LocalWindows.tsx). The UTC tiles
+ * remain, below the totals, as the day basis of the per-day table.
  */
 import { useEffect, useState } from 'react';
 import { fetchAggregateSavings, fetchCostSummary, fetchGlobalDag } from '../api';
@@ -58,6 +63,7 @@ import { SessionCostAnalysis } from './SessionCostAnalysis';
 import { DroppedUsageNote, PartialAggregateNote, PartialBadge } from './session-honesty';
 import { snapshotAge } from './snapshot';
 import { NO_FIGURE_META } from './status';
+import { LocalWindowsStrip } from './LocalWindows';
 import { rankTopBurners } from './top-burners';
 import type { ViewProps } from './types';
 import { UnpricedModelsBanner } from './unpriced';
@@ -893,6 +899,17 @@ export function CostView({ token, onAuthRejected, replayEpoch }: ViewProps) {
           {REFRESH_LABEL}
         </button>
       </p>
+      {/* R21 (UX-8): the page leads with today / this week / saved, in the
+          reader's own timezone. The UTC tiles below stay as they were. */}
+      <LocalWindowsStrip
+        token={token}
+        onAuthRejected={onAuthRejected}
+        reload={reload}
+        replayEpoch={replayEpoch}
+        nowMs={nowMs}
+        savings={savings}
+        describedBy={costHonestyDescribedBy}
+      />
       {/* `role="group"`: a plain div exposes neither its label nor its
           description, so the honesty note it names would reach nobody. */}
       <div

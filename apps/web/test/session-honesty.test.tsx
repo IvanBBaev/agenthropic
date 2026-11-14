@@ -163,7 +163,8 @@ describe('LiveView', () => {
     );
     render(<LiveView token="secret-token" sse={sse} onAuthRejected={onAuthRejected} />);
     const list = await screen.findByRole('list', { name: 'sessions' });
-    const cards = within(list).getAllByRole('listitem');
+    // R21 (UX-3): the board nests cards inside band items; count the cards.
+    const cards = [...list.querySelectorAll<HTMLElement>('li.card')];
     expect(cards).toHaveLength(2);
     expect(cards[0]!.textContent).toContain(BADGE);
     expect(cards[0]!.textContent).toContain(

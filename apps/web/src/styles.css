@@ -459,8 +459,53 @@ button:disabled {
   font-size: 0.85rem;
 }
 
+.card-attention {
+  border-left: 3px solid #e07070;
+}
+
+.card-running {
+  border-left: 3px solid #3987e5;
+}
+
+.card-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.card-link:hover,
+.card-link:focus-visible {
+  text-decoration: underline;
+}
+
+/* R21 (UX-2): bands group the board by what the reader has to do next. */
+.board-bands {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.band-heading {
+  margin: 0 0 0.4rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+/* R21 (UX-2): a zero bucket is noise to the eye but still a fact. It is
+   removed from the visual layout and kept for assistive tech, so a screen
+   reader still hears "0 error" and nothing is silently dropped. */
 .bucket-zero {
-  opacity: 0.45;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .card-metrics {
@@ -573,6 +618,11 @@ button:disabled {
 .node-label {
   fill: #e6e8eb;
   font-size: 11px;
+}
+
+.node-figures {
+  fill: #9aa2ad;
+  font-size: 10px;
 }
 
 .legend-inline {
@@ -732,4 +782,46 @@ button:disabled {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   vertical-align: middle;
+}
+
+/* --- R21 (UX-6): local time on session rows --- */
+
+.session-day {
+  list-style: none;
+  margin: 0.6rem 0 0.2rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #9aa2ad;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.session-when {
+  font-size: 0.8rem;
+}
+
+/* --- R21 (UX-9): folded honesty prose --- */
+
+/* The provenance and stream notices became <div>s so a <details> can sit
+   inside them; give them back the paragraph spacing they had as <p>. */
+div.truncation-banner {
+  margin: 0.75rem 0;
+}
+
+.caveat-details {
+  margin: 0.35rem 0;
+  font-size: 0.8rem;
+}
+
+.caveat-details > summary {
+  cursor: pointer;
+  color: #9aa2ad;
+}
+
+.caveat-details > .caveat-body {
+  margin-top: 0.3rem;
+}
+
+.caveat-details > .caveat-body > p {
+  margin: 0.3rem 0;
 }

@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_VIEW, parseHash, parseRoute, VIEW_IDS, viewHash } from '../src/router';
+import {
+  DEFAULT_VIEW,
+  parseHash,
+  parseRoute,
+  sessionHash,
+  VIEW_IDS,
+  viewHash,
+} from '../src/router';
 
 describe('parseHash', () => {
   it('resolves each canonical view hash', () => {
@@ -95,6 +102,41 @@ describe('parseRoute reports whether the hash named a real view (RT-1)', () => {
   it('keeps parseHash as exactly the view half of the same answer', () => {
     for (const hash of ['#/cost', '#/nope', '', '#/dag/']) {
       expect(parseHash(hash)).toBe(parseRoute(hash).view);
+    }
+  });
+});
+
+/**
+ * R21 / UX-1: a session is addressable. `#/sessions/<id>` opens the session
+ * view with that session selected; nothing else gains a parameter.
+ */
+describe('session deep links (UX-1)', () => {
+  it('parses #/sessions/<id> as the sessions view with that id selected', () => {
+    const route = parseRoute('#/sessions/abc-123');
+    expect(route.view).toBe('sessions');
+    expect(route.recognised).toBe(true);
+    expect(route.sessionId).toBe('abc-123');
+    expect(parseRoute('#/sessions/abc-123/').sessionId).toBe('abc-123');
+  });
+
+  it('round-trips an id through sessionHash, percent-encoding included', () => {
+    for (const id of ['abc-123', 'a b/c?d#e', 'ünïcode']) {
+      expect(parseRoute(sessionHash(id))).toMatchObject({ view: 'sessions', sessionId: id });
+    }
+  });
+
+  it('carries no session for a bare view hash', () => {
+    for (const id of VIEW_IDS) {
+      expect(parseRoute(viewHash(id)).sessionId).toBeNull();
+    }
+  });
+
+  it('keeps extra segments and undecodable ids unrecognised', () => {
+    for (const hash of ['#/sessions/a/b', '#/sessions/%E0%A4%A', '#/dag/abc', '#/live/abc']) {
+      const route = parseRoute(hash);
+      expect(route.recognised).toBe(false);
+      expect(route.view).toBe(DEFAULT_VIEW);
+      expect(route.sessionId).toBeNull();
     }
   });
 });

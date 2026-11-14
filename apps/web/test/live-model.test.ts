@@ -6,12 +6,13 @@ import { describe, expect, it } from 'vitest';
 import type { AgentStatusChangedEvent, SessionStatusCountsDto } from '../src/dto';
 import {
   applyAgentStatusChange,
+  boardBand,
   isAgentStatusChangedEvent,
   livePatchCount,
   outcomeCauseLine,
   sortSessionsByRecency,
 } from '../src/views/live-model';
-import { outcomeCauseCounts, sessionSummary, statusCounts } from './fixtures';
+import { OVERSIZE_PARTIAL, outcomeCauseCounts, sessionSummary, statusCounts } from './fixtures';
 
 function statusEvent(overrides: Partial<AgentStatusChangedEvent> = {}): AgentStatusChangedEvent {
   return {
@@ -540,5 +541,91 @@ describe('outcomeCauseLine (D9)', () => {
     expect(outcomeCauseLine(null)).toBe(
       'Observed agent outcomes: unreadable (no cause counts sent).',
     );
+  });
+});
+
+describe('boardBand (R21, UX-2)', () => {
+  const none = new Set<string>();
+
+  it('puts a session with an error or unknown agent in the attention band', () => {
+    expect(boardBand(sessionSummary({ statusCounts: statusCounts({ error: 1 }) }), none)).toBe(
+      'attention',
+    );
+    expect(
+      boardBand(sessionSummary({ statusCounts: statusCounts({ working: 2, unknown: 1 }) }), none),
+    ).toBe('attention');
+  });
+
+  it('puts an error or unknown session status in the attention band', () => {
+    const counts = statusCounts({ completed: 3 });
+    expect(boardBand(sessionSummary({ status: 'error', statusCounts: counts }), none)).toBe(
+      'attention',
+    );
+    expect(boardBand(sessionSummary({ status: 'unknown', statusCounts: counts }), none)).toBe(
+      'attention',
+    );
+  });
+
+  it('puts a partial read or a failed ingest in the attention band', () => {
+    const done = sessionSummary({
+      status: 'completed',
+      statusCounts: statusCounts({ completed: 3 }),
+    });
+    expect(boardBand(done, none)).toBe('recent');
+    expect(boardBand(done, new Set([done.id]))).toBe('attention');
+    expect(boardBand(sessionSummary({ ...done, partial: OVERSIZE_PARTIAL }), none)).toBe(
+      'attention',
+    );
+  });
+
+  it('reads a missing working or waiting bucket as nothing running', () => {
+    const counts = { ...statusCounts({ completed: 3 }) } as Record<string, number>;
+    delete counts['working'];
+    delete counts['waiting'];
+    expect(
+      boardBand(
+        sessionSummary({
+          status: 'completed',
+          statusCounts: counts as unknown as SessionStatusCountsDto,
+        }),
+        none,
+      ),
+    ).toBe('recent');
+  });
+
+  it('treats a missing error or unknown bucket as unknown, not as zero', () => {
+    const counts = { ...statusCounts({ completed: 3 }) } as Record<string, number>;
+    delete counts['unknown'];
+    expect(
+      boardBand(
+        sessionSummary({
+          status: 'completed',
+          statusCounts: counts as unknown as SessionStatusCountsDto,
+        }),
+        none,
+      ),
+    ).toBe('attention');
+  });
+
+  it('puts a working or waiting session in the running band', () => {
+    expect(
+      boardBand(
+        sessionSummary({
+          status: 'completed',
+          statusCounts: statusCounts({ waiting: 1, completed: 1 }),
+        }),
+        none,
+      ),
+    ).toBe('running');
+    expect(boardBand(sessionSummary(), none)).toBe('running');
+  });
+
+  it('leaves a finished, healthy session in the recent band', () => {
+    expect(
+      boardBand(
+        sessionSummary({ status: 'completed', statusCounts: statusCounts({ completed: 3 }) }),
+        none,
+      ),
+    ).toBe('recent');
   });
 });

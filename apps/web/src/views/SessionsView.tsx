@@ -44,8 +44,21 @@
  * reason and the reader was never told. See `outcomeCauseText` below for what
  * each of the six causes renders as, why a NULL one renders as nothing at all,
  * and why the surface is not filtered to `status === 'error'`.
+ *
+ * AMENDED 2026-11-14 (R21). Three things changed. UX-1: the selection is the
+ * route - `#/sessions/<id>` opens this view on that session, and picking a row
+ * writes it - so a drill-down survives a reload and can be linked from a Live
+ * card. UX-3: the "does NOT subscribe to SSE" sentence above is retired. The
+ * open tree now follows the stream: an `agent-status-changed` frame for the
+ * selected session patches that node's status in place (and the pane counts
+ * the patches, the way a Live card does, because tokens and dollars are not in
+ * the frame and stay as read), and a `session-ingested` frame for it re-reads
+ * the tree without blanking it. The list is not live; its age line still
+ * stands. UX-5/UX-6: each node prints its tokens and dollars under its label,
+ * and each list row says when the session started (local time) and how long
+ * it ran, grouped under local-day headings.
  */
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchSessions, fetchSessionTree } from '../api';
 import { readNowMs, useNowMs } from '../clock';
 import type { AgentNodeDto, SessionSummaryDto, SessionTreeDto } from '../dto';
@@ -55,10 +68,14 @@ import {
   formatUsd,
   impossibleCountText,
   isImpossibleCount,
+  localDayLabel,
   projectLabel,
   quoteRawValue,
+  sessionWhenText,
   shortId,
 } from '../format';
+import { sessionHash, useRoute } from '../router';
+import { isAgentStatusChangedEvent } from './live-model';
 import { ChangesPanel } from './ChangesPanel';
 import { describeAgentGraph } from './chart-summary';
 import { computeLayeredLayout, fallbackLayerNotice } from './layout/layered';
@@ -67,6 +84,7 @@ import { SessionCostAnalysis } from './SessionCostAnalysis';
 import { snapshotAge } from './snapshot';
 import { statusMeta, UNRECOGNISED_STATUS_LABEL } from './status';
 import type { ViewProps } from './types';
+import { CaveatDetails, caveatCountLabel } from './caveats';
 import { DroppedUsageNote, PartialBadge } from './session-honesty';
 import { sessionRejectionText, type SessionRejectionText } from './session-rejection';
 import { UnpricedNote, unpricedTitleSuffix } from './unpriced';
@@ -99,7 +117,59 @@ type TreeState =
       /** Set when the 409 named an ingest rejection (see session-rejection.ts). */
       readonly rejection?: SessionRejectionText;
     }
-  | { readonly kind: 'ready'; readonly tree: SessionTreeDto; readonly fetchedAtMs: number };
+  | {
+      readonly kind: 'ready';
+      readonly tree: SessionTreeDto;
+      readonly fetchedAtMs: number;
+      /** UX-3: status frames applied to this read since it landed. */
+      readonly livePatches: number;
+    };
+
+/**
+ * UX-3: the tree after one `agent-status-changed` frame. Only the named node's
+ * status moves - the frame carries no tokens or dollars, so those stay as read
+ * and the caller counts the patch. `null` when the frame names no node in this
+ * tree (an agent first seen after the read): there is nothing to patch, and the
+ * caller re-reads instead of drawing a node it has no row for.
+ */
+export function patchTreeStatus(
+  tree: SessionTreeDto,
+  agentId: string,
+  status: AgentNodeDto['status'],
+): SessionTreeDto | null {
+  if (!tree.agents.some((agent) => agent.id === agentId)) return null;
+  return {
+    ...tree,
+    agents: tree.agents.map((agent) => (agent.id === agentId ? { ...agent, status } : agent)),
+  };
+}
+
+function frameSessionId(data: unknown): string | null {
+  if (typeof data !== 'object' || data === null) return null;
+  const sessionId = (data as Record<string, unknown>)['sessionId'];
+  return typeof sessionId === 'string' ? sessionId : null;
+}
+
+/**
+ * UX-6: the session list split under local-day headings, keyed by each row's
+ * last activity - the order the server pages in - so every day is one
+ * contiguous run. A row with no readable activity goes under `No recorded
+ * activity` rather than being filed under a day it never named.
+ */
+export function groupSessionsByLocalDay(
+  sessions: readonly SessionSummaryDto[],
+  nowMs: number,
+): { readonly label: string; readonly sessions: readonly SessionSummaryDto[] }[] {
+  const groups: { label: string; sessions: SessionSummaryDto[] }[] = [];
+  for (const session of sessions) {
+    const at = session.lastActivityAt === null ? Number.NaN : Date.parse(session.lastActivityAt);
+    const label = Number.isNaN(at) ? 'No recorded activity' : localDayLabel(at, nowMs);
+    const last = groups.at(-1);
+    if (last !== undefined && last.label === label) last.sessions.push(session);
+    else groups.push({ label, sessions: [session] });
+  }
+  return groups;
+}
 
 function agentLabel(agent: AgentNodeDto): string {
   return agentTypeLabel(agent.subagentType, agent.type);
@@ -217,11 +287,13 @@ function countClause(persisted: number, served: number, noun: string): string {
 function TreePanel({
   tree,
   fetchedAtMs,
+  livePatches,
   nowMs,
   onRefresh,
 }: {
   readonly tree: SessionTreeDto;
   readonly fetchedAtMs: number;
+  readonly livePatches: number;
   readonly nowMs: number;
   readonly onRefresh: () => void;
 }) {
@@ -313,46 +385,74 @@ function TreePanel({
   const hasHonesty = tree.partial !== null || tree.usageRecordsDropped !== 0;
   const honestyId = `tree-honesty-${tree.sessionId}`;
   const describedBy = hasHonesty ? `${outcomesDescribedBy} ${honestyId}` : outcomesDescribedBy;
+  const pictureCaveats =
+    (countDisagreement === null ? 0 : 1) +
+    (layout.droppedEdges > 0 ? 1 : 0) +
+    (layout.cyclicNodes > 0 ? 1 : 0);
   return (
     <div>
       {/* The caveat escalates with the fact rather than sitting at one volume:
           quiet while the read is inside the app's own "just now" window (where
           it is a truism), promoted to the warning banner once it is outside
           (where it marks real drift the reader is about to act on). */}
-      <p
+      {/* R21 (UX-9): the aged headline stays in the banner; its full wording
+          folds into a disclosure that keeps every word in the document. */}
+      <div
         className={age.aged ? 'truncation-banner' : 'muted card-provenance'}
         data-testid="tree-provenance"
       >
         Tree read {age.label}
-        {age.aged
-          ? ' - everything below is remembered, not observed: each agent status, token count and dollar figure, and how many agents there were. An agent still drawn as working may have finished or failed since.'
-          : '.'}{' '}
+        {age.aged ? ' - remembered, not observed.' : '.'}{' '}
         <button type="button" onClick={onRefresh}>
           Refresh tree
         </button>
-      </p>
+        {age.aged && (
+          <CaveatDetails summary="what is remembered">
+            Everything below is remembered, not observed: each agent status, token count and dollar
+            figure, and how many agents there were. An agent still drawn as working may have
+            finished or failed since.
+          </CaveatDetails>
+        )}
+      </div>
+      {livePatches > 0 && (
+        <p className="muted card-provenance" data-testid="tree-live-patches">
+          {livePatches} live status update{livePatches === 1 ? '' : 's'} applied since this read -
+          node statuses are current, tokens and dollars are as read.
+        </p>
+      )}
       <p className="muted">
         {tree.agentCount} agent{tree.agentCount === 1 ? '' : 's'}, {tree.edgeCount} edge
         {tree.edgeCount === 1 ? '' : 's'} (persisted).
       </p>
-      {countDisagreement !== null && (
-        <p className="muted" id={countDisagreementId} data-testid="tree-count-disagreement">
-          {countDisagreement}
-        </p>
-      )}
-      {layout.droppedEdges > 0 && (
-        <p className="muted">
-          {layout.droppedEdges} edge{layout.droppedEdges === 1 ? '' : 's'} reference agents outside
-          this payload and are not drawn.
-        </p>
-      )}
-      {/* DG-3 (2026-09-08): rendered under exactly the condition that puts
-          `cycleNoticeId` into `aria-describedby`, so the reference and the
-          element can never disagree. */}
-      {layout.cyclicNodes > 0 && (
-        <p className="muted" id={cycleNoticeId}>
-          {fallbackLayerNotice(layout.cyclicNodes, layout.belowCycleNodes)}
-        </p>
+      {/* R21 (UX-9): the notes about how the picture was drawn sit under one
+          disclosure whose label counts them, so the tree is the first thing
+          below the counts. Each note keeps its id: `aria-describedby` reaches
+          into a closed <details> just the same. */}
+      {pictureCaveats > 0 && (
+        <CaveatDetails
+          summary={caveatCountLabel(pictureCaveats, 'about this picture')}
+          testId="tree-caveats"
+        >
+          {countDisagreement !== null && (
+            <p className="muted" id={countDisagreementId} data-testid="tree-count-disagreement">
+              {countDisagreement}
+            </p>
+          )}
+          {layout.droppedEdges > 0 && (
+            <p className="muted">
+              {layout.droppedEdges} edge{layout.droppedEdges === 1 ? '' : 's'} reference agents
+              outside this payload and are not drawn.
+            </p>
+          )}
+          {/* DG-3 (2026-09-08): rendered under exactly the condition that puts
+              `cycleNoticeId` into `aria-describedby`, so the reference and the
+              element can never disagree. */}
+          {layout.cyclicNodes > 0 && (
+            <p className="muted" id={cycleNoticeId}>
+              {fallbackLayerNotice(layout.cyclicNodes, layout.belowCycleNodes)}
+            </p>
+          )}
+        </CaveatDetails>
       )}
       <div className="chart-scroll">
         <svg
@@ -393,6 +493,10 @@ function TreePanel({
                 </text>
                 <text className="node-label" x={placed.x} y={placed.y + 24} textAnchor="middle">
                   {agentLabel(agent)}
+                </text>
+                {/* UX-5: the figures a reader came for, without a hover. */}
+                <text className="node-figures" x={placed.x} y={placed.y + 38} textAnchor="middle">
+                  {`${formatTokens(agent.totalTokens)} · ${formatUsd(agent.costUsd)}${agent.unpricedTokens > 0 ? '+' : ''}`}
                 </text>
               </g>
             );
@@ -447,10 +551,28 @@ function TreePanel({
   );
 }
 
-export function SessionsView({ token, onAuthRejected, replayEpoch }: ViewProps) {
+export function SessionsView({ token, sse, onAuthRejected, replayEpoch }: ViewProps) {
   const [list, setList] = useState<ListState>({ kind: 'loading' });
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // UX-1: the route owns the selection. Local state mirrors it so a click
+  // selects at once, and follows it so back/forward and a pasted link select.
+  const route = useRoute();
+  const routedId = route.view === 'sessions' ? route.sessionId : null;
+  const [selectedId, setSelectedId] = useState<string | null>(routedId);
+  useEffect(() => {
+    setSelectedId(routedId);
+  }, [routedId]);
+  const selectSession = (sessionId: string) => {
+    setSelectedId(sessionId);
+    window.location.hash = sessionHash(sessionId);
+  };
   const [treeState, setTreeState] = useState<TreeState>({ kind: 'idle' });
+  // Mirror of the latest tree so a stream handler patches the current read
+  // even before React re-renders between two quick frames (LiveView's pattern).
+  const treeRef = useRef<TreeState>(treeState);
+  const applyTree = useCallback((next: TreeState) => {
+    treeRef.current = next;
+    setTreeState(next);
+  }, []);
   // Cost analysis reprices transcripts off disk (WP-C4/C5), so like the cost
   // view it is opt-in per session, never fetched for every listed row.
   const [analysedSessionId, setAnalysedSessionId] = useState<string | null>(null);
@@ -493,27 +615,75 @@ export function SessionsView({ token, onAuthRejected, replayEpoch }: ViewProps) 
 
   useEffect(() => {
     if (selectedId === null) {
-      setTreeState({ kind: 'idle' });
+      applyTree({ kind: 'idle' });
       return;
     }
     const controller = new AbortController();
-    setTreeState({ kind: 'loading' });
+    // UX-3: a re-read of the tree already on screen keeps it there until the
+    // new one lands, so a live refresh never blanks the pane under the reader.
+    const current = treeRef.current;
+    if (current.kind !== 'ready' || current.tree.sessionId !== selectedId) {
+      applyTree({ kind: 'loading' });
+    }
     void fetchSessionTree(token, selectedId, controller.signal).then((result) => {
       if (controller.signal.aborted) return;
       if (result.kind === 'unauthorized') {
         onAuthRejected();
       } else if (result.kind === 'error') {
-        setTreeState({
+        applyTree({
           kind: 'error',
           message: result.message,
           rejection: sessionRejectionText(result),
         });
       } else {
-        setTreeState({ kind: 'ready', tree: result.data, fetchedAtMs: readNowMs() });
+        applyTree({
+          kind: 'ready',
+          tree: result.data,
+          fetchedAtMs: readNowMs(),
+          livePatches: 0,
+        });
       }
     });
     return () => controller.abort();
-  }, [token, selectedId, treeReload, onAuthRejected]);
+  }, [token, selectedId, treeReload, onAuthRejected, applyTree]);
+
+  // UX-3: the open tree follows the stream. Frames for other sessions are
+  // ignored; a status frame this tree cannot place, and every ingest of the
+  // selected session, re-read the tree rather than guess at it.
+  useEffect(() => {
+    if (selectedId === null) return undefined;
+    const unsubscribeIngest = sse.subscribe('session-ingested', (event) => {
+      if (frameSessionId(event.data) === selectedId) setTreeReload((value) => value + 1);
+    });
+    const unsubscribeStatus = sse.subscribe('agent-status-changed', (event) => {
+      const data = event.data;
+      if (!isAgentStatusChangedEvent(data)) {
+        if (frameSessionId(data) === selectedId) setTreeReload((value) => value + 1);
+        return;
+      }
+      if (data.sessionId !== selectedId) return;
+      const current = treeRef.current;
+      // A frame that lands while the tree is still loading is answered by that
+      // read only if the read was taken after it - which nothing proves - so it
+      // is re-read once more rather than dropped. An errored pane keeps its
+      // own Retry: a frame is not evidence the error has cleared.
+      if (current.kind === 'loading') {
+        setTreeReload((value) => value + 1);
+        return;
+      }
+      if (current.kind !== 'ready' || current.tree.sessionId !== selectedId) return;
+      const patched = patchTreeStatus(current.tree, data.agentId, data.status);
+      if (patched === null) {
+        setTreeReload((value) => value + 1);
+        return;
+      }
+      applyTree({ ...current, tree: patched, livePatches: current.livePatches + 1 });
+    });
+    return () => {
+      unsubscribeIngest();
+      unsubscribeStatus();
+    };
+  }, [sse, selectedId, applyTree]);
 
   if (list.kind === 'loading') {
     return (
@@ -541,18 +711,22 @@ export function SessionsView({ token, onAuthRejected, replayEpoch }: ViewProps) 
   // list too - "no sessions yet" is itself a claim with an age, and it is
   // rendered in the branch below where there is nothing else to qualify.
   const listProvenance = (
-    <p
+    <div
       className={listAge.aged ? 'truncation-banner' : 'muted card-provenance'}
       data-testid="list-provenance"
     >
       Session list read {listAge.label}
-      {listAge.aged
-        ? ' - everything from it is remembered, not observed: each row status, agent count and dollar figure, and whether a session exists at all.'
-        : '.'}{' '}
+      {listAge.aged ? ' - remembered, not observed.' : '.'}{' '}
       <button type="button" onClick={refreshList}>
         Refresh sessions
       </button>
-    </p>
+      {listAge.aged && (
+        <CaveatDetails summary="what is remembered">
+          Everything from it is remembered, not observed: each row status, agent count and dollar
+          figure, and whether a session exists at all.
+        </CaveatDetails>
+      )}
+    </div>
   );
 
   if (list.sessions.length === 0) {
@@ -605,47 +779,62 @@ export function SessionsView({ token, onAuthRejected, replayEpoch }: ViewProps) 
             </p>
           ) : null}
           <ul className="session-list" aria-label="session list">
-            {list.sessions.map((session) => {
-              const meta = statusMeta(session.status);
-              return (
-                <li key={session.id} className="session-item">
-                  <button
-                    type="button"
-                    className={
-                      session.id === selectedId ? 'session-row session-active' : 'session-row'
-                    }
-                    aria-pressed={session.id === selectedId}
-                    onClick={() => setSelectedId(session.id)}
-                  >
-                    <code>{shortId(session.id)}</code>{' '}
-                    <span className={session.projectSlug === null ? 'muted' : undefined}>
-                      {projectLabel(session.projectSlug)}
-                    </span>{' '}
-                    <span className={`session-status ${meta.className}`}>
-                      <span aria-hidden="true">{meta.symbol}</span> {meta.label}
-                    </span>{' '}
-                    <span className="muted">
-                      {session.agentCount} agent{session.agentCount === 1 ? '' : 's'} ·{' '}
-                      {formatUsd(session.totalCostUsd)}
-                    </span>
-                    {/* A3 (2026-09-23): see views/unpriced.tsx. */}
-                    <UnpricedNote tokens={session.unpricedTokens} lead=" · " />
-                    {/* Owner decisions 1 and 2: see views/session-honesty.tsx. */}
-                    <PartialBadge partial={session.partial} lead=" · " />
-                    <DroppedUsageNote count={session.usageRecordsDropped} lead=" · " />
-                  </button>
-                  <button
-                    type="button"
-                    className="link-button analyse-button"
-                    aria-pressed={session.id === analysedSessionId}
-                    aria-label={`analyse cost of session ${shortId(session.id)}`}
-                    onClick={() => setAnalysedSessionId(session.id)}
-                  >
-                    analyse
-                  </button>
-                </li>
-              );
-            })}
+            {groupSessionsByLocalDay(list.sessions, nowMs).flatMap((group) => [
+              <li key={`day-${group.label}`} className="session-day" data-testid="session-day">
+                {group.label}
+              </li>,
+              ...group.sessions.map((session) => {
+                const meta = statusMeta(session.status);
+                const when = sessionWhenText(session.startedAt, session.lastActivityAt, nowMs);
+                return (
+                  <li key={session.id} className="session-item">
+                    <button
+                      type="button"
+                      className={
+                        session.id === selectedId ? 'session-row session-active' : 'session-row'
+                      }
+                      aria-pressed={session.id === selectedId}
+                      onClick={() => selectSession(session.id)}
+                    >
+                      <code>{shortId(session.id)}</code>{' '}
+                      <span className={session.projectSlug === null ? 'muted' : undefined}>
+                        {projectLabel(session.projectSlug)}
+                      </span>{' '}
+                      <span className={`session-status ${meta.className}`}>
+                        <span aria-hidden="true">{meta.symbol}</span> {meta.label}
+                      </span>{' '}
+                      <span className="muted">
+                        {session.agentCount} agent{session.agentCount === 1 ? '' : 's'} ·{' '}
+                        {formatUsd(session.totalCostUsd)}
+                      </span>
+                      {/* A3 (2026-09-23): see views/unpriced.tsx. */}
+                      <UnpricedNote tokens={session.unpricedTokens} lead=" · " />
+                      {/* Owner decisions 1 and 2: see views/session-honesty.tsx. */}
+                      <PartialBadge partial={session.partial} lead=" · " />
+                      <DroppedUsageNote count={session.usageRecordsDropped} lead=" · " />
+                      {when !== null && (
+                        <span
+                          className="muted session-when"
+                          data-testid={`session-when-${session.id}`}
+                        >
+                          {' · '}
+                          {when}
+                        </span>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      className="link-button analyse-button"
+                      aria-pressed={session.id === analysedSessionId}
+                      aria-label={`analyse cost of session ${shortId(session.id)}`}
+                      onClick={() => setAnalysedSessionId(session.id)}
+                    >
+                      analyse
+                    </button>
+                  </li>
+                );
+              }),
+            ])}
           </ul>
         </div>
         <div>
@@ -673,6 +862,7 @@ export function SessionsView({ token, onAuthRejected, replayEpoch }: ViewProps) 
             <TreePanel
               tree={treeState.tree}
               fetchedAtMs={treeState.fetchedAtMs}
+              livePatches={treeState.livePatches}
               nowMs={nowMs}
               onRefresh={refreshTree}
             />

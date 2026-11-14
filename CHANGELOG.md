@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Dashboard UX minimum (R21, UX-1/2/3/5/6/8/9).** A session has its own link
+  (`#/sessions/<id>`), and Live cards link to it. The Live board now groups sessions into
+  Needs attention / Running / Recent bands with a coloured edge, and it hides empty bands and
+  zero status buckets. An open session tree follows agent status changes over SSE without a
+  refetch. Every tree node prints its tokens and dollars. Sessions show their local start
+  time and duration, grouped by local day. The Cost page leads with Today, Last 7 days
+  (local time, read from `/api/changes` at local midnight) and Saved by delegation (all
+  time). Caveat paragraphs fold into a headline plus a `<details>` disclosure that keeps
+  every sentence. Banners that say the data is wrong stay banners.
+
 - **Opt-in real-corpus contract suite (R17, QA-2).** `AGENTHROPIC_REAL_CORPUS=~/.claude/projects
   pnpm test:real` ingests a real Claude Code projects directory (one or more roots) into a
   throwaway database and asserts the moat contracts on it: zero failed sessions, P0-1 exact

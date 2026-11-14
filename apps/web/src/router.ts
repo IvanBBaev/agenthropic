@@ -16,6 +16,15 @@
  * The fallback itself stays - there is nothing else to render - and `parseHash`
  * keeps its exact old signature and answer. `parseRoute` adds back the one fact
  * the fallback destroyed, so the caller can disclose it.
+ *
+ * AMENDED 2026-11-14 (R21, UX-1): one view takes a parameter. `#/sessions/<id>`
+ * opens the session view with that session selected, so a session is something
+ * a reader can bookmark, share or reach from a Live card - before this the
+ * selection lived only in component state and every reload or link forgot it.
+ * Exactly one non-empty segment is accepted after `sessions`; every other
+ * trailing segment (`#/cost/extra`, `#/sessions/a/b`) stays unrecognised, and
+ * so does an id that does not percent-decode, because a selection this module
+ * cannot read is a route it cannot honour.
  */
 import { useSyncExternalStore } from 'react';
 
@@ -42,12 +51,36 @@ export interface Route {
    * which is how a reader learns to stop reading notices.
    */
   readonly recognised: boolean;
+  /**
+   * The session a `#/sessions/<id>` hash selects, percent-decoded; `null` for
+   * every other hash, including a bare `#/sessions`.
+   */
+  readonly sessionId: string | null;
+}
+
+/** The view that accepts a `/<id>` parameter (UX-1). */
+const PARAM_VIEW: ViewId = 'sessions';
+
+function decodeSegment(segment: string): string | null {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return null;
+  }
 }
 
 /** `'#/cost'` (also `'#cost'`, `'#/cost/'`) -> `'cost'`; anything else -> default. */
 export function parseRoute(hash: string): Route {
   const normalized = hash.replace(/^#\/?/, '').replace(/\/+$/, '');
   const known = (VIEW_IDS as readonly string[]).includes(normalized);
+  const prefix = `${PARAM_VIEW}/`;
+  if (!known && normalized.startsWith(prefix)) {
+    const segment = normalized.slice(prefix.length);
+    const sessionId = segment.includes('/') ? null : decodeSegment(segment);
+    if (sessionId !== null && sessionId !== '') {
+      return { view: PARAM_VIEW, requested: hash, recognised: true, sessionId };
+    }
+  }
   return {
     view: known ? (normalized as ViewId) : DEFAULT_VIEW,
     requested: hash,
@@ -56,6 +89,7 @@ export function parseRoute(hash: string): Route {
     // the view disagree in the other direction, which is the same lie with
     // better manners; disclosing the miss costs nothing and hides nothing.
     recognised: known || normalized === '',
+    sessionId: null,
   };
 }
 
@@ -67,6 +101,11 @@ export function parseHash(hash: string): ViewId {
 /** The canonical href for a view, usable directly in an anchor. */
 export function viewHash(view: ViewId): string {
   return `#/${view}`;
+}
+
+/** The canonical href that opens the session view on one session (UX-1). */
+export function sessionHash(sessionId: string): string {
+  return `#/${PARAM_VIEW}/${encodeURIComponent(sessionId)}`;
 }
 
 function subscribeToHash(onChange: () => void): () => void {

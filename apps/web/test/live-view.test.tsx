@@ -277,7 +277,8 @@ describe('LiveView', () => {
     renderView();
 
     await screen.findByText('2 sessions, most recent first.');
-    expect(screen.getAllByRole('listitem')).toHaveLength(2);
+    // R21 (UX-3): band items wrap the cards, so the cards are counted directly.
+    expect(document.querySelectorAll('li.card')).toHaveLength(2);
   });
 
   it('writes a one-agent card in the singular', async () => {
@@ -566,6 +567,26 @@ describe('LiveView', () => {
     const seam = screen.getByTestId('stream-seam');
     expect(seam.getAttribute('role')).toBe('alert');
     expect(seam.textContent).toContain('ingest failure');
+  });
+
+  it('keeps the seam headline visible and folds its explanation into a disclosure (R21, UX-9)', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, sessionList([sessionSummary()])));
+    renderView();
+    await screen.findByRole('list', { name: 'sessions' });
+    act(() => {
+      MockEventSource.latest().open();
+    });
+    act(() => {
+      MockEventSource.latest().fail();
+      MockEventSource.latest().open();
+    });
+
+    const seam = await screen.findByTestId('stream-seam');
+    expect(seam.textContent).toMatch(/^The event stream dropped and reconnected 1 time/);
+    const details = seam.querySelector('details');
+    expect(details?.open).toBe(false);
+    expect(details?.querySelector('summary')?.textContent).toBe('what may be missing');
+    expect(details?.textContent).toContain('the ids begin again at 1 on every boot');
   });
 
   it('counts repeated interruptions and lets the seam be dismissed', async () => {
@@ -1375,5 +1396,117 @@ describe('LiveView banner refetch claims (MM3) and id-epoch honesty (MM2)', () =
     const notice = await screen.findByTestId('stream-gap');
     expect(notice.textContent).toMatch(/^At least 3 frames published/);
     expect(notice.textContent).toContain('id numbering');
+  });
+
+  describe('bands, links and local time (R21)', () => {
+    const ERROR_ID = 'eeeeeeee-0000-0000-0000-000000000001';
+    const DONE_ID = 'dddddddd-0000-0000-0000-000000000002';
+    const RUN_ID = 'rrrrrrrr-0000-0000-0000-000000000003';
+
+    function boardSessions() {
+      return [
+        sessionSummary({
+          id: DONE_ID,
+          status: 'completed',
+          lastActivityAt: '2026-07-29T10:09:00.000Z',
+          statusCounts: statusCounts({ completed: 2 }),
+        }),
+        sessionSummary({
+          id: RUN_ID,
+          lastActivityAt: '2026-07-29T10:08:00.000Z',
+          statusCounts: statusCounts({ working: 1 }),
+        }),
+        sessionSummary({
+          id: ERROR_ID,
+          status: 'error',
+          lastActivityAt: '2026-07-29T07:00:00.000Z',
+          statusCounts: statusCounts({ error: 1, completed: 1 }),
+        }),
+      ];
+    }
+
+    function bandOfCard(id: string): string | null {
+      const link = document.querySelector(`a[href="#/sessions/${id}"]`);
+      return link?.closest('li.card')?.getAttribute('data-band') ?? null;
+    }
+
+    it('lifts an older error session above newer ones into the attention band', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, sessionList(boardSessions())));
+      renderView();
+      await screen.findByRole('list', { name: 'sessions' });
+
+      const headings = screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent);
+      expect(headings).toEqual(['Needs attention (1)', 'Running (1)', 'Recent (1)']);
+      expect(bandOfCard(ERROR_ID)).toBe('attention');
+      expect(bandOfCard(RUN_ID)).toBe('running');
+      expect(bandOfCard(DONE_ID)).toBe('recent');
+      const attention = screen.getByRole('list', { name: 'needs attention sessions' });
+      expect(within(attention).getByText(/eeeeeeee/)).toBeDefined();
+    });
+
+    it('omits an empty band instead of printing a zero heading', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, sessionList([boardSessions()[0]!])));
+      renderView();
+      await screen.findByRole('list', { name: 'sessions' });
+
+      expect(screen.queryByTestId('band-attention')).toBeNull();
+      expect(screen.queryByTestId('band-running')).toBeNull();
+      expect(screen.getByTestId('band-recent').textContent).toBe('Recent (1)');
+    });
+
+    it('moves a session into the attention band when its ingest fails, and back on a status patch', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, sessionList(boardSessions())));
+      renderView();
+      await screen.findByRole('list', { name: 'sessions' });
+      expect(bandOfCard(DONE_ID)).toBe('recent');
+
+      act(() => {
+        MockEventSource.latest().emit('ingest-failed', {
+          type: 'ingest-failed',
+          payload: {
+            sessionId: DONE_ID,
+            reason: 'refusing to price at $0: unknown model id',
+            attempt: 1,
+            willRetry: true,
+            occurredAt: '2026-07-29T10:10:00.000Z',
+          },
+        });
+      });
+      expect(bandOfCard(DONE_ID)).toBe('attention');
+
+      act(() => {
+        MockEventSource.latest().emit('agent-status-changed', {
+          type: 'agent-status-changed',
+          sessionId: RUN_ID,
+          agentId: 'agent-main',
+          status: 'error',
+          previousStatus: 'working',
+          occurredAt: '2026-07-29T10:11:00.000Z',
+        });
+      });
+      expect(bandOfCard(RUN_ID)).toBe('attention');
+    });
+
+    it('links every card head to its session deep link', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, sessionList([sessionSummary()])));
+      renderView();
+      await screen.findByRole('list', { name: 'sessions' });
+
+      const link = screen.getByRole('link', { name: /aaaaaaaa/ });
+      expect(link.getAttribute('href')).toBe('#/sessions/aaaaaaaa-1111-2222-3333-444444444444');
+    });
+
+    it('prints the local start time and run length on the card', async () => {
+      const startedAt = new Date(2020, 0, 6, 9, 5).toISOString();
+      const lastActivityAt = new Date(2020, 0, 6, 9, 47).toISOString();
+      fetchMock.mockResolvedValue(
+        jsonResponse(200, sessionList([sessionSummary({ startedAt, lastActivityAt })])),
+      );
+      renderView();
+      await screen.findByRole('list', { name: 'sessions' });
+
+      const when = screen.getByTestId('card-when-aaaaaaaa-1111-2222-3333-444444444444');
+      expect(when.textContent).toMatch(/^started .*09:05 · ran 42m$/);
+    });
   });
 });

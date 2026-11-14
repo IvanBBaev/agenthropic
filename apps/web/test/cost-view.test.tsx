@@ -9,10 +9,12 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { CostView, COST_TOP_N, TOP_BURNERS_N, TOP_BURNERS_NODE_LIMIT } from '../src/views/CostView';
 // M-10: the windows ride the app's shared clock, so the rollover test advances it.
 import { CLOCK_INTERVAL_MS } from '../src/clock';
+import { localMidnightMs } from '../src/format';
 import { createSseClient, type SseClient } from '../src/sse';
 import type { CostSummaryDto } from '../src/dto';
 import {
   agentNode,
+  changes,
   aggregateSavings,
   costAnalysis,
   costSummary,
@@ -62,9 +64,14 @@ function routeFetch(
     dag?: Response;
     analysis?: Response;
     savings?: Response;
+    changes?: Response;
   } = {},
 ) {
   fetchMock.mockImplementation((url: string) => {
+    // R21 (UX-8): the local-time strip's two window reads.
+    if (url.startsWith('/api/changes')) {
+      return Promise.resolve(responses.changes ?? jsonResponse(200, changes()));
+    }
     if (url.includes('cost-analysis')) {
       return Promise.resolve(responses.analysis ?? jsonResponse(200, costAnalysis()));
     }
@@ -348,10 +355,14 @@ describe('CostView', () => {
     await screen.findByLabelText('totals');
 
     expect(screen.getByTestId('analysis-prompt').textContent).toContain('Pick a session above');
-    // Exactly three requests may leave on mount: the summary, the DAG and the
-    // aggregate savings. The count is asserted, not just the absence of a
-    // cost-analysis URL, so a fourth always-on endpoint has to be justified here.
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    // Exactly five requests may leave on mount: the summary, the DAG, the
+    // aggregate savings and - since R21 (UX-8) - the local today and 7-day
+    // windows. The count is asserted, not just the absence of a cost-analysis
+    // URL, so another always-on endpoint has to be justified here. Waited for,
+    // because the strip's reads leave from effects of the ready render.
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(5);
+    });
     expect(fetchMock.mock.calls.every(([url]) => !String(url).includes('cost-analysis'))).toBe(
       true,
     );
@@ -681,7 +692,13 @@ describe('CostView', () => {
     );
     expect(screen.getByTestId('kpi-week').textContent).toContain('$0.80');
     // Re-cutting the served rows is arithmetic, not a reason to hit the API.
-    expect(fetchMock.mock.calls).toHaveLength(callsBeforeMidnight);
+    // R21 (UX-8): the local-time windows are the exception - where local and
+    // UTC midnight coincide they DO re-read, so they are left out of the count.
+    const nonWindowCalls = (calls: unknown[][]) =>
+      calls.filter(([url]) => !String(url).startsWith('/api/changes')).length;
+    expect(nonWindowCalls(fetchMock.mock.calls)).toBe(
+      nonWindowCalls(fetchMock.mock.calls.slice(0, callsBeforeMidnight)),
+    );
     // F-1 (2026-09-01). Both figures above are real - the fixture's row for
     // 2026-08-16 was served before the boundary moved. What neither can be is
     // COMPLETE: the snapshot was read on 2026-08-15, so nothing recorded since
@@ -2637,7 +2654,7 @@ describe('CostView provenance, refresh and retry (KK3)', () => {
     expect(fetchMock.mock.calls).toHaveLength(callsAfterMount);
   });
 
-  it('re-reads all three endpoints and re-stamps when Refresh is used', async () => {
+  it('re-reads all five endpoints and re-stamps when Refresh is used', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(Date.UTC(2026, 7, 15, 12, 0, 0));
     routeFetch();
@@ -2648,15 +2665,16 @@ describe('CostView provenance, refresh and retry (KK3)', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(AGED_MS);
     });
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Refresh costs' }));
       await vi.advanceTimersByTimeAsync(0);
     });
 
-    expect(fetchMock).toHaveBeenCalledTimes(6);
-    const urls = fetchMock.mock.calls.slice(3).map((call) => String(call[0]));
+    expect(fetchMock).toHaveBeenCalledTimes(10);
+    const urls = fetchMock.mock.calls.slice(5).map((call) => String(call[0]));
+    expect(urls.filter((url) => url.startsWith('/api/changes'))).toHaveLength(2);
     expect(urls.some((url) => url.startsWith('/api/cost/summary'))).toBe(true);
     expect(urls.some((url) => url.includes('/api/dag/global'))).toBe(true);
     expect(urls.some((url) => url.includes('/api/cost/delegation-savings'))).toBe(true);
@@ -2669,6 +2687,11 @@ describe('CostView provenance, refresh and retry (KK3)', () => {
     routeFetch();
     renderView();
     await screen.findByTestId('cost-provenance');
+    // The local-time strip mounts with the ready page and its passive effects
+    // can flush after the find resolves; let its two reads leave first.
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(5);
+    });
     const pending = deferred<Response>();
     const signals: AbortSignal[] = [];
     fetchMock.mockImplementation((_url: string, init: RequestInit) => {
@@ -2679,10 +2702,11 @@ describe('CostView provenance, refresh and retry (KK3)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Refresh costs' }));
     fireEvent.click(screen.getByRole('button', { name: 'Refresh costs' }));
 
-    // The first refresh's three reads are cancelled by the second.
-    expect(signals).toHaveLength(6);
-    expect(signals.slice(0, 3).every((signal) => signal.aborted)).toBe(true);
-    expect(signals.slice(3).some((signal) => signal.aborted)).toBe(false);
+    // The first refresh's five reads (three since KK3, two local windows since
+    // R21) are cancelled by the second.
+    expect(signals).toHaveLength(10);
+    expect(signals.slice(0, 5).every((signal) => signal.aborted)).toBe(true);
+    expect(signals.slice(5).some((signal) => signal.aborted)).toBe(false);
   });
 
   it('points the "not measured" tile at the Refresh control, not a page reload', async () => {
@@ -2718,6 +2742,7 @@ describe('CostView provenance, refresh and retry (KK3)', () => {
       if (url.includes('/api/cost/delegation-savings')) {
         return Promise.resolve(jsonResponse(200, aggregateSavings()));
       }
+      if (url.startsWith('/api/changes')) return Promise.resolve(jsonResponse(200, changes()));
       summaryCalls += 1;
       return Promise.resolve(
         summaryCalls === 1
@@ -2773,5 +2798,165 @@ describe('CostView across a fetch that lands just after UTC midnight (KK4)', () 
     expect(today).toContain('2026-08-16 · 700 tokens');
     expect(today).toContain('$0.07');
     expect(screen.getByTestId('windows-basis').textContent).not.toContain('disagree');
+  });
+});
+
+/**
+ * R21 (UX-8): the page leads with today / last 7 days / saved, cut at LOCAL
+ * midnight by the server's event-time window rather than from the UTC `perDay`
+ * rows. Expectations are computed with the same local-midnight helper, so the
+ * suite holds in any timezone it runs in.
+ */
+describe('CostView local-time windows (R21, UX-8)', () => {
+  const changesCalls = () =>
+    fetchMock.mock.calls
+      .map(([url]) => String(url))
+      .filter((url) => url.startsWith('/api/changes'))
+      .map((url) => new URLSearchParams(url.slice(url.indexOf('?') + 1)));
+
+  it('leads the page and asks for windows starting at local midnight', async () => {
+    routeFetch();
+    renderView();
+    await screen.findByLabelText('totals');
+
+    await waitFor(() => {
+      expect(changesCalls()).toHaveLength(2);
+    });
+    const strip = screen.getByRole('group', { name: 'local time windows' });
+    const totals = screen.getByRole('group', { name: 'totals' });
+    // The strip comes before the all-time totals in reading order.
+    expect(strip.compareDocumentPosition(totals) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const now = Date.now();
+    const sinces = changesCalls().map((params) => params.get('since'));
+    expect(sinces).toEqual([
+      new Date(localMidnightMs(now)).toISOString(),
+      new Date(localMidnightMs(now, 6)).toISOString(),
+    ]);
+    // Only the window totals are read, so one session row is enough.
+    expect(changesCalls().every((params) => params.get('limit') === '1')).toBe(true);
+  });
+
+  it('prints the window totals, the unpriced gap and the all-time saving', async () => {
+    routeFetch({
+      changes: jsonResponse(
+        200,
+        changes({
+          totals: {
+            sessionsNew: 1,
+            sessionsUpdated: 0,
+            sessionsUnknownStart: 0,
+            agentsAppeared: 2,
+            tokensAdded: 9_000,
+            costAddedUsd: 0.42,
+            unpricedTokensAdded: 2_500,
+            tokensAddedOutsideChangedSessions: 0,
+          },
+        }),
+      ),
+      savings: jsonResponse(200, aggregateSavings({ savingsUsd: 1.5 })),
+    });
+    renderView();
+    await screen.findByLabelText('totals');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('kpi-local-today').textContent).toContain('$0.42');
+    });
+    const today = screen.getByTestId('kpi-local-today').textContent;
+    expect(today).toContain('Today (local time)');
+    expect(today).toContain('since 00:00 · 9,000 tokens');
+    expect(screen.getByTestId('kpi-local-today-unpriced').textContent).toContain(
+      '2,500 tokens unpriced - not counted in $',
+    );
+    expect(screen.getByTestId('kpi-local-week').textContent).toContain('Last 7 days (local time)');
+    const saved = screen.getByTestId('kpi-local-saved').textContent;
+    expect(saved).toContain('~ $1.50');
+    // A corpus-wide figure must not pass for a windowed one.
+    expect(saved).toContain('all time');
+  });
+
+  it('names the newest recorded event and any rows no window can hold', async () => {
+    routeFetch({
+      changes: jsonResponse(
+        200,
+        changes({ coverage: { undatedSessions: 0, undatedAgents: 0, undatedUsageRows: 4 } }),
+      ),
+    });
+    renderView();
+    await screen.findByLabelText('totals');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('local-windows-basis').textContent).toContain(
+        'up to the newest recorded event at',
+      );
+    });
+    const basis = screen.getByTestId('local-windows-basis').textContent;
+    expect(basis).toContain('Local time (');
+    expect(basis).toContain('4 usage rows carry no timestamp and are in no window.');
+  });
+
+  it('says "not measured" when a window cannot be read, never $0.00', async () => {
+    routeFetch({ changes: jsonResponse(500, { error: 'Internal server error.' }) });
+    renderView();
+    await screen.findByLabelText('totals');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('kpi-local-today').textContent).toContain('not measured');
+    });
+    expect(screen.getByTestId('kpi-local-today').textContent).not.toContain('$');
+    expect(screen.getByTestId('kpi-local-week').textContent).toContain('not measured');
+  });
+
+  it('hands a rejected token back to the shell rather than printing a window', async () => {
+    routeFetch({ changes: jsonResponse(401, { error: 'Unauthorized.' }) });
+    renderView();
+    await screen.findByLabelText('totals');
+
+    await waitFor(() => {
+      expect(onAuthRejected).toHaveBeenCalled();
+    });
+    expect(screen.getByTestId('kpi-local-today').textContent).toContain('…');
+  });
+
+  it('marks the saving unmeasured when the savings read fails, and counts one undated row', async () => {
+    routeFetch({
+      savings: jsonResponse(500, { error: 'Internal server error.' }),
+      changes: jsonResponse(
+        200,
+        changes({ coverage: { undatedSessions: 0, undatedAgents: 0, undatedUsageRows: 1 } }),
+      ),
+    });
+    renderView();
+    await screen.findByLabelText('totals');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('kpi-local-saved').textContent).toContain('not measured');
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('local-windows-basis').textContent).toContain(
+        '1 usage row carries no timestamp and is in no window.',
+      );
+    });
+  });
+
+  it('re-reads both windows when local midnight passes under an open tab', async () => {
+    vi.useFakeTimers();
+    const nextMidnight = localMidnightMs(Date.now(), -1);
+    vi.setSystemTime(nextMidnight - 10_000);
+    routeFetch();
+    renderView();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(changesCalls()).toHaveLength(2);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(CLOCK_INTERVAL_MS);
+    });
+
+    const after = changesCalls().slice(2);
+    expect(after.map((params) => params.get('since'))).toEqual([
+      new Date(nextMidnight).toISOString(),
+      new Date(localMidnightMs(nextMidnight, 6)).toISOString(),
+    ]);
   });
 });

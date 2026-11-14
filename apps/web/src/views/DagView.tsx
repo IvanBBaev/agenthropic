@@ -41,6 +41,7 @@ import { fetchGlobalDag } from '../api';
 import { readNowMs, useNowMs } from '../clock';
 import type { GlobalDagDto } from '../dto';
 import { agentTypeLabel, formatTokens, formatUsd, shortId } from '../format';
+import { CaveatDetails, caveatCountLabel } from './caveats';
 import { describeAgentGraph } from './chart-summary';
 import { computeLayeredLayout, fallbackLayerNotice } from './layout/layered';
 import { edgeProvenance, EDGE_PROVENANCE_LEGEND } from './provenance';
@@ -136,21 +137,28 @@ export function DagView({ token, onAuthRejected, replayEpoch }: ViewProps) {
   // so it is stated whenever the graph is cut - it is what makes "showing N of
   // M" readable as a fact about one moment.
   const provenance = (
-    <p
+    // R21 (UX-9): the headline stays visible, the full wording folds into a
+    // disclosure that keeps every word in the document.
+    <div
       className={age.aged ? 'truncation-banner' : 'muted card-provenance'}
       data-testid="dag-provenance"
     >
       Read {age.label}
-      {age.aged
-        ? ' - everything here is remembered, not observed: the counts above, and every node status, token count and dollar figure below. An agent still drawn as working may have finished or failed since.'
-        : '.'}{' '}
-      {dag.counts.truncated
-        ? 'The server returns the most recent agents first, so this is the newest slice as of that read: agents started since are in neither the picture nor the "showing N of M" figures above. '
-        : ''}
+      {age.aged ? ' - remembered, not observed.' : '.'}{' '}
       <button type="button" onClick={refresh}>
         Refresh DAG
       </button>
-    </p>
+      {(age.aged || dag.counts.truncated) && (
+        <CaveatDetails summary={age.aged ? 'what is remembered' : 'about this slice'}>
+          {age.aged
+            ? 'Everything here is remembered, not observed: the counts above, and every node status, token count and dollar figure below. An agent still drawn as working may have finished or failed since. '
+            : ''}
+          {dag.counts.truncated
+            ? 'The server returns the most recent agents first, so this is the newest slice as of that read: agents started since are in neither the picture nor the "showing N of M" figures above.'
+            : ''}
+        </CaveatDetails>
+      )}
+    </div>
   );
 
   // Hoisted out of the return below so the empty branch can render it too.
@@ -336,22 +344,33 @@ export function DagView({ token, onAuthRejected, replayEpoch }: ViewProps) {
         </p>
       )}
       {provenance}
-      {layout.droppedEdges > 0 && (
-        <p className="muted">
-          {layout.droppedEdges} edge{layout.droppedEdges === 1 ? '' : 's'} reference agents outside
-          the returned slice and are not drawn.
-        </p>
-      )}
-      {/* DG-3 (2026-09-08): the id exists so the SVG below can name this
-          paragraph in its accessible description. It is rendered under exactly
-          the condition that puts the id in `aria-describedby`, so the two can
-          never disagree - an id referenced while this branch is false would
-          point at nothing, and a description that resolves to nothing is worse
-          than none: it reads as if the caveat had been given. */}
-      {layout.cyclicNodes > 0 && (
-        <p className="muted" id={DAG_CYCLE_ID}>
-          {fallbackLayerNotice(layout.cyclicNodes, layout.belowCycleNodes)}
-        </p>
+      {/* R21 (UX-9): drawing notes fold under one counted disclosure. */}
+      {(layout.droppedEdges > 0 || layout.cyclicNodes > 0) && (
+        <CaveatDetails
+          summary={caveatCountLabel(
+            (layout.droppedEdges > 0 ? 1 : 0) + (layout.cyclicNodes > 0 ? 1 : 0),
+            'about this picture',
+          )}
+          testId="dag-caveats"
+        >
+          {layout.droppedEdges > 0 && (
+            <p className="muted">
+              {layout.droppedEdges} edge{layout.droppedEdges === 1 ? '' : 's'} reference agents
+              outside the returned slice and are not drawn.
+            </p>
+          )}
+          {/* DG-3 (2026-09-08): the id exists so the SVG below can name this
+              paragraph in its accessible description. It is rendered under exactly
+              the condition that puts the id in `aria-describedby`, so the two can
+              never disagree - an id referenced while this branch is false would
+              point at nothing, and a description that resolves to nothing is worse
+              than none: it reads as if the caveat had been given. */}
+          {layout.cyclicNodes > 0 && (
+            <p className="muted" id={DAG_CYCLE_ID}>
+              {fallbackLayerNotice(layout.cyclicNodes, layout.belowCycleNodes)}
+            </p>
+          )}
+        </CaveatDetails>
       )}
       <div className="chart-scroll">
         <svg

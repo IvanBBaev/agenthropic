@@ -287,3 +287,78 @@ export function isImpossibleCount(count: number): boolean {
 export function impossibleCountText(count: number): string {
   return Number.isFinite(count) ? `${String(count)}, a count that cannot be right` : 'unreadable';
 }
+
+/*
+ * R21 (UX-6, UX-8): local wall-clock helpers. Every other time on these pages
+ * is relative ("5m ago") or an explicit UTC day; a reader recognising "the
+ * session I ran after lunch" needs the browser's own clock. Formatted by hand
+ * rather than through `toLocaleString`, so the output shape does not move with
+ * the browser locale - only the values move with its timezone, which is the
+ * point.
+ */
+
+/** Three letters per entry, indexed by `Date#getMonth` / `Date#getDay`. */
+const MONTHS = 'JanFebMarAprMayJunJulAugSepOctNovDec';
+const WEEKDAYS = 'SunMonTueWedThuFriSat';
+
+function pad2(value: number): string {
+  return String(value).padStart(2, '0');
+}
+
+/** `09:05` - the local wall-clock time of an instant. */
+export function formatLocalClock(timestampMs: number): string {
+  const date = new Date(timestampMs);
+  return `${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+}
+
+/** Local midnight `daysBack` days before the local day holding `nowMs`. */
+export function localMidnightMs(nowMs: number, daysBack = 0): number {
+  const date = new Date(nowMs);
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() - daysBack).getTime();
+}
+
+/**
+ * A heading for the local day holding `timestampMs`: `Today`, `Yesterday`, or
+ * `Fri 14 Nov 2026`. Measured in local calendar days, not 24-hour spans.
+ */
+export function localDayLabel(timestampMs: number, nowMs: number): string {
+  const day = localMidnightMs(timestampMs);
+  if (day === localMidnightMs(nowMs)) return 'Today';
+  if (day === localMidnightMs(nowMs, 1)) return 'Yesterday';
+  const date = new Date(timestampMs);
+  const weekday = WEEKDAYS.slice(date.getDay() * 3, date.getDay() * 3 + 3);
+  const month = MONTHS.slice(date.getMonth() * 3, date.getMonth() * 3 + 3);
+  return `${weekday} ${String(date.getDate())} ${month} ${String(date.getFullYear())}`;
+}
+
+/** `under 1m`, `42m`, `3h 05m`, `2d 4h` - a span of elapsed time. */
+export function formatDuration(spanMs: number): string {
+  const minutes = Math.floor(spanMs / 60_000);
+  if (minutes < 1) return 'under 1m';
+  if (minutes < 60) return `${String(minutes)}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${String(hours)}h ${pad2(minutes % 60)}m`;
+  return `${String(Math.floor(hours / 24))}d ${String(hours % 24)}h`;
+}
+
+/**
+ * The "when" of a session as one phrase: local start time plus how long it ran
+ * to its last recorded activity, e.g. `started 09:05 · ran 42m`. A start on
+ * another local day than `nowMs` carries that day. `null` when the start is not
+ * recorded; an unreadable start says so; a missing, unreadable or earlier-than-
+ * start last activity drops the duration rather than inventing one.
+ */
+export function sessionWhenText(
+  startedAt: string | null,
+  lastActivityAt: string | null,
+  nowMs: number,
+): string | null {
+  if (startedAt === null) return null;
+  const start = Date.parse(startedAt);
+  if (Number.isNaN(start)) return `start ${UNREADABLE_TIMESTAMP}`;
+  const day = localDayLabel(start, nowMs);
+  const started = `started ${day === 'Today' ? '' : `${day} `}${formatLocalClock(start)}`;
+  const last = lastActivityAt === null ? Number.NaN : Date.parse(lastActivityAt);
+  if (Number.isNaN(last) || last < start) return started;
+  return `${started} · ran ${formatDuration(last - start)}`;
+}

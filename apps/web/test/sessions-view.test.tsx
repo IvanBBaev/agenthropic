@@ -6,7 +6,12 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { SessionsView, SESSION_LIST_LIMIT } from '../src/views/SessionsView';
+import {
+  groupSessionsByLocalDay,
+  patchTreeStatus,
+  SessionsView,
+  SESSION_LIST_LIMIT,
+} from '../src/views/SessionsView';
 import { CLOCK_INTERVAL_MS } from '../src/clock';
 import { createSseClient, type SseClient } from '../src/sse';
 import type { AgentNodeDto, OrchestrationEdgeSource } from '../src/dto';
@@ -39,6 +44,9 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  // R21 (UX-1): selecting a row writes `#/sessions/<id>`; a leftover hash
+  // would pre-select a session in the next test.
+  window.location.hash = '';
 });
 
 function renderView() {
@@ -1237,5 +1245,285 @@ describe('SessionsView edge provenance (lane-EP)', () => {
     expect(container.querySelector('line.edge-unrecognised title')?.textContent).toBe(
       'unrecognised (no source word sent)',
     );
+  });
+});
+
+describe('SessionsView - deep links, live tree, figures and local time (R21)', () => {
+  const ID = 'aaaaaaaa-1111-2222-3333-444444444444';
+
+  function treeCalls(): number {
+    return fetchMock.mock.calls.filter((call) => (call[0] as string).includes('/tree')).length;
+  }
+
+  function statusFrame(overrides: Record<string, unknown> = {}) {
+    return {
+      type: 'agent-status-changed',
+      sessionId: ID,
+      agentId: 'agent-main',
+      status: 'completed',
+      previousStatus: 'working',
+      occurredAt: '2026-07-29T10:10:00.000Z',
+      ...overrides,
+    };
+  }
+
+  async function openTree(): Promise<void> {
+    routeFetch();
+    renderView();
+    await screen.findByRole('list', { name: 'session list' });
+    fireEvent.click(screen.getByRole('button', { name: /agenthropic/ }));
+    await screen.findByRole('img', { name: `agent tree for session ${ID}` });
+  }
+
+  it('opens the session named by a #/sessions/<id> hash without a click', async () => {
+    window.location.hash = `#/sessions/${ID}`;
+    routeFetch();
+    renderView();
+
+    await screen.findByRole('img', { name: `agent tree for session ${ID}` });
+    expect(treeCalls()).toBe(1);
+    expect(screen.getByRole('button', { name: /agenthropic/ }).getAttribute('aria-pressed')).toBe(
+      'true',
+    );
+  });
+
+  it('writes the selection into the hash so it can be bookmarked', async () => {
+    await openTree();
+    expect(window.location.hash).toBe(`#/sessions/${ID}`);
+  });
+
+  it('patches a node status in place on agent-status-changed and counts the patch', async () => {
+    await openTree();
+    expect(screen.getByTestId('tree-node-agent-main').getAttribute('class')).toBe('status-working');
+    expect(screen.queryByTestId('tree-live-patches')).toBeNull();
+
+    act(() => {
+      MockEventSource.latest().emit('agent-status-changed', statusFrame());
+    });
+
+    expect(screen.getByTestId('tree-node-agent-main').getAttribute('class')).toBe(
+      'status-completed',
+    );
+    expect(screen.getByTestId('tree-live-patches').textContent).toContain(
+      '1 live status update applied since this read',
+    );
+    expect(treeCalls()).toBe(1);
+  });
+
+  it('ignores a status frame for another session', async () => {
+    await openTree();
+    act(() => {
+      MockEventSource.latest().emit(
+        'agent-status-changed',
+        statusFrame({ sessionId: 'bbbbbbbb-0000-0000-0000-000000000000' }),
+      );
+    });
+    expect(screen.getByTestId('tree-node-agent-main').getAttribute('class')).toBe('status-working');
+    expect(treeCalls()).toBe(1);
+  });
+
+  it('re-reads the tree for a status frame naming an agent the tree does not hold', async () => {
+    await openTree();
+    act(() => {
+      MockEventSource.latest().emit('agent-status-changed', statusFrame({ agentId: 'agent-new' }));
+    });
+    await waitFor(() => expect(treeCalls()).toBe(2));
+  });
+
+  it('re-reads the tree for a status frame it cannot read but that names this session', async () => {
+    await openTree();
+    act(() => {
+      MockEventSource.latest().emit('agent-status-changed', {
+        type: 'agent-status-changed',
+        sessionId: ID,
+      });
+    });
+    await waitFor(() => expect(treeCalls()).toBe(2));
+  });
+
+  it('ignores a status frame that names no session or another session', async () => {
+    await openTree();
+    act(() => {
+      const source = MockEventSource.latest();
+      source.emit('agent-status-changed', '42');
+      source.emit('agent-status-changed', { type: 'agent-status-changed', sessionId: 42 });
+      source.emit('agent-status-changed', {
+        type: 'agent-status-changed',
+        sessionId: 'bbbbbbbb-0000-0000-0000-000000000000',
+      });
+    });
+    expect(screen.getByTestId('tree-node-agent-main').getAttribute('class')).toBe('status-working');
+    expect(treeCalls()).toBe(1);
+  });
+
+  it('counts every live patch applied since the read', async () => {
+    await openTree();
+    act(() => {
+      MockEventSource.latest().emit('agent-status-changed', statusFrame({ status: 'waiting' }));
+    });
+    act(() => {
+      MockEventSource.latest().emit('agent-status-changed', statusFrame());
+    });
+    expect(screen.getByTestId('tree-live-patches').textContent).toContain(
+      '2 live status updates applied since this read',
+    );
+    expect(treeCalls()).toBe(1);
+  });
+
+  it('leaves an errored tree to its own Retry when a status frame lands', async () => {
+    routeFetch({ tree: jsonResponse(500, { error: 'Internal server error.' }) });
+    window.location.hash = `#/sessions/${ID}`;
+    renderView();
+    await screen.findByRole('button', { name: 'Retry' });
+    expect(treeCalls()).toBe(1);
+
+    act(() => {
+      MockEventSource.latest().emit('agent-status-changed', statusFrame());
+    });
+    expect(treeCalls()).toBe(1);
+  });
+
+  it('re-reads once more for a status frame that lands while the tree is loading', async () => {
+    const pending = deferred<Response>();
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes('/tree')) {
+        return treeCalls() === 1
+          ? pending.promise
+          : Promise.resolve(jsonResponse(200, sessionTree()));
+      }
+      return Promise.resolve(jsonResponse(200, sessionList([sessionSummary()])));
+    });
+    window.location.hash = `#/sessions/${ID}`;
+    renderView();
+    await waitFor(() => expect(treeCalls()).toBe(1));
+
+    act(() => {
+      MockEventSource.latest().emit('agent-status-changed', statusFrame());
+    });
+
+    await waitFor(() => expect(treeCalls()).toBe(2));
+    pending.resolve(jsonResponse(200, sessionTree()));
+  });
+
+  it('re-reads the tree on session-ingested for the selected session only', async () => {
+    await openTree();
+    act(() => {
+      MockEventSource.latest().emit('session-ingested', {
+        type: 'session-ingested',
+        sessionId: 'bbbbbbbb-0000-0000-0000-000000000000',
+      });
+    });
+    expect(treeCalls()).toBe(1);
+
+    act(() => {
+      MockEventSource.latest().emit('session-ingested', {
+        type: 'session-ingested',
+        sessionId: ID,
+      });
+    });
+    await waitFor(() => expect(treeCalls()).toBe(2));
+    // The re-read keeps the tree on screen instead of blanking it to a spinner.
+    expect(screen.getByRole('img', { name: `agent tree for session ${ID}` })).toBeDefined();
+  });
+
+  it('prints tokens and dollars under each node label', async () => {
+    await openTree();
+    const figures = screen.getByTestId('tree-node-agent-main').querySelector('text.node-figures');
+    expect(figures?.textContent).toBe('800 · $0.30');
+  });
+
+  it('groups the list under local-day headings and prints each start time', async () => {
+    const earlier = new Date(2020, 0, 6, 22, 0);
+    routeFetch({
+      list: jsonResponse(
+        200,
+        sessionList([
+          sessionSummary({
+            startedAt: earlier.toISOString(),
+            lastActivityAt: new Date(2020, 0, 6, 23, 30).toISOString(),
+          }),
+        ]),
+      ),
+    });
+    renderView();
+    await screen.findByRole('list', { name: 'session list' });
+
+    expect(screen.getAllByTestId('session-day').map((li) => li.textContent)).toEqual([
+      'Mon 6 Jan 2020',
+    ]);
+    expect(screen.getByTestId(`session-when-${ID}`).textContent).toBe(
+      ' · started Mon 6 Jan 2020 22:00 · ran 1h 30m',
+    );
+  });
+});
+
+describe('SessionsView - folded caveats (R21, UX-9)', () => {
+  it('prints no caveat disclosure for a clean tree', async () => {
+    routeFetch();
+    renderView();
+    await screen.findByRole('list', { name: 'session list' });
+    fireEvent.click(screen.getByRole('button', { name: /agenthropic/ }));
+    await screen.findByRole('img', { name: /agent tree for session/ });
+
+    expect(screen.queryByTestId('tree-caveats')).toBeNull();
+  });
+
+  it('folds drawing notes under one counted, closed disclosure that keeps the wording', async () => {
+    routeFetch({
+      tree: jsonResponse(
+        200,
+        sessionTree({
+          agents: [
+            agentNode(),
+            agentNode({ id: 'agent-child', type: 'subagent', subagentType: 'Explore' }),
+          ],
+          edges: [
+            orchestrationEdge(),
+            orchestrationEdge({ id: 2, parentAgentId: 'agent-child', childAgentId: 'agent-main' }),
+            orchestrationEdge({ id: 3, parentAgentId: 'agent-gone', childAgentId: 'agent-main' }),
+          ],
+        }),
+      ),
+    });
+    renderView();
+    await screen.findByRole('list', { name: 'session list' });
+    fireEvent.click(screen.getByRole('button', { name: /agenthropic/ }));
+    await screen.findByRole('img', { name: /agent tree for session/ });
+
+    const caveats = screen.getByTestId('tree-caveats') as HTMLDetailsElement;
+    expect(caveats.tagName).toBe('DETAILS');
+    expect(caveats.open).toBe(false);
+    expect(caveats.querySelector('summary')?.textContent).toBe('⚠ 2 caveats about this picture');
+    expect(caveats.textContent).toContain('1 edge reference agents outside this payload');
+    expect(caveats.textContent).toContain('sit in a cycle');
+  });
+});
+
+describe('patchTreeStatus / groupSessionsByLocalDay (R21)', () => {
+  it('patches only the named agent and reports a miss as null', () => {
+    const tree = sessionTree();
+    const patched = patchTreeStatus(tree, 'agent-child', 'error');
+    expect(patched?.agents.map((agent) => agent.status)).toEqual(['working', 'error']);
+    expect(tree.agents[1]!.status).toBe('completed');
+    expect(patchTreeStatus(tree, 'agent-missing', 'error')).toBeNull();
+  });
+
+  it('keeps each local day contiguous and files unreadable activity separately', () => {
+    const now = new Date(2026, 10, 14, 12, 0).getTime();
+    const groups = groupSessionsByLocalDay(
+      [
+        sessionSummary({ id: 'a', lastActivityAt: new Date(2026, 10, 14, 9, 0).toISOString() }),
+        sessionSummary({ id: 'b', lastActivityAt: new Date(2026, 10, 14, 1, 0).toISOString() }),
+        sessionSummary({ id: 'c', lastActivityAt: new Date(2026, 10, 13, 23, 0).toISOString() }),
+        sessionSummary({ id: 'd', lastActivityAt: 'not a time' }),
+        sessionSummary({ id: 'e', lastActivityAt: null }),
+      ],
+      now,
+    );
+    expect(groups.map((group) => [group.label, group.sessions.map((s) => s.id)])).toEqual([
+      ['Today', ['a', 'b']],
+      ['Yesterday', ['c']],
+      ['No recorded activity', ['d', 'e']],
+    ]);
   });
 });
