@@ -449,6 +449,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Inline forks (Claude Code 2.1.319+) no longer break a session's ingest.** A subagent
+  forked from another subagent opens with a verbatim copy of its parent's records, usage
+  rows and spawn blocks included, and no `fork-context-ref`. The copied usage rows collided
+  with the parent's, so the whole session failed with `UsageConflictError`. The copied spawn
+  block also made each fork look like its own spawner, so forks fell back to main as
+  `task_notification` edges. For a fork whose sidecar says `isFork: true`, rows whose
+  `message.id` also has usage on its resolved parent now stay with the parent. A spawn block
+  carried by several transcripts now resolves to the non-fork owner (parser spec §4.1 and
+  §5.3 amendments, 2026-11-14).
 - **An idle main agent now stays `waiting` after its turn.** Claude Code writes a
   `stop_hook_summary` record once the `Stop` hooks have run. Its later timestamp moved the
   agent's last activity forward, so the next ingest read it as new work and flipped the

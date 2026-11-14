@@ -169,6 +169,15 @@ never a substring (item #5):
   A **legacy child-side `<task-notification>`** in the child's first record is a further
   fallback (also → main, `source = 'task_notification'`).
 
+  **Several owners of one spawn block (amended 2026-11-14).** An inline fork (Claude Code
+  2.1.319+, sidecar `isFork: true`, see §5.3) copies its parent's records verbatim, spawn
+  blocks included, so one `tool_use.id` can sit on the parent and on every fork. Owners are
+  kept per id; a child resolves to the owners that are not itself, preferring one that is
+  **not a fork** (the fork's block is a copy, never a second spawn). A fork still owns the
+  blocks only it carries. Before this rule the last transcript scanned won; when that was the
+  fork itself, the self-owner was discarded and the fork fell back to main as
+  `task_notification` — six forks in one real session were misparented that way.
+
 - **Legacy bare-`Explore` last resort** (gate #7, added 2026-08) — when *every* modern
   anchor above misses and the sidecar is the pre-2.1.71 bare shape (`{agentType:'Explore'}`
   with no `toolUseId` and no `spawnDepth`), the child is joined via a raw top-level
@@ -418,6 +427,17 @@ child `message.id` sets are **disjoint** → provably no double-count. Partition
 > record on a transcript that opens with `fork-context-ref`, whose `message.id` also has
 > usage on another transcript — so the tokens stay with the parent and are counted once.
 > Every other `message.id` shared across agents is still a loud `UsageConflictError`.
+>
+> **Amended 2026-11-14 — inline forks.** Claude Code 2.1.319 forks a subagent (depth 2) in a
+> second format: no `fork-context-ref`; the fork opens with a **verbatim copy of its parent's
+> records** (same `uuid`s, usage rows included), then a re-`uuid`'d copy of the spawning
+> message whose `parentUuid` points into the parent's transcript. The sidecar still says
+> `isFork: true`. The real corpus holds six such files (one session); before this rule the
+> session failed with `UsageConflictError`. For a fork with `isFork: true` and a resolved
+> parent, a usage row is dropped when its `message.id` also carries usage on **that parent's**
+> transcript. The fork's own messages exist nowhere else and stay. An orphan fork claims
+> nothing, and a `message.id` shared with any transcript other than the resolved parent is
+> still a loud `UsageConflictError`.
 
 ### 5.4 Pricing must be bucket-and-model-aware (N3)
 88% of corpus tokens are cheap **cache reads** — a flat per-token rate would be wildly

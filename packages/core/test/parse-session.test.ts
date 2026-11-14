@@ -2751,3 +2751,237 @@ describe('parseSession — fork transcripts inherit the spawning message', () =>
     expect(() => parseSession(input)).toThrow(UsageConflictError);
   });
 });
+
+// --- inline forks (Claude Code 2.1.319+) -------------------------------------
+// A fork whose sidecar says `isFork: true` carries no `fork-context-ref`. It
+// opens with a VERBATIM copy of its parent's records - usage rows and spawn
+// blocks included - then a re-uuid'd copy of the spawning message. The copies
+// must neither steal the parent's tokens (parser-spec 5.3, amended 2026-11-14)
+// nor make the fork the owner of its own spawn block (parser-spec 4).
+
+describe('parseSession — inline forks copy their parent’s records', () => {
+  const SESSION = 'f0a10000-1111-4222-8333-444444444444';
+  const PARENT = 'a0a0a0a0';
+  const FORK = 'f1f1f1f1';
+  const SIBLING = 'f2f2f2f2';
+  const GRANDCHILD = 'c3c3c3c3';
+  const T_PARENT = 'toolu_parent';
+  const T_FORK = 'toolu_fork';
+  const T_SIBLING = 'toolu_sibling';
+  const T_GRANDCHILD = 'toolu_grandchild';
+
+  const agentSpawn = (ids: readonly string[]) =>
+    ids.map((id) => ({ type: 'tool_use', id, name: 'Agent', input: { subagent_type: 'fork' } }));
+
+  const mainFile = {
+    path: `${SESSION}.jsonl`,
+    lines: [
+      jline({
+        sessionId: SESSION,
+        type: 'assistant',
+        uuid: 'u-main-1',
+        parentUuid: null,
+        timestamp: '2026-11-14T10:00:00.000Z',
+        message: {
+          id: 'msg_main',
+          model: 'claude-opus-5-5',
+          usage: { input_tokens: 1 },
+          content: [
+            {
+              type: 'tool_use',
+              id: T_PARENT,
+              name: 'Agent',
+              input: { subagent_type: 'general-purpose' },
+            },
+          ],
+        },
+      }),
+    ],
+  };
+
+  const parentRecords = (owner: string) => [
+    jline({
+      sessionId: SESSION,
+      agentId: owner,
+      type: 'assistant',
+      uuid: 'u-p-1',
+      parentUuid: null,
+      timestamp: '2026-11-14T10:00:01.000Z',
+      message: { id: 'msg_p_work', model: 'claude-opus-5-5', usage: { input_tokens: 10 } },
+    }),
+  ];
+
+  const spawnRecord = (owner: string, uuid: string, parentUuid: string) =>
+    jline({
+      sessionId: SESSION,
+      agentId: owner,
+      type: 'assistant',
+      uuid,
+      parentUuid,
+      timestamp: '2026-11-14T10:00:02.000Z',
+      message: {
+        id: 'msg_p_spawn',
+        model: 'claude-opus-5-5',
+        usage: { input_tokens: 20 },
+        content: agentSpawn([T_FORK, T_SIBLING]),
+      },
+    });
+
+  const parentFile = {
+    path: `subagents/agent-${PARENT}.jsonl`,
+    lines: [...parentRecords(PARENT), spawnRecord(PARENT, 'u-p-2', 'u-p-1')],
+  };
+
+  const forkOwn = (owner: string, messageId: string, content: unknown[] = []) =>
+    jline({
+      sessionId: SESSION,
+      agentId: owner,
+      type: 'assistant',
+      uuid: `u-${owner}-own`,
+      parentUuid: `u-${owner}-spawn`,
+      timestamp: '2026-11-14T10:00:03.000Z',
+      message: { id: messageId, model: 'claude-opus-5-5', usage: { input_tokens: 3 }, content },
+    });
+
+  const forkFile = (owner: string, ownContent: unknown[] = []) => ({
+    path: `subagents/agent-${owner}.jsonl`,
+    lines: [
+      ...parentRecords(owner),
+      spawnRecord(owner, `u-${owner}-spawn`, 'u-p-1'),
+      forkOwn(owner, `msg_${owner}_own`, ownContent),
+    ],
+  });
+
+  const meta = (hex: string, record: Record<string, unknown>) => ({
+    path: `subagents/agent-${hex}.meta.json`,
+    lines: [jline(record)],
+  });
+
+  const parentMeta = meta(PARENT, {
+    agentType: 'general-purpose',
+    toolUseId: T_PARENT,
+    spawnDepth: 1,
+  });
+  const forkMeta = (hex: string, toolUseId: string | undefined) =>
+    meta(hex, {
+      agentType: 'fork',
+      isFork: true,
+      ...(toolUseId === undefined ? {} : { toolUseId }),
+      spawnDepth: 2,
+    });
+
+  for (const order of ['parent first', 'forks first'] as const) {
+    it(`resolves each fork to the parent's original spawn block (${order})`, () => {
+      const agentFiles = [parentFile, forkFile(FORK), forkFile(SIBLING)];
+      const result = parseSession(
+        substrate([
+          mainFile,
+          ...(order === 'parent first' ? agentFiles : [...agentFiles].reverse()),
+          parentMeta,
+          forkMeta(FORK, T_FORK),
+          forkMeta(SIBLING, T_SIBLING),
+        ]),
+      );
+      for (const [hex, toolUseId] of [
+        [FORK, T_FORK],
+        [SIBLING, T_SIBLING],
+      ] as const) {
+        expect(agentById(result, hex)?.parentAgentId).toBe(PARENT);
+        expect(edgeForChild(result, hex)).toMatchObject({
+          parentAgentId: PARENT,
+          source: 'tool_use',
+          toolUseId,
+        });
+      }
+    });
+  }
+
+  it('attributes the copied rows to the parent once and keeps each fork’s own rows', () => {
+    const result = parseSession(
+      substrate([
+        mainFile,
+        forkFile(FORK),
+        parentFile,
+        forkFile(SIBLING),
+        parentMeta,
+        forkMeta(FORK, T_FORK),
+        forkMeta(SIBLING, T_SIBLING),
+      ]),
+    );
+    for (const messageId of ['msg_p_work', 'msg_p_spawn']) {
+      expect(result.usage.filter((u) => u.messageId === messageId)).toHaveLength(1);
+      expect(usageFor(result, messageId)?.agentId).toBe(PARENT);
+    }
+    expect(usageFor(result, `msg_${FORK}_own`)?.agentId).toBe(FORK);
+    expect(usageFor(result, `msg_${SIBLING}_own`)?.agentId).toBe(SIBLING);
+  });
+
+  it('lets a fork own the spawn blocks only it carries', () => {
+    const result = parseSession(
+      substrate([
+        mainFile,
+        parentFile,
+        forkFile(FORK, agentSpawn([T_GRANDCHILD])),
+        {
+          path: `subagents/agent-${GRANDCHILD}.jsonl`,
+          lines: [forkOwn(GRANDCHILD, 'msg_grandchild')],
+        },
+        parentMeta,
+        forkMeta(FORK, T_FORK),
+        meta(GRANDCHILD, { agentType: 'Explore', toolUseId: T_GRANDCHILD, spawnDepth: 3 }),
+      ]),
+    );
+    expect(agentById(result, GRANDCHILD)?.parentAgentId).toBe(FORK);
+    expect(edgeForChild(result, GRANDCHILD)?.source).toBe('tool_use');
+  });
+
+  it('keeps an unresolved fork’s rows on the fork and stays loud on a shared id', () => {
+    // No anchor at all: the fork is an orphan, so no parent can claim its rows -
+    // and the copied ids it shares with the real parent conflict loudly.
+    const input = substrate([
+      mainFile,
+      parentFile,
+      forkFile(FORK),
+      parentMeta,
+      forkMeta(FORK, undefined),
+    ]);
+    expect(() => parseSession(input)).toThrow(UsageConflictError);
+  });
+
+  it('keeps an orphan fork’s unique rows on the fork', () => {
+    const result = parseSession(
+      substrate([
+        mainFile,
+        { path: `subagents/agent-${FORK}.jsonl`, lines: [forkOwn(FORK, 'msg_orphan_fork')] },
+        forkMeta(FORK, undefined),
+      ]),
+    );
+    expect(agentById(result, FORK)?.parentAgentId).toBeNull();
+    expect(usageFor(result, 'msg_orphan_fork')?.agentId).toBe(FORK);
+  });
+
+  it('stays loud when an isFork transcript shares an id with a NON-parent transcript', () => {
+    const input = substrate([
+      mainFile,
+      parentFile,
+      {
+        path: `subagents/agent-${FORK}.jsonl`,
+        lines: [
+          jline({
+            sessionId: SESSION,
+            agentId: FORK,
+            type: 'assistant',
+            uuid: 'u-f-main-copy',
+            parentUuid: null,
+            timestamp: '2026-11-14T10:00:04.000Z',
+            message: { id: 'msg_main', model: 'claude-opus-5-5', usage: { input_tokens: 1 } },
+          }),
+        ],
+      },
+      parentMeta,
+      forkMeta(FORK, T_FORK),
+    ]);
+    // FORK's resolved parent is PARENT (via the block on parentFile), not main.
+    expect(() => parseSession(input)).toThrow(UsageConflictError);
+  });
+});

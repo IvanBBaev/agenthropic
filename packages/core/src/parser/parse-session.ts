@@ -230,6 +230,13 @@ interface AgentSidecar {
    * path — treating it as legacy would fabricate a parent from bad data.
    */
   isLegacyBareExplore: boolean;
+  /**
+   * The sidecar's `isFork: true` flag (Claude Code 2.1.319+). A fork transcript
+   * may open with a verbatim copy of its parent's records - including the
+   * parent's usage rows and spawn blocks - so both the usage ledger and the
+   * spawn-owner index must tell a fork's copies from the originals.
+   */
+  isFork: boolean;
 }
 
 /**
@@ -379,6 +386,7 @@ function collectSidecars(files: readonly ParsedFile[]): Map<string, AgentSidecar
         record['agentType'] === LEGACY_EXPLORE_AGENT_TYPE &&
         !('toolUseId' in record) &&
         !('spawnDepth' in record),
+      isFork: record['isFork'] === true,
     });
   }
   return sidecars;
@@ -392,8 +400,13 @@ interface ToolUseOwner {
 }
 
 interface SpawnIndices {
-  /** `tool_use.id` -> owning agent (main = sessionId), from `Agent`/`Workflow` blocks. */
-  toolUseOwner: Map<string, ToolUseOwner>;
+  /**
+   * `tool_use.id` -> every agent whose transcript carries that `Agent`/`Workflow`
+   * block (main = sessionId), in scan order. Usually exactly one; an inline fork
+   * (2.1.319+) copies its parent's records verbatim, spawn blocks included, so
+   * the same id can sit on the parent AND on each fork - see {@link pickToolUseOwner}.
+   */
+  toolUseOwner: Map<string, ToolUseOwner[]>;
   /** `workflow_id` -> owning agent, from `Workflow` blocks (nested-directory fallback source). */
   workflowDispatcher: Map<string, string>;
   /** `tool-use-id` (from a `queue-operation` record) -> owning agent. */
@@ -461,7 +474,7 @@ function collectErrorResults(record: JsonRecord | undefined, pending: Map<string
  * to the agent id of the transcript that CONTAINS it.
  */
 function buildIndices(transcripts: readonly Transcript[]): SpawnIndices {
-  const toolUseOwner = new Map<string, ToolUseOwner>();
+  const toolUseOwner = new Map<string, ToolUseOwner[]>();
   const workflowDispatcher = new Map<string, string>();
   const queueOps = new Map<string, string>();
   const toolUseResultByChildHex = new Map<string, string>();
@@ -493,10 +506,12 @@ function buildIndices(transcripts: readonly Transcript[]): SpawnIndices {
             continue;
           }
           const input = asRecord(block['input']);
-          toolUseOwner.set(id, {
+          const blockOwners = toolUseOwner.get(id) ?? [];
+          blockOwners.push({
             owner: transcript.owner,
             subagentType: asString(input?.['subagent_type']) ?? null,
           });
+          toolUseOwner.set(id, blockOwners);
           if (name === 'Workflow') {
             const workflowId = asString(input?.['workflow_id']);
             if (workflowId !== undefined) {
@@ -652,11 +667,33 @@ function foreignOwner(owner: string | undefined, childHex: string): string | und
   return owner === childHex ? undefined : owner;
 }
 
+/**
+ * The owner of a spawn block that the child resolves to, among every transcript
+ * carrying it. Self-owners are discarded ({@link foreignOwner}); of the rest, an
+ * owner that is NOT a fork wins over a fork, because an inline fork's copy of a
+ * spawn block is a duplicate of its parent's original, never a second spawn.
+ * A fork still owns the blocks only it carries (its own spawns). Among equals
+ * the LAST in scan order wins - the pre-multi-owner last-writer-wins rule, kept
+ * for any duplicate that is not a fork copy.
+ */
+function pickToolUseOwner(
+  owners: readonly ToolUseOwner[] | undefined,
+  childHex: string,
+  forkHexes: ReadonlySet<string>,
+): ToolUseOwner | undefined {
+  const foreign = (owners ?? []).filter(
+    (candidate) => foreignOwner(candidate.owner, childHex) !== undefined,
+  );
+  const original = foreign.filter((candidate) => !forkHexes.has(candidate.owner));
+  return (original.length > 0 ? original : foreign).at(-1);
+}
+
 function resolveParent(
   agentFile: AgentFile,
   sessionId: string,
   indices: SpawnIndices,
   sidecar: AgentSidecar | undefined,
+  forkHexes: ReadonlySet<string>,
 ): Resolution {
   // 1. directory - nested layout (gate #2): a `workflows/wf_<id>/` file is
   //    anchored by directory alone — workflow subagents carry no parent block
@@ -686,8 +723,8 @@ function resolveParent(
     // 2. tool_use: the anchor names a materialized `Agent`/`Workflow` block; its
     //    owning transcript is the parent (a depth-2 parent block lives inside a
     //    depth-1 agent transcript — gate #4).
-    const owner = indices.toolUseOwner.get(anchor);
-    if (owner !== undefined && foreignOwner(owner.owner, agentFile.hex) !== undefined) {
+    const owner = pickToolUseOwner(indices.toolUseOwner.get(anchor), agentFile.hex, forkHexes);
+    if (owner !== undefined) {
       return {
         parentAgentId: owner.owner,
         subagentType: owner.subagentType ?? sidecar?.agentType ?? null,
@@ -940,14 +977,27 @@ function usageOwnersByMessageId(transcripts: readonly Transcript[]): Map<string,
  * parent's transcript, so the fork's copy is not a usage row. Only that exact
  * shape is skipped; any other `message.id` shared across agents still reaches
  * the dedupe as a loud attribution conflict.
+ *
+ * Inline forks (parser-spec 5.3, amended 2026-11-14): a 2.1.319+ fork whose
+ * sidecar says `isFork: true` has no `fork-context-ref`; it opens with a
+ * verbatim copy of its parent's records (usage rows included) and a re-uuid'd
+ * copy of the spawning message. A row on such a fork is skipped when its
+ * `message.id` also carries usage on the fork's RESOLVED parent transcript
+ * (`forkParents`): those tokens were spent by the parent. The fork's own
+ * messages exist nowhere else and stay; a shared id on any non-parent
+ * transcript still reaches the dedupe as a loud conflict.
  */
-function extractUsageRows(transcripts: readonly Transcript[]): ExtractedUsage {
+function extractUsageRows(
+  transcripts: readonly Transcript[],
+  forkParents: ReadonlyMap<string, string>,
+): ExtractedUsage {
   const rows: UsageRow[] = [];
   let dropped = 0;
   const owners = usageOwnersByMessageId(transcripts);
   for (const transcript of transcripts) {
     const agentId = transcript.isMain ? null : transcript.owner;
     const isFork = isForkTranscript(transcript);
+    const forkParent = forkParents.get(transcript.owner);
     for (const rawRecord of transcript.records) {
       const record = asRecord(rawRecord);
       if (asString(record?.['type']) !== 'assistant') {
@@ -966,6 +1016,9 @@ function extractUsageRows(transcripts: readonly Transcript[]): ExtractedUsage {
       // This transcript is always among the owners, so a second one means the
       // message also lives on another agent's transcript.
       if (isFork && record?.['parentUuid'] === null && owners.get(messageId)!.size > 1) {
+        continue;
+      }
+      if (forkParent !== undefined && owners.get(messageId)!.has(forkParent)) {
         continue;
       }
       rows.push({
@@ -1024,6 +1077,10 @@ export function parseSession(substrate: SessionSubstrate): ParsedSession {
   }
 
   const indices = buildIndices(transcripts);
+  const forkHexes = new Set(
+    [...sidecars].filter(([, sidecar]) => sidecar.isFork).map(([hex]) => hex),
+  );
+  const forkParents = new Map<string, string>();
 
   const agents: ParsedAgent[] = [];
   const edges: ParsedEdge[] = [];
@@ -1042,7 +1099,16 @@ export function parseSession(substrate: SessionSubstrate): ParsedSession {
   }
 
   for (const agentFile of agentFiles) {
-    const resolution = resolveParent(agentFile, sessionId, indices, sidecars.get(agentFile.hex));
+    const resolution = resolveParent(
+      agentFile,
+      sessionId,
+      indices,
+      sidecars.get(agentFile.hex),
+      forkHexes,
+    );
+    if (forkHexes.has(agentFile.hex) && resolution.parentAgentId !== null) {
+      forkParents.set(agentFile.hex, resolution.parentAgentId);
+    }
     const span = transcriptTimespan(agentFile.records, `agent "${agentFile.hex}"`);
     agents.push({
       id: agentFile.hex,
@@ -1069,7 +1135,7 @@ export function parseSession(substrate: SessionSubstrate): ParsedSession {
     }
   }
 
-  const extracted = extractUsageRows(transcripts);
+  const extracted = extractUsageRows(transcripts, forkParents);
   const usage: DedupedUsage[] = dedupeUsageByMessageId(extracted.rows);
 
   return {
