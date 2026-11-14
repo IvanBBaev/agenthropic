@@ -236,8 +236,9 @@ AGENTHROPIC_REAL_CORPUS=~/.claude/projects pnpm test:real
 
 `AGENTHROPIC_REAL_CORPUS` is a list of corpus roots joined by the platform path delimiter, so
 the five spike captures under `spike/corpus/sessions/` can run as one corpus. The suite lives
-in `apps/server/test/real-corpus/`, which the default `vitest.config.ts` excludes. `pnpm test`
-and CI never see it, and it throws instead of skipping when the variable is missing. It
+in `apps/server/test/real-corpus/`. Its `.contract.ts` suffix keeps it outside the default
+`*.test.ts` glob, so `pnpm test` and CI never see it, and it throws instead of skipping when
+the variable is missing. It
 ingests every root through the production `runCorpusIngest` into a throwaway database and
 asserts:
 

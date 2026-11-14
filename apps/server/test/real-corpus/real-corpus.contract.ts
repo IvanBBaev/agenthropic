@@ -16,7 +16,7 @@
  *  4. 0 orphans: every subagent has a parent and a persisted spawn edge;
  *  5. the edge census does not regress against the last recorded value.
  *
- * It never runs in `pnpm test` (the default config excludes this directory) and
+ * It never runs in `pnpm test` (its `.contract.ts` suffix is outside the default `*.test.ts` glob) and
  * refuses to run without its input:
  *
  *   AGENTHROPIC_REAL_CORPUS=~/.claude/projects pnpm test:real
