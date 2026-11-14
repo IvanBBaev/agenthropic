@@ -148,8 +148,8 @@ DESIGN §2 item 1 names as unclaimed by any of the six audited projects (DESIGN 
 Full design and the rebuild-from-JSONL story: [the DAG moat](../architecture/dag-moat.md).
 
 *(As built, an edge carries its **provenance** in a `source` column whose `CHECK`
-constraint admits exactly five values — `'tool_use'`, `'directory'`,
-`'task_notification'`, `'queue_operation'`, `'legacy_explore'` — one per join path the
+constraint admits exactly six values — `'tool_use'`, `'directory'`,
+`'task_notification'`, `'queue_operation'`, `'legacy_explore'`, `'prompt_id'` — one per join path the
 parser can prove, so a consumer can always tell *how* a relationship was established and
 filter on it. The table is keyed `UNIQUE(session_id, parent_agent_id, child_agent_id)` and
 written with `INSERT OR IGNORE`, which is what makes re-ingesting the same transcript a
@@ -261,7 +261,7 @@ being a diagram and started being 12.8 GiB of files written by another process w
 read them.
 
 **Legacy-explore edge** — an `orchestration_edges` row with `source = 'legacy_explore'`:
-the fifth and only *inferential* join path. The other four prove a parent→child
+the fifth join path and the first *inferential* one. The four before it prove a parent→child
 relationship from structure the transcript states outright; this one exists for
 pre-2.1.71 transcripts whose sidecars carry a bare `Explore` shape with none of the modern
 anchors. It fires only when every modern anchor has missed **and** two independent
@@ -274,6 +274,17 @@ anywhere in the available corpus, so it is **PROVISIONAL** until a real pre-2.1.
 transcript ratifies it. It carries its own `source` value precisely so a consumer can
 exclude inferred edges from a structural query. Detail:
 [the DAG moat](../architecture/dag-moat.md).
+
+**Prompt-id edge** — an `orchestration_edges` row with `source = 'prompt_id'`: the sixth
+join path and the last resort before orphan, added by migration 28 (2026-11-14). A
+**forked skill** leaves no spawn anchor at all — no `tool_use` block, no async result, no
+queue record — but its first record names the user turn it ran in (`promptId`). The
+parent is the single other transcript that carries that turn on a user record, narrowed by
+the sidecar's `spawnDepth` (`1` → main, deeper → another subagent). Because every
+transcript of a turn carries its `promptId`, two candidates are not evidence and leave the
+child an orphan; a fork's copied records count only when no original carrier remains. It
+is an inference, labelled as one. Measured on the live corpus: 49 of 50 previously
+parentless forked skills joined. Detail: parser-spec §4.1.
 
 **Containment** — the guarantee that the corpus reader only ever opens files that are
 genuinely inside the configured corpus root. Enforced by opening with

@@ -29,6 +29,7 @@ describe('EDGE_SOURCES', () => {
       'task_notification',
       'queue_operation',
       'legacy_explore',
+      'prompt_id',
     ]);
   });
 
@@ -38,6 +39,7 @@ describe('EDGE_SOURCES', () => {
       'task_notification',
       'queue_operation',
       'legacy_explore',
+      'prompt_id',
     ]);
     expect(INFERRED_EDGE_SOURCES).not.toContain(OBSERVED_EDGE_SOURCE);
     expect([OBSERVED_EDGE_SOURCE, ...INFERRED_EDGE_SOURCES]).toEqual(EDGE_SOURCES);
@@ -115,7 +117,7 @@ describe('edgeProvenance', () => {
 describe('EDGE_PROVENANCE_LEGEND', () => {
   it('explains every stroke the views can draw', () => {
     expect(EDGE_PROVENANCE_LEGEND).toBe(
-      '— observed (tool_use) ┄ inferred (directory, task_notification, queue_operation, legacy_explore) ⋯ unrecognised (the raw word in quotes, or "no source word sent")',
+      '— observed (tool_use) ┄ inferred (directory, task_notification, queue_operation, legacy_explore, prompt_id) ⋯ unrecognised (the raw word in quotes, or "no source word sent")',
     );
   });
 

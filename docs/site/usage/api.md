@@ -634,7 +634,7 @@ idempotent table before the API ever queries it.
 >   missing hooks, it never depended on them.
 > - **The API does tell you which derivation path produced a row.** Every edge carries a
 >   `source` of `tool_use` (observed) or `directory` / `task_notification` /
->   `queue_operation` / `legacy_explore` (inferred), and the SPA is required to draw
+>   `queue_operation` / `legacy_explore` / `prompt_id` (inferred), and the SPA is required to draw
 >   observed edges solid and inferred edges dashed behind a permanent legend. Provenance
 >   is served, not flattened.
 
@@ -647,6 +647,12 @@ present a name-based guess as an observed spawn — the schema comment says so i
 words. Treat it as PROVISIONAL: it has **never been observed in the real corpus** and
 exists in the test corpus only as the synthetic `legacy-bare-explore` fixture. A client
 that renders edges should give it the inferred treatment, not the observed one.
+
+**The sixth source.** `prompt_id` (migration 28) joins a forked skill that left no spawn
+anchor at all: its first record names the user turn it ran in, and the parent is the one
+other transcript that carries that turn on a user record, narrowed by the sidecar's
+`spawnDepth`. Any ambiguity leaves the child an orphan rather than a guess. It is an
+inference too, and gets the inferred treatment for the same reason.
 
 ## The hook receiver — `POST /api/hooks/event`
 

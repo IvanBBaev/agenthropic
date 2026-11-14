@@ -4,7 +4,7 @@
  * edges the API served, it never reconstructs relationships client-side.
  * Provenance is always visible: solid edges are observed (`tool_use`),
  * dashed edges are inferred (`directory` / `task_notification` /
- * `queue_operation` / `legacy_explore`), and the session's unattributed usage
+ * `queue_operation` / `legacy_explore` / `prompt_id`), and the session's unattributed usage
  * bucket is shown even when it is zero.
  *
  * AMENDED 2026-09-23 (lane-EP): the list in that sentence was exhaustive of

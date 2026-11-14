@@ -23,9 +23,10 @@ right, which is exactly why it is the moat and not a nice-to-have.
 > - **The edges are JSONL-only, not dual-path.** No hook ever asserts an edge —
 >   `SubagentStart` does not exist, and even `SubagentStop` contributes only a liveness
 >   verdict (a `'completed'` status on an agent the parser already created), never an
->   edge. The parser derives every edge from the transcripts via **five join
+>   edge. The parser derives every edge from the transcripts via **six join
 >   paths**, recorded per row in a `source` column: `'tool_use'`, `'directory'`,
->   `'task_notification'`, `'queue_operation'`, and `'legacy_explore'`.
+>   `'task_notification'`, `'queue_operation'`, `'legacy_explore'`, and `'prompt_id'`
+>   (migration 28: the last resort for a forked skill with no spawn anchor).
 >   "Rebuild from JSONL alone" is therefore not a fallback proof but the only branch
 >   the system has.
 > - **The real DDL differs from the CD-4 sketch**: the `UNIQUE` logical key is

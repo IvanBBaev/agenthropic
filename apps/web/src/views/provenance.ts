@@ -62,6 +62,7 @@ export const EDGE_SOURCES: readonly OrchestrationEdgeSource[] = [
   'task_notification',
   'queue_operation',
   'legacy_explore',
+  'prompt_id',
 ];
 
 /**

@@ -79,7 +79,13 @@ describe('DagView', () => {
     // kind that is not listed here would make the legend lie by omission.
     const legend = screen.getByLabelText('edge provenance legend').textContent;
     expect(legend).toContain('observed (tool_use)');
-    for (const kind of ['directory', 'task_notification', 'queue_operation', 'legacy_explore']) {
+    for (const kind of [
+      'directory',
+      'task_notification',
+      'queue_operation',
+      'legacy_explore',
+      'prompt_id',
+    ]) {
       expect(legend).toContain(kind);
     }
   });

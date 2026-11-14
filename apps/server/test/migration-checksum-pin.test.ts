@@ -34,8 +34,8 @@
  *
  *   vitest (vite's esbuild transform, what this file pins) and `tsx` (what
  *   `pnpm start`, `pnpm dev` and `pnpm bench` run) now produce an IDENTICAL
- *   checksum for TWENTY-TWO of the twenty-seven migrations - ids 1-6, 8, 9, 10,
- *   12, 13, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26 and 27. They differ on ids 7, 11, 14, 15 and 16. Running the pre-H-1
+ *   checksum for TWENTY-THREE of the twenty-eight migrations - ids 1-6, 8, 9, 10,
+ *   12, 13, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27 and 28. They differ on ids 7, 11, 14, 15 and 16. Running the pre-H-1
  *   whitespace-only formula over the SAME two transform outputs puts the
  *   agreement at ZERO, so the agreeing set is what H-1 bought.
  *
@@ -85,6 +85,12 @@
  * and vitest
  * (447e64481647a9ddebcc2897a878d7fa4deecebb97d0ff128dba0d3d3544e5e8) on the
  * day it was written, with migrations 24-26 re-measured unchanged.
+ * Migration 28 (`orchestration-edges-prompt-id-source`, appended 2026-11-14)
+ * is one `db.exec` of a single template literal - migration 13's edge-table
+ * rebuild plus the migration-22 trigger, no number literal, no `new`, no arrow
+ * function - and was measured identical under tsx and vitest
+ * (08086b97513ebf4617eda7ab87a4e8235dd789c6e7cf76118560bcd25e06bb67) on the
+ * day it was written, with migrations 24-27 re-measured unchanged.
  * The residual five are still exactly ids 7, 11, 14,
  * 15 and 16.
  *
@@ -346,6 +352,11 @@ const PINNED: readonly PinnedChecksum[] = [
     name: 'pricing-audit',
     checksum: '447e64481647a9ddebcc2897a878d7fa4deecebb97d0ff128dba0d3d3544e5e8',
   },
+  {
+    id: 28,
+    name: 'orchestration-edges-prompt-id-source',
+    checksum: '08086b97513ebf4617eda7ab87a4e8235dd789c6e7cf76118560bcd25e06bb67',
+  },
 ];
 
 /** The literal whitespace normalisation `migrationChecksum` applies. */
@@ -427,7 +438,7 @@ describe('migration checksum pin', () => {
     // One `toEqual` over the whole table rather than a loop of assertions: the
     // failure output then shows every literal that moved at once, which
     // separates "someone edited migration 11" from "the transform changed" at a
-    // glance - one row versus twenty-seven.
+    // glance - one row versus twenty-eight.
     expect(computed).toEqual(PINNED);
   });
 

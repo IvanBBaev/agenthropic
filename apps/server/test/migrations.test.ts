@@ -211,6 +211,93 @@ describe('migration runner (WP-D3)', () => {
     }
   });
 
+  it('widens the edge-source CHECK to prompt_id, keeping rows, indexes and the clock trigger (migration 28)', () => {
+    // The parser joins an anchorless forked skill through its user turn and
+    // labels the edge 'prompt_id'; migration 13's CHECK rejects that word.
+    // The rebuild must keep every row, the dedup key, the three read-path
+    // indexes AND migration 22's ingest-clock trigger, which DROP TABLE
+    // silently takes with it.
+    const dir = mkdtempSync(join(tmpdir(), 'agenthropic-mig28-'));
+    const db = openDatabase(join(dir, 'edges.db'));
+    try {
+      runMigrations(
+        db,
+        migrations.filter((m) => m.id < 28),
+      );
+      const insert = db.prepare(
+        `INSERT OR IGNORE INTO orchestration_edges
+           (session_id, parent_agent_id, child_agent_id, source, instance, host_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      );
+      insert.run(
+        's1',
+        'parent',
+        'child-a',
+        'legacy_explore',
+        'default',
+        'host',
+        '2026-11-01T00:00:00Z',
+      );
+      expect(() =>
+        db
+          .prepare(
+            `INSERT INTO orchestration_edges
+               (session_id, parent_agent_id, child_agent_id, source, instance, host_id, created_at)
+             VALUES ('s1', 'parent', 'child-b', 'prompt_id', 'default', 'host', NULL)`,
+          )
+          .run(),
+      ).toThrow(/CHECK/);
+
+      expect(runMigrations(db).appliedIds).toEqual([28]);
+
+      expect(
+        db.prepare(`SELECT * FROM orchestration_edges WHERE child_agent_id = 'child-a'`).get(),
+      ).toMatchObject({
+        session_id: 's1',
+        source: 'legacy_explore',
+        created_at: '2026-11-01T00:00:00Z',
+      });
+      const clockBefore = db.prepare('SELECT seq FROM ingest_clock').pluck().get() as number;
+      insert.run('s1', 'parent', 'child-b', 'prompt_id', 'default', 'host', null);
+      expect(
+        db
+          .prepare(`SELECT source FROM orchestration_edges WHERE child_agent_id = 'child-b'`)
+          .pluck()
+          .get(),
+      ).toBe('prompt_id');
+      // The recreated trigger still advances the ingest clock on an edge insert.
+      expect(db.prepare('SELECT seq FROM ingest_clock').pluck().get()).toBe(clockBefore + 1);
+      expect(
+        insert.run('s1', 'parent', 'child-b', 'prompt_id', 'default', 'host', null).changes,
+      ).toBe(0);
+      // A plain INSERT: OR IGNORE would swallow the CHECK violation as well.
+      expect(() =>
+        db
+          .prepare(
+            `INSERT INTO orchestration_edges
+               (session_id, parent_agent_id, child_agent_id, source, instance, host_id, created_at)
+             VALUES ('s1', 'parent', 'child-c', 'guessed', 'default', 'host', NULL)`,
+          )
+          .run(),
+      ).toThrow(/CHECK/);
+      const objects = db
+        .prepare(`SELECT name FROM sqlite_master WHERE tbl_name = 'orchestration_edges'`)
+        .pluck()
+        .all();
+      expect(objects).toEqual(
+        expect.arrayContaining([
+          'idx_orchestration_edges_session_id',
+          'idx_orchestration_edges_parent_agent_id',
+          'idx_orchestration_edges_child_agent_id',
+          'orchestration_edges_ingest_seq_insert',
+        ]),
+      );
+    } finally {
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('is idempotent: a second run applies nothing and the schema is identical', () => {
     temp = createMigratedTempDb();
     const firstDump = dumpSchema(temp.db);
@@ -1188,7 +1275,7 @@ describe('migration runner (WP-D3)', () => {
       // The fresh database is at the latest schema; migration 20 touches only
       // claude-sonnet-5, so the opus-5-5 rows read exactly as 19 wrote them.
       temp = createMigratedTempDb();
-      expect(currentSchemaVersion(temp.db)).toBe(27);
+      expect(currentSchemaVersion(temp.db)).toBe(28);
       expect(opus55Rows(temp.db)).toEqual(
         OFFICIAL_RATES.map((row) => ({ ...row, effective_from: FLOOR })),
       );
@@ -1334,7 +1421,7 @@ describe('migration runner (WP-D3)', () => {
 
     it('prices claude-sonnet-5 at the official per-bucket rates on a fresh database', () => {
       temp = createMigratedTempDb();
-      expect(currentSchemaVersion(temp.db)).toBe(27);
+      expect(currentSchemaVersion(temp.db)).toBe(28);
       expect(sonnet5Rows(temp.db)).toEqual(at(OFFICIAL_RATES));
     });
 
@@ -1446,7 +1533,7 @@ describe('migration runner (WP-D3)', () => {
         insertSession(db, 'sess-b');
         insertSession(db, 'sess-c');
 
-        expect(runMigrations(db, migrations).appliedIds).toEqual([22, 23, 24, 25, 26, 27]);
+        expect(runMigrations(db, migrations).appliedIds).toEqual([22, 23, 24, 25, 26, 27, 28]);
 
         expect(stamps(db)).toEqual([
           { id: 'sess-a', ingest_seq: 1 },
@@ -1556,7 +1643,7 @@ describe('migration runner (WP-D3)', () => {
 
     it('seeds claude-sonnet-5-5 with the official per-bucket rates at the canonical floor', () => {
       temp = createMigratedTempDb();
-      expect(currentSchemaVersion(temp.db)).toBe(27);
+      expect(currentSchemaVersion(temp.db)).toBe(28);
       expect(sonnet55Rows(temp.db)).toEqual(
         OFFICIAL_RATES.map((row) => ({ ...row, effective_from: FLOOR })),
       );
@@ -1622,7 +1709,7 @@ describe('migration runner (WP-D3)', () => {
 
     it('seeds claude-haiku-5-5 with the official base-tier rates at the canonical floor', () => {
       temp = createMigratedTempDb();
-      expect(currentSchemaVersion(temp.db)).toBe(27);
+      expect(currentSchemaVersion(temp.db)).toBe(28);
       expect(haiku55Rows(temp.db)).toEqual(
         OFFICIAL_RATES.map((row) => ({ ...row, effective_from: FLOOR })),
       );
@@ -1647,7 +1734,7 @@ describe('migration runner (WP-D3)', () => {
             .all();
         const before = otherRows();
 
-        expect(runMigrations(db).appliedIds).toEqual([25, 26, 27]);
+        expect(runMigrations(db).appliedIds).toEqual([25, 26, 27, 28]);
         expect(haiku55Rows(db)).toHaveLength(OFFICIAL_RATES.length);
         expect(otherRows()).toEqual(before);
         expect(runMigrations(db).appliedIds).toEqual([]);
@@ -1676,7 +1763,7 @@ describe('migration runner (WP-D3)', () => {
         );
         insertSession(db, 'sess-a');
 
-        expect(runMigrations(db).appliedIds).toEqual([26, 27]);
+        expect(runMigrations(db).appliedIds).toEqual([26, 27, 28]);
         expect(columns(db)).toEqual([{ claude_code_versions: null, format_census: null }]);
         expect(runMigrations(db).appliedIds).toEqual([]);
       } finally {

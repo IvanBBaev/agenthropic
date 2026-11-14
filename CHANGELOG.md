@@ -449,6 +449,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Forked skills with no spawn anchor now join their parent instead of staying orphans.**
+  A forked skill's sidecar carries no `toolUseId`, and its parent leaves no `tool_use`
+  block, async result or queue record behind, so the live corpus held 50 parentless
+  subagents. The parser now joins such a child through the user turn its first record
+  names (`promptId`): the parent is the one other transcript that carries that turn on a
+  user record, narrowed by the sidecar's `spawnDepth`. Any ambiguity leaves the child an
+  orphan. The edge is recorded as a sixth, inferred `source`, `prompt_id`. Migration 28
+  rebuilds `orchestration_edges` to admit it and keeps the rows, indexes and ingest-clock
+  trigger (parser spec §4.1).
 - **Inline forks (Claude Code 2.1.319+) no longer break a session's ingest.** A subagent
   forked from another subagent opens with a verbatim copy of its parent's records, usage
   rows and spawn blocks included, and no `fork-context-ref`. The copied usage rows collided

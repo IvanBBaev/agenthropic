@@ -28,7 +28,7 @@ export { extractCompactionBoundaries } from './parser/compaction';
 export { AGENT_OUTCOME_CAUSES, classifyAgentOutcomeCause } from './parser/agent-outcome';
 export type { CompactionBoundary } from './parser/compaction';
 export type { TokenBuckets, UsageRow, DedupedUsage, PricingEntry, SiblingWave } from './types';
-export { LEGACY_EXPLORE_EDGE_SOURCE } from './parser/types';
+export { LEGACY_EXPLORE_EDGE_SOURCE, PROMPT_ID_EDGE_SOURCE } from './parser/types';
 export type {
   ParsedSession,
   ParsedAgent,

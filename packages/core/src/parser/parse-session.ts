@@ -13,7 +13,8 @@
  * (primary), a parent-side async `toolUseResult`, or a queue-operation
  * `<task-id>` — then classified tool_use -> queue_operation -> task_notification
  * -> legacy_explore (gate #7, pre-2.1.71 bare-`Explore` sidecars joined via a
- * progress-line `agentId`) -> orphan. Ids are matched by structural POSITION,
+ * progress-line `agentId`) -> prompt_id (an anchorless forked skill joined to
+ * the one transcript carrying its first record's user turn) -> orphan. Ids are matched by structural POSITION,
  * never substring (gate #5): a `tool_use.id` mentioned in prose text must
  * never forge an edge.
  *
@@ -40,7 +41,7 @@ import { parseTimestampMs } from '../time';
 import { dedupeUsageByMessageId } from '../usage/dedupe';
 import { classifyAgentOutcomeCause } from './agent-outcome';
 import { censusFormat } from './format-census';
-import { LEGACY_EXPLORE_EDGE_SOURCE } from './types';
+import { LEGACY_EXPLORE_EDGE_SOURCE, PROMPT_ID_EDGE_SOURCE } from './types';
 import type {
   ParsedAgent,
   ParsedAgentOutcome,
@@ -435,6 +436,14 @@ interface SpawnIndices {
    * map lookup, never by substring (gate #5).
    */
   failedSpawns: Map<string, AgentOutcomeCause>;
+  /**
+   * `promptId` -> every agent whose transcript carries that id on a
+   * `type: 'user'` record, in first-seen order. A `promptId` names the USER
+   * TURN, not a spawner: every subagent spawned during a turn carries it too,
+   * so this is only ever read through {@link pickPromptCarrier}, which joins
+   * on a single unambiguous carrier and otherwise refuses.
+   */
+  promptCarriers: Map<string, Set<string>>;
 }
 
 /**
@@ -481,6 +490,7 @@ function buildIndices(transcripts: readonly Transcript[]): SpawnIndices {
   const queueChildToToolUse = new Map<string, string>();
   const legacyProgressOwner = new Map<string, string>();
   const pendingErrorResults = new Map<string, string>();
+  const promptCarriers = new Map<string, Set<string>>();
 
   for (const transcript of transcripts) {
     for (const rawRecord of transcript.records) {
@@ -542,6 +552,13 @@ function buildIndices(transcripts: readonly Transcript[]): SpawnIndices {
         // spawn has no child to name), so it cannot live under the guard below.
         collectErrorResults(record, pendingErrorResults);
 
+        const promptId = asString(record?.['promptId']);
+        if (promptId !== undefined) {
+          const carriers = promptCarriers.get(promptId) ?? new Set<string>();
+          carriers.add(transcript.owner);
+          promptCarriers.set(promptId, carriers);
+        }
+
         // Parent-side async spawn record: `toolUseResult.agentId` names the child
         // hex and the sibling `tool_result` block's `tool_use_id` is the parent
         // spawn block (the join for a child whose sidecar carries no toolUseId).
@@ -596,10 +613,11 @@ function buildIndices(transcripts: readonly Transcript[]): SpawnIndices {
     queueChildToToolUse,
     legacyProgressOwner,
     failedSpawns,
+    promptCarriers,
   };
 }
 
-// --- Parent resolution (five edge sources + orphan, in resolveParent order) ---
+// --- Parent resolution (six edge sources + orphan, in resolveParent order) ---
 // Numbering below is this function's own check order; parser-spec §4.1 names
 // the same paths but does not number them.
 
@@ -609,7 +627,8 @@ interface Resolution {
   edge: ParsedEdge | undefined;
   /**
    * The structural spawn-block id this child resolved THROUGH, or `null` when
-   * the join path carried none (directory, `legacy_explore`, orphan).
+   * the join path carried none (directory, `legacy_explore`, `prompt_id`,
+   * orphan).
    *
    * Additive: nothing about resolution changes, the anchor the branches already
    * computed is simply no longer discarded. It is the join key an observed
@@ -686,6 +705,41 @@ function pickToolUseOwner(
   );
   const original = foreign.filter((candidate) => !forkHexes.has(candidate.owner));
   return (original.length > 0 ? original : foreign).at(-1);
+}
+
+/**
+ * The parent of an anchorless child, read from the user turn its first record
+ * names: the ONE foreign transcript that carries that `promptId`, or nothing.
+ *
+ * A turn id is shared by every agent that ran during the turn, so ambiguity is
+ * the normal case and the answer to it is to refuse, never to guess. Two facts
+ * narrow the field before the count is taken:
+ * - the sidecar's `spawnDepth` is the CLI's own statement of where the spawner
+ *   sits: depth 1 admits only the main transcript, a deeper value admits only
+ *   subagent transcripts, an absent one admits both;
+ * - an inline fork's copy of its parent's records carries the parent's turn
+ *   ids too, so a fork carrier counts only when no original one is left (the
+ *   {@link pickToolUseOwner} rule).
+ */
+function pickPromptCarrier(
+  carriers: ReadonlySet<string> | undefined,
+  childHex: string,
+  sessionId: string,
+  spawnDepth: number | undefined,
+  forkHexes: ReadonlySet<string>,
+): string | undefined {
+  const foreign = [...(carriers ?? [])].filter((owner) => {
+    if (owner === childHex) {
+      return false;
+    }
+    if (spawnDepth === undefined) {
+      return true;
+    }
+    return spawnDepth === 1 ? owner === sessionId : owner !== sessionId;
+  });
+  const original = foreign.filter((owner) => !forkHexes.has(owner));
+  const pool = original.length > 0 ? original : foreign;
+  return pool.length === 1 ? pool[0] : undefined;
 }
 
 function resolveParent(
@@ -795,7 +849,32 @@ function resolveParent(
     }
   }
 
-  // 6. orphan: no structural join path — never fabricate a parent, emit no edge.
+  // 6. prompt_id: a forked skill run without an `Agent` block (a slash
+  //    command, or a fork the user interrupted) leaves no spawn anchor at all.
+  //    Its first record still names the user turn it ran in; when exactly one
+  //    foreign transcript carries that turn, that transcript is the parent.
+  //    Ambiguity stays an orphan (see pickPromptCarrier). The edge carries
+  //    the DISTINCT `prompt_id` provenance and no tool-use id.
+  const promptId = asString(agentFile.firstRecord?.['promptId']);
+  if (promptId !== undefined) {
+    const carrier = pickPromptCarrier(
+      indices.promptCarriers.get(promptId),
+      agentFile.hex,
+      sessionId,
+      sidecar?.spawnDepth,
+      forkHexes,
+    );
+    if (carrier !== undefined) {
+      return {
+        parentAgentId: carrier,
+        subagentType: sidecar?.agentType ?? null,
+        edge: makeEdge(sessionId, carrier, agentFile.hex, PROMPT_ID_EDGE_SOURCE, null),
+        anchor: null,
+      };
+    }
+  }
+
+  // 7. orphan: no join path — never fabricate a parent, emit no edge.
   //    The subagent type is still recoverable from the sidecar when present.
   return {
     parentAgentId: null,

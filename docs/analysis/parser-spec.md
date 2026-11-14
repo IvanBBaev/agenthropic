@@ -189,13 +189,28 @@ never a substring (item #5):
   A reader who wants to exclude inferred legacy edges from a hierarchy claim must be able to
   do so with a `WHERE`, not with archaeology.
 
+- **Prompt-id last resort** (added 2026-11-14) — a **forked skill** (sidecar
+  `{agentType, spawnDepth?}`, no `toolUseId`) leaves no spawn anchor of any kind: no
+  `tool_use` block, no async result, no queue record. What it does carry is the
+  `promptId` of the user turn it ran in, on its first record. The parent is the **one
+  foreign transcript that carries that same `promptId` on a `type:'user'` record**, with
+  the candidates narrowed by the sidecar's `spawnDepth`: `1` → main only, `> 1` → other
+  subagents only, absent → either. A fork carrier (sidecar `isFork: true`, §5.3) counts
+  only when no original carrier remains, because a fork's user records are copies. Two or
+  more candidates left → **orphan**: `promptId` names a *turn*, and every transcript of
+  that turn carries it, so an ambiguous match is not evidence. The edge carries `source =
+  'prompt_id'` and no anchor id — an inference, never filed as `tool_use`. On the live
+  corpus this joined 49 of the 50 parentless forked skills; the fiftieth carries a turn no
+  user record of any other transcript holds, and stays an orphan.
+
   No path → **orphan, no edge** (a parent is never fabricated).
 
 **The provenance set is closed at the storage layer.** Migration 13 rebuilds
 `orchestration_edges` with `CHECK (source IN ('tool_use','directory','task_notification',
-'queue_operation','legacy_explore'))` (`apps/server/src/db/migrations.ts`). A sixth join
-path cannot be introduced by a parser edit alone: it needs a migration, which is a
-deliberate speed bump on exactly the change that would otherwise dilute provenance quietly.
+'queue_operation','legacy_explore'))` (`apps/server/src/db/migrations.ts`); migration 28
+rebuilds it again to admit the sixth value, `'prompt_id'`. A new join path cannot be
+introduced by a parser edit alone: it needs a migration, which is a deliberate speed bump
+on exactly the change that would otherwise dilute provenance quietly.
 
 ### 4.2 Real-data measurement — census of record (PROVISIONAL — LABEL-ME)
 

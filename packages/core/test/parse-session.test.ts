@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest';
 import {
   LEGACY_EXPLORE_EDGE_SOURCE,
   parseSession,
+  PROMPT_ID_EDGE_SOURCE,
   UsageConflictError,
   type ParsedEdge,
   type ParsedSession,
@@ -2983,5 +2984,201 @@ describe('parseSession — inline forks copy their parent’s records', () => {
     ]);
     // FORK's resolved parent is PARENT (via the block on parentFile), not main.
     expect(() => parseSession(input)).toThrow(UsageConflictError);
+  });
+});
+
+describe('parseSession — anchorless forked skills join through their user turn (prompt_id)', () => {
+  const SESSION = 'b0a10000-1111-4222-8333-444444444444';
+  const SKILL = 'd1d1d1d1';
+  const SIBLING = 'e2e2e2e2';
+  const FORK = 'f3f3f3f3';
+  const PROMPT = 'prompt-turn-1';
+
+  const userTurn = (owner: string | undefined, uuid: string, promptId: string | undefined) =>
+    jline({
+      sessionId: SESSION,
+      ...(owner === undefined ? {} : { agentId: owner }),
+      type: 'user',
+      uuid,
+      parentUuid: null,
+      timestamp: '2026-11-14T11:00:00.000Z',
+      ...(promptId === undefined ? {} : { promptId }),
+      message: { role: 'user', content: 'run the skill' },
+    });
+
+  const mainFile = (
+    promptId: string | undefined = PROMPT,
+    type: 'user' | 'assistant' = 'user',
+  ) => ({
+    path: `${SESSION}.jsonl`,
+    lines: [
+      type === 'user'
+        ? userTurn(undefined, 'u-main-1', promptId)
+        : jline({
+            sessionId: SESSION,
+            type: 'assistant',
+            uuid: 'u-main-1',
+            parentUuid: null,
+            timestamp: '2026-11-14T11:00:00.000Z',
+            promptId,
+            message: { id: 'msg_main', model: 'claude-opus-5-5', usage: { input_tokens: 1 } },
+          }),
+    ],
+  });
+
+  const agentFile = (hex: string, promptId: string | null = PROMPT) => ({
+    path: `subagents/agent-${hex}.jsonl`,
+    lines: [userTurn(hex, `u-${hex}-1`, promptId ?? undefined)],
+  });
+
+  const meta = (hex: string, record: Record<string, unknown>) => ({
+    path: `subagents/agent-${hex}.meta.json`,
+    lines: [jline({ agentType: 'skill-runner', ...record })],
+  });
+
+  const parse = (files: Array<{ path: string; lines: string[] }>) => parseSession(substrate(files));
+
+  it('joins a depth-1 skill to the main transcript that carries its turn', () => {
+    const result = parse([mainFile(), agentFile(SKILL), meta(SKILL, { spawnDepth: 1 })]);
+    expect(agentById(result, SKILL)).toMatchObject({
+      parentAgentId: SESSION,
+      subagentType: 'skill-runner',
+    });
+    expect(edgeForChild(result, SKILL)).toEqual({
+      sessionId: SESSION,
+      parentAgentId: SESSION,
+      childAgentId: SKILL,
+      source: PROMPT_ID_EDGE_SOURCE,
+      toolUseId: null,
+    });
+    expect(PROMPT_ID_EDGE_SOURCE).toBe('prompt_id');
+  });
+
+  it('joins a skill with no depth and no sidecar when its turn has one foreign carrier', () => {
+    const result = parse([mainFile(), agentFile(SKILL)]);
+    expect(edgeForChild(result, SKILL)).toMatchObject({
+      parentAgentId: SESSION,
+      source: 'prompt_id',
+    });
+    expect(agentById(result, SKILL)?.subagentType).toBeNull();
+  });
+
+  it('stays an orphan when the turn has several carriers and no depth narrows them', () => {
+    const result = parse([mainFile(), agentFile(SKILL), agentFile(SIBLING), meta(SKILL, {})]);
+    expect(agentById(result, SKILL)?.parentAgentId).toBeNull();
+    expect(edgeForChild(result, SKILL)).toBeUndefined();
+  });
+
+  it('depth 1 admits only the main transcript among several carriers', () => {
+    const result = parse([
+      mainFile(),
+      agentFile(SKILL),
+      agentFile(SIBLING),
+      meta(SKILL, { spawnDepth: 1 }),
+    ]);
+    expect(edgeForChild(result, SKILL)?.parentAgentId).toBe(SESSION);
+  });
+
+  it('a deeper depth admits only subagent carriers', () => {
+    const result = parse([
+      mainFile(),
+      agentFile(SKILL),
+      agentFile(SIBLING),
+      meta(SKILL, { spawnDepth: 2 }),
+    ]);
+    expect(edgeForChild(result, SKILL)).toMatchObject({
+      parentAgentId: SIBLING,
+      source: 'prompt_id',
+    });
+  });
+
+  it('a deeper depth never falls back to main', () => {
+    const result = parse([mainFile(), agentFile(SKILL), meta(SKILL, { spawnDepth: 2 })]);
+    expect(agentById(result, SKILL)?.parentAgentId).toBeNull();
+    expect(edgeForChild(result, SKILL)).toBeUndefined();
+  });
+
+  it('an original carrier wins over an inline fork that copied the turn', () => {
+    const result = parse([
+      mainFile(),
+      agentFile(SKILL),
+      agentFile(FORK),
+      meta(FORK, { isFork: true, toolUseId: 'toolu_missing', spawnDepth: 1 }),
+    ]);
+    expect(edgeForChild(result, SKILL)?.parentAgentId).toBe(SESSION);
+  });
+
+  it('a fork is the parent when it is the only carrier left', () => {
+    const result = parse([
+      mainFile(),
+      agentFile(SKILL),
+      agentFile(FORK),
+      meta(FORK, { isFork: true, toolUseId: 'toolu_missing', spawnDepth: 1 }),
+      meta(SKILL, { spawnDepth: 2 }),
+    ]);
+    expect(edgeForChild(result, SKILL)?.parentAgentId).toBe(FORK);
+  });
+
+  it('counts only user records as carriers', () => {
+    const result = parse([mainFile(PROMPT, 'assistant'), agentFile(SKILL)]);
+    expect(agentById(result, SKILL)?.parentAgentId).toBeNull();
+  });
+
+  it('stays an orphan when nothing else carries the turn, or the child names none', () => {
+    const unknownTurn = parse([mainFile('another-turn'), agentFile(SKILL)]);
+    expect(agentById(unknownTurn, SKILL)?.parentAgentId).toBeNull();
+    const noTurn = parse([mainFile(), agentFile(SKILL, null)]);
+    expect(agentById(noTurn, SKILL)?.parentAgentId).toBeNull();
+    // A turn id seen on no user record anywhere (the child opens on an
+    // assistant record) has no carrier set at all.
+    const uncarried = parse([
+      mainFile('another-turn'),
+      {
+        path: `subagents/agent-${SKILL}.jsonl`,
+        lines: [
+          jline({
+            sessionId: SESSION,
+            agentId: SKILL,
+            type: 'assistant',
+            uuid: 'u-skill-1',
+            parentUuid: null,
+            timestamp: '2026-11-14T11:00:00.000Z',
+            promptId: PROMPT,
+            message: { id: 'msg_skill', model: 'claude-opus-5-5', usage: { input_tokens: 1 } },
+          }),
+        ],
+      },
+    ]);
+    expect(agentById(uncarried, SKILL)?.parentAgentId).toBeNull();
+  });
+
+  it('never outranks a structural anchor', () => {
+    const result = parse([
+      {
+        path: `${SESSION}.jsonl`,
+        lines: [
+          userTurn(undefined, 'u-main-1', PROMPT),
+          jline({
+            sessionId: SESSION,
+            type: 'assistant',
+            uuid: 'u-main-2',
+            parentUuid: 'u-main-1',
+            timestamp: '2026-11-14T11:00:01.000Z',
+            message: {
+              id: 'msg_spawn',
+              model: 'claude-opus-5-5',
+              usage: { input_tokens: 1 },
+              content: [{ type: 'tool_use', id: 'toolu_skill', name: 'Agent', input: {} }],
+            },
+          }),
+        ],
+      },
+      agentFile(SKILL),
+      meta(SKILL, { toolUseId: 'toolu_skill', spawnDepth: 1 }),
+    ]);
+    expect(edgeForChild(result, SKILL)).toMatchObject({
+      source: 'tool_use',
+      toolUseId: 'toolu_skill',
+    });
   });
 });

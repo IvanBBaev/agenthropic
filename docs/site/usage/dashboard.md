@@ -293,10 +293,10 @@ moat itself (the moat is §3, next).
 >
 > - Every edge is drawn **solid when observed** (`source = tool_use`) and **dashed
 >   when inferred** (`directory`, `task_notification`, `queue_operation`,
->   `legacy_explore`), with the provenance also in each edge's `<title>` and a legend
+>   `legacy_explore`, `prompt_id`), with the provenance also in each edge's `<title>` and a legend
 >   that is permanently on screen rather than behind a hover or a toggle. The legend
->   names all five sources by their stored word, so an edge you can see is an edge whose
->   evidence you can name — the four dashed sources are four different strengths of
+>   names all six sources by their stored word, so an edge you can see is an edge whose
+>   evidence you can name — the five dashed sources are five different strengths of
 >   guess, not one undifferentiated "inferred". `legacy_explore` is the weakest of them
 >   and is kept separate for exactly that reason (see
 >   [the API reference](api.md#as-built-details-worth-knowing-before-you-call-these)).

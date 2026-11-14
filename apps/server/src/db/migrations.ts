@@ -1652,6 +1652,54 @@ export const migrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    id: 28,
+    name: 'orchestration-edges-prompt-id-source',
+    up(db) {
+      // WHY. A forked skill invoked without an `Agent` block (a slash command,
+      // or a fork the user interrupted) leaves no spawn anchor anywhere: no
+      // `toolUseId` in its sidecar, no parent-side `toolUseResult`, no queue
+      // record. 50 of the live corpus's subagents fell to the orphan path that
+      // way. The parser now joins such a child through the user turn its first
+      // record names (`promptId`) when exactly one transcript carries that
+      // turn, and labels the edge with the DISTINCT source 'prompt_id' - an
+      // inference, never disguised as 'tool_use'.
+      //
+      // Migration 13's CHECK does not admit the new value. SQLite cannot ALTER
+      // a CHECK, so this is migration 13's rebuild again: copy every row
+      // verbatim, recreate the three read-path indexes (migrations 5 and 12)
+      // and the ingest-clock trigger (migration 22) that DROP TABLE takes with
+      // it.
+      db.exec(`
+        CREATE TABLE orchestration_edges_new (
+          id              INTEGER PRIMARY KEY,
+          session_id      TEXT NOT NULL,
+          parent_agent_id TEXT NOT NULL,
+          child_agent_id  TEXT NOT NULL,
+          source          TEXT NOT NULL CHECK (source IN ('tool_use','directory','task_notification','queue_operation','legacy_explore','prompt_id')),
+          instance        TEXT NOT NULL,
+          host_id         TEXT NOT NULL,
+          created_at      TEXT,
+          UNIQUE (session_id, parent_agent_id, child_agent_id)
+        );
+        INSERT INTO orchestration_edges_new
+          (id, session_id, parent_agent_id, child_agent_id, source, instance, host_id, created_at)
+          SELECT id, session_id, parent_agent_id, child_agent_id, source, instance, host_id, created_at
+            FROM orchestration_edges;
+        DROP TABLE orchestration_edges;
+        ALTER TABLE orchestration_edges_new RENAME TO orchestration_edges;
+        CREATE INDEX idx_orchestration_edges_session_id ON orchestration_edges(session_id);
+        CREATE INDEX idx_orchestration_edges_parent_agent_id ON orchestration_edges(parent_agent_id);
+        CREATE INDEX idx_orchestration_edges_child_agent_id ON orchestration_edges(child_agent_id);
+        CREATE TRIGGER orchestration_edges_ingest_seq_insert
+        AFTER INSERT ON orchestration_edges
+        BEGIN
+          UPDATE ingest_clock SET seq = seq + 1;
+          UPDATE sessions SET ingest_seq = (SELECT seq FROM ingest_clock) WHERE id = NEW.session_id;
+        END;
+      `);
+    },
+  },
 ];
 
 export interface MigrationRunResult {

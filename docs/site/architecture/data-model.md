@@ -107,6 +107,9 @@ leaves the schema byte-identical.
 | 23 | `alerts-core` | The four v2.0 alert tables (`webhook_targets`, `alert_rules`, `alert_events`, `webhook_deliveries`) + the delivery due-scan and throttle-window indexes |
 | 24 | `model-pricing-sonnet-5-5` | Five explicit rate rows for `claude-sonnet-5-5`, the next model id the real corpus exposed as unpriced (2026-10-28) |
 | 25 | `model-pricing-haiku-5-5-base-tier` | Five explicit rate rows for `claude-haiku-5-5` at its up-to-100k-prompt tier only (owner decision D1, 2026-10-30); a longer prompt halts in `computeCostUsd` |
+| 26 | `sessions-format-census` | `sessions.claude_code_versions` and `sessions.format_census` — the format-drift census of each session's latest parse, aggregated by `/api/health` (R13) |
+| 27 | `pricing-audit` | `pricing_audit`, the append-only trail of every rate the `pricing` CLI writes (R15) |
+| 28 | `orchestration-edges-prompt-id-source` | Rebuilds the edge table to admit the sixth `source` value, `prompt_id`, and recreates migration 22's ingest-clock trigger with it |
 
 Three properties of that list are worth stating explicitly, because they are the reason
 the ledger table exists at all.
@@ -471,8 +474,8 @@ per-instance (not type-aggregated), and carry an instance/host key for future fl
 aggregation." CD-4 pins the column set: *"self-ref `parent_agent_id`, `instance`/
 `host_id`, `derived_from_event_id`, idempotent."*
 
-The **real DDL** — as it stands after migration 13, `orchestration-edges-legacy-explore-source`,
-with the endpoint indexes migration 12 added:
+The **real DDL** — as it stands after migration 28, `orchestration-edges-prompt-id-source`,
+with the endpoint indexes migration 12 added and the ingest-clock trigger migration 22 added:
 
 ```sql
 CREATE TABLE orchestration_edges (
@@ -480,7 +483,7 @@ CREATE TABLE orchestration_edges (
   session_id      TEXT NOT NULL,
   parent_agent_id TEXT NOT NULL,
   child_agent_id  TEXT NOT NULL,
-  source          TEXT NOT NULL CHECK (source IN ('tool_use','directory','task_notification','queue_operation','legacy_explore')),
+  source          TEXT NOT NULL CHECK (source IN ('tool_use','directory','task_notification','queue_operation','legacy_explore','prompt_id')),
   instance        TEXT NOT NULL,
   host_id         TEXT NOT NULL,
   created_at      TEXT,
@@ -489,10 +492,16 @@ CREATE TABLE orchestration_edges (
 CREATE INDEX idx_orchestration_edges_session_id ON orchestration_edges(session_id);
 CREATE INDEX idx_orchestration_edges_parent_agent_id ON orchestration_edges(parent_agent_id);
 CREATE INDEX idx_orchestration_edges_child_agent_id ON orchestration_edges(child_agent_id);
+CREATE TRIGGER orchestration_edges_ingest_seq_insert
+AFTER INSERT ON orchestration_edges
+BEGIN
+  UPDATE ingest_clock SET seq = seq + 1;
+  UPDATE sessions SET ingest_seq = (SELECT seq FROM ingest_clock) WHERE id = NEW.session_id;
+END;
 ```
 
 Migration 5 created this table with a four-value `source` CHECK and the session index
-alone. Two later migrations reshaped it, and both are instructive:
+alone. Three later migrations reshaped it, and all three are instructive:
 
 - **Migration 12** added the two endpoint indexes. The global-DAG query filters on
   `parent_agent_id` and `child_agent_id`, which migration 5 had not indexed at all, so
@@ -506,6 +515,10 @@ alone. Two later migrations reshaped it, and both are instructive:
   under a disguised `tool_use` label, and provenance honesty is the property the CHECK
   exists to defend in the first place. Without the widening, ingesting a pre-2.1.71 session
   would abort on the constraint and that legacy DAG would silently stay frozen.
+- **Migration 28** rebuilt it the same way for a sixth value, `prompt_id`, and had one
+  more object to carry across: migration 22's `AFTER INSERT` trigger that advances the
+  ingest clock, which `DROP TABLE` takes with it just like the indexes. Losing it would not
+  fail anything loudly — new edges would simply stop moving `/api/changes`.
 
 Rationale — updated to the as-built facts:
 
@@ -520,9 +533,9 @@ Rationale — updated to the as-built facts:
 - **`source` replaces `derived_from_event_id`.** The design sketch traced each edge to a
   normalized event; as built there is no JSONL `events` row to point at (JSONL bypasses
   `events_raw`), so provenance is carried by the `source` CHECK instead — it names which
-  of the parser's **five join paths** produced the edge: `tool_use` (the `Agent`/`Workflow`
+  of the parser's **six join paths** produced the edge: `tool_use` (the `Agent`/`Workflow`
   `tool_use` id join), `directory` (nested `wf_<id>/` containment), `task_notification`,
-  `queue_operation`, and `legacy_explore`. The first four are *structural* — they anchor on
+  `queue_operation`, `legacy_explore` and `prompt_id`. The first four are *structural* — they anchor on
   a position in the transcript. The fifth is a **defensive name-based fallback** for the
   pre-2.1.71 bare-`Explore` sidecar shape (parser gate #7), which carries no `toolUseId`
   and no `spawnDepth` and can only be joined through a progress line that names the child's
@@ -532,6 +545,11 @@ Rationale — updated to the as-built facts:
   path collapses the two. Its scope is **implemented but not measured**: the bare-`Explore`
   shape is absent from the corpus available to the project, so the path is exercised only
   by fixtures and stays PROVISIONAL until a real pre-2.1.71 transcript ratifies it.
+  The sixth, `prompt_id`, is the last resort for a **forked skill**, which leaves no spawn
+  anchor at all: the parent is the single other transcript carrying the child's
+  first-record `promptId` on a user record, narrowed by the sidecar's `spawnDepth`; any
+  ambiguity leaves the child an orphan (parser-spec §4.1). It is an inference as well,
+  and is labelled as one.
 - **Derivation is JSONL-only** (`WP-IN8` as built): the designed second path — a
   `SubagentStart`/`SubagentStop` hook pair — was never built, and never could be:
   `SubagentStart` does not exist (Phase-0 `WP-S4` verified the real catalog), and hooks

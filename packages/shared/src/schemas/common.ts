@@ -114,7 +114,10 @@ export type AgentOutcomeCause = Static<typeof AgentOutcomeCauseSchema>;
  * (parser-spec gate #7). Served verbatim as persisted - the
  * observed-vs-inferred provenance distinction is the honesty rule and must
  * survive every hop to the UI; collapsing `legacy_explore` into `tool_use`
- * would present a name-based guess as an observed spawn.
+ * would present a name-based guess as an observed spawn. `prompt_id` is the
+ * last-resort join for a forked skill that left no spawn anchor at all: the
+ * child's first-record `promptId` names the user turn, and the one transcript
+ * that carries that turn is the parent (parser-spec section 4.1).
  */
 export const OrchestrationEdgeSourceSchema = Type.Union([
   Type.Literal('tool_use'),
@@ -122,6 +125,7 @@ export const OrchestrationEdgeSourceSchema = Type.Union([
   Type.Literal('task_notification'),
   Type.Literal('queue_operation'),
   Type.Literal('legacy_explore'),
+  Type.Literal('prompt_id'),
 ]);
 
 export type OrchestrationEdgeSource = Static<typeof OrchestrationEdgeSourceSchema>;

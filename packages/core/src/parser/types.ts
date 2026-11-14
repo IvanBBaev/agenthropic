@@ -60,6 +60,15 @@ export interface ParsedAgent {
 export const LEGACY_EXPLORE_EDGE_SOURCE = 'legacy_explore' satisfies OrchestrationEdgeSource;
 
 /**
+ * The edge source for a child joined through the user turn its first record
+ * names (`promptId`) - the last resort for a forked skill that left no spawn
+ * anchor at all (parser-spec section 4.1). An inference, so it is never filed
+ * as `tool_use`; `satisfies` pins it to the shared union like the constant
+ * above.
+ */
+export const PROMPT_ID_EDGE_SOURCE = 'prompt_id' satisfies OrchestrationEdgeSource;
+
+/**
  * Everything a parsed edge's `source` can be. A direct alias of the shared
  * union (which carries the four modern structural literals AND
  * `legacy_explore`), kept as the parser-side name so read-side code does not
@@ -81,8 +90,9 @@ export interface ParsedEdge {
   source: ParsedEdgeSource;
   /**
    * The structural anchor id when the resolving path carried one; `null` for
-   * directory joins and for `legacy_explore` joins (whose join key is the raw
-   * child hex, not a tool-use id).
+   * directory joins, for `legacy_explore` joins (whose join key is the raw
+   * child hex, not a tool-use id) and for `prompt_id` joins (whose join key is
+   * a user-turn id).
    */
   toolUseId: string | null;
 }

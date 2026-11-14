@@ -179,6 +179,7 @@ describe('graph schemas', () => {
       'task_notification',
       'queue_operation',
       'legacy_explore',
+      'prompt_id',
     ]) {
       expect(Value.Check(OrchestrationEdgeDtoSchema, { ...edge, source })).toBe(true);
     }
