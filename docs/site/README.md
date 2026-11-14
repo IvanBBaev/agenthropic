@@ -1,109 +1,99 @@
-# agenthropic — documentation site (content root)
+# agenthropic documentation
 
-Tool-agnostic Markdown source for the public GitHub Pages docs site. The generator
-(VitePress / Docusaurus / MkDocs) is **deferred** — content here is plain CommonMark so
-it can be authored and reviewed before the generator is chosen (see
-[`../DOCS-PLAN.md`](../DOCS-PLAN.md) `DOC-P1`). Assembly (nav, theme, publish) happens
-later without touching page content.
+agenthropic is a self-hosted, local-first dashboard for Claude Code agent and subagent
+activity. It shows the persisted subagent DAG and the dollar cost of each agent, computed
+from token counts in the JSONL transcripts under `~/.claude/projects`.
+[What is agenthropic](guide/what-is-agenthropic.md) explains the idea, and
+[Running agenthropic](guide/running.md) gets it running.
 
-> **The app binds `127.0.0.1` only. These docs are the sole public surface.** Nothing here
-> may instruct a reader to bind `0.0.0.0`, expose the port, or add a spawner.
+> **The app binds `127.0.0.1` only. These docs are its only public surface.** No page here
+> may tell a reader to bind `0.0.0.0`, expose the port, or add a subprocess spawner.
 
-> **Update — 2026-07 (as built).** This corpus was written **before any application code
-> existed**. Implementation began **2026-07-11** (by explicit owner override of the CD-8
-> no-code-before-Phase-0 gate), so pages that describe agenthropic as "pre-code" or
-> "bootstrap phase" are design history, not current truth. What runs today: the
-> loopback-bound, token-gated Fastify server; the SQLite/WAL substrate with twenty-one
-> migrations and a daily backup timer; JSONL corpus ingest with replay-on-startup and
-> tail-follow polling that re-reads only new bytes; the persisted subagent DAG; the cost
-> engine (compaction repricing + delegation savings); the hook receiver and its installer;
-> the status watchdog that ages an unobserved agent to `unknown`; the SSE realtime hub; the
-> read API; and all four dashboard views (live status, session tree, global DAG,
-> cost/Sankey) plus a per-session cost-analysis panel. Retention is **signed and wired as
-> of 2026-09-10** — `events` rows older than 90 days and backup files older than 30 days
-> (never below the newest 7) are pruned after each successful daily backup; `token_usage`
-> is never pruned in v1.0, by decision.
->
-> Test figures, re-measured 2026-09-18 on the working tree: **131 test files / 2428 tests**,
-> with **100% statements, branches, functions and lines** enforced in **all five** packages —
-> *(re-measured again 2026-09-23: **140 test files / 2621 tests**; and 2026-09-26: **167 test files / 3060 tests**; 2026-10-08: **180 test files / 3398 tests**; 2026-10-10: **180 test files / 3438 tests**; 2026-10-22: **184 test files / 3487 tests**; 2026-10-23: **185 test files / 3519 tests**; 2026-10-24: **195 test files / 3736 tests**; 2026-10-28: **195 test files / 3747 tests**, same 100% on all four axes in
-> all five packages - a dated measurement, not a constant)* —
-> `packages/test-fixtures` is no longer an exclusion, it is inside the gate. Two things that
-> figure does not mean: the thresholds block a *contributor's* merge but not the sole
-> maintainer's push (branch protection on `main` requires the `ci` check as of 2026-08-25,
-> with `enforce_admins` deliberately off), and coverage of the code is not accuracy of the
-> output — the
-> hierarchy-accuracy exit gate still reports **NOT CERTIFIED at n = 0** because no session
-> has been hand-labeled.
->
-> Three things are **not** true of the running system, and every affected page below now
-> says so: there are only **four real hooks** (`UserPromptSubmit`, `Stop`, `SubagentStop`,
-> `PreCompact`) rather than twelve, and `SubagentStart` does not exist; there is **no
-> separate Normalizer→Projection pipeline** — JSONL parses straight into the projections in
-> one transaction per session, and `events_raw` holds hook events only; and **v2.0 alerting
-> (Telegram) is not started and may never start** — it is entered only via KC-5, and its
-> operator-alerts API and UI (WP-A8/A9) were cut outright.
->
-> Two honesty caveats stand across the whole corpus: the Phase-0 spike numbers remain
-> **PROVISIONAL** until ratified against a hand-labeled corpus, and the v1.0 "<30s to
-> understand a session" usability claim is **unmeasured** — nobody has ever timed it. Kill
-> checkpoints **KC-0 and KC-1 both passed unmet** — work continues by explicit owner
-> override, not because the gates were satisfied. See [`guide/roadmap.md`](guide/roadmap.md)
-> for the full checkpoint record.
->
-> Amendment convention (how pages are corrected without erasing the design record):
-> [`STYLE-GUIDE.md`](STYLE-GUIDE.md) § "As-built amendments". This block is the single
-> amendment blockquote that convention allows; its contents are refreshed in place as the
-> tree moves, most recently on **2026-09-19**.
+## Where things stand
 
-> **On the generator.** Still deferred (`DOC-P1` / ADR-0013) — but the corpus **is wired to
-> publish**: `.github/workflows/pages.yml` renders it with the stock GitHub Pages Jekyll
-> builder, adding zero dependencies. Its source root is `docs/`, not `docs/site/`, because
-> the site tree cross-links heavily into `../analysis/` and `../due-diligence/`. **Pages was
-> enabled on 2026-08-25** and the site is live at
-> <https://ivanbbaev.github.io/agenthropic/>. Before that, every run of the workflow failed
-> at the Configure Pages step, and it could not be automated away: the workflow does pass
-> `enablement: true`, but a workflow's `GITHUB_TOKEN` may only deploy to a Pages site that
-> already exists — creating one needs repository-administration rights the token
-> deliberately never has. Two runs proved it with `Create Pages site failed. Error:
-> Resource not accessible by integration`. Failing loudly there was the intended behaviour;
-> a job that "succeeded" while deploying nowhere would have been worse. The same corpus
-> remains readable in the repository.
+agenthropic is **pre-1.0**. It has no tag and no published package, and v1.0 is planned
+for 2026-12-01. The repository's [`RELEASE.md`](https://github.com/IvanBBaev/agenthropic/blob/main/RELEASE.md) lists what still has to
+pass, and [`CHANGELOG.md`](https://github.com/IvanBBaev/agenthropic/blob/main/CHANGELOG.md) lists what changed.
+
+What runs today:
+
+- the loopback-only, token-gated server;
+- SQLite in WAL mode, with daily backups and a verified restore;
+- JSONL replay and tail-follow ingest;
+- the persisted subagent DAG;
+- the cost engine, with dated per-model pricing, compaction repricing, delegation savings
+  and an operator pricing CLI;
+- four lifecycle hooks (`UserPromptSubmit`, `Stop`, `SubagentStop`, `PreCompact`) and
+  their installer;
+- the SSE live stream;
+- the read API;
+- the dashboard: live status, session tree, global DAG, cost flow.
+
+Retention runs under the signed v1.0 policy. Event rows expire after 90 days and backups
+after 30 days, always keeping the newest 7. `token_usage` is never pruned.
+
+An **opt-in alerting core** with a Telegram sink is in the tree. It is off unless
+`DASHBOARD_ALERTS_CONFIG` is set; see [Telegram alerts](usage/telegram.md). There is no
+alerts API or UI. Configuration is a JSON file.
+
+Caveats that apply to the whole corpus:
+
+- Phase-0 spike numbers are **PROVISIONAL**.
+- The hierarchy-accuracy gate reports **NOT CERTIFIED**, because no session has been
+  hand-labelled.
+- The "under 30 seconds to understand a session" goal has **never been timed**.
+- Kill checkpoints KC-0 and KC-1 passed unmet. Work continued by explicit owner override;
+  see [Roadmap](guide/roadmap.md).
+
+Test and migration counts are not repeated here. They change with every commit, and the
+CI log is the only place where they are always current.
+
+Many pages were written before any code existed. Where the build turned out differently,
+a page keeps its design text and carries an "as built" note on top of it. The note
+convention is in [`STYLE-GUIDE.md`](STYLE-GUIDE.md).
 
 ## Site map
 
-| Section | Page | File |
-|---|---|---|
-| Guide | What is agenthropic | [guide/what-is-agenthropic.md](guide/what-is-agenthropic.md) |
-| Guide | Running agenthropic | [guide/running.md](guide/running.md) |
-| Guide | The moat — why build | [guide/the-moat.md](guide/the-moat.md) |
-| Guide | Comparison vs the field | [guide/comparison.md](guide/comparison.md) |
-| Guide | Roadmap | [guide/roadmap.md](guide/roadmap.md) |
-| Guide | FAQ | [guide/faq.md](guide/faq.md) |
-| Architecture | Overview | [architecture/overview.md](architecture/overview.md) |
-| Architecture | Data model | [architecture/data-model.md](architecture/data-model.md) |
-| Architecture | Hook ingestion | [architecture/hooks.md](architecture/hooks.md) |
-| Architecture | Ingest & reconciliation | [architecture/ingest-reconciliation.md](architecture/ingest-reconciliation.md) |
-| Architecture | The DAG moat | [architecture/dag-moat.md](architecture/dag-moat.md) |
-| Architecture | Cost model | [architecture/cost-model.md](architecture/cost-model.md) |
-| Architecture | Glossary & reference | [architecture/glossary.md](architecture/glossary.md) |
-| Security | Security model | [security/model.md](security/model.md) |
-| Security | Threat model | [security/threat-model.md](security/threat-model.md) |
-| Security | Remote access | [security/remote-access.md](security/remote-access.md) |
-| Operations | Backup & restore | [operations/backup-restore.md](operations/backup-restore.md) |
-| Operations | Troubleshooting | [operations/troubleshooting.md](operations/troubleshooting.md) |
-| Contributing | Overview | [contributing/index.md](contributing/index.md) |
-| Contributing | Testing & quality | [contributing/testing.md](contributing/testing.md) |
-| Contributing | Licensing & provenance | [contributing/licensing.md](contributing/licensing.md) |
-| Contributing | Decisions (ADRs) | [contributing/decisions/README.md](contributing/decisions/README.md) |
-| Contributing | Governance | [contributing/governance.md](contributing/governance.md) |
-| Usage _(written pre-code; amended as-built)_ | Getting started | [usage/getting-started.md](usage/getting-started.md) |
-| Usage | Hooks installer | [usage/hooks-installer.md](usage/hooks-installer.md) |
-| Usage | Configuration | [usage/configuration.md](usage/configuration.md) |
-| Usage | Using the dashboard | [usage/dashboard.md](usage/dashboard.md) |
-| Usage | API reference | [usage/api.md](usage/api.md) |
-| Usage _(**not built** — v2.0, entered only via KC-5)_ | Telegram alerts | [usage/telegram.md](usage/telegram.md) |
+| Section      | Page                    | File                                                                                  |
+| ------------ | ----------------------- | ------------------------------------------------------------------------------------- |
+| Guide        | What is agenthropic     | [guide/what-is-agenthropic.md](guide/what-is-agenthropic.md)                          |
+| Guide        | Running agenthropic     | [guide/running.md](guide/running.md)                                                  |
+| Guide        | The moat — why build    | [guide/the-moat.md](guide/the-moat.md)                                                |
+| Guide        | Comparison vs the field | [guide/comparison.md](guide/comparison.md)                                            |
+| Guide        | Roadmap                 | [guide/roadmap.md](guide/roadmap.md)                                                  |
+| Guide        | FAQ                     | [guide/faq.md](guide/faq.md)                                                          |
+| Usage        | Getting started         | [usage/getting-started.md](usage/getting-started.md)                                  |
+| Usage        | Hooks installer         | [usage/hooks-installer.md](usage/hooks-installer.md)                                  |
+| Usage        | Configuration           | [usage/configuration.md](usage/configuration.md)                                      |
+| Usage        | Using the dashboard     | [usage/dashboard.md](usage/dashboard.md)                                              |
+| Usage        | API reference           | [usage/api.md](usage/api.md)                                                          |
+| Usage        | Telegram alerts (opt-in) | [usage/telegram.md](usage/telegram.md)                                              |
+| Architecture | Overview                | [architecture/overview.md](architecture/overview.md)                                  |
+| Architecture | Data model              | [architecture/data-model.md](architecture/data-model.md)                              |
+| Architecture | Hook ingestion          | [architecture/hooks.md](architecture/hooks.md)                                        |
+| Architecture | Ingest & reconciliation | [architecture/ingest-reconciliation.md](architecture/ingest-reconciliation.md)        |
+| Architecture | The DAG moat            | [architecture/dag-moat.md](architecture/dag-moat.md)                                  |
+| Architecture | Cost model              | [architecture/cost-model.md](architecture/cost-model.md)                              |
+| Architecture | Glossary & reference    | [architecture/glossary.md](architecture/glossary.md)                                  |
+| Security     | Security model          | [security/model.md](security/model.md)                                                |
+| Security     | Threat model            | [security/threat-model.md](security/threat-model.md)                                  |
+| Security     | Remote access           | [security/remote-access.md](security/remote-access.md)                                |
+| Operations   | Backup & restore        | [operations/backup-restore.md](operations/backup-restore.md)                          |
+| Operations   | Troubleshooting         | [operations/troubleshooting.md](operations/troubleshooting.md)                        |
+| Contributing | Overview                | [contributing/index.md](contributing/index.md)                                        |
+| Contributing | Testing & quality       | [contributing/testing.md](contributing/testing.md)                                    |
+| Contributing | Licensing & provenance  | [contributing/licensing.md](contributing/licensing.md)                                |
+| Contributing | Decisions (ADRs)        | [contributing/decisions/README.md](contributing/decisions/README.md)                  |
+| Contributing | Governance              | [contributing/governance.md](contributing/governance.md)                              |
 
-Authoring conventions: [`STYLE-GUIDE.md`](STYLE-GUIDE.md). Decomposition &
-per-page scope: [`../DOCS-PLAN.md`](../DOCS-PLAN.md). Design basis:
-`docs/ai/DESIGN.md` (internal, kept local-only — not published in this repo).
+## How this site is built
+
+This page and the rest of `docs/site/` are plain CommonMark.
+[`.github/workflows/pages.yml`](https://github.com/IvanBBaev/agenthropic/blob/main/.github/workflows/pages.yml) publishes them at
+<https://ivanbbaev.github.io/agenthropic/> with the stock GitHub Pages Jekyll builder,
+which adds no dependency to the repository. The workflow's source root is `docs/`, so
+links into `../analysis/` and `../due-diligence/` resolve on the site too. Choosing a
+dedicated generator (`DOC-P1`, ADR-0013) is deferred.
+
+Authoring conventions: [`STYLE-GUIDE.md`](STYLE-GUIDE.md). Per-page scope:
+[`../DOCS-PLAN.md`](../DOCS-PLAN.md).

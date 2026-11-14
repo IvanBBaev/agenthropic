@@ -481,6 +481,50 @@ milestone record, not a second copy._
   (web 860 · shared 94 · test-fixtures 139 · core 338 · server 1629) at 100% coverage,
   `gate:spawner`, `gate:licenses`. Pushed to `claude/fervent-maxwell-2hmdro`.
 
+### 2026-09-18 → 2026-10-27 · RELEASE.md command-block rehearsals (moved from RELEASE.md)
+- Moved here on 2026-11-14 (R22), when `RELEASE.md` was cut back to a checklist that
+  carries no counts. The record below is verbatim from its appendix:
+
+> Last rehearsal of this block on a non-release tree: **2026-09-18**, HEAD `39e565a` plus
+> the uncommitted working tree — every command above exited 0 (131 test files / 2428 tests,
+> 100% on all four axes in all five packages; the spawner allowlist held the policy file
+> only; 412 packages under the license gate with one documented exception), and the §2, §4
+> and §6 scriptable verifications passed. *(Partial re-run 2026-09-23 on the same HEAD with
+> a further-changed working tree - `pnpm -r test`, `gate:spawner` and `gate:licenses` only,
+> not the restore drill or the `gh api` checks: all three exited 0, at 140 test files / 2621
+> tests with the same 100% in all five packages, 282 files scanned by the spawner gate, and
+> 412 packages / 429 installed versions under the license gate with the same one documented
+> exception. That is a re-measurement, not a second rehearsal.)* *(Second rehearsal 2026-09-26 on
+> `af10c87` (branch `claude/fervent-maxwell-2hmdro`, clean tree): all seven CI commands plus
+> `gate:node` exited 0 at 167 test files / 3060 tests with 100% in all five packages; the spawner
+> gate scanned 313 files with only the policy file allowlisted; the license gate read 406 packages /
+> 428 installed versions, 405 allowlisted, 1 documented exception. §2's no-SSRF grep was empty and
+> the corpus write-symbol grep matched only the two in-file comments; §3 P0 4 files / 19 tests
+> green; §5 `backup.test.ts` 4/4, and the §5 live-drill command, run against a scratch database
+> migrated to schema 20 rather than the owner's, printed `restore drill OK` - which proves the
+> command, not the live drill. `apps/web/vitest.config.ts` is unchanged since `2f8d103` (exclude
+> list two entries, thresholds 100 ×4). Not re-checked: branch protection and Pages (no `gh` in
+> that session); CI's latest `main` run was `success` on `4b3cd2d`, and the branch commits have no
+> CI run because `ci.yml` fires on pushes to `main` and on pull requests only.)* *(Third rehearsal
+> 2026-10-08 on `2d85a71` plus the uncommitted working tree: all seven CI commands plus `gate:node`
+> exited 0 at 180 test files / 3398 tests with 100% in all five packages (`format:check` failed once on
+> one test file written in that session and passed after `prettier --write`); the spawner gate scanned
+> 333 files with only the policy file allowlisted and 97 server-process files checked for outbound
+> network calls; the license gate read 407 packages / 429 installed versions, 406 allowlisted, 1
+> documented exception. §2 greps as on 2026-09-26; §3 P0 4 files / 20 tests green; §5 `backup.test.ts`
+> 4/4. Not re-checked: the live drill, branch protection, Pages. Schema is 21 since 2026-10-01.)* *(Fourth rehearsal 2026-10-27 on
+> `7dcf795`, clean tree, Node 22.23.2: all seven CI commands plus `pnpm install --frozen-lockfile`
+> and `gate:node` exited 0 at 195 test files / 3736 tests (server 132 / 2013, web 27 / 1043, core
+> 21 / 364, test-fixtures 6 / 167, shared 9 / 149) with 100% in all five packages; the spawner gate
+> scanned 360 files with only the policy file allowlisted, 109 server-process files checked for
+> outbound network calls, and the Telegram `fetch` as the only outbound inline opt-out; the license
+> gate read 407 packages / 429 installed versions, 406 allowlisted, 1 documented exception. §2's
+> no-SSRF grep matched only `telegram-sink.ts` (the amended expectation) and the corpus write-symbol
+> grep only the two in-file comments; §3 P0 4 files green inside the server run; §5 `backup.test.ts`
+> green inside the same run. Schema is 23 since 2026-10-24. Not re-checked: the live drill, branch
+> protection, Pages, CI on `7dcf795` (not pushed).)* A rehearsal ticks no box: every box on this page
+> is ticked on the release commit only. The record is on the `TODO.md` Wave 4 row.
+
 ### Still open, and owned by Ivan — not by any agent
 - ~~**Everything above is UNCOMMITTED.**~~ **Closed 2026-07-30** — committed and pushed
   as `9b6c6b3` on Ivan's explicit instruction (198 files, +27 133 / −1 113). CI is

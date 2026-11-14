@@ -269,6 +269,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **README, docs landing page and release checklist rewritten (R22, OSS-3/4/6/8).** The README
+  leads with a five-line Quickstart, explains why hooks matter, and lists what agenthropic
+  refuses to report. The docs landing page describes the current tree instead of the pre-code
+  plan. `RELEASE.md` now keeps every box unticked until the release commit and states no
+  counts. It also gains steps for private vulnerability reporting, the docs-site truth pass,
+  the version bump, the CHANGELOG cut and `gh release create`. The rehearsal history moved to
+  `DONE.md`.
+
 - The default port is now 7341 instead of 4317. 4317 is the OpenTelemetry OTLP/gRPC port, so a
   local collector or Claude Code's own telemetry export would take it first. The server, the hooks
   installer, the Vite dev proxy and the docs move together. To upgrade an install that already
