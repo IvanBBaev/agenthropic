@@ -230,6 +230,13 @@ them. Test bodies live under `apps/server/test/p0/`.
       `WP-IN13`'s Done-when. The `enforce_admins: false` exemption means the release
       commit's own green run is what this box records — the rule cannot enforce it
       against the owner.
+- [ ] **Real-corpus contract suite green on the owner's machine (R17)** — run
+      `AGENTHROPIC_REAL_CORPUS=~/.claude/projects pnpm test:real` on the release commit,
+      with `AGENTHROPIC_REAL_CORPUS_CENSUS` pointing at the census file of the previous
+      release run. It replays the real corpus (CI only sees the synthetic one, D14(a)) and
+      asserts 0 failed sessions, P0-1 exact per message, 0 orphan subagents and an edge
+      census that has not regressed. Local-only by design; record the printed counts in the
+      release notes.
 - [ ] **[HUMAN-dependent] Hierarchy correctness ≥95%** vs. the labeled corpus
       (testing.md §4) — this bar is only meaningful once the §0 LABEL-ME box is done,
       because it is scored against Ivan's hand-labeled trees, not self-check.

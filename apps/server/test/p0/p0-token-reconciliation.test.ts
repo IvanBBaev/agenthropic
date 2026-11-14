@@ -34,27 +34,12 @@ import {
   openSeededDb,
   type DbBucket,
 } from './harness';
-
-type JsonRecord = Record<string, unknown>;
+import { asRecord, mergeUsagePartial, usageOfRawRecord, type RawUsagePartial } from './raw-usage';
 
 /** One deduped message as reconstructed by the test's own independent reader. */
-interface IndependentMessage {
+interface IndependentMessage extends RawUsagePartial {
   readonly sessionId: string;
   readonly messageId: string;
-  model: string;
-  /** Greatest output seen so far — the model-settling criterion (spec 5.2). */
-  settledOutput: number;
-  readonly buckets: Record<DbBucket, number>;
-}
-
-function asRecord(value: unknown): JsonRecord | null {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? (value as JsonRecord)
-    : null;
-}
-
-function asCount(value: unknown): number {
-  return typeof value === 'number' ? value : 0;
 }
 
 /** Every regular `*.jsonl` file under `root`, recursively. */
@@ -71,28 +56,6 @@ function listJsonlFiles(root: string): string[] {
   return files;
 }
 
-/**
- * Raw-field bucket mapping per parser-spec section 5.3 (NOT the production mapper).
- * NN2: a breakdown that covers only part of the flat cache-write total keeps its
- * split, and the uncovered remainder goes to the unsplit 5m bucket.
- */
-function bucketsOfRawUsage(usage: JsonRecord): Record<DbBucket, number> {
-  const cacheCreation = asRecord(usage['cache_creation']);
-  const flat = asCount(usage['cache_creation_input_tokens']);
-  const split5m = cacheCreation !== null ? asCount(cacheCreation['ephemeral_5m_input_tokens']) : 0;
-  const split1h = cacheCreation !== null ? asCount(cacheCreation['ephemeral_1h_input_tokens']) : 0;
-  return {
-    input: asCount(usage['input_tokens']),
-    output: asCount(usage['output_tokens']),
-    cache_read: asCount(usage['cache_read_input_tokens']),
-    cache_write_5m: cacheCreation !== null ? split5m + Math.max(0, flat - split5m - split1h) : flat,
-    cache_write_1h: split1h,
-  };
-}
-
-/** Per-bucket maxima apply to these; the two cache-write buckets move as one pair (C-4). */
-const MAX_BUCKETS: readonly DbBucket[] = ['input', 'output', 'cache_read'];
-
 /** The independent expected side: raw JSONL -> deduped messages, plus the raw line count. */
 function readCorpusIndependently(corpusRoot: string): {
   deduped: Map<string, IndependentMessage>;
@@ -107,52 +70,25 @@ function readCorpusIndependently(corpusRoot: string): {
         continue;
       }
       const record = asRecord(JSON.parse(line));
-      if (record === null || record['type'] !== 'assistant') {
-        continue;
-      }
-      const message = asRecord(record['message']);
-      const usage = message === null ? null : asRecord(message['usage']);
-      const messageId = message?.['id'];
-      if (message === null || usage === null || typeof messageId !== 'string') {
+      const usage = usageOfRawRecord(record);
+      if (usage === null) {
         continue; // spec 5.1: usage rows require BOTH message.usage and message.id
       }
       rawUsageLines += 1;
 
-      const sessionId = record['sessionId'];
+      const sessionId = record?.['sessionId'];
       expect(typeof sessionId).toBe('string'); // every fixture record carries it
-      const model = typeof message['model'] === 'string' ? message['model'] : '';
-      const buckets = bucketsOfRawUsage(usage);
 
-      const existing = deduped.get(messageId);
+      const existing = deduped.get(usage.messageId);
       if (existing === undefined) {
-        deduped.set(messageId, {
+        deduped.set(usage.messageId, {
           sessionId: sessionId as string,
-          messageId,
-          model,
-          settledOutput: buckets.output,
-          buckets,
+          messageId: usage.messageId,
+          ...usage.partial,
         });
         continue;
       }
-      // Spec 5.2: per-bucket MAXIMUM across partials, never a sum.
-      for (const bucket of MAX_BUCKETS) {
-        existing.buckets[bucket] = Math.max(existing.buckets[bucket], buckets[bucket]);
-      }
-      // C-4: the cache-write pair comes whole from the partial with the largest
-      // 5m+1h total (a tie goes to the later partial), so mixed flat/split
-      // shapes are never counted twice.
-      if (
-        buckets.cache_write_5m + buckets.cache_write_1h >=
-        existing.buckets.cache_write_5m + existing.buckets.cache_write_1h
-      ) {
-        existing.buckets.cache_write_5m = buckets.cache_write_5m;
-        existing.buckets.cache_write_1h = buckets.cache_write_1h;
-      }
-      // Spec 5.2: the message's model settles to the greatest-output row.
-      if (buckets.output > existing.settledOutput) {
-        existing.settledOutput = buckets.output;
-        existing.model = model;
-      }
+      mergeUsagePartial(existing, usage.partial);
     }
   }
   return { deduped, rawUsageLines };

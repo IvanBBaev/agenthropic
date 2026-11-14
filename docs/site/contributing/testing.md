@@ -223,6 +223,37 @@ full.
 > the same dispatch. The ≥95% hierarchy gate is unaffected — it is scored only against a
 > human-labelled real corpus and refuses a synthetic one (§3.1).
 
+## 2.1 As built: the opt-in real-corpus contract suite (R17, 2026-11-14)
+
+QA-2 asked for two things: an opt-in suite that runs the contracts against the owner's real
+`~/.claude/projects`, and two or three redacted golden fixtures committed from it. The second
+half is superseded by D14(a) above. No real or redacted session goes into the repository, so
+only the opt-in suite was built.
+
+```
+AGENTHROPIC_REAL_CORPUS=~/.claude/projects pnpm test:real
+```
+
+`AGENTHROPIC_REAL_CORPUS` is a list of corpus roots joined by the platform path delimiter, so
+the five spike captures under `spike/corpus/sessions/` can run as one corpus. The suite lives
+in `apps/server/test/real-corpus/`, which the default `vitest.config.ts` excludes. `pnpm test`
+and CI never see it, and it throws instead of skipping when the variable is missing. It
+ingests every root through the production `runCorpusIngest` into a throwaway database and
+asserts:
+
+| Contract | How |
+|---|---|
+| 0 failed sessions | Every failure is reported by session id and class (`SubstrateError`, `UsageConflictError`, ...), never by content |
+| P0-1 exact, per message and bucket | Each transcript the ingest reads passes through a tapping `CorpusFs`, and an independent reader (`test/p0/raw-usage.ts`, the same one the synthetic P0-1 uses) reads exactly those bytes. A live corpus that grows during a multi-minute ingest therefore cannot make the two sides disagree. Every `token_usage` cell must equal the reader's value, and every message the reader saw must be stored. |
+| Attribution | Every usage row's `agent_id` is a transcript that carried the message |
+| 0 orphans | Every subagent has a parent and an `orchestration_edges` row in its session (parser-spec: a parent is never fabricated) |
+| Census ratchet | With `AGENTHROPIC_REAL_CORPUS_CENSUS=<file>`, the share of subagents with an edge may not fall below the stored run. The absolute edge count is compared only when the corpus did not shrink, because Claude Code prunes old sessions. A green run rewrites the file. |
+
+The run prints one JSON block of counts: sessions, transcripts, usage messages, cross-session
+collisions (M-12), skipped files by reason, unpriced tokens and edges by source. It keeps no
+content. It is a release-time check on the owner's machine (`RELEASE.md`
+§3), not a CI gate.
+
 ## 3. Labeled ground truth: `expected/*.json` and the typed loader
 
 A corpus of real sessions is only useful to CI if there is a machine-checkable answer

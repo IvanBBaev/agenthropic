@@ -17,7 +17,8 @@
     "db:vacuum": "node ../../scripts/check-node-version.mjs && tsx bin/vacuum.ts",
     "pricing": "node ../../scripts/check-node-version.mjs && tsx bin/pricing.ts",
     "drill:restore": "node ../../scripts/check-node-version.mjs && tsx bin/restore-drill.ts",
-    "test": "node ../../scripts/check-node-version.mjs && vitest run --coverage"
+    "test": "node ../../scripts/check-node-version.mjs && vitest run --coverage",
+    "test:real": "node ../../scripts/check-node-version.mjs && vitest run --config vitest.real-corpus.config.ts"
   },
   "dependencies": {
     "@agenthropic/core": "workspace:*",

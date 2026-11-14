@@ -1,4 +1,4 @@
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 
 // Thresholds are set at the level this package actually holds rather than at
 // the workspace floor of 90: a 90% bar on a package sitting at ~100% licenses a
@@ -20,8 +20,13 @@ import { defineConfig } from 'vitest/config';
 // bound for the whole package beats a unit/integration projects split that
 // would sort ~100 of ~125 files into the slow bucket anyway. A real hang still
 // fails, just later. No retries: they would hide real races.
+//
+// `test/real-corpus/**` is the opt-in R17 contract suite over a REAL corpus. It
+// needs `AGENTHROPIC_REAL_CORPUS` and runs for minutes, so it has its own config
+// (vitest.real-corpus.config.ts, `pnpm test:real`) and never runs here.
 export default defineConfig({
   test: {
+    exclude: [...configDefaults.exclude, 'test/real-corpus/**'],
     testTimeout: 60_000,
     hookTimeout: 60_000,
     coverage: {

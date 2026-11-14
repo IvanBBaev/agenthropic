@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Opt-in real-corpus contract suite (R17, QA-2).** `AGENTHROPIC_REAL_CORPUS=~/.claude/projects
+  pnpm test:real` ingests a real Claude Code projects directory (one or more roots) into a
+  throwaway database and asserts the moat contracts on it: zero failed sessions, P0-1 exact
+  per message and bucket against an independent reader of the very bytes the ingest read,
+  every usage row attributed to the transcript that carried it, and no subagent without an
+  edge. An optional `AGENTHROPIC_REAL_CORPUS_CENSUS` file ratchets the edge census so
+  attribution can only improve between runs. It prints counts only, never content, and stays
+  out of `pnpm test` and CI.
+
 - **Operator pricing CLI with an audit trail (R15, DAT-4, owner decision D3).**
   `pnpm --filter @agenthropic/server pricing` lists the dated rate table (`list`), shows
   which stored tokens no rate covers and from which day (`unpriced`), writes dated rates

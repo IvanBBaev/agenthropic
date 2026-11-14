@@ -40,6 +40,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "node scripts/check-node-version.mjs && pnpm -r --workspace-concurrency=1 run test",
+    "test:real": "pnpm --filter @agenthropic/server run test:real",
     "gate:node": "node scripts/check-node-version.mjs",
     "gate:spawner": "node scripts/check-no-spawner.mjs",
     "gate:licenses": "node scripts/check-licenses.mjs"
