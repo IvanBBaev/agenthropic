@@ -297,8 +297,17 @@ the system at all (DESIGN §3; concept-analysis-v2 §5, Strengths).
 
 The fingerprint map lives in process memory, so a restart starts blank and every session
 counts as changed. That is correct, and on a small corpus it is also free — but a full cold
-replay of the whole corpus is **tens of seconds of boot-time work**, paid again on every
-restart, for sessions whose bytes have not moved in months.
+replay of the whole corpus is **about two minutes of boot-time work** today, paid again on
+every restart, for sessions whose bytes have not moved in months.
+
+> **Current figure — 2026-10-31 (R25).** A cold replay of the owner's real corpus took
+> **≈120.4 s** for **5.70 GiB across 362 sessions**, from database open to the
+> `corpus replay:` line. It is one sample on a heavily loaded machine, so it is an upper-side
+> reading, not a band. The startup replay runs in passes capped at 25 sessions and 32 MiB,
+> with an event-loop yield between passes, so this is total boot work, not one stall. See
+> [`real-corpus-boot-2026-10-31.md`](../../measurement/real-corpus-boot-2026-10-31.md).
+> Every figure below is **historical**: synthetic, or measured on the September corpus,
+> which has since grown about 4×.
 
 > **Correction and direct measurement — 2026-09-01.** This paragraph used to read: "on the
 > measured corpus (12.80 GiB across **1855 sessions**) a full cold replay projects to roughly
