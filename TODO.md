@@ -1166,7 +1166,7 @@ synthesis, not on this board._
   — done 2026-11-08: explicit `testTimeout`/`hookTimeout` in every `vitest.config.ts`
   (server 60 s, web 30 s, core/shared/test-fixtures 15 s). No projects split: ~100 of ~125
   server test files are integration, so the split would buy nothing (testing.md §6.2).
-- [ ] **R17** opt-in real-corpus contract suite [QA-2]
+- [x] **R17** opt-in real-corpus contract suite [QA-2] _(done 2026-11-14 (`ff4468c`): `AGENTHROPIC_REAL_CORPUS=<roots> pnpm test:real` — 0 failed sessions, P0-1 exact per message/bucket against an independent reader tapped onto the ingest's own reads, usage attribution, 0 orphans, optional edge-census ratchet file; counts-only output, out of `pnpm test`/CI; green on the five spike roots (224/224 subagents edged); the committed redacted-fixtures half is superseded by D14(a))_
 - [x] **R18** CSP, `frame-ancestors`, XFO, Referrer-Policy; Host allowlist [SEC-3, SEC-4] _(done 2026-11-08: root `onSend` header set (SSE head too) + `onRequest` Host allowlist → 421, hostname-only, `allowedOrigins` hostnames admitted; `isAllowedHost` in shared; security model rule 10)_
 - [x] **R19** pragmas, periodic checkpoint, vacuum policy [DAT-16, OPS-7, OPS-19] _(done 2026-11-08: `synchronous=NORMAL` + `busy_timeout=5000` on every connection; end-of-cycle `wal_checkpoint(TRUNCATE)`; offline `db:vacuum` command with a kept pre-vacuum backup; no automatic VACUUM by design)_
 - [x] **R20** replay yields; hook receiver stays responsive [OPS-8] _(done 2026-11-08: replay passes capped at 32 MiB as well as 25 sessions (an oversized session is read alone); a 10 ms timer window before every pass instead of one `setImmediate` turn; an e2e test pins that a hook POST sent mid-replay is answered 202 before the next pass and stored)_
