@@ -525,6 +525,28 @@ milestone record, not a second copy._
 > protection, Pages, CI on `7dcf795` (not pushed).)* A rehearsal ticks no box: every box on this page
 > is ticked on the release commit only. The record is on the `TODO.md` Wave 4 row.
 
+- **Fifth rehearsal — 2026-11-14, on `0f6f3fc` (`main`), clean tree, Node 22.23.2.** Recorded
+  here directly, not in `RELEASE.md`. It ran on a heavily loaded machine (load average about 246).
+  - `pnpm install --frozen-lockfile`, all seven CI commands and `gate:node` exited 0.
+  - Tests: 210 files / 4119 tests (server 146 / 2266, web 27 / 1099, core 22 / 416,
+    test-fixtures 6 / 167, shared 9 / 171), with 100% on all four axes in all five packages.
+  - The spawner gate scanned 395 files with one allowlisted file, 6 inline-exempt lines and
+    118 server-process files checked for outbound calls. The Telegram `fetch` at
+    `telegram-sink.ts:97` is the only outbound opt-out. The other exempt lines are
+    `check-licenses.mjs` (`pnpm licenses list`), the fixed-argv `tsx` measurement in
+    `apps/server/test/migrations-checksum-stability.test.ts` (test code, justified in its
+    header) and the `0.0.0.0` fixture in `packages/shared/test/security.test.ts`. Two markers
+    sit on comment lines and suppress nothing; the gate reports them as not fatal.
+  - The license gate read 407 packages / 429 installed versions: 406 allowlisted, 1 documented
+    exception (`caniuse-lite`, CC-BY-4.0).
+  - §2: the no-SSRF grep matched only `telegram-sink.ts` (the call and its header comment). The
+    corpus write-symbol grep matched only the in-file comments. §4: the
+    `controlGate|nirdiamant` grep was empty. §6: the leftovers grep matched only history marked
+    as such (`running.md:13`, `hooks-installer.md:550`).
+  - Not re-run: `test:real` (last run 2026-11-14 on R22: 1 orphan remains), the §5 live drill,
+    and the `gh api` checks (branch protection, Pages, LICENSE, PVR). CI on `0f6f3fc` was not
+    checked because it is not pushed.
+
 ### Still open, and owned by Ivan — not by any agent
 - ~~**Everything above is UNCOMMITTED.**~~ **Closed 2026-07-30** — committed and pushed
   as `9b6c6b3` on Ivan's explicit instruction (198 files, +27 133 / −1 113). CI is

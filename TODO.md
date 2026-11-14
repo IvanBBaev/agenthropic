@@ -1095,6 +1095,12 @@ exit and proof live in the plan. Dated one-word answers under D1…D8 are the si
     `getting-started.md`, `api.md`, `testing.md` got dated "Amended 2026-10-27"
     corrections. Not re-checked: live drill, branch protection, Pages, CI on `7dcf795`
     (not pushed). No box ticked. Row stays open.
+  - **R1 rehearsed again 2026-11-14** on clean `0f6f3fc`: install, all seven CI commands and
+    `gate:node` exited 0 (210 files / 4,119 tests, 100% in five packages); §2/§4/§6 greps as
+    expected. The same day the docs truth pass (`0f6f3fc`) added dated amendments to the
+    pages that still called the alerting core or `events_raw` unbuilt. Full record in
+    `DONE.md`. Not re-run: `test:real` (1 orphan remains), live drill, `gh api` checks.
+    No box ticked. Row stays open.
 - [ ] **Wave 5 · by 2026-12-01 (KC-4)** — release commit, `v1.0.0` tag, push (Ivan) ·
   post-tag CI/Pages/badges green, `DONE.md` closed, this board reduced to the KC-5 items
   (orchestrator). One week of buffer; the critical path is D1 → Wave 3's 14 days → R3.
