@@ -258,8 +258,10 @@ token via `token_ref` → launchd env / chmod-600 (never in SQLite, never to the
 browser)."
 
 - **The schema never has a column for the raw token.** The designed `webhook_targets`
-  table (Phase 5, not yet built — reproduced from
-  [the data model page](../architecture/data-model.md)) carries only a reference:
+  table (reproduced from [the data model page](../architecture/data-model.md)) carries
+  only a reference. *(As built — 2026-10-24: migration 23 (`alerts-core`) created it,
+  with `chat_id` and `max_per_minute` added, and a CHECK that `token_ref` is `env:NAME`
+  or `file:/abs/path`. It still has no column for the token.)*
 
   ```sql
   CREATE TABLE webhook_targets (
@@ -296,9 +298,15 @@ browser)."
   placeholder, never a real value:
 
   ```
-  # illustrative only — WP-A3's resolver is not yet built
+  # illustrative only — the design-era placeholder
   TELEGRAM_BOT_TOKEN_REF=<token-ref-name>
   ```
+
+  *(As built — 2026-10-24: `WP-A3`'s resolver is `apps/server/src/alerts/token-ref.ts`.
+  The reference is the config file's `"tokenRef": "env:<NAME>"` or
+  `"tokenRef": "file:/abs/path"`, as in [Set it up](#set-it-up). A `file:` secret must be
+  a regular file owned by the server's user with no group or other bits; a symlink is
+  rejected. The resolved value lives only in memory.)*
 
 See also [configuration](configuration.md) for how secrets fit into the broader config
 surface — that page is no longer a stub: it enumerates the environment variables the
@@ -315,8 +323,11 @@ restated as a release-blocking exit gate for Phase 5 in
 `docs/analysis/development-plan.md`: "a real error/stuck condition yields exactly one
 throttled notification."
 
-The designed `webhook_deliveries` table (Phase 5, not yet built) carries the columns
-that make this mechanical, not aspirational:
+The designed `webhook_deliveries` table carries the columns that make this mechanical,
+not aspirational. *(As built — 2026-10-24: migration 23 created both tables as designed,
+with `session_id` made `NOT NULL`, plus `UNIQUE` on `dedupe_key`, `UNIQUE (alert_event_id, target_id)`, a `json_valid`
+`payload` and a short `last_error` that never holds a URL or a token. There is no
+delivery-log view, because `WP-A9` was cut; the rows are read by the dispatcher only.)*
 
 ```sql
 CREATE TABLE alert_events (

@@ -595,7 +595,9 @@ marked _(planned)_ since no installer or receiver exists yet:
    only `agents` is fixed verbatim by the design basis): `id`,
    `idempotency_key` `UNIQUE`, `source IN ('hook','jsonl')`, `event_type`, `seq`,
    `payload`, `received_at`). The exact query surface (an admin CLI, a debug endpoint, or
-   a raw `sqlite3` check) is not designed yet — mark as _(planned)_.
+   a raw `sqlite3` check) is not designed yet — mark as _(planned)_. *(As built: `events_raw`
+   has existed since migration 1, holds hook deliveries only, and its key is the hook-only
+   `hook:sha256:` form; a raw `sqlite3` read of it is the check.)*
 5. **Confirm idempotency once the JSONL path also exists.** Once the transcript
    tail-follower ships alongside the hook receiver (both are Phase 2), the same fact
    arriving via both paths must still collapse to **one** `events_raw` row, not two — the

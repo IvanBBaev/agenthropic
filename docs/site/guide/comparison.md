@@ -25,6 +25,9 @@ this page (full grading rationale: [the moat §3](the-moat.md)).
 > (`agents` + `orchestration_edges`), dollar-cost attribution with delegation savings, and
 > SQLite/WAL persistence. **Telegram remains ❌ not built** — it is v2.0, entered only via
 > KC-5, may never start, and its operator-alerts API and UI were cut outright.
+> *(Amended 2026-11-14: the opt-in alerting core and its Telegram sink were built on
+> 2026-10-24 by an explicit owner override of KC-5's entry condition. They are off unless
+> `DASHBOARD_ALERTS_CONFIG` is set; the API and UI stay cut.)*
 > **Cross-machine remains ❌ not built** — only the `instance`/`host_id` key on
 > `orchestration_edges` exists, and no second host does. The security row was implemented
 > exactly as committed: loopback-only bind, mandatory `DASHBOARD_TOKEN` compared with

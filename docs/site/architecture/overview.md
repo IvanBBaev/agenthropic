@@ -25,7 +25,11 @@ restart, partial failure, and an unverified hook catalog.
 > stages. CD-1 is intact — hooks contribute **liveness only, never structure** — and
 > replay stays idempotent. Hook deliveries are additionally normalized into a small
 > `events` liveness timeline (identifiers only, same transaction, never the payload
-> body). The Telegram/webhook alert branch remains **post-1.0 and unbuilt**. Sections
+> body). The Telegram/webhook alert branch remains **post-1.0 and unbuilt**. *(Amended
+> 2026-11-14: the opt-in alerting core (`apps/server/src/alerts/`, migration 23) was built
+> on 2026-10-24 by an explicit owner override of KC-5's entry condition. It is off unless
+> `DASHBOARD_ALERTS_CONFIG` is set; the alerts API and UI stay cut — see
+> [Telegram alerts](../usage/telegram.md).)* Sections
 > below that describe the two-stage substrate design are the design history; per-section
 > updates mark what actually runs.
 
@@ -94,7 +98,10 @@ Reading the diagram left to right, one subagent turn produces (at minimum) this 
    subagent DAG and the cost/token Sankey view.
 7. **The webhook sink independently watches persisted state** for rule matches
    (`alert_rules`) and relays formatted payloads through the Telegram bot integration
-   (`@baev_bot_bot`) — not yet built. DESIGN §9's original sketch places this at Phase 2;
+   (`@baev_bot_bot`) — not yet built *(as built — 2026-10-24: the opt-in alerting core in
+   `apps/server/src/alerts/`, migration 23, by an explicit owner override of KC-5's entry
+   condition; off unless `DASHBOARD_ALERTS_CONFIG` is set, with the alerts API and UI
+   still cut — see [Telegram alerts](../usage/telegram.md))*. DESIGN §9's original sketch places this at Phase 2;
    the canonical, dependency-checked [roadmap](../guide/roadmap.md) resequences it to
    **Phase 5** once its real dependencies are accounted for — DESIGN §9's "Phase 2" is
    superseded, not current — and per the best-path decision
@@ -116,7 +123,8 @@ Reading the diagram left to right, one subagent turn produces (at minimum) this 
 > that number is **PROVISIONAL (LABEL-ME)**: it was chosen to feel live on one machine, not
 > derived from a measured load target. Hook POSTs land in `events_raw` (append-only,
 > idempotency-keyed, redacted first) plus one `events` liveness row. Step 7 (webhook sink /
-> Telegram) is unbuilt, post-1.0.
+> Telegram) is unbuilt, post-1.0. *(Amended 2026-11-14: built 2026-10-24 as the opt-in
+> alerting core, off unless `DASHBOARD_ALERTS_CONFIG` is set.)*
 
 ## Component responsibilities
 
@@ -137,7 +145,8 @@ Reading the diagram left to right, one subagent turn produces (at minimum) this 
 > single-transaction session writer — not a separate `events_raw`-fed stage; the
 > `hook-ingest` row is `POST /api/hooks/event` (auth-gated, accept-any-shape, 202); the
 > hook catalog is four real events, not twelve; and the webhook-sink / Telegram rows are
-> **unbuilt (post-1.0)**.
+> **unbuilt (post-1.0)**. *(Amended 2026-11-14: the webhook sink and Telegram rows now exist
+> as the opt-in alerting core, off by default; see step 7.)*
 
 ## Ports & adapters
 

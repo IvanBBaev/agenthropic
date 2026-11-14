@@ -227,7 +227,9 @@ idea is borrowed from and why forking was rejected, is on
 > rebuilds from JSONL alone after a simulated outage, with hooks proven liveness-only
 > (appending them leaves the DAG dump unchanged). **Telegram alerting is not built** —
 > it is v2.0, entered only via KC-5, and its operator-alerts API and UI were cut
-> outright. **Fleet aggregation is not built** either; only the schema key exists, and
+> outright. *(Amended 2026-11-14: the alerting core was built on 2026-10-24 by an owner
+> override of KC-5. It is off unless `DASHBOARD_ALERTS_CONFIG` is set; the API and UI
+> stay cut.)* **Fleet aggregation is not built** either; only the schema key exists, and
 > no second host does. One caveat on the survey itself: the six rivals and the baseline
 > were assessed by **reading their code and docs during due diligence** — none was
 > installed and run head-to-head, and the project's friction log was never opened, so
