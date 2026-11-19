@@ -280,6 +280,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`tsx` is pinned to an exact version, 4.23.0 (ARC-2).** Every stored migration checksum
+  was produced by the tsx/esbuild transform, so a printer change in a tsx bump would make
+  every existing database refuse to boot. `apps/server` and `packages/test-fixtures` used a
+  caret range (`^4.20.0`) held only by the lockfile. `apps/server/test/tsx-pin.test.ts`
+  fails on a range, on consumers that disagree, or on an installed copy that is not the pin.
+  Residual: tsx's own esbuild range is held by the lockfile (`--frozen-lockfile` in CI), with
+  the checksum stability test as the backstop.
 - **The real-corpus contract tolerates only provably unanchorable orphans.** The R17 suite
   used to require 0 orphan subagents, which a corpus holding one honest orphan can never
   satisfy without inventing a parent. It now requires 0 *anchorable* orphans. A parentless

@@ -424,6 +424,12 @@ remaining differences away is not an escape either: re-printing literals into so
 canonical form changes the bytes `tsx` produces *today*, which invalidates every checksum
 already sitting in an operator's database.
 
+For the same reason `tsx` is pinned to one exact version in `apps/server` and
+`packages/test-fixtures`, and `apps/server/test/tsx-pin.test.ts` fails if either goes back to a
+range or the installed copy differs from the pin. Bumping it is a deliberate change: install the
+new version, then let `migrations-checksum-stability.test.ts` say whether any checksum moved
+before merging. *(Amended 2026-11-19 — ARC-2.)*
+
 So the constraint is not stylistic and not a performance opinion: a build step here is a
 data-migration incident. The SPA is built (it has to be — a browser cannot run TSX); the
 server is not.
