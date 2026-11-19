@@ -448,3 +448,116 @@ describe('censusFormat - usage the pricing table has no rate for (DAT-8, DAT-9)'
     });
   });
 });
+
+/**
+ * QA-9 mutation follow-up (QA-9a): each case below pins a behaviour that a
+ * surviving mutant changed while every earlier test stayed green.
+ */
+describe('censusFormat - mutation-pinned edges (QA-9a)', () => {
+  function versioned(records: unknown[]) {
+    return censusFormat([{ isTranscript: true, records }], 0);
+  }
+
+  it('knows every record type and usage key of the corpus scan, listed literally', () => {
+    // A literal list, not the exported set: a test that iterates the set itself
+    // cannot notice an entry blanked out of it.
+    const types = [
+      'agent-name',
+      'ai-title',
+      'api-request',
+      'api-request-blob',
+      'api-request-shape',
+      'artifact-autoreact-ledger',
+      'artifact-comment-monitor',
+      'assistant',
+      'atis-latch',
+      'attachment',
+      'bridge-session',
+      'cost-state',
+      'custom-title',
+      'file-history-delta',
+      'file-history-snapshot',
+      'fork-context-ref',
+      'frame-link',
+      'last-prompt',
+      'launched',
+      'mode',
+      'pr-link',
+      'progress',
+      'queue-operation',
+      'result',
+      'started',
+      'system',
+      'tools-used',
+      'user',
+    ];
+    const usage = {
+      ...FULL_USAGE,
+      fallback_credit: 0,
+      inference_geo: 'global',
+      iterations: [],
+      output_tokens_details: {},
+      server_tool_use: { web_search_requests: 0 },
+      speed: 'standard',
+    };
+    const result = versioned([
+      ...types.map((type) => ({ type, version: '2.3.0' })),
+      { type: 'assistant', version: '2.3.0', message: { model: 'claude-opus-4-5', usage } },
+    ]);
+    expect(result.byVersion).toEqual({});
+    expect([...KNOWN_RECORD_TYPES].sort()).toEqual(types);
+  });
+
+  it('uses the documented sentinel keys', () => {
+    expect(MISSING_RECORD_TYPE).toBe('(missing)');
+    expect(UNVERSIONED).toBe('(none)');
+  });
+
+  it('serializes an object value as JSON and keeps a value of exactly the limit whole', () => {
+    const result = versioned([
+      {
+        type: 'assistant',
+        version: '2.3.0',
+        message: { model: 'claude-opus-4-5', usage: { ...FULL_USAGE, speed: { a: 1 } } },
+      },
+      {
+        type: 'assistant',
+        version: '2.3.0',
+        message: {
+          model: 'claude-opus-4-5',
+          usage: { ...FULL_USAGE, service_tier: 'y'.repeat(64) },
+        },
+      },
+    ]);
+    expect(result.byVersion['2.3.0']?.unpricedUsage).toEqual({
+      [`service_tier=${'y'.repeat(64)}`]: 1,
+      'speed={"a":1}': 1,
+    });
+  });
+
+  it('treats an empty or non-string version as no version at all', () => {
+    const result = versioned([
+      { type: 'user', version: '2.1.80' },
+      { type: 'novel', version: '' },
+      { type: 'novel', version: 7 },
+    ]);
+    expect(Object.keys(result.byVersion)).toEqual(['2.1.80']);
+    expect(result.byVersion['2.1.80']?.unknownRecordTypes).toEqual({ novel: 2 });
+  });
+
+  it('attributes pre-version drift to the first version, not the last one', () => {
+    const result = versioned([
+      { type: 'novel' },
+      { type: 'user', version: '2.1.80' },
+      { type: 'user', version: '2.1.81' },
+    ]);
+    expect(Object.keys(result.byVersion)).toEqual(['2.1.80']);
+  });
+
+  it('reads usage only on assistant records', () => {
+    const result = versioned([
+      { type: 'user', version: '2.3.0', message: { usage: { brand_new_bucket: 5 } } },
+    ]);
+    expect(result.byVersion).toEqual({});
+  });
+});

@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Mutation follow-up (QA-9a): core tests now kill the format-census and filename-pattern
+  survivors from the QA-9 baseline — the literal known record types and usage keys, the
+  sentinel keys, the 64-character value cut, object values, empty and non-string
+  versions, first-version attribution, assistant-only usage, the anchored `agent-<hex>`
+  patterns and the `wf_` workflow-directory prefix.
 - Mutation baseline (QA-9): a one-off Stryker run over `packages/core` (parser, usage
   dedupe, cost) and the server read models, recorded in
   `docs/measurement/mutation-2026-11-19.md` — core 89.74 %, server 92.13 %, with the

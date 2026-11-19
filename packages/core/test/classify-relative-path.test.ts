@@ -46,6 +46,10 @@ describe('classifyRelativePath (WP-IN5 allowlist contract)', () => {
     ['subagents/agent-ABCD.meta.json', 'other'],
     ['subagents/agent-3fa9c2d1.meta.json.bak', 'other'],
     ['meta.json', 'other'],
+    // QA-9a: both filename patterns are anchored at the start and the end
+    ['subagents/xagent-3fa9c2d1.jsonl', 'other'],
+    ['subagents/agent-3fa9c2d1.jsonl.bak', 'other'],
+    ['subagents/xagent-3fa9c2d1.meta.json', 'other'],
     // a project-root companion that is not a `<uuid>.jsonl` main is still 'main'
     // ONLY structurally (no slash + .jsonl); a non-jsonl root file is 'other'
     ['README.md', 'other'],

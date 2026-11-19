@@ -190,3 +190,61 @@ describe('parseSession — self-parent guard (C-6)', () => {
     ]);
   });
 });
+
+describe('parseSession - workflow directory naming (QA-9a)', () => {
+  it('joins by directory only under a segment that starts with wf_', () => {
+    // `my_wf_x` merely contains `wf_`: it is not a workflow directory, so the
+    // agent below must not be joined to the agent that dispatched `my_wf_x`.
+    const SESSION = 'c6c60009-1111-4222-8333-444444444444';
+    const DISPATCHER = 'd1d1d1d1';
+    const HEX = 'e2e2e2e2';
+    const result = parseSession(
+      substrate([
+        mainTranscript(SESSION),
+        {
+          path: `subagents/agent-${DISPATCHER}.jsonl`,
+          lines: [
+            jline({
+              sessionId: SESSION,
+              agentId: DISPATCHER,
+              type: 'assistant',
+              timestamp: '2026-09-01T00:00:01.000Z',
+              message: {
+                id: 'm_qa9a_wf',
+                model: 'm',
+                usage: { input_tokens: 1 },
+                content: [
+                  {
+                    type: 'tool_use',
+                    id: 'toolu_qa9a_wf',
+                    name: 'Workflow',
+                    input: { workflow_id: 'my_wf_x', prompt: 'p' },
+                  },
+                ],
+              },
+            }),
+          ],
+        },
+        {
+          path: `subagents/workflows/my_wf_x/agent-${HEX}.jsonl`,
+          lines: [
+            jline({
+              sessionId: SESSION,
+              agentId: HEX,
+              type: 'user',
+              timestamp: '2026-09-01T00:00:02.000Z',
+              message: { role: 'user', content: 'go' },
+            }),
+          ],
+        },
+      ]),
+    );
+
+    const child = result.agents.find((a) => a.id === HEX);
+    expect(child).toBeDefined();
+    expect(child?.parentAgentId).not.toBe(DISPATCHER);
+    expect(result.edges.filter((e) => e.childAgentId === HEX && e.source === 'directory')).toEqual(
+      [],
+    );
+  });
+});
