@@ -844,6 +844,33 @@ binary fixtures, and a new migration adds its prefix to the matrix by itself. Be
 kept, the test caught two deliberate bugs: a misdated operator rate (prefixes 7–13 failed)
 and a misconverted offset timestamp (prefixes 6–14).
 
+## 6.8 As built: the real-browser smoke (QA-7, 2026-11-19)
+
+Every other suite stops short of a browser. The web tests render components in jsdom, and
+the server tests speak HTTP to `inject()`. None of them loads the shipped bundle under the
+server's CSP, so a broken build, a blocked script or a dead SSE stream would pass them all.
+`apps/web/e2e/smoke.e2e.ts` is one Playwright test that closes that gap:
+
+- `e2e/playwright.config.ts` creates a mkdtemp root (mode 0700) and a random token, then
+  starts `e2e/serve-fixtures.ts` under tsx, the executor `pnpm start` uses. That script
+  lays the synthetic fixture corpus out under the root, prices the two synthetic models at
+  1 USD/Mtok and calls the server's public `start()` on `127.0.0.1:7391` with the built
+  SPA. It never reads `~/.claude/projects`.
+- Headless Chromium signs in with the token and visits the router's four views plus the
+  session-detail route. It checks a known session (`depth-2-sync`) and its dollar figure
+  on Live and Sessions, the two edges of that session's agent tree, a global DAG with as
+  many drawn edges as its summary announces, and an all-time dollar figure on Cost.
+- It then writes a new session into the corpus. An EventSource opened in the page must
+  receive that session's `session-ingested` frame, and the Live board must show the new
+  card and its dollars with no navigation. The Live board refreshes only on SSE frames.
+- Any console error or warning fails the test, CSP violations included.
+
+Run it with `pnpm --filter @agenthropic/web e2e`, which builds the SPA first. It is a local
+pre-tag step in [`RELEASE.md`](../../../RELEASE.md) §6, outside `pnpm test` and outside CI
+for now. Spec files use the `.e2e.ts` suffix, so Vitest's default include never collects
+them. The Playwright and tsx processes run from `node_modules`; the spec itself spawns
+nothing, so the no-spawner gate is unchanged.
+
 ## 7. Where this lands on the roadmap
 
 | Phase | Wave(s) | Testing-relevant exit gate |

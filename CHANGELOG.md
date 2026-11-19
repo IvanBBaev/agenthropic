@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Real-browser smoke (QA-7): `pnpm --filter @agenthropic/web e2e` boots the real server on
+  the synthetic fixture corpus with the built SPA. Headless Chromium checks the five routes
+  and one SSE update that reaches the page without a reload. It is a local pre-tag step in
+  `RELEASE.md` §6.
 - Release hook step (QA-12): `RELEASE.md` §6 has the owner fire the installed hook once from
   real Claude Code and confirm the delivery on `/api/health`, because the test suite replays
   the generated curl command with `fetch` and never runs it.

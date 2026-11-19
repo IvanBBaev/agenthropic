@@ -1,0 +1,12 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "../dist/.e2e-types",
+    "tsBuildInfoFile": "../dist/.e2e-types/.tsbuildinfo",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["node"]
+  },
+  "include": ["."],
+  "references": [{ "path": "../../server" }, { "path": "../../../packages/test-fixtures" }]
+}

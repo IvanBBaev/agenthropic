@@ -91,6 +91,15 @@ importers:
         specifier: ^19.2.4
         version: 19.2.7(react@19.2.7)
     devDependencies:
+      '@agenthropic/server':
+        specifier: workspace:*
+        version: link:../server
+      '@agenthropic/test-fixtures':
+        specifier: workspace:*
+        version: link:../../packages/test-fixtures
+      '@playwright/test':
+        specifier: ^1.65.1
+        version: 1.65.1
       '@sinclair/typebox':
         specifier: ^0.34.51
         version: 0.34.51
@@ -103,6 +112,9 @@ importers:
       '@types/d3-sankey':
         specifier: ^0.12.5
         version: 0.12.5
+      '@types/node':
+        specifier: ^22.20.1
+        version: 22.20.1
       '@types/react':
         specifier: ^19.2.13
         version: 19.2.17
@@ -115,6 +127,9 @@ importers:
       jsdom:
         specifier: ^28.0.0
         version: 28.1.0
+      tsx:
+        specifier: 4.23.0
+        version: 4.23.0
       vite:
         specifier: ^7.3.4
         version: 7.3.6(@types/node@22.20.1)(tsx@4.23.0)
@@ -582,6 +597,11 @@ packages:
 
   '@pinojs/redact@0.4.0':
     resolution: {integrity: sha512-k2ENnmBugE/rzQfEcdWHcCY+/FM3VLzH9cYEsbdsoqrvzAKRhUZeRNhAZvB8OitQJ1TBed3yqWtdjzS6wJKBwg==}
+
+  '@playwright/test@1.65.1':
+    resolution: {integrity: sha512-y+NCIRm2LvY4slUVWvGh1nujJ8RF/hEisIsq2mtUPgdQC4L701bq5hZGMhrpeXjACvwvO9tj5dJqhvM6TP9lbw==}
+    engines: {node: '>=20'}
+    hasBin: true
 
   '@rolldown/pluginutils@1.0.0-rc.3':
     resolution: {integrity: sha512-eybk3TjzzzV97Dlj5c+XrBFW57eTNhzod66y9HrBlzJ6NsCrWCp/2kaPS3K9wJmurBC0Tdw4yPjXKZqlznim3Q==}
@@ -1783,6 +1803,16 @@ packages:
     resolution: {integrity: sha512-r34yH/GlQpKZbU1BvFFqOjhISRo1MNx1tWYsYvmj6KIRHSPMT2+yHOEb1SG6NMvRoHRF0a07kCOox/9yakl1vg==}
     hasBin: true
 
+  playwright-core@1.65.1:
+    resolution: {integrity: sha512-hqPpz7blSMPxWVdoeE1yiBSzXsKiVOd2k+kjCvmUywD2GPO2Dd9HfcWnq9NN0GHbNZDFgZ9JfBFr+X5/BLo0qw==}
+    engines: {node: '>=20'}
+    hasBin: true
+
+  playwright@1.65.1:
+    resolution: {integrity: sha512-vJ1FuoOrNwOKHUIVEvSt3jT1L+wjjDpwhwIstKtfvTh8XIG4FG4bIFuvNdMxi81LGfAhUgUZleVFaOLY4RIUUw==}
+    engines: {node: '>=20'}
+    hasBin: true
+
   postcss@8.5.16:
     resolution: {integrity: sha512-vuwillviilfKZsg0VGj5R/YwwcHx4SLsIOI/7K6mQkWx+l5cUHTjj5g0AasTBcyXsbfTgrwsUNmVUb5xVwyPwg==}
     engines: {node: ^10 || ^12 || >=14}
@@ -2557,6 +2587,10 @@ snapshots:
       '@jridgewell/sourcemap-codec': 1.5.5
 
   '@pinojs/redact@0.4.0': {}
+
+  '@playwright/test@1.65.1':
+    dependencies:
+      playwright: 1.65.1
 
   '@rolldown/pluginutils@1.0.0-rc.3': {}
 
@@ -3825,6 +3859,12 @@ snapshots:
       safe-stable-stringify: 2.5.0
       sonic-boom: 4.2.1
       thread-stream: 4.2.0
+
+  playwright-core@1.65.1: {}
+
+  playwright@1.65.1:
+    dependencies:
+      playwright-core: 1.65.1
 
   postcss@8.5.16:
     dependencies:

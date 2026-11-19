@@ -306,6 +306,19 @@ scan."**
       [`real-corpus-boot-2026-10-31.md`](docs/measurement/real-corpus-boot-2026-10-31.md).
       This is not a CI job, because the CI corpus uses deliberately unpriced synthetic
       models.
+- [ ] **Real-browser smoke on the release commit (QA-7).** Run
+      `pnpm --filter @agenthropic/web e2e`. It builds the SPA and boots the real server
+      under tsx on the synthetic fixture corpus, in a throwaway temp directory on
+      `127.0.0.1:7391`. Headless Chromium then signs in and checks five routes: `#/live`,
+      `#/sessions`, `#/sessions/<id>`, `#/dag` and `#/cost`.
+      - The pass: every route shows a known fixture session, a dollar figure or a DAG
+        edge. One new session is written to the corpus mid-test, and its
+        `session-ingested` frame reaches the page over SSE and adds its card without a
+        reload. The console stays free of errors and warnings, including CSP violations.
+      - It is the only test that runs the shipped bundle under the server's CSP. jsdom
+        and the server suites cannot see a broken bundle, a CSP block or a dead stream.
+      - It is local-only for now (not in `pnpm test`, not in CI). A first run needs the
+        browser: `pnpm --filter @agenthropic/web exec playwright install chromium`.
 - [ ] **[HUMAN] The installed hook fires once from real Claude Code (QA-12).** The test
       suite never executes the generated hook command. The no-spawner gate bans
       subprocesses, so `hooks-end-to-end.test.ts` parses the curl string and replays it with
@@ -426,6 +439,7 @@ pnpm run gate:spawner
 pnpm run gate:licenses
 AGENTHROPIC_REAL_CORPUS=~/.claude/projects pnpm test:real   # owner's machine only
 pnpm --filter @agenthropic/server bench                     # synthetic corpus, real scale
+pnpm --filter @agenthropic/web e2e                          # real-browser smoke (QA-7)
 # then: §5 live restore drill, §6 pricing re-read + real-corpus boot [HUMAN],
 #       §0/§4/§6/§7 gh api verifications
 ```

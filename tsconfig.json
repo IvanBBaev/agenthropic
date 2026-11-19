@@ -5,6 +5,7 @@
     { "path": "packages/core" },
     { "path": "packages/test-fixtures" },
     { "path": "apps/server" },
-    { "path": "apps/web" }
+    { "path": "apps/web" },
+    { "path": "apps/web/e2e" }
   ]
 }
