@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Cost view split (UX-16): `CostView.tsx` is now the orchestrator - the three reads,
+  their state and the page order - and each section renders from its own module under
+  `apps/web/src/views/cost/` (totals and window tiles, delegation savings, cost flow,
+  breakdown tables, agent burners). No change to what the page shows.
 - Sessions view (UX-11): one selected session now drives both the agent tree and the
   opt-in cost analysis - the separate per-row "analyse" selection is gone - and the
   "Changed since" reader moved to the Live view.
