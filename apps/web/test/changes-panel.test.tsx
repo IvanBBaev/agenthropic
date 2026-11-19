@@ -14,7 +14,7 @@ import {
   changeKindText,
   previousUtcDay,
 } from '../src/views/ChangesPanel';
-import { SessionsView } from '../src/views/SessionsView';
+import { LiveView } from '../src/views/LiveView';
 import { createSseClient } from '../src/sse';
 import {
   changedSession,
@@ -415,7 +415,7 @@ describe('ChangesPanel', () => {
   });
 });
 
-describe('the Sessions view carries the changed-since list', () => {
+describe('the Live view carries the changed-since list (UX-11, moved from Sessions)', () => {
   it('renders it under its own heading and requests nothing from /api/changes on mount', async () => {
     MockEventSource.reset();
     vi.stubGlobal('EventSource', MockEventSource);
@@ -427,13 +427,13 @@ describe('the Sessions view carries the changed-since list', () => {
       ),
     );
     render(
-      <SessionsView
+      <LiveView
         token="secret-token"
         sse={createSseClient('secret-token')}
         onAuthRejected={onAuthRejected}
       />,
     );
-    await screen.findByRole('list', { name: 'session list' });
+    await screen.findByRole('list', { name: 'sessions' });
     expect(screen.getByRole('heading', { name: 'Changed since' })).toBeDefined();
     expect(changesCalls()).toHaveLength(0);
 

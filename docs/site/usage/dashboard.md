@@ -258,6 +258,15 @@ returns `timestamp unreadable` (`UNREADABLE_TIMESTAMP` in `apps/web/src/format.t
 `UNREADABLE_TOKENS` and `UNREADABLE_USD`), leaving `null` meaning exactly one thing: nothing
 was recorded.
 
+### "Changed since" — what moved after a given day
+
+*(UX-11, 2026-11-19: moved here from the Sessions view.)* Under the board sits the reader of
+`GET /api/changes`: pick a day and it lists the sessions with activity after it, with the
+window printed as the server served it. Nothing is requested until you submit a day — the
+endpoint has no default lower bound and the page does not invent one. It renders whatever
+state the board is in, because a board that failed to load says nothing about the delta
+endpoint.
+
 ## (b) Session-scoped subagent tree
 
 **Answers:** Q1 (the tree shape of "what is the subagent tree of this session").
@@ -363,6 +372,12 @@ existed when it was written:
   amendment there): `~ n unpriced` when positive, silence at a measured zero, and
   `unpriced: tokens unreadable` when the count arrives non-finite. A withdrawn clause here
   would say the unattributed dollars are the whole of it.
+- **One selected session drives the whole page** *(UX-11, 2026-11-19)*. Under the tree, the
+  same session offers **Analyse cost of session …** — the per-session cost analysis panel
+  described in §(d). It stays opt-in, because it re-reads transcripts off disk, and it
+  closes when you select another session, so the tree and the analysis never describe two
+  different sessions. (Until this change every row carried its own "analyse" button with a
+  selection separate from the tree's.)
 
 ## (c) Global, persistent, per-instance orchestration DAG
 

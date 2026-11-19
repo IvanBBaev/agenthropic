@@ -1,6 +1,8 @@
 /**
- * D11(a) (2026-09-30): the "changed since" list on the Sessions view - the
- * dashboard reader of `GET /api/changes` (WP-U11, daily question Q5). Text
+ * D11(a) (2026-09-30): the "changed since" list - the dashboard reader of
+ * `GET /api/changes` (WP-U11, daily question Q5). It sat on the Sessions view
+ * until UX-11 (2026-11-19) moved it to the Live view, beside the board that
+ * answers the neighbouring "what is happening now" question. Text
  * only, no new view and no new colour, in the same restraint as the D4
  * observed-outcomes list in the session tree.
  *

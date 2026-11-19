@@ -438,42 +438,70 @@ describe('SessionsView', () => {
   /**
    * M-9: cost analysability must not be limited to the sessions that rank in
    * the cost view's top-5. Like there, the analysis reprices transcripts off
-   * disk, so it stays opt-in per row - no request may leave before the user
-   * picks "analyse".
+   * disk, so it stays opt-in - no request may leave before the user asks.
+   *
+   * UX-11 (2026-11-19): it is asked for the SELECTED session, never for a
+   * second, separately chosen one, so the tree and the analysis always
+   * describe the same session.
    */
-  it('fetches no cost analysis until the user picks analyse on a row', async () => {
+  it('offers no cost analysis before a selection and fetches none on selection', async () => {
     routeFetch();
     renderView();
     await screen.findByRole('list', { name: 'session list' });
 
-    expect(screen.getByTestId('analysis-prompt').textContent).toContain('Pick “analyse”');
+    expect(screen.queryByTestId('analysis-prompt')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Analyse cost/ })).toBeNull();
     // Exactly one request may leave on mount: the session list.
     expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: /agenthropic/ }));
+    await screen.findByTestId('unattributed');
+    expect(screen.getByTestId('analysis-prompt').textContent).toContain('Reprice session aaaaaaaa');
     expect(fetchMock.mock.calls.every(([url]) => !String(url).includes('cost-analysis'))).toBe(
       true,
     );
   });
 
-  it('opens the per-session cost analysis for any listed row via its analyse action', async () => {
-    routeFetch();
+  it('analyses the selected session, and selecting another closes the analysis', async () => {
+    const other = 'bbbbbbbb-1111-2222-3333-444444444444';
+    routeFetch({
+      list: jsonResponse(
+        200,
+        sessionList([sessionSummary(), sessionSummary({ id: other, projectSlug: 'other-repo' })]),
+      ),
+    });
     renderView();
     await screen.findByRole('list', { name: 'session list' });
+    fireEvent.click(screen.getByRole('button', { name: /agenthropic/ }));
+    await screen.findByTestId('unattributed');
 
-    const analyseButton = screen.getByRole('button', { name: /analyse cost of session aaaaaaaa/ });
-    expect(analyseButton.getAttribute('aria-pressed')).toBe('false');
-    fireEvent.click(analyseButton);
-
+    fireEvent.click(screen.getByRole('button', { name: /Analyse cost of session aaaaaaaa/ }));
     await screen.findByTestId('session-analysis');
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/sessions/aaaaaaaa-1111-2222-3333-444444444444/cost-analysis',
       expect.anything(),
     );
     expect(screen.queryByTestId('analysis-prompt')).toBeNull();
-    expect(analyseButton.getAttribute('aria-pressed')).toBe('true');
-    // Analysing a session is independent of tree drill-down: no tree fetch
-    // leaves and the tree pane keeps inviting a selection.
-    expect(fetchMock.mock.calls.every(([url]) => !String(url).includes('/tree'))).toBe(true);
-    expect(screen.getByText('Select a session to see its persisted agent tree.')).toBeDefined();
+
+    // A new selection drives both panes: the old analysis goes, and the new
+    // session is offered - not fetched - until it is asked for.
+    fireEvent.click(screen.getByRole('button', { name: /other-repo/ }));
+    await waitFor(() =>
+      expect(screen.getByTestId('analysis-prompt').textContent).toContain(
+        'Reprice session bbbbbbbb',
+      ),
+    );
+    expect(screen.queryByTestId('session-analysis')).toBeNull();
+    expect(
+      fetchMock.mock.calls.some(([url]) => String(url).includes(`${other}/cost-analysis`)),
+    ).toBe(false);
+  });
+
+  it('no longer carries the Q5 "Changed since" reader (it moved to Live)', async () => {
+    routeFetch();
+    renderView();
+    await screen.findByRole('list', { name: 'session list' });
+    expect(screen.queryByRole('heading', { name: 'Changed since' })).toBeNull();
   });
 });
 

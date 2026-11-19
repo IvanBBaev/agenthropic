@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Sessions view (UX-11): one selected session now drives both the agent tree and the
+  opt-in cost analysis - the separate per-row "analyse" selection is gone - and the
+  "Changed since" reader moved to the Live view.
 - Pricing drift alarm (DAT-10): the parser now reads Claude Code's own `cost-state`
   record from the main transcript and stores the latest valid snapshot in
   `sessions.cost_state` (migration 29). `GET /api/cost/reconciliation` prices that

@@ -14,9 +14,16 @@
  * this build cannot place now gets a third, dotted stroke and says so. The
  * vocabulary and the legend both live in `views/provenance.ts`.
  *
- * Review item M-9: every listed session also carries an "analyse" action that
- * opens the same per-session cost analysis the cost view offers for its top-5,
- * so cost analysability is not limited to the sessions that happen to rank.
+ * Review item M-9: every listed session can open the same per-session cost
+ * analysis the cost view offers for its top-5, so cost analysability is not
+ * limited to the sessions that happen to rank.
+ *
+ * AMENDED 2026-11-19 (UX-11): that action used to be a second button on every
+ * row, with its own "analysed" selection beside the tree's, so the page could
+ * show the tree of one session over the cost analysis of another. Now the one
+ * selected session drives both: its tree, then an opt-in "Analyse cost" for the
+ * same session under it. The "Changed since" reader (Q5) moved to the Live
+ * view, so this route answers one question - what happened in this session.
  *
  * AMENDED 2026-09-02 (F-3): the paragraph above says provenance is "always
  * visible", and that was believed to be true because the EDGE provenance is.
@@ -77,7 +84,6 @@ import {
 } from '../format';
 import { sessionHash, useRoute } from '../router';
 import { isAgentStatusChangedEvent } from './live-model';
-import { ChangesPanel } from './ChangesPanel';
 import { describeAgentGraph } from './chart-summary';
 import { computeLayeredLayout, fallbackLayerNotice } from './layout/layered';
 import { edgeProvenance, EDGE_PROVENANCE_LEGEND } from './provenance';
@@ -676,7 +682,13 @@ export function SessionsView({ token, sse, onAuthRejected, replayEpoch }: ViewPr
   }, []);
   // Cost analysis reprices transcripts off disk (WP-C4/C5), so like the cost
   // view it is opt-in per session, never fetched for every listed row.
-  const [analysedSessionId, setAnalysedSessionId] = useState<string | null>(null);
+  // UX-11 (2026-11-19): it is opt-in for the SELECTED session only. A separate
+  // "analysed" id let two sessions be current at once - one in the tree, a
+  // different one in the analysis below it. The request is remembered by id,
+  // so selecting another session closes the analysis instead of carrying it
+  // across to a session nobody asked to reprice.
+  const [analysisRequestedFor, setAnalysisRequestedFor] = useState<string | null>(null);
+  const analysisOpen = selectedId !== null && analysisRequestedFor === selectedId;
   // F-3: the two panes are read at different moments (the list on mount, the
   // tree on selection) and therefore age independently, so each owns its own
   // reload counter rather than sharing one that would re-read both.
@@ -962,15 +974,6 @@ export function SessionsView({ token, sse, onAuthRejected, replayEpoch }: ViewPr
                         </span>
                       )}
                     </button>
-                    <button
-                      type="button"
-                      className="link-button analyse-button"
-                      aria-pressed={session.id === analysedSessionId}
-                      aria-label={`analyse cost of session ${shortId(session.id)}`}
-                      onClick={() => setAnalysedSessionId(session.id)}
-                    >
-                      analyse
-                    </button>
                   </li>
                 );
               }),
@@ -1022,29 +1025,31 @@ export function SessionsView({ token, sse, onAuthRejected, replayEpoch }: ViewPr
               onRefresh={refreshTree}
             />
           )}
+          {selectedId !== null && (
+            <>
+              <h2>Cost analysis</h2>
+              {analysisOpen ? (
+                <SessionCostAnalysis
+                  token={token}
+                  sessionId={selectedId}
+                  onAuthRejected={onAuthRejected}
+                />
+              ) : (
+                <>
+                  <p className="empty-state" data-testid="analysis-prompt">
+                    Reprice session {shortId(selectedId)} across its compaction boundaries and
+                    estimate what it would have cost without delegation. This reads its transcripts
+                    from disk, so it runs only when asked.
+                  </p>
+                  <button type="button" onClick={() => setAnalysisRequestedFor(selectedId)}>
+                    Analyse cost of session {shortId(selectedId)}
+                  </button>
+                </>
+              )}
+            </>
+          )}
         </div>
       </div>
-
-      {/* D11(a) (2026-09-30): the reader of GET /api/changes (Q5, "what
-          changed since X"). Opt-in like the cost analysis below - nothing is
-          requested until the reader submits a day, because the server has no
-          default lower bound and this page must not invent one. */}
-      <h2>Changed since</h2>
-      <ChangesPanel token={token} nowMs={nowMs} onAuthRejected={onAuthRejected} />
-
-      <h2>Session cost analysis</h2>
-      {analysedSessionId === null ? (
-        <p className="empty-state" data-testid="analysis-prompt">
-          Pick “analyse” on a session row to reprice it across its compaction boundaries and
-          estimate what it would have cost without delegation.
-        </p>
-      ) : (
-        <SessionCostAnalysis
-          token={token}
-          sessionId={analysedSessionId}
-          onAuthRejected={onAuthRejected}
-        />
-      )}
     </section>
   );
 }

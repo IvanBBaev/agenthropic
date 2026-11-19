@@ -1578,3 +1578,40 @@ describe('LiveView banner refetch claims (MM3) and id-epoch honesty (MM2)', () =
     });
   });
 });
+
+/**
+ * UX-11 (2026-11-19): the Q5 reader ("what changed since X") moved here from
+ * the Sessions view. It is opt-in - nothing reaches /api/changes on mount -
+ * and it is present whatever state the board is in, because a board that
+ * failed to load says nothing about the delta endpoint.
+ */
+describe('LiveView - the "Changed since" reader (UX-11)', () => {
+  function changesCalls(): readonly string[] {
+    return fetchMock.mock.calls
+      .map((call) => call[0] as string)
+      .filter((url) => url.startsWith('/api/changes'));
+  }
+
+  it('renders under the board while loading, without requesting changes', () => {
+    fetchMock.mockImplementation(() => new Promise<Response>(() => undefined));
+    renderView();
+    expect(screen.getByText('Loading sessions…')).toBeDefined();
+    expect(screen.getByRole('heading', { name: 'Changed since' })).toBeDefined();
+    expect(changesCalls()).toHaveLength(0);
+  });
+
+  it('renders under a loaded board, without requesting changes', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, sessionList([sessionSummary()])));
+    renderView();
+    await screen.findByRole('list', { name: 'sessions' });
+    expect(screen.getByRole('heading', { name: 'Changed since' })).toBeDefined();
+    expect(changesCalls()).toHaveLength(0);
+  });
+
+  it('stays reachable when the board fails to load', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(500, { error: 'Internal server error.' }));
+    renderView();
+    await screen.findByText(/Could not load sessions/);
+    expect(screen.getByRole('heading', { name: 'Changed since' })).toBeDefined();
+  });
+});

@@ -622,19 +622,6 @@ button:disabled {
   min-width: 0;
 }
 
-.analyse-button {
-  white-space: nowrap;
-  font-size: 0.8rem;
-  padding: 0 0.4rem;
-  border: 1px solid #2a2f37;
-  border-radius: 6px;
-}
-
-.analyse-button[aria-pressed='true'] {
-  color: #e6e8eb;
-  background: #22303f;
-}
-
 .chart-scroll {
   overflow-x: auto;
   background: #171a1f;

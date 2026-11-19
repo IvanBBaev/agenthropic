@@ -73,6 +73,7 @@ import {
 } from '../format';
 import { sessionHash } from '../router';
 import { CaveatDetails } from './caveats';
+import { ChangesPanel } from './ChangesPanel';
 import type { BoardBand, BoardSession } from './live-model';
 import {
   applyAgentStatusChange,
@@ -517,11 +518,24 @@ export function LiveView({ token, sse, onAuthRejected }: ViewProps) {
     </>
   );
 
+  // UX-11 (2026-11-19): the Q5 reader ("what changed since X") lives here,
+  // under the board, rather than on the Sessions view. It owns its own request
+  // and is opt-in (nothing is fetched until a day is submitted), so it renders
+  // in every board state - a board that failed to load says nothing about
+  // whether the delta endpoint can answer.
+  const changes = (
+    <>
+      <h2>Changed since</h2>
+      <ChangesPanel token={token} nowMs={nowMs} onAuthRejected={onAuthRejected} />
+    </>
+  );
+
   if (board.kind === 'loading') {
     return (
       <section aria-label="live status board">
         {failureBanners}
         <p className="muted">Loading sessions…</p>
+        {changes}
       </section>
     );
   }
@@ -535,6 +549,7 @@ export function LiveView({ token, sse, onAuthRejected }: ViewProps) {
         <button type="button" onClick={() => setReload((value) => value + 1)}>
           Retry
         </button>
+        {changes}
       </section>
     );
   }
@@ -707,6 +722,7 @@ export function LiveView({ token, sse, onAuthRejected }: ViewProps) {
           </ul>
         </>
       )}
+      {changes}
     </section>
   );
 }

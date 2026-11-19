@@ -4,7 +4,7 @@
  * assertions pin what the view ASKED for as well as what it drew.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import {
   filterText,
   sessionListLimit,
@@ -52,6 +52,11 @@ function serveCorpus(total: number): void {
     const rows = summaries(Math.min(limit, total));
     return Promise.resolve(jsonResponse(200, sessionList(rows, { total, limit })));
   });
+}
+
+/** One selectable button per listed session (UX-11: the row is the only control). */
+function sessionRows(): HTMLElement[] {
+  return within(screen.getByRole('list', { name: 'session list' })).getAllByRole('button');
 }
 
 function listUrls(): string[] {
@@ -143,15 +148,11 @@ describe('session list filter and paging (UX-12)', () => {
     serveCorpus(500);
     renderView();
     await screen.findByRole('list', { name: 'session list' });
-    expect(screen.getAllByRole('button', { name: /analyse cost/ })).toHaveLength(
-      SESSION_LIST_LIMIT,
-    );
+    expect(sessionRows()).toHaveLength(SESSION_LIST_LIMIT);
 
     for (const expected of [100, 150, 200]) {
       fireEvent.click(screen.getByRole('button', { name: 'Load older sessions' }));
-      await waitFor(() =>
-        expect(screen.getAllByRole('button', { name: /analyse cost/ })).toHaveLength(expected),
-      );
+      await waitFor(() => expect(sessionRows()).toHaveLength(expected));
       expect(listUrls().at(-1)).toBe(`/api/sessions?limit=${String(expected)}`);
     }
     expect(screen.queryByRole('button', { name: 'Load older sessions' })).toBeNull();
