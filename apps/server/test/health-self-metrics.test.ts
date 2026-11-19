@@ -79,6 +79,20 @@ describe('startLoopLagMonitor()', () => {
     }
   });
 
+  it('clamps a timer that ran early to zero lag, never a negative one', () => {
+    // Pinned with the fake histogram: the real one reaches this branch only
+    // when the machine happens to be idle, so coverage depended on load.
+    vi.useFakeTimers();
+    const histogram = new FakeHistogram();
+    const monitor = startLoopLagMonitor({ histogram, resolutionMs: 20, windowMs: 1000 });
+    try {
+      histogram.samples = [18 * MS, 19 * MS];
+      expect(monitor.snapshot()).toEqual({ p99Ms: 0, maxMs: 0 });
+    } finally {
+      monitor.stop();
+    }
+  });
+
   it('reports the last complete window and rotates the histogram', () => {
     vi.useFakeTimers();
     const histogram = new FakeHistogram();
