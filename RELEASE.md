@@ -199,6 +199,21 @@ run, not against a local run.
         suite proves this from the raw bytes and prints such orphans as
         `unanchorableOrphans` instead of failing (parser-spec §4.1, amendment 2026-11-19).
         Name each one in the release notes.
+- [ ] **Corpus-scale bench, compared with the previous tag's run (QA-13).** Run
+      `pnpm --filter @agenthropic/server bench` on the release commit, with no other
+      heavy work on the machine.
+      - The default run synthesises a corpus at the documented real session count and
+        ingests it through the real watcher. It never reads `~/.claude/projects`, so its
+        figures are a lower bound on real cost (see the header of
+        [`apps/server/bench/corpus-scale.ts`](apps/server/bench/corpus-scale.ts)).
+      - Record in the release notes the **cold replay** and **warm tick** times, together
+        with the provenance lines the run prints (Node version, platform, cores, load
+        average). Put the previous tag's figures from its GitHub Release next to them.
+      - The bench stores no baseline on purpose. Compare two runs, never a run against a
+        number written into a file.
+      - Until the owner sets a time budget, the box is red when a figure has regressed
+        against the previous tag's run and the release notes do not explain why. A budget,
+        once set, is written here as a dated decision.
 - [ ] **[HUMAN-dependent] Hierarchy correctness ≥95%** against the labelled corpus
       (testing.md §4). This bar only means something once the §0 LABEL-ME box is done.
       **Waived in writing 2026-10-30 (D8).** Unless Ivan labels the trees before the tag,
@@ -358,6 +373,7 @@ scan."**
         gate is NOT CERTIFIED by human labels".
       - Unless the §6 stopwatch box was run: "time-to-understand is unmeasured".
       - The §1 test totals and the §3 real-corpus counts, including any honest orphan.
+      - The §3 bench figures, next to the previous tag's.
       - The §5 backup: its path and date.
       - Links to the docs site and the MIT license.
 - [ ] Update `DONE.md` with the v1.0 milestone entry.
@@ -392,6 +408,7 @@ pnpm run test
 pnpm run gate:spawner
 pnpm run gate:licenses
 AGENTHROPIC_REAL_CORPUS=~/.claude/projects pnpm test:real   # owner's machine only
+pnpm --filter @agenthropic/server bench                     # synthetic corpus, real scale
 # then: §5 live restore drill, §6 pricing re-read + real-corpus boot [HUMAN],
 #       §0/§4/§6/§7 gh api verifications
 ```

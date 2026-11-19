@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Release bench step (QA-13): `RELEASE.md` §3 runs the corpus-scale bench on the release
+  commit and records cold-replay and warm-tick times next to the previous tag's run, so a
+  performance regression is caught before a tag instead of after it.
 - Unpriced usage in the format census (DAT-8, DAT-9): `/api/health` `formatDrift` now
   counts, per Claude Code version, the usage blocks the pricing table has no rate for - a
   `speed` such as `fast`, a non-standard `service_tier`, a data-residency `inference_geo`, or
