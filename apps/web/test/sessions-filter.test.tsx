@@ -54,9 +54,32 @@ function serveCorpus(total: number): void {
   });
 }
 
+/*
+ * The paging tests hold 50-200 rows. A `*ByRole` query computes the accessible
+ * name of every button in the document on each call, which costs seconds per
+ * call in jsdom at that size, and `waitFor` repeats the call until it matches.
+ * On a loaded machine that pushed these tests past the 30 s timeout. So the
+ * row-heavy queries below use selectors and text, which cost milliseconds.
+ * The role and the accessible name of the row controls are pinned once, in
+ * 'gives every row one pressable button'.
+ */
+
 /** One selectable button per listed session (UX-11: the row is the only control). */
 function sessionRows(): HTMLElement[] {
-  return within(screen.getByRole('list', { name: 'session list' })).getAllByRole('button');
+  return Array.from(
+    screen
+      .getByRole('list', { name: 'session list' })
+      .querySelectorAll<HTMLElement>(':scope > li.session-item > button'),
+  );
+}
+
+/** A button found by its exact visible text, or null. */
+function queryButton(text: string): HTMLElement | null {
+  return screen.queryByText(text, { selector: 'button' });
+}
+
+function getButton(text: string): HTMLElement {
+  return screen.getByText(text, { selector: 'button' });
 }
 
 function listUrls(): string[] {
@@ -144,18 +167,31 @@ describe('session list filter and paging (UX-12)', () => {
     expect(screen.queryByRole('form', { name: 'filter sessions' })).toBeNull();
   });
 
+  it('gives every row one pressable button', async () => {
+    serveCorpus(3);
+    renderView();
+    const list = await screen.findByRole('list', { name: 'session list' });
+    const buttons = within(list).getAllByRole('button');
+    expect(buttons).toEqual(sessionRows());
+    expect(buttons).toHaveLength(3);
+    expect(buttons.every((button) => button.hasAttribute('aria-pressed'))).toBe(true);
+  });
+
   it('loads older sessions as one longer read until the cap, then points at the filter', async () => {
     serveCorpus(500);
     renderView();
     await screen.findByRole('list', { name: 'session list' });
     expect(sessionRows()).toHaveLength(SESSION_LIST_LIMIT);
+    expect(screen.getByRole('button', { name: 'Load older sessions' })).toBe(
+      getButton('Load older sessions'),
+    );
 
     for (const expected of [100, 150, 200]) {
-      fireEvent.click(screen.getByRole('button', { name: 'Load older sessions' }));
+      fireEvent.click(getButton('Load older sessions'));
       await waitFor(() => expect(sessionRows()).toHaveLength(expected));
       expect(listUrls().at(-1)).toBe(`/api/sessions?limit=${String(expected)}`);
     }
-    expect(screen.queryByRole('button', { name: 'Load older sessions' })).toBeNull();
+    expect(queryButton('Load older sessions')).toBeNull();
     expect(screen.getByTestId('list-cap').textContent).toContain(
       `${String(SESSION_LIST_MAX)} rows is the most one read serves`,
     );
@@ -165,7 +201,7 @@ describe('session list filter and paging (UX-12)', () => {
     serveCorpus(3);
     renderView();
     await screen.findByRole('list', { name: 'session list' });
-    expect(screen.queryByRole('button', { name: 'Load older sessions' })).toBeNull();
+    expect(queryButton('Load older sessions')).toBeNull();
     expect(screen.queryByTestId('list-cap')).toBeNull();
   });
 
@@ -173,13 +209,13 @@ describe('session list filter and paging (UX-12)', () => {
     serveCorpus(500);
     renderView();
     await screen.findByRole('list', { name: 'session list' });
-    fireEvent.click(screen.getByRole('button', { name: 'Load older sessions' }));
+    fireEvent.click(getButton('Load older sessions'));
     await waitFor(() => expect(listUrls().at(-1)).toBe('/api/sessions?limit=100'));
 
     fireEvent.change(screen.getByRole('combobox', { name: /filter sessions by status/ }), {
       target: { value: 'waiting' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Filter' }));
+    fireEvent.click(getButton('Filter'));
     await waitFor(() =>
       expect(listUrls().at(-1)).toBe(
         `/api/sessions?limit=${String(SESSION_LIST_LIMIT)}&status=waiting`,
