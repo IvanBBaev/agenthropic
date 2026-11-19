@@ -37,6 +37,9 @@ corrections are welcome without asking.
   `render-claims`, because none of them loads the native binding - and, being a package-script
   prefix rather than a runtime hook, it is bypassed entirely by a direct `npx vitest` / `tsx`
   invocation.
+  Node 22 reaches end of life on 2027-04-30; the move to Node 24 (rehearsed by CI's
+  non-required `node24` job) is laid out in
+  [Node support policy](docs/site/guide/running.md#node-support-policy). *(OSS-12.)*
 - **pnpm**, which you should not install by hand: the version is pinned in the root
   `package.json` `packageManager` field (`pnpm@11.11.0`), so `corepack enable` gives you
   exactly that one. CI does the same thing.

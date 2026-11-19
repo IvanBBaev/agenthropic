@@ -1,5 +1,5 @@
 /**
- * SEC-9 / OSS-10 - the CI supply-chain policy, read from the files themselves.
+ * SEC-9 / OSS-10 / OSS-12 - the CI supply-chain policy, read from the files themselves.
  *
  * A major tag such as `actions/checkout@v7` can be moved by whoever controls
  * the Action's repository, and the next CI run executes whatever it now points
@@ -89,7 +89,7 @@ describe('workflow supply chain (SEC-9)', () => {
     const jobsBlock = ci.slice(ci.indexOf('\njobs:\n'));
     const jobIds = [...jobsBlock.matchAll(/^ {2}([\w-]+):$/gm)].map((match) => match[1]);
     // `ci` is the context branch protection requires; renaming it drops the rule.
-    expect(jobIds).toEqual(['ci', 'macos']);
+    expect(jobIds).toEqual(['ci', 'macos', 'node24']);
 
     const macos = jobsBlock.slice(jobsBlock.indexOf('\n  macos:\n'));
     expect(macos).toMatch(/^ {4}runs-on: macos-latest$/m);
@@ -100,6 +100,23 @@ describe('workflow supply chain (SEC-9)', () => {
     expect(macos).toContain('run: pnpm --filter @agenthropic/test-fixtures exec vitest run');
     // Thresholds belong to the `ci` job; on a subset they would fail on code never run.
     expect(macos).not.toContain('--coverage');
+  });
+
+  it('a node24 job rehearses the next LTS on the full gate without touching the pin (OSS-12)', () => {
+    const ci = readRepoFile('.github/workflows/ci.yml');
+    const node24 = ci.slice(ci.indexOf('\n  node24:\n'));
+    expect(node24).toMatch(/^ {4}runs-on: ubuntu-latest$/m);
+    expect(node24).toMatch(/^ {4}timeout-minutes: \d+$/m);
+    expect(node24).toMatch(/^ {10}node-version: 24$/m);
+    // The guard compares the running major with .nvmrc, so the job points it at 24.
+    // The committed pin stays 22 until the policy's step 2 moves it.
+    expect(node24).toContain('run: echo 24 > .nvmrc');
+    expect(readRepoFile('.nvmrc').trim()).toBe('22');
+    expect(node24).toContain('--frozen-lockfile --config.engine-strict=false');
+    // The full gate, coverage thresholds included, unlike the macOS subset.
+    expect(node24).toContain('run: pnpm run typecheck');
+    expect(node24).toContain('run: pnpm --filter @agenthropic/web build');
+    expect(node24).toContain('run: pnpm run test');
   });
 
   it('Dependabot watches both the Actions and the npm workspace', () => {

@@ -3,8 +3,9 @@
 # The security gate runs first so a broken invariant fails in seconds rather
 # than after the suite.
 #
-# A second, non-required job (`macos`, QA-6, at the bottom) re-runs the
-# filesystem-touching suites on macOS without coverage.
+# A second, non-required job (`macos`, QA-6) re-runs the filesystem-touching
+# suites on macOS without coverage. A third, non-required job (`node24`, OSS-12,
+# at the bottom) rehearses the next Node LTS line against the full gate.
 #
 # NOTE: this workflow used to carry a note saying that making it merge-blocking
 # required a GitHub branch-protection rule that was an owner action, still unset.
@@ -142,3 +143,47 @@ jobs:
 
       - name: Test-fixtures tests on macOS (no coverage)
         run: pnpm --filter @agenthropic/test-fixtures exec vitest run
+
+  # OSS-12: the project pins Node 22 (`.nvmrc`, `engines.node` `>=22 <23`), and
+  # Node 22 reaches end of life on 2027-04-30 - inside the v1.x line's life. This
+  # job rehearses the next LTS line, Node 24, so the move is a measured step and
+  # not a surprise. It runs the same gate as `ci` (typecheck, web build, the full
+  # suite WITH the coverage thresholds) under Node 24.
+  #
+  # The pin itself is not widened here. The job rewrites `.nvmrc` to 24 in its
+  # own checkout, so `scripts/check-node-version.mjs` checks the Node it really
+  # runs on, and installs with `engine-strict` off, because `engines.node` still
+  # says `<23`. Nothing in this job is committed back. Widening the pin is a
+  # separate change, made once this job has been green for a while; see "Node
+  # support policy" in docs/site/guide/running.md.
+  #
+  # NOT a required check, like `macos`: branch protection names only `ci`.
+  node24:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Enable corepack (pnpm from packageManager field)
+        run: corepack enable
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      # Point the Node-major guard at the Node this job runs, in this checkout only.
+      - name: Rehearse the Node 24 pin (.nvmrc -> 24, not committed)
+        run: echo 24 > .nvmrc
+
+      - name: Install (frozen lockfile, engines not enforced)
+        run: pnpm install --frozen-lockfile --config.engine-strict=false
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      - name: Web production build
+        run: pnpm --filter @agenthropic/web build
+
+      - name: Test on Node 24 (coverage thresholds enforce the coverage gate)
+        run: pnpm run test

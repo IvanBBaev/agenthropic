@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Node 24 rehearsal (OSS-12): a non-required `node24` CI job runs the full gate (install,
+  typecheck, web build, every suite with the coverage thresholds) under Node 24, with
+  `.nvmrc` rewritten to `24` in its own checkout only. A "Node support policy" section in
+  `docs/site/guide/running.md` states the rule (one LTS major at a time, today Node 22) and
+  the three steps off Node 22 before its end of life on 2027-04-30.
 - Server module split (ARC-4): the API reads moved out of `api/queries.ts` into one module
   per read model under `apps/server/src/api/read-models/` (`sessions`, `cost`, `dag`,
   `savings`, `changes`, plus the shared priced-CTE fragments); `api/queries.ts` is now a

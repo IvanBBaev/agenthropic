@@ -48,7 +48,8 @@ SPA is worked on.
 
 Requires **Node 22, and only 22** (`.nvmrc`; `engines.node` is `>=22 <23` with
 `engine-strict`, and `pnpm test` / `pnpm start` refuse any other major up front) and **pnpm** (the repo pins `pnpm@11.11.0` through the root
-`package.json` `packageManager` field, so `corepack enable` is enough).
+`package.json` `packageManager` field, so `corepack enable` is enough). How the pin moves
+off Node 22 is in [Node support policy](#node-support-policy).
 
 **AMENDED 2026-09-23 (J-1).** The guard's reach is wider than `pnpm test` / `pnpm start`
 now, and naming only those two understates it. `scripts/check-node-version.mjs` currently
@@ -455,6 +456,40 @@ gate:spawner` scans the whole tree and rejects `0.0.0.0`, `host: true`, `host: '
 
 Use this path when you are editing the SPA and want hot reload. Use `pnpm start` when
 you want to run the product.
+
+## Node support policy
+
+*(Added 2026-11-19 — OSS-12.)*
+
+**One major at a time.** agenthropic supports exactly one Node major, the one `.nvmrc`
+names: today Node 22. The pin is exact, not a range, because `better-sqlite3` is a native
+module built for one Node ABI (see [the troubleshooting entry](#better-sqlite3-will-not-load-node_module_version-mismatch)),
+and the guard, the `engines` field, `@types/node`, CI and the launchd installer all read
+or assume that one major.
+
+**Only LTS lines.** The pin moves only to an even-numbered major that has reached Active
+LTS. Odd and "Current" releases are never supported.
+
+**Why it has to move during v1.x.** Node 22 reaches end of life on **2027-04-30**, inside
+the v1.x line's life. The next pin is **Node 24**.
+
+**How it moves.** In three steps, each a separate change:
+
+1. **Rehearse (now).** CI's `node24` job runs the full gate under Node 24: install,
+   typecheck, web build, and every suite with the coverage thresholds. It rewrites
+   `.nvmrc` to `24` in its own checkout and installs with `engine-strict` off. Nothing is
+   committed back. The job is not a required check.
+2. **Move the pin.** Once `node24` has been green on `main` for a while, one change moves
+   `.nvmrc` to `24`, `engines.node` to `>=24 <25`, `@types/node` to `^24`, and
+   `REQUIRED_NODE_MAJOR` in `scripts/service-install.mjs` to `24`. It also removes the
+   `node24` job, since `ci` then runs Node 24 itself. A Node 22 checkout must then be
+   reinstalled under Node 24 (`nvm use && pnpm install`), and a launchd service
+   re-installed with `node scripts/service-install.mjs --write`.
+3. **Be off Node 22 before 2027-04-30.** Step 2 lands in a v1.x minor before that date.
+
+The pin stays a single major because the guard (`scripts/check-node-version.mjs`) exists
+to refuse a run whose Node does not match the ABI that built the binding. Two supported
+majors would mean two install states that the guard cannot tell apart.
 
 ## Troubleshooting
 
