@@ -560,6 +560,73 @@ Nothing has been ingested yet. In rough order of likelihood:
 That is the no-hooks state described above, not a bug. Install the hooks, or read the
 status column as "observed working, then unobserved".
 
+### `start` fails after `pnpm install --prod`: `vite` or `tsx` "command not found"
+
+The server has one supported run path: a full checkout with its dev tooling installed.
+`pnpm start` first builds the SPA with `vite`, then runs the server with
+`tsx src/index.ts`. Both are devDependencies, `tsx` on purpose (see
+[Why there is no compiled server build](#why-there-is-no-compiled-server-build)). So a
+`pnpm install --prod`, or any install that skips devDependencies, leaves `start` with
+nothing to run. It stops at the SPA build, or at `tsx` when you start the server package
+on its own. The launchd service needs the same tooling: `service-install.mjs` refuses to
+write the plist when the `tsx` loader is missing from `apps/server/node_modules`.
+`pnpm` must be on PATH for a manual `pnpm start`; the launchd service never calls `pnpm`.
+
+The fix is a normal install in the checkout, with Node 22 active:
+
+```sh
+nvm use            # reads .nvmrc (22)
+pnpm install
+```
+
+There is no slimmed-down production install to aim for. The package is private and is
+run from the repo, not deployed as a build artefact. *(Added 2026-11-19 — OPS-12.)*
+
+### `better-sqlite3` will not load: `NODE_MODULE_VERSION` mismatch
+
+`better-sqlite3` is a native module, built for the Node ABI that ran the install. Node 22
+is ABI `127`. If `pnpm install` ran under another major — typically a shell whose nvm
+default or Homebrew `node` is Node 26 — the binding is built for that ABI, and Node 22 then
+refuses to load it:
+
+```text
+Error: The module '…/better_sqlite3.node'
+was compiled against a different Node.js version using
+NODE_MODULE_VERSION … This version of Node.js requires
+NODE_MODULE_VERSION 127.
+```
+
+The reverse case, a Node 22 install run under Node 26, does not reach this error from the
+package scripts: `pnpm start`, `pnpm test` and the per-package `dev`/`start`/`test`
+scripts run `scripts/check-node-version.mjs` first and refuse with "Node 22 required
+(.nvmrc)". A `vitest` or `tsx` invoked directly skips that guard and fails on the binding
+instead, often as `Cannot read properties of undefined (reading 'close')` from a test's
+cleanup.
+
+Recovery, from the repo root:
+
+```sh
+nvm use                              # Node 22, from .nvmrc
+node -v                              # confirm v22.x before going on
+pnpm -r rebuild better-sqlite3       # rebuild the binding for this ABI
+```
+
+A full `pnpm install --force` under Node 22 does the same thing, more slowly. Check that the
+binding loads before restarting anything:
+
+```sh
+pnpm --filter @agenthropic/server exec node -e "new (require('better-sqlite3'))(':memory:').close(); console.log(process.versions.modules)"
+```
+
+It should print `127`.
+
+The launchd service does not depend on the shell's PATH. The plist records the absolute
+path of a Node 22 binary, and `service-install.mjs` refuses any other major. Upgrading or
+removing that Node install still breaks the service, so rebuild the binding with the new
+binary and re-run `node scripts/service-install.mjs --write`, as
+[the launchd section](#running-it-as-a-launchd-service-macos) says. *(Added 2026-11-19 —
+OPS-12.)*
+
 [Troubleshooting](../operations/troubleshooting.md) goes much deeper — reading
 `/api/health` field by field, reading the ingest log, the watchdog pattern, and what
 retention is and is not deleting today.

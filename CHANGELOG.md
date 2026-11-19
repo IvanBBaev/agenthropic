@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Running guide: two troubleshooting entries (OPS-12). One covers `pnpm install --prod`:
+  `start` needs the `vite` and `tsx` devDependencies, so the dev-tooling checkout is the
+  only run path. The other recovers a `better-sqlite3` `NODE_MODULE_VERSION` mismatch
+  after an install under another Node major, via `nvm use` and `pnpm -r rebuild
+  better-sqlite3`, plus a load check that prints ABI `127`.
 - Cost summary: `/api/cost/summary` now carries `sessionsWithMalformedLines` and
   `malformedLinesSkipped`, the corpus-wide count of transcript lines ingest skipped as
   invalid JSON (R13), and the cost view's honesty line says "N transcript lines in M
