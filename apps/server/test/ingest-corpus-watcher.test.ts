@@ -922,6 +922,71 @@ describe('createCorpusWatcher', () => {
     });
   });
 
+  describe('clock-jump guard (OPS-21)', () => {
+    /** The helpers' fixed agent stamp — the activity anchor of every agent below. */
+    const SEEN_MS = Date.parse('2026-07-11T00:00:00Z');
+
+    function clockedWatcher(withMono: boolean): {
+      advance: (wallMs: number, monoMs: number) => void;
+      tick: () => TickOutcome;
+    } {
+      let wall = SEEN_MS + 60_000;
+      let mono = 0;
+      const watcher = createCorpusWatcher(
+        makeDeps({}, withMono ? { nowMs: () => wall, monoMs: () => mono } : { nowMs: () => wall }),
+      );
+      return {
+        advance: (wallMs, monoMs) => {
+          wall += wallMs;
+          mono += monoMs;
+        },
+        tick: () => watcher.tick(),
+      };
+    }
+
+    beforeEach(() => {
+      insertSession(temp.db, 'session-1');
+      insertAgent(temp.db, 'a-silent', 'session-1', null, 'working');
+    });
+
+    it('gives a working agent one full window after a sleep before calling it unknown', () => {
+      const clock = clockedWatcher(true);
+      clock.tick(); // first reading: one minute of silence
+      expect(statusOf(temp, 'a-silent')).toBe('working');
+
+      // Two hours asleep: the wall clock leaps, the monotonic one barely moves.
+      clock.advance(120 * 60_000, 3_000);
+      clock.tick();
+      expect(statusOf(temp, 'a-silent')).toBe('working');
+
+      // Still silent one window after the wake (awake time on both clocks).
+      clock.advance(THRESHOLD_MS - 1, THRESHOLD_MS - 1);
+      clock.tick();
+      expect(statusOf(temp, 'a-silent')).toBe('working');
+      clock.advance(1, 1);
+      clock.tick();
+      expect(statusOf(temp, 'a-silent')).toBe('unknown');
+    });
+
+    it('without a monotonic clock the same timeline flips at the wake (the guard is off)', () => {
+      const clock = clockedWatcher(false);
+      clock.tick();
+      clock.advance(120 * 60_000, 3_000);
+      clock.tick();
+      expect(statusOf(temp, 'a-silent')).toBe('unknown');
+    });
+
+    it('raises no floor for a backward step: silence still counts in real time', () => {
+      const clock = clockedWatcher(true);
+      clock.tick();
+      clock.advance(-30 * 60_000, 3_000); // NTP pulls the wall clock back
+      clock.tick();
+      clock.advance(30 * 60_000 + THRESHOLD_MS, 30 * 60_000 + THRESHOLD_MS);
+      clock.tick();
+      expect(statusOf(temp, 'a-silent')).toBe('unknown');
+    });
+  });
+
   describe('transient errors and the watchdog', () => {
     it('skips the pass on a transient root error but still sweeps the watchdog', () => {
       insertSession(temp.db, 'session-1');

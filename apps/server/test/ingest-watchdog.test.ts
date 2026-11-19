@@ -10,7 +10,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { listWatchdogCandidates, setAgentStatus } from '../src/db/agents';
 import type { SqliteDatabase } from '../src/db/connection';
 import {
+  CLOCK_JUMP_TOLERANCE_MS,
   decideWatchdogVerdict,
+  detectClockJump,
   isTerminalAgentStatus,
   runWatchdogSweep,
 } from '../src/ingest/watchdog';
@@ -152,6 +154,60 @@ describe('decideWatchdogVerdict', () => {
   });
 });
 
+describe('clock jumps (OPS-21)', () => {
+  const at = (msBeforeNow: number): string => new Date(NOW_MS - msBeforeNow).toISOString();
+  const before = { wallMs: NOW_MS, monoMs: 1_000 };
+
+  it('reads clocks that advance together (an event-loop stall included) as no jump', () => {
+    expect(detectClockJump(before, { wallMs: NOW_MS + 3_000, monoMs: 4_000 })).toBe(0);
+    expect(detectClockJump(before, { wallMs: NOW_MS + MINUTE_MS, monoMs: 1_000 + MINUTE_MS })).toBe(
+      0,
+    );
+  });
+
+  it('tolerates divergence up to and including the tolerance', () => {
+    expect(
+      detectClockJump(before, { wallMs: NOW_MS + CLOCK_JUMP_TOLERANCE_MS, monoMs: 1_000 }),
+    ).toBe(0);
+    expect(
+      detectClockJump(before, { wallMs: NOW_MS - CLOCK_JUMP_TOLERANCE_MS, monoMs: 1_000 }),
+    ).toBe(0);
+  });
+
+  it('reports a sleep or forward NTP step as a positive jump of its size', () => {
+    // Two hours of wall time across three seconds of monotonic time.
+    expect(detectClockJump(before, { wallMs: NOW_MS + 120 * MINUTE_MS, monoMs: 4_000 })).toBe(
+      120 * MINUTE_MS - 3_000,
+    );
+  });
+
+  it('reports a backward NTP step as a negative jump', () => {
+    expect(detectClockJump(before, { wallMs: NOW_MS - 60 * MINUTE_MS, monoMs: 4_000 })).toBe(
+      -60 * MINUTE_MS - 3_000,
+    );
+  });
+
+  it('measures silence from the activity floor when the floor is later than the stamp', () => {
+    const stale = { status: 'working' as const, firstSeenAt: null, lastSeenAt: at(THRESHOLD_MS) };
+    expect(decideWatchdogVerdict(stale, NOW_MS, THRESHOLD_MS)).toBe('unknown');
+    // The machine woke a minute ago: one minute of silence, not the window.
+    expect(decideWatchdogVerdict(stale, NOW_MS, THRESHOLD_MS, NOW_MS - MINUTE_MS)).toBe(null);
+    // A full window after the wake the agent is stale again.
+    expect(decideWatchdogVerdict(stale, NOW_MS, THRESHOLD_MS, NOW_MS - THRESHOLD_MS)).toBe(
+      'unknown',
+    );
+  });
+
+  it('ignores a floor older than the stamp and never rescues a stamp-less agent', () => {
+    const fresh = { status: 'working' as const, firstSeenAt: null, lastSeenAt: at(MINUTE_MS) };
+    expect(decideWatchdogVerdict(fresh, NOW_MS, THRESHOLD_MS, NOW_MS - 2 * THRESHOLD_MS)).toBe(
+      null,
+    );
+    const bare = { status: 'working' as const, firstSeenAt: null, lastSeenAt: null };
+    expect(decideWatchdogVerdict(bare, NOW_MS, THRESHOLD_MS, NOW_MS)).toBe('unknown');
+  });
+});
+
 describe('watchdog against a real migrated db', () => {
   let temp: TempDb;
 
@@ -249,6 +305,14 @@ describe('watchdog against a real migrated db', () => {
     expect(runWatchdogSweep(temp.db, NOW_MS, THRESHOLD_MS)).toHaveLength(1);
     expect(runWatchdogSweep(temp.db, NOW_MS, THRESHOLD_MS)).toEqual([]);
     expect(runWatchdogSweep(temp.db, NOW_MS + THRESHOLD_MS, THRESHOLD_MS)).toEqual([]);
+  });
+
+  it('forwards the activity floor to every verdict (OPS-21)', () => {
+    insertAgent(temp.db, 'a-stale', 'session-1', null, 'working');
+
+    expect(runWatchdogSweep(temp.db, NOW_MS, THRESHOLD_MS, NOW_MS - MINUTE_MS)).toEqual([]);
+    expect(statusOf(temp.db, 'a-stale')).toBe('working');
+    expect(runWatchdogSweep(temp.db, NOW_MS, THRESHOLD_MS, NOW_MS - THRESHOLD_MS)).toHaveLength(1);
   });
 
   it('an empty candidate set sweeps to zero events', () => {

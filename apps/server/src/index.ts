@@ -116,7 +116,14 @@ export { projectSession } from './ingest/project-session';
 export type { ProjectionCounts } from './ingest/project-session';
 export { createCorpusWatcher, tickSummary } from './ingest/corpus-watcher';
 export type { CorpusWatcher, CorpusWatcherDeps, TickOutcome } from './ingest/corpus-watcher';
-export { decideWatchdogVerdict, isTerminalAgentStatus, runWatchdogSweep } from './ingest/watchdog';
+export {
+  CLOCK_JUMP_TOLERANCE_MS,
+  decideWatchdogVerdict,
+  detectClockJump,
+  isTerminalAgentStatus,
+  runWatchdogSweep,
+  type ClockReading,
+} from './ingest/watchdog';
 export type {
   IngestEvent,
   SessionIngestedEvent,
@@ -1229,6 +1236,9 @@ export async function start(
       },
       intervalMs: config.pollIntervalMs,
       watchdogThresholdMs: config.watchdogMinutes * 60_000,
+      // OPS-21: the monotonic reference that tells a sleep/NTP jump of the
+      // wall clock apart from real silence.
+      monoMs: () => performance.now(),
       // WP-IN10 replay checkpoint: the boot re-reads only what changed while
       // the process was down. Correctness does not depend on it — the store
       // hands back a fingerprint only for a session whose row is still present,

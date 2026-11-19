@@ -188,6 +188,16 @@ whose status was never written. Because the flip to `unknown` arrives over SSE (
 rather than on a page reload, a session that goes stale while the board is already open
 updates in place.
 
+**Sleep and clock jumps.** *(Amended 2026-11-19, OPS-21)* Staleness is the wall clock
+minus the transcript's own stamps, so a Mac waking from sleep (or an NTP step forward)
+would make every silent agent look stale at once. The watcher compares how far the wall
+clock moved between two polls with how far the monotonic clock moved; when they differ
+by more than 30 s it treats the gap as a clock jump, not as silence, and gives each
+`working` agent one full watchdog window from the wake before calling it `unknown`. A
+backward step only makes agents look fresher, so it delays a verdict and never invents
+one. A flip that still happens is reverted by the next hook or transcript line that
+reports the agent's real terminal state.
+
 > **As built:** `LiveView` renders **all five** buckets for every session, including
 > the ones sitting at zero (they get a dimmed `bucket-zero` class rather than being
 > filtered out) — a board that hides empty buckets would let a reader infer "no

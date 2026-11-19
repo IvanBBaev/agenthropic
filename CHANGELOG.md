@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Watchdog clock-jump guard (OPS-21): after a Mac sleep or an NTP step forward, the
+  corpus watcher sees the wall clock run ahead of the monotonic clock by more than 30 s
+  and measures each agent's silence from the wake, so `working` agents get one full
+  watchdog window instead of all flipping to `unknown` at once.
 - Sessions view: a search box (session id or project slug) and a status filter, both
   applied by `GET /api/sessions` through the new optional `q` and `status` parameters,
   with `total` counting the matching sessions; and a "Load older sessions" button that

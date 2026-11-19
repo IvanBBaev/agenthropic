@@ -116,7 +116,7 @@ import type { SqliteDatabase } from '../db/connection';
 import { databaseUnavailableCode } from '../db/sqlite-errors';
 import type { ReplayCheckpointStore } from '../db/replay-checkpoints';
 import type { IngestEvent } from './ingest-events';
-import { runWatchdogSweep } from './watchdog';
+import { detectClockJump, runWatchdogSweep, type ClockReading } from './watchdog';
 
 /**
  * How many consecutive failed passes a session gets before it is quarantined,
@@ -327,6 +327,13 @@ export interface CorpusWatcherDeps {
   readonly now?: () => string;
   /** Epoch-ms clock for the watchdog; defaults to `Date.now` (injectable for tests). */
   readonly nowMs?: () => number;
+  /**
+   * Monotonic clock (ms) for the OPS-21 clock-jump guard — the composition
+   * root passes `performance.now`. Omitted, the guard is off: tests that move
+   * an injected `nowMs` on purpose would otherwise read their own fake time as
+   * a jump.
+   */
+  readonly monoMs?: () => number;
   /** Ingest function forwarded to the runner; defaults to the real ingestSession. */
   readonly ingest?: IngestFn;
   /**
@@ -502,6 +509,11 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
   const fs = deps.fs ?? nodeCorpusFs();
   const limits: ReadLimits = { ...DEFAULT_READ_LIMITS, ...deps.limits };
   const nowMs = deps.nowMs ?? Date.now;
+  const monoMs = deps.monoMs;
+  /** Both clocks as read by the previous sweep (OPS-21); null before the first. */
+  let lastClocks: ClockReading | null = null;
+  /** Epoch ms of the latest forward clock jump; silence before it is not counted. */
+  let activityFloorMs = Number.NEGATIVE_INFINITY;
 
   /** sessionId → fingerprint of the last SUCCESSFULLY handled enumeration. */
   const fingerprints = new Map<string, string>();
@@ -943,7 +955,20 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
           code === null ? { kind: 'read-error', reason } : { kind: 'db-unavailable', code, reason };
       }
       try {
-        for (const transition of runWatchdogSweep(deps.db, nowMs(), deps.watchdogThresholdMs)) {
+        const sweepAtMs = nowMs();
+        if (monoMs !== undefined) {
+          const clocks: ClockReading = { wallMs: sweepAtMs, monoMs: monoMs() };
+          if (lastClocks !== null && detectClockJump(lastClocks, clocks) > 0) {
+            activityFloorMs = sweepAtMs; // a woken agent gets one full window
+          }
+          lastClocks = clocks;
+        }
+        for (const transition of runWatchdogSweep(
+          deps.db,
+          sweepAtMs,
+          deps.watchdogThresholdMs,
+          activityFloorMs,
+        )) {
           deps.onIngestEvent?.(transition);
         }
       } catch (error) {
