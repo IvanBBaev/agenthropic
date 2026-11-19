@@ -428,12 +428,21 @@ async function getJson<T>(
 /** GET /api/sessions - the summaries backing the live board and session list. */
 export function fetchSessions(
   token: string,
-  options: { readonly limit?: number; readonly offset?: number } = {},
+  options: {
+    readonly limit?: number;
+    readonly offset?: number;
+    /** UX-12: exact session status; empty means no status filter. */
+    readonly status?: string;
+    /** UX-12: id / project-slug substring (`q`); empty means no search. */
+    readonly search?: string;
+  } = {},
   signal?: AbortSignal,
 ): Promise<ApiResult<SessionListDto>> {
   const params = new URLSearchParams();
   if (options.limit !== undefined) params.set('limit', String(options.limit));
   if (options.offset !== undefined) params.set('offset', String(options.offset));
+  if (options.status !== undefined && options.status !== '') params.set('status', options.status);
+  if (options.search !== undefined && options.search !== '') params.set('q', options.search);
   const query = params.size > 0 ? `?${params.toString()}` : '';
   return getJson<SessionListDto>(`/api/sessions${query}`, token, isSessionList, signal);
 }

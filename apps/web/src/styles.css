@@ -552,6 +552,34 @@ button:disabled {
   align-items: start;
 }
 
+/* UX-12: list filter and "Load older". */
+.session-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0 0 0.75rem;
+}
+
+.session-filter input,
+.session-filter select {
+  padding: 0.4rem 0.6rem;
+  background: #101216;
+  color: #e6e8eb;
+  border: 1px solid #2a2f37;
+  border-radius: 6px;
+  font-size: 0.95rem;
+}
+
+.session-filter input {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.load-older {
+  margin-top: 0.75rem;
+}
+
 .session-list {
   list-style: none;
   margin: 0;

@@ -148,6 +148,45 @@ describe('session endpoints (WP-U3)', () => {
     expect(zeroLimit.statusCode).toBe(400);
   });
 
+  it('narrows the list by exact status and an id/project search, counting only matches (UX-12)', async () => {
+    temp.db.exec(`
+      INSERT INTO sessions (id, project_slug, started_at, last_activity_at, status) VALUES
+        ('Session-C%', NULL, '2026-07-11T00:00:00Z', '2026-07-11T01:00:00Z', 'completed');
+    `);
+    const ids = async (query: string) => {
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/sessions?${query}`,
+        headers: AUTH,
+      });
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      return { ids: body.sessions.map((s: { id: string }) => s.id), total: body.total };
+    };
+
+    expect(await ids('status=completed')).toEqual({ ids: ['Session-C%'], total: 1 });
+    // Case-insensitive, and the project slug is searched as well as the id.
+    expect(await ids('q=PROJ-A')).toEqual({ ids: ['session-a'], total: 1 });
+    expect(await ids('q=session-')).toEqual({
+      ids: ['session-b', 'Session-C%', 'session-a'],
+      total: 3,
+    });
+    // `%` is matched literally, never as a LIKE wildcard.
+    expect(await ids(`q=${encodeURIComponent('%')}`)).toEqual({ ids: ['Session-C%'], total: 1 });
+    // Filters combine with AND, and pagination applies to the matching rows.
+    expect(await ids('q=session&status=active&limit=1')).toEqual({ ids: ['session-b'], total: 2 });
+    expect(await ids('q=proj-b&status=completed')).toEqual({ ids: [], total: 0 });
+
+    for (const query of ['q=', 'status=', `q=${'x'.repeat(10_000)}`]) {
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/sessions?${query}`,
+        headers: AUTH,
+      });
+      expect(response.statusCode).toBe(400);
+    }
+  });
+
   it('serves the session detail with edge count and per-model cost rollup', async () => {
     const response = await app.inject({
       method: 'GET',

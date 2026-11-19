@@ -422,6 +422,12 @@ sum to `agentCount`. Every summary also carries the two honesty fields
 transcripts could be read; `skippedBytes` is nullable) and `usageRecordsDropped` (an
 integer: usage records excluded because they had no `message.id`).
 
+Two optional query parameters narrow the list *(Amended 2026-11-19, UX-12)*: `status`
+(an exact match on the stored session status) and `q` (a case-insensitive substring of
+the session id **or** the project slug, matched literally, so `%` and `_` are not
+wildcards). Both are 1–256 characters and combine with AND. `total` then counts the
+matching sessions, and `limit`/`offset` page through those.
+
 **`GET /api/sessions/:id`** → the same summary shape plus `edgeCount` and `models`, a
 per-model array of `{ model, tokens, costUsd, unpricedTokens }`.
 

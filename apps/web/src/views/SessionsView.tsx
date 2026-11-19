@@ -93,6 +93,102 @@ import { UnpricedNote, unpricedTitleSuffix } from './unpriced';
 /** Page size for the selectable session list. */
 export const SESSION_LIST_LIMIT = 50;
 
+/**
+ * UX-12: the most rows one list read may ask for - the server's
+ * MAX_PAGE_LIMIT, mirrored because the web bundle has no runtime dependency on
+ * the shared package (see dto.ts). "Load older" grows the ONE read up to this
+ * cap rather than appending offset pages, so every row on screen still comes
+ * from a single response with a single age; past the cap, the search and
+ * status filter are the way to reach older sessions.
+ */
+export const SESSION_LIST_MAX = 200;
+
+/** Rows to request after `pages` presses of "Load older" (1 = first page). */
+export function sessionListLimit(pages: number): number {
+  return Math.min(pages * SESSION_LIST_LIMIT, SESSION_LIST_MAX);
+}
+
+/** UX-12: the applied list filter; an empty string means "not filtered". */
+export interface SessionFilter {
+  readonly search: string;
+  readonly status: string;
+}
+
+const NO_FILTER: SessionFilter = { search: '', status: '' };
+
+/** The session statuses the filter offers, in the board's order. */
+const FILTER_STATUSES = ['working', 'waiting', 'completed', 'error', 'unknown'] as const;
+
+function isFiltered(filter: SessionFilter): boolean {
+  return filter.search !== '' || filter.status !== '';
+}
+
+/** "matching “abc” with status error" - the filter as the reader set it. */
+export function filterText(filter: SessionFilter): string {
+  const parts: string[] = [];
+  if (filter.search !== '') parts.push(`matching “${filter.search}”`);
+  if (filter.status !== '') parts.push(`with status ${filter.status}`);
+  return parts.join(' ');
+}
+
+function SessionFilterForm({
+  applied,
+  onApply,
+}: {
+  readonly applied: SessionFilter;
+  readonly onApply: (filter: SessionFilter) => void;
+}) {
+  const [search, setSearch] = useState(applied.search);
+  const [status, setStatus] = useState(applied.status);
+  return (
+    <form
+      className="session-filter"
+      aria-label="filter sessions"
+      onSubmit={(event) => {
+        event.preventDefault();
+        onApply({ search: search.trim(), status });
+      }}
+    >
+      <input
+        type="search"
+        aria-label="search sessions by id or project"
+        placeholder="Session id or project"
+        maxLength={256}
+        value={search}
+        onChange={(event) => setSearch(event.target.value)}
+      />{' '}
+      <select
+        aria-label="filter sessions by status"
+        value={status}
+        onChange={(event) => setStatus(event.target.value)}
+      >
+        <option value="">Any status</option>
+        {FILTER_STATUSES.map((value) => (
+          <option key={value} value={value}>
+            {value}
+          </option>
+        ))}
+      </select>{' '}
+      <button type="submit">Filter</button>
+      {isFiltered(applied) && (
+        <>
+          {' '}
+          <button
+            type="button"
+            onClick={() => {
+              setSearch('');
+              setStatus('');
+              onApply(NO_FILTER);
+            }}
+          >
+            Clear filter
+          </button>
+        </>
+      )}
+    </form>
+  );
+}
+
 type ListState =
   | { readonly kind: 'loading' }
   | { readonly kind: 'error'; readonly message: string }
@@ -100,6 +196,10 @@ type ListState =
       readonly kind: 'ready';
       readonly sessions: readonly SessionSummaryDto[];
       readonly total: number;
+      /** UX-12: the filter this read was taken under (not the one being typed). */
+      readonly filter: SessionFilter;
+      /** UX-12: the row count this read asked for. */
+      readonly limit: number;
       /**
        * When these rows were read from the server. Stamped with `readNowMs`
        * (the event clock) rather than the render clock, because a reading up to
@@ -587,11 +687,25 @@ export function SessionsView({ token, sse, onAuthRejected, replayEpoch }: ViewPr
   // never refetches - under which this view went stale in silence.
   const nowMs = useNowMs();
   const refreshList = () => setListReload((value) => value + 1);
+  // UX-12: "Load older" presses and the applied filter. A new filter starts
+  // again from the first page - the old page count described other rows.
+  const [listPages, setListPages] = useState(1);
+  const [listFilter, setListFilter] = useState<SessionFilter>(NO_FILTER);
+  const applyFilter = (next: SessionFilter) => {
+    setListPages(1);
+    setListFilter(next);
+  };
+  const listLimit = sessionListLimit(listPages);
   const refreshTree = () => setTreeReload((value) => value + 1);
 
   useEffect(() => {
     const controller = new AbortController();
-    void fetchSessions(token, { limit: SESSION_LIST_LIMIT }, controller.signal).then((result) => {
+    const filter = listFilter;
+    void fetchSessions(
+      token,
+      { limit: listLimit, status: filter.status, search: filter.search },
+      controller.signal,
+    ).then((result) => {
       if (controller.signal.aborted) return;
       if (result.kind === 'unauthorized') {
         onAuthRejected();
@@ -602,6 +716,8 @@ export function SessionsView({ token, sse, onAuthRejected, replayEpoch }: ViewPr
           kind: 'ready',
           sessions: result.data.sessions,
           total: result.data.total,
+          filter,
+          limit: listLimit,
           fetchedAtMs: readNowMs(),
         });
       }
@@ -612,7 +728,7 @@ export function SessionsView({ token, sse, onAuthRejected, replayEpoch }: ViewPr
     // ViewProps). The tree effect below deliberately does not follow it: a
     // session is ingested whole, so an open tree is not a partial read, and
     // re-reading it would blank the pane under the reader.
-  }, [token, listReload, onAuthRejected, replayEpoch]);
+  }, [token, listReload, onAuthRejected, replayEpoch, listLimit, listFilter]);
 
   useEffect(() => {
     if (selectedId === null) {
@@ -733,20 +849,40 @@ export function SessionsView({ token, sse, onAuthRejected, replayEpoch }: ViewPr
     </div>
   );
 
+  const filterForm = <SessionFilterForm applied={list.filter} onApply={applyFilter} />;
+
   if (list.sessions.length === 0) {
+    // UX-12: an empty FILTERED read says nothing about whether the corpus is
+    // empty, so it must not borrow the "nothing ingested" wording.
     return (
       <section aria-label="session tree">
-        <p className="empty-state">No sessions ingested yet - nothing to drill into.</p>
+        {isFiltered(list.filter) ? (
+          <>
+            {filterForm}
+            <p className="empty-state" data-testid="list-no-match">
+              No sessions {filterText(list.filter)} as of this read.
+            </p>
+          </>
+        ) : (
+          <p className="empty-state">No sessions ingested yet - nothing to drill into.</p>
+        )}
         {listProvenance}
       </section>
     );
   }
+
+  const filteredNoun = isFiltered(list.filter) ? `sessions ${filterText(list.filter)}` : 'sessions';
+  // UX-12: more rows exist past this read. "Load older" asks the next read for
+  // a longer page until the server's cap; past it, only a narrower filter can
+  // bring older sessions into a single read.
+  const moreExist = Number.isFinite(list.total) && list.total > list.sessions.length;
 
   return (
     <section aria-label="session tree">
       <div className="split">
         <div>
           <h2>Sessions</h2>
+          {filterForm}
           {listProvenance}
           {/* SV-1 (2026-09-07): the denominator is not a bare count. The
               endpoint pages by most recent activity (SESSION_PAGE_ORDER), so
@@ -771,8 +907,8 @@ export function SessionsView({ token, sse, onAuthRejected, replayEpoch }: ViewPr
             </p>
           ) : list.total > list.sessions.length ? (
             <p className="muted" data-testid="list-truncation">
-              Showing {list.sessions.length} of {list.total} sessions - the server pages by most
-              recent activity first, so this is the newest slice as of that read: the rest are
+              Showing {list.sessions.length} of {list.total} {filteredNoun} - the server pages by
+              most recent activity first, so this is the newest slice as of that read: the rest are
               older, and a session started since is in neither figure.
             </p>
           ) : list.total < list.sessions.length ? (
@@ -840,6 +976,21 @@ export function SessionsView({ token, sse, onAuthRejected, replayEpoch }: ViewPr
               }),
             ])}
           </ul>
+          {moreExist &&
+            (list.limit < SESSION_LIST_MAX ? (
+              <button
+                type="button"
+                className="load-older"
+                onClick={() => setListPages((value) => value + 1)}
+              >
+                Load older sessions
+              </button>
+            ) : (
+              <p className="muted" data-testid="list-cap">
+                {SESSION_LIST_MAX} rows is the most one read serves. Search by id or project, or
+                filter by status, to reach older sessions.
+              </p>
+            ))}
         </div>
         <div>
           <h2>Agent tree</h2>

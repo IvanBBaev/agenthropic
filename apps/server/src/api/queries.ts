@@ -259,8 +259,39 @@ function toSessionSummary(row: SessionSummaryRow): SessionSummaryDto {
   };
 }
 
-export function countSessions(db: SqliteDatabase): number {
-  const row = db.prepare('SELECT COUNT(*) AS c FROM sessions').get() as { c: number };
+/**
+ * UX-12: optional narrowing of the session list. `status` is an exact match on
+ * the stored session status; `search` is a case-insensitive substring of the
+ * session id OR the project slug. `instr` rather than `LIKE`, so a `%` or `_`
+ * the reader types is matched literally instead of as a wildcard.
+ */
+export interface SessionListFilter {
+  readonly status?: string;
+  readonly search?: string;
+}
+
+function sessionFilterWhere(filter: SessionListFilter): { sql: string; params: string[] } {
+  const clauses: string[] = [];
+  const params: string[] = [];
+  if (filter.status !== undefined) {
+    clauses.push('s.status = ?');
+    params.push(filter.status);
+  }
+  if (filter.search !== undefined) {
+    clauses.push(
+      "(instr(lower(s.id), lower(?)) > 0 OR instr(lower(COALESCE(s.project_slug, '')), lower(?)) > 0)",
+    );
+    params.push(filter.search, filter.search);
+  }
+  return { sql: clauses.length === 0 ? '' : `WHERE ${clauses.join(' AND ')}`, params };
+}
+
+/** Sessions matching `filter` (all of them when it is empty). */
+export function countSessions(db: SqliteDatabase, filter: SessionListFilter = {}): number {
+  const where = sessionFilterWhere(filter);
+  const row = db
+    .prepare(`SELECT COUNT(*) AS c FROM sessions s ${where.sql}`)
+    .get(...where.params) as { c: number };
   return row.c;
 }
 
@@ -276,16 +307,20 @@ export function listSessions(
   db: SqliteDatabase,
   limit: number,
   offset: number,
+  filter: SessionListFilter = {},
 ): SessionSummaryDto[] {
   // Resolve WHICH sessions are on this page before pricing anything: the
   // ordering key lives entirely on `sessions`, so the page is knowable without
   // reading a single `token_usage` row. Pricing the whole usage table only to
   // return one page of it is what made this endpoint scale with corpus size
   // instead of page size.
+  const where = sessionFilterWhere(filter);
   const ids = (
     db
-      .prepare(`SELECT s.id AS id FROM sessions s ORDER BY ${SESSION_PAGE_ORDER} LIMIT ? OFFSET ?`)
-      .all(limit, offset) as Array<{ id: string }>
+      .prepare(
+        `SELECT s.id AS id FROM sessions s ${where.sql} ORDER BY ${SESSION_PAGE_ORDER} LIMIT ? OFFSET ?`,
+      )
+      .all(...where.params, limit, offset) as Array<{ id: string }>
   ).map((row) => row.id);
   if (ids.length === 0) {
     return [];

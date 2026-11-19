@@ -89,10 +89,24 @@ export interface ApiRoutesOptions {
 }
 
 /** Capped limit/offset pagination - /api/sessions and /api/sessions/:id/events. */
+const PageQueryProperties = {
+  limit: Type.Integer({ minimum: 1, maximum: MAX_PAGE_LIMIT, default: DEFAULT_PAGE_LIMIT }),
+  offset: Type.Integer({ minimum: 0, maximum: MAX_PAGE_OFFSET, default: 0 }),
+};
+
+const PageQuerySchema = Type.Object(PageQueryProperties, { additionalProperties: false });
+
+/**
+ * UX-12: the session list also takes an optional exact `status` and a
+ * substring search `q` (session id or project slug); `total` then counts the
+ * matching sessions. The events page keeps the bare pagination schema: these
+ * filters belong to the list, not to one session's event page.
+ */
 const SessionListQuerySchema = Type.Object(
   {
-    limit: Type.Integer({ minimum: 1, maximum: MAX_PAGE_LIMIT, default: DEFAULT_PAGE_LIMIT }),
-    offset: Type.Integer({ minimum: 0, maximum: MAX_PAGE_OFFSET, default: 0 }),
+    ...PageQueryProperties,
+    status: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_ID_LENGTH })),
+    q: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_ID_LENGTH })),
   },
   { additionalProperties: false },
 );
@@ -210,10 +224,11 @@ export const apiRoutes: FastifyPluginAsync<ApiRoutesOptions> = async (app, optio
       },
     },
     async (request) => {
-      const { limit, offset } = request.query;
+      const { limit, offset, status, q } = request.query;
+      const filter = { status, search: q };
       return {
-        sessions: listSessions(db, limit, offset),
-        total: countSessions(db),
+        sessions: listSessions(db, limit, offset, filter),
+        total: countSessions(db, filter),
         limit,
         offset,
       };
@@ -289,7 +304,7 @@ export const apiRoutes: FastifyPluginAsync<ApiRoutesOptions> = async (app, optio
     {
       schema: {
         params: SessionParamsSchema,
-        querystring: SessionListQuerySchema,
+        querystring: PageQuerySchema,
         response: {
           200: SessionEventsResponseSchema,
           400: ApiErrorSchema,

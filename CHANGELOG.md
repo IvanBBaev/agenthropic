@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Sessions view: a search box (session id or project slug) and a status filter, both
+  applied by `GET /api/sessions` through the new optional `q` and `status` parameters,
+  with `total` counting the matching sessions; and a "Load older sessions" button that
+  grows the one list read 50 rows at a time up to the 200-row page cap (UX-12).
 - **Narrow-screen layout (UX-13).** Below 800px the sidebar becomes a wrapping top nav,
   the header wraps, the Sessions split stacks into one column, and wide tables and
   charts scroll inside the view instead of widening the page. This is for reaching the

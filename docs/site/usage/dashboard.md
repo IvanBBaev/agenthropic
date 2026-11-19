@@ -318,6 +318,15 @@ moat itself (the moat is §3, next).
 > - Cyclic nodes are likewise declared rather than laid out as if acyclic, and the
 >   `unattributed` bucket is always rendered — including when it is empty.
 
+**Finding a session** *(Amended 2026-11-19, UX-12)*. Above the list are a search box
+(session id or project slug, case-insensitive substring) and a status filter; both are
+applied on the server, so the "Showing N of M" line counts the *matching* sessions. An
+empty filtered read says that nothing matched — it never uses the "no sessions ingested
+yet" wording, which is a claim about the whole corpus. **Load older sessions** asks the
+next read for 50 more rows instead of appending a second page, so every row on screen
+still comes from one response with one age. One read serves at most 200 rows; past that,
+the view says so and points at the search and the status filter.
+
 Two further things the view renders that the text above never described, because neither
 existed when it was written:
 
