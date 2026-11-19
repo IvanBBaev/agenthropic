@@ -118,6 +118,13 @@ This is the same `hook-ingest → SQLite (WAL) → SSE → browser SPA` loop des
 the [architecture overview](../architecture/overview.md); the dashboard is the read
 side of that pipeline, not a second data path.
 
+**Keyboard use** *(Amended 2026-11-19, UX-14)*. The first Tab on a page shows a **Skip
+to main content** button that moves focus past the header and the navigation into the
+open view. It is a button rather than a `#main` link because the hash is the route, and
+`#main` would open the unrecognised-route notice. Every focusable control shows the
+same light-blue focus ring when it is reached from the keyboard, and the ring stays off
+mouse clicks.
+
 ## (a) Live status board — working / unknown / done
 
 **Answers:** Q3 ("did any session get stuck / error without me noticing?") and,

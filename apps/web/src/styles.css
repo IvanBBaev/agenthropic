@@ -7,6 +7,35 @@
   box-sizing: border-box;
 }
 
+/*
+ * UX-14: one keyboard focus ring for every control. Drawn outside the element
+ * (offset) so it reads against the page background rather than against a
+ * button's own blue fill, which the browser's default ring did not.
+ * :focus-visible keeps it off mouse clicks.
+ */
+:focus-visible {
+  outline: 2px solid #8fc1f5;
+  outline-offset: 2px;
+}
+
+/* The view receives focus only from the skip link; ringing the whole page
+   would mark nothing a reader can act on. */
+.view:focus {
+  outline: none;
+}
+
+/* Off-screen until it is focused: the first Tab of a page shows it. */
+.skip-link {
+  position: absolute;
+  left: 0.5rem;
+  top: -3rem;
+  z-index: 10;
+}
+
+.skip-link:focus {
+  top: 0.5rem;
+}
+
 body {
   margin: 0;
   background: #14161a;
@@ -70,7 +99,6 @@ code {
 }
 
 .token-form input:focus {
-  outline: none;
   border-color: #4b8dd6;
 }
 

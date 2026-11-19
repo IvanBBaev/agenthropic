@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Keyboard focus ring and skip link (UX-14).** Every control now shows one focus ring
+  when it is reached from the keyboard. The ring is drawn outside the control, so it
+  stays visible on the blue buttons, and the token input no longer removes it. A **Skip
+  to main content** button comes first in the tab order and moves focus into the open
+  view without changing the route.
 - **Code of Conduct and sponsor button (OSS-15).** `CODE_OF_CONDUCT.md` adopts the
   Contributor Covenant 2.1. A report goes through a GitHub issue that asks for a private
   channel, the same route `SECURITY.md` uses, because the project publishes no contact

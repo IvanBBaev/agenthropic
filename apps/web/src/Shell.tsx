@@ -496,6 +496,8 @@ export function Shell({
    * replay under way at exactly the re-probe that is meant to watch it end.
    */
   const replayingSchemaRef = useRef<number | null>(null);
+  /** Where the skip link sends focus (UX-14). */
+  const mainRef = useRef<HTMLElement>(null);
   /**
    * How many replays this shell has watched END (2026-10-05). Three of the
    * four views fetch once and hold the answer, so a view opened mid-replay
@@ -607,8 +609,21 @@ export function Shell({
   const chip = chipFor(health, stream, streamEverOpened, streamAttempts);
   const active = VIEWS[view];
 
+  /**
+   * UX-14: the skip link moves focus to the view without touching the hash.
+   * It is a button, not `<a href="#main">`, because the hash IS the route here
+   * (router.ts): `#main` would navigate to a view this build does not have and
+   * raise the unrecognised-route notice instead of skipping anything.
+   */
+  const skipToMain = (): void => {
+    mainRef.current?.focus();
+  };
+
   return (
     <div className="shell">
+      <button type="button" className="skip-link" onClick={skipToMain}>
+        Skip to main content
+      </button>
       <header className="shell-header">
         <span className="brand">agenthropic</span>
         {/* The live region wraps chip AND detail, so a state change is
@@ -714,7 +729,7 @@ export function Shell({
             {LEGEND_GAPS}
           </p>
         </nav>
-        <main className="view">
+        <main className="view" ref={mainRef} tabIndex={-1}>
           <h1>{active.title}</h1>
           {sse !== null && (
             /* Keyed by the route so navigating away from a crashed view

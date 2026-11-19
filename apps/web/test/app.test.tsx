@@ -778,6 +778,23 @@ describe('shell with a stored token', () => {
     expect(legend).toContain('the raw word in quotes');
   });
 
+  it('skips to the view without changing the route (UX-14)', async () => {
+    routeFetch();
+    render(<App />);
+    await screen.findByRole('heading', { name: 'Live status' });
+    setHash('#/cost');
+
+    const skip = screen.getByRole('button', { name: 'Skip to main content' });
+    // First in tab order: nothing focusable may precede it in the document.
+    const focusables = document.querySelectorAll('button, a[href], input');
+    expect(focusables[0]).toBe(skip);
+
+    fireEvent.click(skip);
+    expect(document.activeElement).toBe(screen.getByRole('main'));
+    expect(window.location.hash).toBe('#/cost');
+    expect(screen.getByRole('heading', { name: 'Cost and savings' })).toBeDefined();
+  });
+
   it('routes by hash across the four views and defaults unknown hashes to live', async () => {
     routeFetch();
     render(<App />);
