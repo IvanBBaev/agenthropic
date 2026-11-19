@@ -58,6 +58,7 @@ import { signedRetentionPolicy } from './retention/policy';
 import type { RetentionPort } from './retention/port';
 import { createRetentionRunner, RetentionRunError } from './retention/runner';
 import { describeRetentionPolicy, retentionRunLine } from './retention/summary';
+import { selfMetrics, startLoopLagMonitor } from './self-metrics';
 import { buildServer, type OperationalHealth } from './server';
 
 export {
@@ -1265,6 +1266,9 @@ export async function start(
         backup: backups.state(),
         hookDeliveries,
       }),
+    // OPS-20: the process's own memory and event-loop lag. `loopLag` is
+    // declared below, next to the backups, for the same reason as `backups`.
+    selfMetrics: () => selfMetrics({ loopLag }),
     // R13: format-drift census over the stored sessions. Wired with ingest off
     // too: it reads stored rows, so zeros are a real answer, not a fake one.
     formatDrift: () => readFormatDrift(db),
@@ -1291,6 +1295,8 @@ export async function start(
   const backups = scheduleDailyBackups(db, backupsDir, retention, {
     lastBackupAt: newestBackupTime(backupsDir),
   });
+  // OPS-20: event-loop lag for /api/health, sampled for the life of the server.
+  const loopLag = startLoopLagMonitor();
   // v2.0 alerting (AD-1): built only when the operator named a config file.
   // Started inside the try below so a tokenRef that does not resolve fails the
   // boot through the same close path as a failed bind.
@@ -1299,6 +1305,7 @@ export async function start(
     // Awaited: an in-flight delivery must be recorded before db.close().
     await alerting?.stop();
     backups.stop();
+    loopLag.stop();
     watcher?.stop();
     await app.close();
     db.close();

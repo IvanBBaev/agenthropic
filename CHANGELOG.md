@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Self-observability on `/api/health` (OPS-20).** The real server now reports
+  `rssBytes` (resident memory), `eventLoopLagP99Ms` and `eventLoopLagMaxMs` (how late the
+  event loop ran a 20 ms sampling timer over the last complete 60 s window) and
+  `sseClients` (open `/api/stream` connections). A blocked loop shows here before a hook
+  times out. A server built without the wiring omits all four.
 - **Pinned CI supply chain and an update policy (SEC-9, OSS-10).** Every GitHub Action
   now runs from a full commit SHA with its release in a trailing comment, instead of a
   movable major tag. A new `.github/dependabot.yml` proposes weekly updates for the

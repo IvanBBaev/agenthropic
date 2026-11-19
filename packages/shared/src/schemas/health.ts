@@ -112,6 +112,22 @@ export const HealthSchema = Type.Object(
         { additionalProperties: false },
       ),
     ),
+    // OPS-20 (2026-11-19): self-observability - how the process itself is
+    // doing, read at request time. Wired together with the composition
+    // root's self-metrics seam; a bare server omits all four.
+    //
+    // Resident set size of the server process in bytes.
+    rssBytes: Type.Optional(Type.Integer({ minimum: 0 })),
+    // How late the event loop ran a 20 ms sampling timer, in milliseconds,
+    // over the last complete 60 s window (the current one until a window
+    // completes): the 99th percentile and the worst sample. A blocked loop -
+    // a long synchronous parse, a replay pass - shows here first, and a
+    // blocked loop is also a hook receiver that cannot answer. Omitted until
+    // the first sample.
+    eventLoopLagP99Ms: Type.Optional(Type.Number({ minimum: 0 })),
+    eventLoopLagMaxMs: Type.Optional(Type.Number({ minimum: 0 })),
+    // Open `/api/stream` connections right now.
+    sseClients: Type.Optional(Type.Integer({ minimum: 0 })),
     // R13 (ARC-6, QA-3, DAT-7, DAT-11): format-drift census over the stored
     // sessions, aggregated at request time from each session's latest parse.
     // The parser tolerates unknown record types and usage keys and skips a

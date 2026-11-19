@@ -427,6 +427,9 @@ replay pass finishes and `"ok"` after it, and `schemaVersion`. Everything else i
 | `lastBackupError` | the most recent backup attempt failed | That attempt's error message; the full line is `database backup failed: <message>` on stderr. Disappears once a backup succeeds. *(Added 2026-11-08, R11.)* |
 | `dbBytes`, `walBytes` | the database file can be read | File sizes in bytes. A WAL that keeps growing means a checkpoint is being held back — usually a long read. *(Added 2026-11-08, R11.)* |
 | `hookDeliveries` | always, on the real server | Hook deliveries since boot by outcome. A rising `unauthorized` count means a hook is sending a token the server does not accept — re-run the hook installer with the current `DASHBOARD_TOKEN`; the hook never shows this itself. A rising `failed` count means the append is failing; see the server log. *(Added 2026-11-08, R11.)* |
+| `rssBytes` | always, on the real server | Resident memory of the server process. A cold replay peaked at 487–583 MiB in the September 2026 measurement (a smaller corpus than today); a value that keeps climbing on an idle server is worth a restart and a report. *(Added 2026-11-19, OPS-20.)* |
+| `eventLoopLagP99Ms`, `eventLoopLagMaxMs` | the real server has taken its first sample | How late the event loop ran a 20 ms timer, over the last complete 60 s window. Single-digit milliseconds is idle. Hundreds of milliseconds means something held the loop — a replay pass or a large session re-parse — and hooks and API requests waited that long. *(Added 2026-11-19, OPS-20.)* |
+| `sseClients` | always, on the real server | Open `/api/stream` connections. It should match the dashboard tabs you have open; a count that only grows means streams are not being released. *(Added 2026-11-19, OPS-20.)* |
 
 The omissions carry information, and it is not the information a zero would carry.
 `lastTickDurationMs` is the clearest case: the server code comments that *"no pass

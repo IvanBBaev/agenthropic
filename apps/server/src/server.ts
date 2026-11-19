@@ -37,6 +37,7 @@ import { NOT_FOUND_MESSAGE, registerStaticSite } from './http/static-site';
 import { SECURITY_HEADERS } from './http/security-headers';
 import { parseLastEventId, RealtimeHub } from './realtime/hub';
 import { MAX_ID_LENGTH, MAX_REQUEST_BODY_BYTES } from './limits';
+import type { SelfMetrics } from './self-metrics';
 
 /**
  * The R11 / OPS-5 health fields the composition root supplies. Every one is
@@ -151,6 +152,13 @@ export interface BuildServerOptions {
    * faked. Absent on a server built without that wiring.
    */
   readonly operationalHealth?: () => OperationalHealth;
+  /**
+   * OPS-20: the process's own resident memory and event-loop lag
+   * (self-metrics.ts). When wired, /api/health also carries `sseClients`, the
+   * open stream count this server holds. Absent on a server built without
+   * that wiring, so all four fields are omitted.
+   */
+  readonly selfMetrics?: () => SelfMetrics;
   /**
    * R13: the format-drift census over the stored sessions (db/format-drift.ts).
    * Absent on a server built without that wiring, so the field is omitted.
@@ -387,6 +395,11 @@ export function buildServer(options: BuildServerOptions) {
             sessionsQuarantined: exclusions.quarantined,
           }),
       ...options.operationalHealth?.(),
+      // `activeStreams` is declared below with the stream route; this runs
+      // only on a request, after the whole server is built.
+      ...(options.selfMetrics === undefined
+        ? {}
+        : { ...options.selfMetrics(), sseClients: activeStreams.size }),
       ...(options.formatDrift === undefined ? {} : { formatDrift: options.formatDrift() }),
     };
   });
