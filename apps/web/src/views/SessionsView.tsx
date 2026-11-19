@@ -61,6 +61,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchSessions, fetchSessionTree } from '../api';
 import { readNowMs, useNowMs } from '../clock';
+import { createCoalescer } from '../coalesce';
 import type { AgentNodeDto, SessionSummaryDto, SessionTreeDto } from '../dto';
 import {
   agentTypeLabel,
@@ -652,8 +653,10 @@ export function SessionsView({ token, sse, onAuthRejected, replayEpoch }: ViewPr
   // selected session, re-read the tree rather than guess at it.
   useEffect(() => {
     if (selectedId === null) return undefined;
+    // UX-15: ingests of the open session are coalesced like the live board's.
+    const ingestRefetch = createCoalescer(() => setTreeReload((value) => value + 1));
     const unsubscribeIngest = sse.subscribe('session-ingested', (event) => {
-      if (frameSessionId(event.data) === selectedId) setTreeReload((value) => value + 1);
+      if (frameSessionId(event.data) === selectedId) ingestRefetch.request();
     });
     const unsubscribeStatus = sse.subscribe('agent-status-changed', (event) => {
       const data = event.data;
@@ -680,6 +683,7 @@ export function SessionsView({ token, sse, onAuthRejected, replayEpoch }: ViewPr
       applyTree({ ...current, tree: patched, livePatches: current.livePatches + 1 });
     });
     return () => {
+      ingestRefetch.cancel();
       unsubscribeIngest();
       unsubscribeStatus();
     };

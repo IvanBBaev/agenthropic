@@ -286,6 +286,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The live board and the open session tree coalesce ingest refetches (UX-15). A burst
+  of `session-ingested` frames used to re-read the session list once per frame. Now
+  the first frame re-reads at once and the rest of a 2-second window fold into one
+  trailing re-read, so the last ingest of a burst is still shown.
 - The per-row price lookup is pinned to an index seek (DAT-13). A test reads the
   query plan of the priced-usage query and fails if SQLite ever scans or sorts
   `model_pricing` for it. The existing primary key `(model, bucket,

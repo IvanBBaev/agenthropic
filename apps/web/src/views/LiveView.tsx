@@ -60,6 +60,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchSessions } from '../api';
 import { readNowMs, useNowMs } from '../clock';
+import { createCoalescer } from '../coalesce';
 import {
   formatRelativeMs,
   formatRelativeTime,
@@ -312,6 +313,9 @@ export function LiveView({ token, sse, onAuthRejected }: ViewProps) {
   }, [token, reload, onAuthRejected, applyBoard]);
 
   useEffect(() => {
+    // UX-15: an active session ingests several times a second; its frames are
+    // folded into at most one re-read per interval, the last one never lost.
+    const ingestRefetch = createCoalescer(() => setReload((current) => current + 1));
     const unsubscribeIngest = sse.subscribe('session-ingested', (event) => {
       const sessionId = ingestedSessionId(event.data);
       if (sessionId !== null) {
@@ -320,7 +324,7 @@ export function LiveView({ token, sse, onAuthRejected }: ViewProps) {
         setFailures((current) => current.filter((notice) => notice.sessionId !== sessionId));
       }
       // New persisted data exists; refetch instead of guessing its summary.
-      setReload((current) => current + 1);
+      ingestRefetch.request();
     });
     const unsubscribeFailed = sse.subscribe('ingest-failed', (event) => {
       const notice = toIngestFailureNotice(event.data);
@@ -390,6 +394,7 @@ export function LiveView({ token, sse, onAuthRejected }: ViewProps) {
       setReload((value) => value + 1);
     });
     return () => {
+      ingestRefetch.cancel();
       unsubscribeIngest();
       unsubscribeFailed();
       unsubscribeStatus();

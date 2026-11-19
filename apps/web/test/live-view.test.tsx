@@ -14,6 +14,7 @@ import {
 } from '../src/views/LiveView';
 // M-10: the cadence now belongs to the app-wide clock, not to this view.
 import { CLOCK_INTERVAL_MS } from '../src/clock';
+import { INGEST_REFETCH_INTERVAL_MS } from '../src/coalesce';
 import { createSseClient, type SseClient } from '../src/sse';
 import {
   deferred,
@@ -241,6 +242,63 @@ describe('LiveView', () => {
     });
 
     await waitFor(() => expect(sessionsCalls()).toHaveLength(2));
+  });
+
+  it('coalesces a burst of session-ingested frames into one immediate and one trailing refetch (UX-15)', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, sessionList([sessionSummary()])));
+    renderView();
+    await screen.findByRole('list', { name: 'sessions' });
+    vi.useFakeTimers();
+
+    const ingest = (n: number) => {
+      MockEventSource.latest().emit('session-ingested', {
+        type: 'session-ingested',
+        sessionId: `session-${String(n)}`,
+        occurredAt: '2026-07-29T10:10:00.000Z',
+      });
+    };
+    act(() => {
+      for (let n = 0; n < 5; n += 1) ingest(n);
+    });
+    // The first frame re-reads at once; the other four wait for the interval.
+    expect(sessionsCalls()).toHaveLength(2);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(INGEST_REFETCH_INTERVAL_MS - 1);
+    });
+    expect(sessionsCalls()).toHaveLength(2);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(sessionsCalls()).toHaveLength(3);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10 * INGEST_REFETCH_INTERVAL_MS);
+    });
+    expect(sessionsCalls()).toHaveLength(3);
+  });
+
+  it('drops a pending coalesced refetch on unmount (UX-15)', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, sessionList([sessionSummary()])));
+    const view = renderView();
+    await screen.findByRole('list', { name: 'sessions' });
+    vi.useFakeTimers();
+
+    act(() => {
+      for (let n = 0; n < 2; n += 1) {
+        MockEventSource.latest().emit('session-ingested', {
+          type: 'session-ingested',
+          sessionId: `session-${String(n)}`,
+          occurredAt: '2026-07-29T10:10:00.000Z',
+        });
+      }
+    });
+    expect(sessionsCalls()).toHaveLength(2);
+    view.unmount();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(INGEST_REFETCH_INTERVAL_MS);
+    });
+    expect(sessionsCalls()).toHaveLength(2);
   });
 
   it('refetches on a malformed agent-status-changed payload instead of patching it', async () => {
