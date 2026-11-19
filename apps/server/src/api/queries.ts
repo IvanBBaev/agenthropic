@@ -42,8 +42,15 @@ import { ledgerEpoch } from '../db/ledger-epoch';
  * Shared CTE: every `token_usage` row with its resolved USD/Mtok rate (NULL
  * when no dated price applies). ISO-8601 strings compare correctly as text,
  * so `effective_from <= occurred_at` needs no date parsing.
+ *
+ * DAT-13 (2026-11-19): the rate subquery is correlated - it runs once per
+ * `token_usage` row - so each run must be an index seek, never a scan of
+ * `model_pricing`. The table's primary key `(model, bucket, effective_from)`
+ * already serves it: equality on the first two columns, a range on the third,
+ * and the ORDER BY ... DESC LIMIT 1 walks that index backwards, so no sort is
+ * needed. No extra index is needed. Exported so a test can pin that plan.
  */
-function pricedCte(where = ''): string {
+export function pricedCte(where = ''): string {
   return `
   priced AS (
     SELECT

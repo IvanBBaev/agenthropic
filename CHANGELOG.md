@@ -286,6 +286,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The per-row price lookup is pinned to an index seek (DAT-13). A test reads the
+  query plan of the priced-usage query and fails if SQLite ever scans or sorts
+  `model_pricing` for it. The existing primary key `(model, bucket,
+  effective_from)` already serves the lookup, so no new index was added.
 - **`@agenthropic/shared` splits off its node-only and test-only code (ARC-12).** The root
   entry, which the SPA imports, no longer re-exports the `node:crypto` security primitives
   or the in-memory test doubles. They moved to two subpath entries:
