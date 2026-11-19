@@ -68,6 +68,9 @@ Rules of this document:
 - [ ] **CI green on the release commit.** Verify:
       `gh api "repos/IvanBBaev/agenthropic/actions/workflows/ci.yml/runs?branch=main&per_page=1" --jq '.workflow_runs[0] | {head_sha, conclusion}'`
       → `conclusion` is `success` and `head_sha` is the commit to be tagged.
+      *(Since 2026-11-19, OSS-11: pushing a `v*` tag also starts its own CI run. After the
+      push, `gh run list --workflow ci.yml --branch v1.0.0 --limit 1` shows it; it must be
+      green too.)*
 
 ## 1. Build-failing quality gates (CD-7)
 

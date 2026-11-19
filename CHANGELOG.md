@@ -286,6 +286,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **CI also runs on a pushed `v*` tag (OSS-11).** Until now a tag push started no run,
+  so the post-tag "CI green on the tag ref" check named a run that did not exist.
+  `timeout-minutes` and the cancel-superseded `concurrency` group were already in place;
+  `workflow-supply-chain.test.ts` now pins all three.
 - **SSE frame ids carry a boot id, and the dashboard re-reads on a server restart
   (ARC-7).** Ids are now `<bootId>-<n>`, with a random 12-hex boot id per server process,
   instead of a bare counter that restarted at 1. A client resuming with an id from another

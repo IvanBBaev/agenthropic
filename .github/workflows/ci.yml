@@ -29,6 +29,10 @@ name: CI
 on:
   push:
     branches: [main]
+    # OSS-11: a pushed release tag gets its own run, so "CI green on the tag
+    # ref" (RELEASE.md, post-tag) names a run that exists. Without this a tag
+    # push started nothing and only the run on the release commit could stand in.
+    tags: ['v*']
   pull_request:
 
 permissions:

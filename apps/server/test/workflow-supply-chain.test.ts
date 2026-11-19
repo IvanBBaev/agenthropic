@@ -76,6 +76,13 @@ describe('workflow supply chain (SEC-9)', () => {
     }
   });
 
+  it('CI runs on a pushed release tag, is time-boxed and cancels superseded runs (OSS-11)', () => {
+    const ci = readRepoFile('.github/workflows/ci.yml');
+    expect(ci).toMatch(/^ {4}tags: \['v\*'\]$/m);
+    expect(ci).toMatch(/^ {4}timeout-minutes: \d+$/m);
+    expect(ci).toMatch(/^ {2}cancel-in-progress: true$/m);
+  });
+
   it('Dependabot watches both the Actions and the npm workspace', () => {
     const config = readRepoFile('.github/dependabot.yml');
     expect(config).toMatch(/^version: 2$/m);
