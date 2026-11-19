@@ -19,6 +19,7 @@ import { MAX_AGGREGATE_SKIPPED_SAMPLE } from '@agenthropic/shared';
 import { buildServer } from '../src/server';
 import type { SqliteDatabase } from '../src/db/connection';
 import { getAggregateDelegationSavings } from '../src/api/queries';
+import { loadPricing } from '../src/db/pricing';
 import { createMigratedTempDb, TEST_TOKEN, type TempDb } from './helpers';
 
 const AUTH = { authorization: `Bearer ${TEST_TOKEN}` };
@@ -293,5 +294,38 @@ describe('/api/cost/delegation-savings (M-9 aggregate)', () => {
         },
       ]),
     ).toThrow(RangeError);
+  });
+
+  it('labels the read model itself an estimate over stored rows, not only the wire', () => {
+    // QA-9b: the route's response schema declares both fields as literals, so
+    // the serializer writes the schema's constant whatever the read model
+    // returned - an HTTP assertion cannot see a wrong value here, so the
+    // fields are pinned where they are produced.
+    const dto = getAggregateDelegationSavings(temp.db, loadPricing(temp.db));
+    expect(dto.isEstimate).toBe(true);
+    expect(dto.basis).toBe('stored-usage-rows');
+  });
+
+  it('names the hypothetical models in code-unit order, not in the order sessions met them', () => {
+    // QA-9b: `r-opus` sorts before `s-deleg`, so the per-session walk meets
+    // claude-opus-4-8 first and then s-deleg's claude-fable-5 and
+    // claude-sonnet-5. An unsorted answer would list opus first.
+    temp.db.exec(`
+      INSERT INTO sessions (id, project_slug, started_at, last_activity_at, status) VALUES
+        ('r-opus', 'proj-c', '2026-07-10T00:00:00Z', '2026-07-10T02:00:00Z', 'active');
+      INSERT INTO agents (id, session_id, type, subagent_type, status, parent_agent_id, first_seen_at, last_seen_at) VALUES
+        ('m-opus', 'r-opus', 'main',     NULL,       'completed', NULL,     '${AT}', '${AT}'),
+        ('a-opus', 'r-opus', 'subagent', 'explorer', 'completed', 'm-opus', '${AT}', '${AT}');
+      INSERT INTO token_usage (session_id, agent_id, message_id, model, bucket, tokens, is_compaction_baseline, occurred_at) VALUES
+        ('r-opus', 'm-opus', 'msg-opus-main', 'claude-opus-4-8',           'output', 1000000, 0, '${AT}'),
+        ('r-opus', 'a-opus', 'msg-opus-sub',  'claude-haiku-4-5-20251001', 'output', 1000000, 0, '${AT}');
+    `);
+    const dto = getAggregateDelegationSavings(temp.db, loadPricing(temp.db));
+    expect(dto.sessionsPriced).toBe(2);
+    expect(dto.hypotheticalModels).toEqual([
+      'claude-fable-5',
+      'claude-opus-4-8',
+      'claude-sonnet-5',
+    ]);
   });
 });

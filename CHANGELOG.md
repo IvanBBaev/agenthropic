@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Mutation follow-up (QA-9b): server tests now kill the read-model survivors from the
+  QA-9 baseline — the `isEstimate` / `basis` and `interval` / `basis` literals checked on
+  the read models themselves (the response schema serializes literals from the schema,
+  hiding a wrong value on the wire), the sorted `hypotheticalModels`, the savings cache's
+  unstamped sentinel against a session stamped `1`, `lateIngested.next` on a complete
+  page whose last row is below the clock, and the `until` clamp for a `since` beyond
+  the corpus.
 - Mutation follow-up (QA-9a): core tests now kill the format-census and filename-pattern
   survivors from the QA-9 baseline — the literal known record types and usage keys, the
   sentinel keys, the 64-character value cut, object values, empty and non-string

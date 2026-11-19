@@ -190,6 +190,26 @@ describe('aggregate delegation savings - incremental per-session cache', () => {
     expect(priced).toEqual(['s-a', 's-b', 's-b']);
   });
 
+  it('trusts a session genuinely stamped 1 - the unstamped sentinel is not a real stamp', () => {
+    // QA-9b: `UNSTAMPED` must be a value no `ingest_seq` can hold (migration 22
+    // CHECKs `>= 0`). Were it 1, the cache would mistake the first session
+    // ever stamped for an unstamped one and reprice it on every request. The
+    // stamping UPDATE writes only `ingest_seq`, which no trigger watches, so
+    // the stamp stays exactly where it is put.
+    const { probe, priced } = makeProbe();
+    temp.db.prepare(`UPDATE sessions SET ingest_seq = 1 WHERE id = 's-a'`).run();
+    expect(
+      (
+        temp.db.prepare(`SELECT ingest_seq AS seq FROM sessions WHERE id = 's-a'`).get() as {
+          seq: number;
+        }
+      ).seq,
+    ).toBe(1);
+    read(probe);
+    read(probe);
+    expect(priced).toEqual(['s-a', 's-b']);
+  });
+
   it('keeps the previous entry when a non-pricing failure aborts a read', () => {
     const { probe, priced } = makeProbe();
     read(probe);

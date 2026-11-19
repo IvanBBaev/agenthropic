@@ -498,6 +498,34 @@ describe('/api/changes (WP-U11)', () => {
     });
   });
 
+  it('S-1: a complete late page hands back the clock, not its own last stamp', () => {
+    // QA-9b: the page holds every late session, but the clock has moved past
+    // its last row - a session that changed INSIDE the window was stamped
+    // after it, and that one is answered by the window, not the late list.
+    // `next` must be the clock: handing back the late row's stamp would make
+    // the following call name the in-window session as late.
+    const cursor = getChanges(temp.db, SINCE, 50, 0).ingestCursor;
+    temp.db.exec(`
+      UPDATE sessions SET status = 'archived' WHERE id = 's-old';
+      UPDATE sessions SET status = 'completed' WHERE id = 's-new';
+    `);
+    const stampOf = (id: string): number =>
+      (
+        temp.db.prepare('SELECT ingest_seq AS seq FROM sessions WHERE id = ?').get(id) as {
+          seq: number;
+        }
+      ).seq;
+    const dto = getChanges(temp.db, SINCE, 50, 0, cursor);
+    expect(stampOf('s-old')).toBeLessThan(dto.ingestCursor);
+    expect(dto.sessions.map((s) => s.id)).toContain('s-new');
+    expect(dto.lateIngested).toEqual({
+      after: cursor,
+      total: 1,
+      sessionIds: ['s-old'],
+      next: dto.ingestCursor,
+    });
+  });
+
   it('S-1: rejects an `after` that is not a non-negative integer', async () => {
     for (const after of ['-1', 'abc', '1.5']) {
       const response = await app.inject({
@@ -520,6 +548,33 @@ describe('/api/changes (WP-U11)', () => {
     // The corpus's newest row, not "now" - ingest lags event time, so a clock
     // boundary would promise rows that have not arrived.
     expect(Date.parse(body.until)).toBeLessThan(Date.now());
+  });
+
+  it('clamps the window end up to `since` when every stored instant is older', async () => {
+    // QA-9b: a `since` beyond the whole corpus must yield the empty window
+    // (since, since], not the inverted (since, newest-instant].
+    const future = '2027-01-01T00:00:00.000Z';
+    const response = await app.inject({
+      method: 'GET',
+      url: url(`since=${future}`),
+      headers: AUTH,
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as ChangesDto;
+    expect(body.since).toBe(future);
+    expect(body.until).toBe(future);
+    expect(body.total).toBe(0);
+    expect(body.sessions).toEqual([]);
+    expect(body.totals.tokensAdded).toBe(0);
+  });
+
+  it('names its interval and basis in the read model itself, not only on the wire', () => {
+    // QA-9b: the response schema declares both as literals, so the serializer
+    // writes the schema's constant whatever the read model returned - the
+    // HTTP assertion above cannot see a wrong value. Pinned at the source.
+    const dto = getChanges(temp.db, SINCE, 50, 0);
+    expect(dto.interval).toBe('(since, until]');
+    expect(dto.basis).toBe('event-time');
   });
 });
 
