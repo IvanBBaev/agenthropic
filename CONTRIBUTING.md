@@ -10,6 +10,9 @@ clear. The depth lives in the docs corpus - start at
 restated there on purpose; when the two disagree, the docs corpus is the detail and this
 page is the summary.
 
+Everyone taking part in issues, pull requests and reviews follows the
+[Code of Conduct](CODE_OF_CONDUCT.md).
+
 ## Before you open a large PR
 
 This is a pre-v1.0 project with a single maintainer and a fixed roadmap. Open work is in

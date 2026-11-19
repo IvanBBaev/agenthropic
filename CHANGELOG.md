@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Code of Conduct and sponsor button (OSS-15).** `CODE_OF_CONDUCT.md` adopts the
+  Contributor Covenant 2.1. A report goes through a GitHub issue that asks for a private
+  channel, the same route `SECURITY.md` uses, because the project publishes no contact
+  email. `.github/FUNDING.yml` lists the three sponsor links from the README, so GitHub
+  shows its Sponsor button.
 - **Optional off-host backup mirror (OPS-17).** Set `DASHBOARD_BACKUP_MIRROR_DIR` to an
   absolute path (a Time Machine volume, a NAS mount) and every daily backup is also
   copied there, 0600, via a `.partial` file and a rename. The server never creates or
