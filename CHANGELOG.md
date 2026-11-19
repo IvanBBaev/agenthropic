@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Money rounding rule (DAT-12): dollars stay doubles end to end and are rounded only for
+  display. The ingest gate and the API are each held within a stated float bound of the
+  exact total, checked against a BigInt pico-dollar oracle by a property test, a
+  20,000-message long-horizon case and an early-rounding guard. See
+  docs/site/architecture/cost-model.md, "The rounding rule".
 - Historical-database upgrade matrix (QA-10): for every on-disk schema from 1 to head-1
   (16 is 0.3.0), a database with representative rows written the way that build wrote them
   is upgraded and compared with a fresh head database holding the same facts. Schema, every

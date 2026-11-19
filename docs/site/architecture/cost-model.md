@@ -514,6 +514,44 @@ ground-truth tokens × dated price" (development plan §3, Phase 4 exit gate), a
 > `GET /api/sessions/:id/cost-analysis` still calls `computeCostUsd` and still answers
 > `422` on an unknown model.
 
+### The rounding rule (DAT-12, 2026-11-19)
+
+Dollars are summed in two places. The ingest gate (`priceUsage`) adds one
+`tokens × rate / 1e6` term per message bucket, in message order. The API (`getCostSummary`)
+adds one term per `token_usage_rollup` group, over an exact integer token total, in
+primary-key order. Both are IEEE-754 doubles, so they cannot be bit-identical. The rule
+that makes them agree in a checkable way:
+
+1. **A dollar amount is a double from end to end, and nothing rounds it except the
+   display.** `formatUsd` in the web app shows cents at or above $0.01, four decimals
+   below that, and a floor marker under $0.0001. No path rounds a term or a subtotal:
+   rounding each term to the cent would drift by up to half a cent per term.
+2. **Each path is within `(n + 4) × 2⁻⁵³ × S` of the exact total.** Here `n` is the
+   number of terms that path adds and `S` is the exact rational total: one unit of
+   roundoff per addition, plus a few per term for the rate's binary representation, the
+   multiply and the divide. The two paths are therefore within the sum of their bounds of
+   each other.
+3. **Both paths show the same cents unless the exact total sits within that bound of a
+   half-cent.** There, any binary representation has to pick a side.
+
+`apps/server/test/money-rounding-rule.test.ts` checks the rule against an exact BigInt
+oracle in pico-dollars. Rates carry at most six decimals, so `tokens × rate × 10⁶` is an
+integer. The file has three tests:
+
+- a fast-check property over arbitrary multi-session usage;
+- a fixed long-horizon case: 20,000 messages over sixty days, ≈ $3,515;
+- a check that per-term rounding to the cent would break the bound.
+
+On the fixed case the gate lands 1.0 × 10⁻¹¹ USD from the exact total (bound 3.9 × 10⁻⁸)
+and the API 1.4 × 10⁻¹² (bound 3.1 × 10⁻¹¹). The API's per-group order is the nearer of
+the two there, as the structural argument in `getCostSummary` predicts.
+
+Integer money was considered and not adopted. One token at $0.08/Mtok costs 8 × 10⁻⁸ USD,
+and rates with up to six decimals make the exact unit a pico-dollar. In pico-dollars, a
+total passes `Number.MAX_SAFE_INTEGER` at about $9,000, so exact integer money would mean
+BigInt on every read path. The bound above makes that unnecessary for any total a
+dashboard shows.
+
 ## 6. Compaction-baseline repricing
 
 `PreCompact` is one of the twelve (nine confirmed, per the hook-catalog caveat — see
