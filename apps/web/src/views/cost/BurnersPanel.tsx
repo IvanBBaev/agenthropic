@@ -3,7 +3,8 @@
  * in UX-16 (2026-11-19).
  */
 import type { GlobalDagDto } from '../../dto';
-import { agentTypeLabel, formatTokens, formatUsd, shortId } from '../../format';
+import { agentTypeLabel, formatTokens, shortId } from '../../format';
+import { UsdCell } from '../UsdCell';
 import { rankTopBurners } from '../top-burners';
 import { TOP_BURNERS_N, TOP_BURNERS_NODE_LIMIT, UnpricedCell } from './shared';
 
@@ -106,7 +107,7 @@ function BurnersPanel({ dag }: { readonly dag: GlobalDagDto }) {
                 <code>{shortId(agent.sessionId)}</code>
               </td>
               <td className="num">{formatTokens(agent.totalTokens)}</td>
-              <td className="num">{formatUsd(agent.costUsd)}</td>
+              <UsdCell costUsd={agent.costUsd} />
               <UnpricedCell tokens={agent.unpricedTokens} />
             </tr>
           ))}

@@ -14,6 +14,7 @@ import {
 import { isReadableDay } from '../cost-windows';
 import { DroppedUsageNote, PartialBadge } from '../session-honesty';
 import { NO_FIGURE_META } from '../status';
+import { UsdCell } from '../UsdCell';
 import { plural, UnpricedCell, USD_EPSILON } from './shared';
 
 /**
@@ -159,7 +160,7 @@ export function PerModelTable({
               <tr key={model.model}>
                 <ModelCell model={model.model} />
                 <td className="num">{formatTokens(model.tokens)}</td>
-                <td className="num">{formatUsd(model.costUsd)}</td>
+                <UsdCell costUsd={model.costUsd} />
                 <UnpricedCell tokens={model.unpricedTokens} />
               </tr>
             ))}
@@ -242,7 +243,7 @@ export function PerDayTable({
                 <tr key={day.day}>
                   <DayCell day={day.day} />
                   <td className="num">{formatTokens(day.tokens)}</td>
-                  <td className="num">{formatUsd(day.costUsd)}</td>
+                  <UsdCell costUsd={day.costUsd} />
                   <UnpricedCell tokens={day.unpricedTokens} />
                   <td className="bar-cell" aria-hidden="true">
                     {barWidth === null ? (
@@ -451,7 +452,7 @@ export function TopSessionsTable({
                   {projectLabel(session.projectSlug)}
                 </td>
                 <td className="num">{formatTokens(session.tokens)}</td>
-                <td className="num">{formatUsd(session.costUsd)}</td>
+                <UsdCell costUsd={session.costUsd} />
                 <UnpricedCell tokens={session.unpricedTokens} />
               </tr>
             ))}

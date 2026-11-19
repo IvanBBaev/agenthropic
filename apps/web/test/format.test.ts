@@ -12,6 +12,7 @@ import {
   formatRelativeTime,
   formatTokens,
   formatUsd,
+  formatUsdDense,
   FUTURE_SKEW_TOLERANCE_MS,
   impossibleCountText,
   isImpossibleCount,
@@ -123,6 +124,33 @@ describe('formatUsd', () => {
     expect(formatUsd(Number.POSITIVE_INFINITY)).toBe(UNREADABLE_USD);
     expect(formatUsd(Number.NEGATIVE_INFINITY)).toBe(UNREADABLE_USD);
     expect(UNREADABLE_USD).not.toContain('$');
+  });
+});
+
+describe('formatUsdDense (UX-19)', () => {
+  it('shows cents, so a column of amounts lines up on its decimal point', () => {
+    expect(formatUsdDense(1.239)).toBe('$1.24');
+    expect(formatUsdDense(0.01)).toBe('$0.01');
+    expect(formatUsdDense(-12.5)).toBe('$-12.50');
+  });
+
+  it('marks a non-zero sub-cent amount as <$0.01, never $0.00 and never $0.01', () => {
+    // 0.0043 would print as $0.00 at cents and 0.0072 as $0.01: one claims
+    // nothing was spent, the other rounds a tiny cost UP into a real cent.
+    expect(formatUsdDense(0.0043)).toBe('<$0.01');
+    expect(formatUsdDense(0.0072)).toBe('<$0.01');
+    expect(formatUsdDense(1e-9)).toBe('<$0.01');
+  });
+
+  it('marks a tiny negative amount from its own side of zero', () => {
+    expect(formatUsdDense(-0.0043)).toBe('>-$0.01');
+    expect(formatUsdDense(-1e-9)).toBe('>-$0.01');
+  });
+
+  it('keeps $0.00 for the honest zero and refuses a non-number', () => {
+    expect(formatUsdDense(0)).toBe('$0.00');
+    expect(formatUsdDense(Number.NaN)).toBe(UNREADABLE_USD);
+    expect(formatUsdDense(Number.NEGATIVE_INFINITY)).toBe(UNREADABLE_USD);
   });
 });
 

@@ -57,6 +57,7 @@ import { formatTokens, formatUsd, hasVisibleText, nameOrBlank, shortId } from '.
 import { DroppedUsageNote, PartialBadge } from './session-honesty';
 import { sessionRejectionText, type RejectionFields } from './session-rejection';
 import { NO_FIGURE_META } from './status';
+import { UsdCell } from './UsdCell';
 
 type AnalysisState =
   | { readonly kind: 'loading' }
@@ -483,7 +484,7 @@ export function SessionCostAnalysis({
                   </td>
                   <td className="num">{messageCountLabel(segment.messageCount)}</td>
                   <td className="num">{formatTokens(segmentTokens(segment.tokens))}</td>
-                  <td className="num">{formatUsd(segment.usd)}</td>
+                  <UsdCell costUsd={segment.usd} />
                 </tr>
               ))}
             </tbody>
@@ -645,9 +646,9 @@ export function SessionCostAnalysis({
                   <code>{shortId(agent.agentId)}</code>
                 </td>
                 <HypotheticalModelCell model={agent.hypotheticalModel} />
-                <td className="num">{formatUsd(agent.actualUsd)}</td>
-                <td className="num">~ {formatUsd(agent.hypotheticalUsd)}</td>
-                <td className="num">~ {formatUsd(agent.savingsUsd)}</td>
+                <UsdCell costUsd={agent.actualUsd} />
+                <UsdCell costUsd={agent.hypotheticalUsd} prefix="~ " />
+                <UsdCell costUsd={agent.savingsUsd} prefix="~ " />
               </tr>
             ))}
           </tbody>

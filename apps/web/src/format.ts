@@ -96,6 +96,23 @@ export function formatUsd(costUsd: number): string {
 }
 
 /**
+ * UX-19 - USD amounts in a dense table column: always cents, so the decimal
+ * points of a column line up (`$0.0043` above `$1.41` does not). A non-zero
+ * sub-cent amount renders as `<$0.01` (or `>-$0.01`), as ux0 specifies -
+ * never `$0.00`, which stays reserved for the honest zero, and never `$0.01`,
+ * which would round a tiny cost UP into a claim. The precise figure is not
+ * lost: a cell that shows this shorthand carries `formatUsd` in its title
+ * (see `UsdCell`). KPIs and prose keep `formatUsd`, where a single figure has
+ * no column to align with.
+ */
+export function formatUsdDense(costUsd: number): string {
+  if (!Number.isFinite(costUsd)) return UNREADABLE_USD;
+  if (costUsd === 0) return '$0.00';
+  if (Math.abs(costUsd) < 0.01) return costUsd > 0 ? '<$0.01' : '>-$0.01';
+  return `$${costUsd.toFixed(2)}`;
+}
+
+/**
  * How far ahead of this machine's clock a timestamp may sit and still be read
  * as jitter rather than as a fault. Deliberately the same 90 s as the "just
  * now" window below, so the two sides of `nowMs` are one symmetric band

@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Dense-table dollar cells (UX-19): the cost tables show every amount in cents, so a column
+  lines up on its decimal point. A non-zero sub-cent amount shows `<$0.01` (or `>-$0.01`),
+  never `$0.00`, and its precise figure is in the cell's tooltip. KPIs keep four decimals.
 - Memoised layouts (UX-17): the global DAG and the session tree are laid out once per served
   payload instead of on every clock tick, and the cost windows are cut once per summary and
   UTC day. The snapshot labels still age every tick; the layout and the windows change only
