@@ -10,6 +10,11 @@ import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { canonicalizeTimestamp } from '../src/index';
 
+// A fixed run count over generated inputs is CPU-bound: its wall-clock time
+// measures the machine's load, not the property. 2000 runs under coverage on
+// a loaded host passed the package's 15 s bound, so these tests get their own.
+const PROPERTY_TIMEOUT_MS = 120_000;
+
 const CANONICAL = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 /**
@@ -75,28 +80,32 @@ describe('canonicalizeTimestamp — properties (QA-8)', () => {
     );
   });
 
-  it('on any string either throws RangeError or returns an idempotent canonical value', () => {
-    const anyText = fc.oneof(
-      fc.string(),
-      // Near-misses of the accepted grammar, where a lax parser would slip.
-      fc.stringMatching(
-        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(\.\d{0,10})?(Z|[+-]\d{2}:?\d{2})?$/,
-      ),
-    );
-    fc.assert(
-      fc.property(anyText, (text) => {
-        let out: string;
-        try {
-          out = canonicalizeTimestamp(text, ctx);
-        } catch (error) {
-          expect(error).toBeInstanceOf(RangeError);
-          return;
-        }
-        expect(out).toMatch(CANONICAL);
-        expect(canonicalizeTimestamp(out, ctx)).toBe(out);
-        expect(Date.parse(out)).toBe(new Date(out).getTime());
-      }),
-      { numRuns: 2000 },
-    );
-  });
+  it(
+    'on any string either throws RangeError or returns an idempotent canonical value',
+    { timeout: PROPERTY_TIMEOUT_MS },
+    () => {
+      const anyText = fc.oneof(
+        fc.string(),
+        // Near-misses of the accepted grammar, where a lax parser would slip.
+        fc.stringMatching(
+          /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(\.\d{0,10})?(Z|[+-]\d{2}:?\d{2})?$/,
+        ),
+      );
+      fc.assert(
+        fc.property(anyText, (text) => {
+          let out: string;
+          try {
+            out = canonicalizeTimestamp(text, ctx);
+          } catch (error) {
+            expect(error).toBeInstanceOf(RangeError);
+            return;
+          }
+          expect(out).toMatch(CANONICAL);
+          expect(canonicalizeTimestamp(out, ctx)).toBe(out);
+          expect(Date.parse(out)).toBe(new Date(out).getTime());
+        }),
+        { numRuns: 2000 },
+      );
+    },
+  );
 });

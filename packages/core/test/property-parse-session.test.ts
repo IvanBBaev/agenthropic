@@ -20,6 +20,11 @@ import {
   type SessionSubstrate,
 } from '../src/index';
 
+// A fixed run count over generated inputs is CPU-bound: its wall-clock time
+// measures the machine's load, not the property. 2000 runs under coverage on
+// a loaded host passed the package's 15 s bound, so these tests get their own.
+const PROPERTY_TIMEOUT_MS = 120_000;
+
 const SESSION = 'a8a80000-1111-4222-8333-444444444444';
 const MAIN = `${SESSION}.jsonl`;
 
@@ -144,59 +149,63 @@ describe('parseSession — properties (QA-8)', () => {
     );
   });
 
-  it('on arbitrary records and junk lines, returns or throws only its declared errors', () => {
-    // Records that LOOK like transcript lines, with every field allowed to take
-    // a wrong type — the shapes a format drift would produce.
-    const loose = fc.jsonValue();
-    const record = fc.record(
-      {
-        sessionId: fc.oneof(fc.constant(SESSION), loose),
-        type: fc.oneof(fc.constantFrom('assistant', 'user', 'system', 'summary'), loose),
-        timestamp: fc.oneof(fc.integer({ min: 0, max: 50 }).map(timestamp), loose),
-        message: fc.oneof(
-          fc.record(
-            {
-              id: fc.oneof(fc.constantFrom('msg_0', 'msg_1'), loose),
-              model: fc.oneof(fc.constantFrom('m-a', 'm-b'), loose),
-              usage: fc.oneof(
-                fc.record(
-                  {
-                    input_tokens: fc.oneof(count, loose),
-                    output_tokens: fc.oneof(count, loose),
-                    cache_creation_input_tokens: fc.oneof(count, loose),
-                    cache_creation: loose,
-                  },
-                  { requiredKeys: [] },
+  it(
+    'on arbitrary records and junk lines, returns or throws only its declared errors',
+    { timeout: PROPERTY_TIMEOUT_MS },
+    () => {
+      // Records that LOOK like transcript lines, with every field allowed to take
+      // a wrong type — the shapes a format drift would produce.
+      const loose = fc.jsonValue();
+      const record = fc.record(
+        {
+          sessionId: fc.oneof(fc.constant(SESSION), loose),
+          type: fc.oneof(fc.constantFrom('assistant', 'user', 'system', 'summary'), loose),
+          timestamp: fc.oneof(fc.integer({ min: 0, max: 50 }).map(timestamp), loose),
+          message: fc.oneof(
+            fc.record(
+              {
+                id: fc.oneof(fc.constantFrom('msg_0', 'msg_1'), loose),
+                model: fc.oneof(fc.constantFrom('m-a', 'm-b'), loose),
+                usage: fc.oneof(
+                  fc.record(
+                    {
+                      input_tokens: fc.oneof(count, loose),
+                      output_tokens: fc.oneof(count, loose),
+                      cache_creation_input_tokens: fc.oneof(count, loose),
+                      cache_creation: loose,
+                    },
+                    { requiredKeys: [] },
+                  ),
+                  loose,
                 ),
-                loose,
-              ),
-              content: loose,
-            },
-            { requiredKeys: [] },
+                content: loose,
+              },
+              { requiredKeys: [] },
+            ),
+            loose,
           ),
-          loose,
-        ),
-        uuid: loose,
-        parentUuid: loose,
-        isSidechain: loose,
-        toolUseResult: loose,
-      },
-      { requiredKeys: [] },
-    );
-    const line = fc.oneof(
-      { weight: 4, arbitrary: record.map((r) => JSON.stringify(r)) },
-      { weight: 1, arbitrary: malformedLine },
-      { weight: 1, arbitrary: loose.map((v) => JSON.stringify(v)) },
-    );
-    fc.assert(
-      fc.property(fc.array(line, { maxLength: 10 }), (lines) => {
-        try {
-          parseSession(substrate(lines));
-        } catch (error) {
-          expect([SubstrateError, UsageConflictError].some((E) => error instanceof E)).toBe(true);
-        }
-      }),
-      { numRuns: 2000 },
-    );
-  });
+          uuid: loose,
+          parentUuid: loose,
+          isSidechain: loose,
+          toolUseResult: loose,
+        },
+        { requiredKeys: [] },
+      );
+      const line = fc.oneof(
+        { weight: 4, arbitrary: record.map((r) => JSON.stringify(r)) },
+        { weight: 1, arbitrary: malformedLine },
+        { weight: 1, arbitrary: loose.map((v) => JSON.stringify(v)) },
+      );
+      fc.assert(
+        fc.property(fc.array(line, { maxLength: 10 }), (lines) => {
+          try {
+            parseSession(substrate(lines));
+          } catch (error) {
+            expect([SubstrateError, UsageConflictError].some((E) => error instanceof E)).toBe(true);
+          }
+        }),
+        { numRuns: 2000 },
+      );
+    },
+  );
 });

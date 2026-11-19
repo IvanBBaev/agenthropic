@@ -18,6 +18,11 @@ import {
   type UsageRow,
 } from '../src/index';
 
+// A fixed run count over generated inputs is CPU-bound: its wall-clock time
+// measures the machine's load, not the property. 2000 runs under coverage on
+// a loaded host passed the package's 15 s bound, so these tests get their own.
+const PROPERTY_TIMEOUT_MS = 120_000;
+
 const MESSAGE_IDS = ['msg_a', 'msg_b', 'msg_c'];
 const MODELS = ['model-x', 'model-y'];
 const AGENTS = [undefined, 'agent-1', 'agent-2'];
@@ -123,14 +128,18 @@ function asRows(deduped: readonly DedupedUsage[]): UsageRow[] {
 }
 
 describe('dedupeUsageByMessageId — properties (QA-8)', () => {
-  it('matches the reference model on any row set, including which sets throw', () => {
-    fc.assert(
-      fc.property(fc.array(anyRow, { maxLength: 12 }), (rows) => {
-        expect(tryDedupe(rows)).toEqual(reference(rows));
-      }),
-      { numRuns: 2000 },
-    );
-  });
+  it(
+    'matches the reference model on any row set, including which sets throw',
+    { timeout: PROPERTY_TIMEOUT_MS },
+    () => {
+      fc.assert(
+        fc.property(fc.array(anyRow, { maxLength: 12 }), (rows) => {
+          expect(tryDedupe(rows)).toEqual(reference(rows));
+        }),
+        { numRuns: 2000 },
+      );
+    },
+  );
 
   it('is idempotent: deduping its own output changes nothing', () => {
     fc.assert(
