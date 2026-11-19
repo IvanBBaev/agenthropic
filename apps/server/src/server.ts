@@ -283,8 +283,9 @@ export function buildServer(options: BuildServerOptions) {
     logger: buildLoggerOptions(options.logger ?? false),
     bodyLimit: MAX_REQUEST_BODY_BYTES,
     // The router answers a longer path parameter with 414 before any schema
-    // runs; Fastify's own default is 100.
-    maxParamLength: MAX_ID_LENGTH,
+    // runs; Fastify's own default is 100. It lives under `routerOptions`: the
+    // top-level spelling is deprecated in Fastify 5 (FSTDEP022).
+    routerOptions: { maxParamLength: MAX_ID_LENGTH },
   });
   const typed = app.withTypeProvider<TypeBoxTypeProvider>();
 

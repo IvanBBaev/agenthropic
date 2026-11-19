@@ -170,7 +170,7 @@ describe('hook route under the input bounds (SEC-7)', () => {
 
   it('sets the body limit explicitly and answers a larger body with 413', async () => {
     expect(app.initialConfig.bodyLimit).toBe(MAX_REQUEST_BODY_BYTES);
-    expect(app.initialConfig.maxParamLength).toBe(MAX_ID_LENGTH);
+    expect(app.initialConfig.routerOptions?.maxParamLength).toBe(MAX_ID_LENGTH);
     const response = await post(JSON.stringify({ blob: 'x'.repeat(MAX_REQUEST_BODY_BYTES) }));
     expect(response.statusCode).toBe(413);
     expect(store.readAll()).toHaveLength(0);

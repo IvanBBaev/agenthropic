@@ -498,6 +498,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **No Fastify deprecation warning at startup.** The SEC-7 path-parameter cap was passed as
+  the top-level `maxParamLength` option, which Fastify 5 deprecates (FSTDEP022) and warned
+  about on every server build. It now sits under `routerOptions`; the cap (256) and its 414
+  answer are unchanged.
 - **Forked skills with no spawn anchor now join their parent instead of staying orphans.**
   A forked skill's sidecar carries no `toolUseId`, and its parent leaves no `tool_use`
   block, async result or queue record behind, so the live corpus held 50 parentless
