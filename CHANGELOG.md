@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Optional off-host backup mirror (OPS-17).** Set `DASHBOARD_BACKUP_MIRROR_DIR` to an
+  absolute path (a Time Machine volume, a NAS mount) and every daily backup is also
+  copied there, 0600, via a `.partial` file and a rename. The server never creates or
+  prunes the mirror; a failed copy is logged and reported, and stops nothing.
+  `/api/health` gains `lastBackupAgeSeconds`, `lastMirrorAt` and `lastMirrorError`.
 - **Self-observability on `/api/health` (OPS-20).** The real server now reports
   `rssBytes` (resident memory), `eventLoopLagP99Ms` and `eventLoopLagMaxMs` (how late the
   event loop ran a 20 ms sampling timer over the last complete 60 s window) and

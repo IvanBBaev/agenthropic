@@ -45,6 +45,7 @@ describe('config (WP-U0)', () => {
       webRoot: DEFAULT_WEB_ROOT,
       allowedOrigins: [],
       alertsConfigPath: null,
+      backupMirrorDir: null,
       logLevel: 'warn',
       maxFileBytes: 256 * 1024 * 1024,
       retention: {
@@ -279,6 +280,28 @@ describe('DASHBOARD_ALLOWED_ORIGINS (C-2, owner decision 2026-10-23)', () => {
       'https://a.example,,https://b.example',
     ]) {
       expect(() => originsOf(bad), bad).toThrow(/Invalid DASHBOARD_ALLOWED_ORIGINS/);
+    }
+  });
+});
+
+describe('DASHBOARD_BACKUP_MIRROR_DIR (OPS-17)', () => {
+  const dirOf = (raw: string | undefined): string | null =>
+    loadConfig({ DASHBOARD_TOKEN: TEST_TOKEN, DASHBOARD_BACKUP_MIRROR_DIR: raw }).backupMirrorDir;
+
+  it('is off by default: unset or empty means no mirror', () => {
+    expect(dirOf(undefined)).toBeNull();
+    expect(dirOf('')).toBeNull();
+  });
+
+  it('accepts an absolute path verbatim', () => {
+    expect(dirOf('/Volumes/nas/agenthropic')).toBe('/Volumes/nas/agenthropic');
+  });
+
+  it('rejects a relative path - the mirror must never resolve against cwd', () => {
+    for (const bad of ['mirror', './mirror', '../mirror']) {
+      expect(() => dirOf(bad), bad).toThrow(
+        /Invalid DASHBOARD_BACKUP_MIRROR_DIR ".*": expected an absolute path/,
+      );
     }
   });
 });

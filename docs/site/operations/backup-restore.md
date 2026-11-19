@@ -291,7 +291,22 @@ Four properties of this scheduler matter before you rely on it:
   (R11):** `/api/health` now reports `lastBackupAt` (the newest successful backup,
   seeded at boot from the newest file in the backup directory) and `lastBackupError`
   (the last attempt's message, while that attempt is the most recent). Retention state
-  is still reported only by the log lines.
+  is still reported only by the log lines. *(Amended 2026-11-19 — OPS-17: health also
+  reports `lastBackupAgeSeconds`, the age of `lastBackupAt` at request time, so a probe
+  can alert on "older than a day" without a clock of its own.)*
+- **An off-host copy is optional and off by default** (OPS-17, 2026-11-19). Every
+  backup above lands on the same disk as the database it protects; one dead disk takes
+  both. Set `DASHBOARD_BACKUP_MIRROR_DIR` to an absolute path on another disk — a Time
+  Machine volume, a NAS mount — and each successful backup is copied there right after
+  it is written, before the retention pass. The copy is written as
+  `<name>.partial`, made 0600 and renamed into place, so the mirror never holds a
+  half-written `agenthropic-*.db`. The server **never creates** the mirror directory
+  (an unmounted volume must fail, not quietly fill the local mount point) and **never
+  deletes** anything in it: local retention does not reach the mirror, so its lifetime
+  is yours to manage. A failed copy logs `database backup mirror failed: <message>`,
+  sets `lastMirrorError` in `/api/health`, and stops nothing — the local backup is
+  already on disk and retention still runs. A mirror equal to the backups directory is
+  a startup error.
 - **A failed retention pass logs and never crashes.** `retention failed: <message>`
   on stderr; the backup of that cycle is already on disk, and the next tick retries.
 - **Symlinks in the backup directory are skipped, never followed** (since 2026-10-10).
@@ -304,10 +319,11 @@ Four properties of this scheduler matter before you rely on it:
   re-entrancy flag makes the second call a no-op, so there are never two writers in the
   same directory.
 
-A successful pass logs two lines to stdout — one per step:
+A successful pass logs two lines to stdout — one per step (three with a mirror configured, *amended 2026-11-19, OPS-17*):
 
 ```
 database backup: wrote <path>.
+database backup mirror: wrote <mirror path>.
 retention: events: pruned <n> row(s) older than <cutoff>; backup files: expired <n> older than <cutoff> (<k> kept by the floor); receipt <journal path>.
 ```
 

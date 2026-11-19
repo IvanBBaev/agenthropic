@@ -102,14 +102,22 @@ describe('operationalHealth()', () => {
     const result = operationalHealth({
       dbPath,
       ingest: { lastTickAt: new Date('2026-11-08T10:00:00.000Z'), corpusTrouble: 'no-corpus-root' },
-      backup: { lastBackupAt: new Date('2026-11-08T03:00:00.000Z'), lastError: 'disk full' },
+      backup: {
+        lastBackupAt: new Date('2026-11-08T03:00:00.000Z'),
+        lastError: 'disk full',
+        mirror: { lastMirrorAt: new Date('2026-11-07T03:00:00.000Z'), lastError: 'ENOENT' },
+      },
       hookDeliveries: counters,
+      now: new Date('2026-11-08T04:30:00.900Z'),
     });
     expect(result).toEqual({
       lastTickAt: '2026-11-08T10:00:00.000Z',
       corpusTrouble: 'no-corpus-root',
       lastBackupAt: '2026-11-08T03:00:00.000Z',
+      lastBackupAgeSeconds: 5400,
       lastBackupError: 'disk full',
+      lastMirrorAt: '2026-11-07T03:00:00.000Z',
+      lastMirrorError: 'ENOENT',
       dbBytes: 100,
       walBytes: 30,
       hookDeliveries: { ...ZERO, failed: 1 },
@@ -131,6 +139,19 @@ describe('operationalHealth()', () => {
         hookDeliveries: ZERO,
       }),
     ).toEqual({ dbBytes: 10, walBytes: 0, hookDeliveries: ZERO });
+    // A configured mirror that has never written and never failed adds nothing.
+    expect(
+      operationalHealth({
+        dbPath,
+        ingest: null,
+        backup: {
+          lastBackupAt: null,
+          lastError: null,
+          mirror: { lastMirrorAt: null, lastError: null },
+        },
+        hookDeliveries: ZERO,
+      }),
+    ).toEqual({ dbBytes: 10, walBytes: 0, hookDeliveries: ZERO });
     expect(
       operationalHealth({
         dbPath: join(dir, 'missing.db'),
@@ -139,6 +160,37 @@ describe('operationalHealth()', () => {
         hookDeliveries: ZERO,
       }),
     ).toEqual({ hookDeliveries: ZERO });
+  });
+});
+
+describe('lastBackupAgeSeconds (OPS-17)', () => {
+  const at = new Date('2026-11-08T03:00:00.000Z');
+  const ageAt = (now?: Date): number | undefined =>
+    operationalHealth({
+      dbPath: join(tempDir(), 'missing.db'),
+      ingest: null,
+      backup: { lastBackupAt: at, lastError: null },
+      hookDeliveries: ZERO,
+      ...(now === undefined ? {} : { now }),
+    }).lastBackupAgeSeconds;
+
+  it('is whole seconds since the backup, rounded down', () => {
+    expect(ageAt(at)).toBe(0);
+    expect(ageAt(new Date('2026-11-08T03:00:01.999Z'))).toBe(1);
+    expect(ageAt(new Date('2026-11-09T03:00:00.000Z'))).toBe(86_400);
+  });
+
+  it('is never negative: a backup stamped after now is a clock step', () => {
+    expect(ageAt(new Date('2026-11-08T02:00:00.000Z'))).toBe(0);
+  });
+
+  it('reads the wall clock when no request time is given', () => {
+    vi.useFakeTimers({ now: new Date('2026-11-08T03:01:00.000Z') });
+    try {
+      expect(ageAt()).toBe(60);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -326,12 +378,18 @@ describe('the R11 fields through start()', () => {
     const backup = join(dir, 'backups', 'agenthropic-2026-11-07T03-00-00-000Z.db');
     writeFileSync(backup, 'x');
     utimesSync(backup, new Date('2026-11-07T03:00:00Z'), new Date('2026-11-07T03:00:00Z'));
+    const mirrorDir = join(dir, 'mirror');
+    mkdirSync(mirrorDir);
+    const mirrored = join(mirrorDir, 'agenthropic-2026-11-06T03-00-00-000Z.db');
+    writeFileSync(mirrored, 'x');
+    utimesSync(mirrored, new Date('2026-11-06T03:00:00Z'), new Date('2026-11-06T03:00:00Z'));
     const server = await start({
       DASHBOARD_TOKEN: TEST_TOKEN,
       DASHBOARD_PORT: '0',
       DASHBOARD_DB_PATH: dbPath,
       DASHBOARD_INGEST: '0',
       DASHBOARD_LOG_LEVEL: 'silent',
+      DASHBOARD_BACKUP_MIRROR_DIR: mirrorDir,
     });
     try {
       await server.app.inject({
@@ -346,6 +404,10 @@ describe('the R11 fields through start()', () => {
       ).json() as Record<string, unknown>;
       expect(health['status']).toBe('ok');
       expect(health['lastBackupAt']).toBe('2026-11-07T03:00:00.000Z');
+      expect(health['lastBackupAgeSeconds']).toBeGreaterThan(0);
+      // OPS-17: the mirror's newest copy is known from boot, like the backup's.
+      expect(health['lastMirrorAt']).toBe('2026-11-06T03:00:00.000Z');
+      expect(health).not.toHaveProperty('lastMirrorError');
       expect(health['dbBytes']).toBeGreaterThan(0);
       expect(health['walBytes']).toEqual(expect.any(Number));
       expect(health['hookDeliveries']).toEqual({ ...ZERO, stored: 1, unauthorized: 1 });
@@ -375,6 +437,8 @@ describe('the R11 fields through start()', () => {
       expect(health['corpusTrouble']).toBe('no-corpus-root');
       expect(typeof health['lastTickAt']).toBe('string');
       expect(health).not.toHaveProperty('lastBackupAt');
+      expect(health).not.toHaveProperty('lastBackupAgeSeconds');
+      expect(health).not.toHaveProperty('lastMirrorAt');
     } finally {
       await server.close();
     }

@@ -27,6 +27,20 @@ describe('HealthSchema', () => {
     expect(Value.Check(HealthSchema, dto)).toBe(true);
   });
 
+  it('accepts the OPS-17 backup fields and rejects a negative or fractional backup age', () => {
+    const dto: HealthDto = {
+      status: 'ok',
+      schemaVersion: 18,
+      lastBackupAt: '2026-11-08T03:00:00.000Z',
+      lastBackupAgeSeconds: 5400,
+      lastMirrorAt: '2026-11-08T03:00:00.000Z',
+      lastMirrorError: 'ENOENT',
+    };
+    expect(Value.Check(HealthSchema, dto)).toBe(true);
+    expect(Value.Check(HealthSchema, { ...dto, lastBackupAgeSeconds: -1 })).toBe(false);
+    expect(Value.Check(HealthSchema, { ...dto, lastBackupAgeSeconds: 1.5 })).toBe(false);
+  });
+
   it('accepts status "replaying": the server is up and still reading the corpus at boot', () => {
     const dto: HealthDto = { status: 'replaying', schemaVersion: 18, ingest: 'replaying' };
     expect(Value.Check(HealthSchema, dto)).toBe(true);

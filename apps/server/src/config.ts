@@ -126,6 +126,13 @@ export interface ServerConfig {
    * the alert surface never depends on the directory the server started in.
    */
   readonly alertsConfigPath: string | null;
+  /**
+   * Second home for every daily backup (`DASHBOARD_BACKUP_MIRROR_DIR`, OPS-17):
+   * a Time Machine volume, a NAS mount, another disk. `null` - the default -
+   * means no mirror. The path must be absolute; the directory is never
+   * created (see `db/backup-mirror.ts`).
+   */
+  readonly backupMirrorDir: string | null;
   /** Server log level (`DASHBOARD_LOG_LEVEL`), default {@link DEFAULT_LOG_LEVEL}. */
   readonly logLevel: LogLevel;
   /**
@@ -162,6 +169,7 @@ export function loadConfig(env: Record<string, string | undefined>): ServerConfi
   const allowedOrigins = parseAllowedOrigins(env['DASHBOARD_ALLOWED_ORIGINS']);
   const retention = loadRetentionValues(env);
   const alertsConfigPath = parseAlertsConfigPath(env['DASHBOARD_ALERTS_CONFIG']);
+  const backupMirrorDir = parseBackupMirrorDir(env['DASHBOARD_BACKUP_MIRROR_DIR']);
   const logLevel = parseLogLevel(env['DASHBOARD_LOG_LEVEL']);
   const maxFileBytes =
     parsePositiveInt(
@@ -182,6 +190,7 @@ export function loadConfig(env: Record<string, string | undefined>): ServerConfi
     allowedOrigins,
     retention,
     alertsConfigPath,
+    backupMirrorDir,
     logLevel,
     maxFileBytes,
   };
@@ -230,6 +239,17 @@ function parseAlertsConfigPath(raw: string | undefined): string | null {
   }
   if (!isAbsolute(raw)) {
     throw new Error(`Invalid DASHBOARD_ALERTS_CONFIG "${raw}": expected an absolute path.`);
+  }
+  return raw;
+}
+
+/** Same house rule: empty counts as unset (no mirror); a relative path fails the boot. */
+function parseBackupMirrorDir(raw: string | undefined): string | null {
+  if (raw === undefined || raw === '') {
+    return null;
+  }
+  if (!isAbsolute(raw)) {
+    throw new Error(`Invalid DASHBOARD_BACKUP_MIRROR_DIR "${raw}": expected an absolute path.`);
   }
   return raw;
 }

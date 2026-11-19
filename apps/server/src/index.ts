@@ -23,6 +23,7 @@ import type { CorpusIngestSummary } from './corpus/ingest-corpus';
 import { nodeCorpusFs } from './corpus/node-corpus-fs';
 import { createTailCachingFs } from './corpus/tail-cache';
 import { backupDatabase } from './db/backup';
+import { assertDistinctMirror, mirrorBackupFile } from './db/backup-mirror';
 import { loadAlertsConfig, startAlerting, type AlertingService } from './alerts/index';
 import { loadPricing } from './db/pricing';
 import { openDatabase, type SqliteDatabase } from './db/connection';
@@ -741,6 +742,14 @@ export interface BackupScheduler {
 export interface BackupState {
   readonly lastBackupAt: Date | null;
   readonly lastError: string | null;
+  /** OPS-17: present only when a mirror directory is configured. */
+  readonly mirror?: BackupMirrorState;
+}
+
+/** OPS-17: the newest mirrored copy and the most recent mirror failure. */
+export interface BackupMirrorState {
+  readonly lastMirrorAt: Date | null;
+  readonly lastError: string | null;
 }
 
 /**
@@ -758,6 +767,8 @@ export function operationalHealth(input: {
   } | null;
   readonly backup: BackupState | null;
   readonly hookDeliveries: NonNullable<OperationalHealth['hookDeliveries']>;
+  /** Request time, for `lastBackupAgeSeconds`; the wall clock when omitted. */
+  readonly now?: Date;
 }): OperationalHealth {
   const result: { -readonly [K in keyof OperationalHealth]: OperationalHealth[K] } = {};
   if (input.ingest?.lastTickAt) {
@@ -768,9 +779,22 @@ export function operationalHealth(input: {
   }
   if (input.backup?.lastBackupAt) {
     result.lastBackupAt = input.backup.lastBackupAt.toISOString();
+    // OPS-17: the age a probe would otherwise compute against its own clock.
+    // Never negative - a backup "from the future" is a clock step, not news.
+    const now = input.now ?? new Date();
+    result.lastBackupAgeSeconds = Math.max(
+      0,
+      Math.floor((now.getTime() - input.backup.lastBackupAt.getTime()) / 1000),
+    );
   }
   if (input.backup?.lastError) {
     result.lastBackupError = input.backup.lastError;
+  }
+  if (input.backup?.mirror?.lastMirrorAt) {
+    result.lastMirrorAt = input.backup.mirror.lastMirrorAt.toISOString();
+  }
+  if (input.backup?.mirror?.lastError) {
+    result.lastMirrorError = input.backup.mirror.lastError;
   }
   const dbBytes = fileSize(input.dbPath);
   if (dbBytes !== null) {
@@ -864,6 +888,15 @@ export function scheduleDailyBackups(
     readonly lastBackupAt?: Date | null;
     /** The end-of-cycle WAL checkpoint; {@link checkpointWal} unless a test needs a busy one. */
     readonly checkpoint?: (db: SqliteDatabase) => WalCheckpointResult;
+    /**
+     * OPS-17: copy each successful backup here too (`DASHBOARD_BACKUP_MIRROR_DIR`).
+     * Omitted or null - no mirror. Must not be `directory` itself.
+     */
+    readonly mirrorDirectory?: string | null;
+    /** Seed for the mirror's `lastMirrorAt`, normally {@link newestBackupTime} of the mirror. */
+    readonly lastMirrorAt?: Date | null;
+    /** The copy step; {@link mirrorBackupFile} unless a test needs a failing one. */
+    readonly mirror?: (sourcePath: string, mirrorDirectory: string) => string;
   } = {},
 ): BackupScheduler {
   const intervalMs = options.intervalMs ?? BACKUP_INTERVAL_MS;
@@ -872,9 +905,36 @@ export function scheduleDailyBackups(
   const log = options.log ?? console.log;
   const logError = options.logError ?? console.error;
   const checkpoint = options.checkpoint ?? checkpointWal;
+  const mirrorDirectory = options.mirrorDirectory ?? null;
+  if (mirrorDirectory !== null) {
+    assertDistinctMirror(directory, mirrorDirectory);
+  }
+  const mirror = options.mirror ?? mirrorBackupFile;
   let running = false;
   let lastBackupAt = options.lastBackupAt ?? null;
   let lastError: string | null = null;
+  let lastMirrorAt = options.lastMirrorAt ?? null;
+  let lastMirrorError: string | null = null;
+
+  /**
+   * OPS-17: a failed mirror is logged and reported, never fatal. The local
+   * backup exists, so retention still runs - the mirror is the extra copy,
+   * not the one the safety contract is built on.
+   */
+  function runMirror(sourcePath: string, at: Date): void {
+    if (mirrorDirectory === null) {
+      return;
+    }
+    try {
+      const mirrored = mirror(sourcePath, mirrorDirectory);
+      lastMirrorAt = at;
+      lastMirrorError = null;
+      log(`database backup mirror: wrote ${mirrored}.`);
+    } catch (error) {
+      lastMirrorError = error instanceof Error ? error.message : String(error);
+      logError(`database backup mirror failed: ${lastMirrorError}`);
+    }
+  }
 
   function runRetention(at: Date): void {
     try {
@@ -905,6 +965,7 @@ export function scheduleDailyBackups(
       lastBackupAt = at;
       lastError = null;
       log(`database backup: wrote ${destPath}.`);
+      runMirror(destPath, at);
       // Reached only after a successful backup - the contract above.
       runRetention(at);
     } catch (error) {
@@ -942,7 +1003,10 @@ export function scheduleDailyBackups(
       clearInterval(timer);
     },
     state(): BackupState {
-      return { lastBackupAt, lastError };
+      if (mirrorDirectory === null) {
+        return { lastBackupAt, lastError };
+      }
+      return { lastBackupAt, lastError, mirror: { lastMirrorAt, lastError: lastMirrorError } };
     },
   };
 }
@@ -1294,6 +1358,8 @@ export async function start(
   // the retention pass chained after each successful backup (L9).
   const backups = scheduleDailyBackups(db, backupsDir, retention, {
     lastBackupAt: newestBackupTime(backupsDir),
+    mirrorDirectory: config.backupMirrorDir,
+    lastMirrorAt: config.backupMirrorDir === null ? null : newestBackupTime(config.backupMirrorDir),
   });
   // OPS-20: event-loop lag for /api/health, sampled for the life of the server.
   const loopLag = startLoopLagMonitor();

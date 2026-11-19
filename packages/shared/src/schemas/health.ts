@@ -89,9 +89,19 @@ export const HealthSchema = Type.Object(
     // or else the newest `agenthropic-*.db` already in the backups directory
     // at boot. Omitted when there is none.
     lastBackupAt: Type.Optional(Type.String()),
+    // OPS-17 (2026-11-19): whole seconds since `lastBackupAt`, at request
+    // time; present exactly when it is. More than a day means the daily
+    // backup is not landing.
+    lastBackupAgeSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
     // Message of the most recent backup attempt, when that attempt failed.
     // Omitted once a later backup succeeds.
     lastBackupError: Type.Optional(Type.String()),
+    // OPS-17: the newest copy in DASHBOARD_BACKUP_MIRROR_DIR (ISO 8601), one
+    // this process wrote or else the newest one there at boot, and the message
+    // of the most recent mirror attempt when that attempt failed. Both are
+    // omitted when no mirror is configured.
+    lastMirrorAt: Type.Optional(Type.String()),
+    lastMirrorError: Type.Optional(Type.String()),
     // Size of the database file and of its WAL in bytes, read at request
     // time. `walBytes` is 0 when no WAL file exists.
     dbBytes: Type.Optional(Type.Integer({ minimum: 0 })),
