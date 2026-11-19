@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Adaptive poll back-off (OPS-16): a corpus pass blocks the event loop for its whole
+  duration, so after a pass longer than half the poll interval the watcher skips enough
+  scheduled polls to keep the loop idle at least twice as long as the pass ran, capped at
+  9 intervals (about 30 s at the 3 s default). A fast pass changes nothing. `/api/health`
+  reports the current skip as `pollBackoffIntervals`, next to `lastTickDurationMs`.
 - CI: a non-required `macos` job (QA-6) runs the whole `apps/server` and
   `packages/test-fixtures` suites on `macos-latest`, without coverage and behind the
   Node-major guard. The real-filesystem tests (corpus reader, backup/restore, retention,

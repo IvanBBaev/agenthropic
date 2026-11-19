@@ -119,6 +119,12 @@ export interface BuildServerOptions {
    */
   readonly tickDurationMs?: () => number | null;
   /**
+   * Scheduled poll intervals the adaptive back-off (OPS-16) skips after the
+   * last pass. Reported only alongside `lastTickDurationMs`: before a pass has
+   * finished there is no back-off to describe, so the field is omitted then too.
+   */
+  readonly pollBackoffIntervals?: () => number;
+  /**
    * Messages the M-12 cross-session ownership rule has skipped since boot. A
    * collision means real spend that this session's rows deliberately do NOT
    * carry (it is already counted once, under the session that ingested the
@@ -388,6 +394,9 @@ export function buildServer(options: BuildServerOptions) {
       ...(options.skipCounters === undefined ? {} : { ingestSkips: options.skipCounters() }),
       ...(options.ingestPhase === undefined ? {} : { ingest: options.ingestPhase() }),
       ...(lastTickDurationMs === null ? {} : { lastTickDurationMs }),
+      ...(lastTickDurationMs === null || options.pollBackoffIntervals === undefined
+        ? {}
+        : { pollBackoffIntervals: options.pollBackoffIntervals() }),
       ...(options.usageCollisions === undefined
         ? {}
         : { crossSessionUsageCollisions: options.usageCollisions() }),

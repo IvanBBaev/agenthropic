@@ -251,6 +251,9 @@ describe('skip visibility through start() (review H-2)', () => {
         // The boot replay is a completed pass, so the M-15 duration is live
         // too — possibly 0ms on a fast machine, but never absent.
         lastTickDurationMs: expect.any(Number) as number,
+        // OPS-16: wired with the duration. A boot replay of one empty file
+        // against a 10-minute poll cannot want a skipped interval.
+        pollBackoffIntervals: 0,
       });
     } finally {
       await server.close();
@@ -342,6 +345,49 @@ describe('/api/health last tick duration (review M-15)', () => {
     } finally {
       await app.close();
     }
+  });
+});
+
+describe('/api/health poll back-off (OPS-16)', () => {
+  async function healthWith(options: Partial<Parameters<typeof buildServer>[0]>): Promise<unknown> {
+    const app = buildServer({ token: TEST_TOKEN, schemaVersion: 0, ...options });
+    try {
+      const health = await app.inject({
+        method: 'GET',
+        url: '/api/health',
+        headers: { authorization: `Bearer ${TEST_TOKEN}` },
+      });
+      expect(health.statusCode).toBe(200);
+      return health.json();
+    } finally {
+      await app.close();
+    }
+  }
+
+  it("reports the seam's skipped intervals next to the duration", async () => {
+    expect(await healthWith({ tickDurationMs: () => 4500, pollBackoffIntervals: () => 2 })).toEqual(
+      { status: 'ok', schemaVersion: 0, lastTickDurationMs: 4500, pollBackoffIntervals: 2 },
+    );
+  });
+
+  it('reports 0 after a fast pass - a real answer, not an omission', async () => {
+    expect(await healthWith({ tickDurationMs: () => 12.5, pollBackoffIntervals: () => 0 })).toEqual(
+      { status: 'ok', schemaVersion: 0, lastTickDurationMs: 12.5, pollBackoffIntervals: 0 },
+    );
+  });
+
+  it('omits the field while no pass has finished, even with the seam wired', async () => {
+    expect(await healthWith({ tickDurationMs: () => null, pollBackoffIntervals: () => 0 })).toEqual(
+      { status: 'ok', schemaVersion: 0 },
+    );
+  });
+
+  it('omits the field without a seam', async () => {
+    expect(await healthWith({ tickDurationMs: () => 12.5 })).toEqual({
+      status: 'ok',
+      schemaVersion: 0,
+      lastTickDurationMs: 12.5,
+    });
   });
 });
 

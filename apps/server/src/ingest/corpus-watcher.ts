@@ -88,6 +88,19 @@
  * synchronous pass the chunking exists to avoid, run after the replay loop
  * has already stopped yielding. An explicit cap on a later call still wins.
  *
+ * ADAPTIVE POLL BACK-OFF (OPS-16). A pass is synchronous, so its duration is
+ * time the event loop answers nothing - no hook delivery, no dashboard read.
+ * An append to a long live session re-parses the whole session (200-235 ms
+ * measured), so a few busy sessions on a loaded machine can push a pass toward
+ * the poll interval, and a plain interval would then keep the loop busy for
+ * most of every period. After each pass the SCHEDULED poll therefore skips
+ * {@link pollIntervalsToSkip} intervals, which keeps at least
+ * {@link POLL_BACKOFF_IDLE_RATIO} times the pass duration idle before the next
+ * pass, up to {@link POLL_BACKOFF_MAX_SKIPPED_INTERVALS} intervals. A fast
+ * pass skips nothing, so the unloaded cadence is exactly the configured
+ * interval. The back-off delays reads only: a skipped interval reads nothing,
+ * and the next pass picks up every byte that moved in the meantime.
+ *
  * Concurrency: better-sqlite3 makes a tick fully synchronous, so two passes
  * can only overlap through re-entrancy (a callback calling `tick()`); a simple
  * in-flight flag makes the inner call a no-op. Error posture: a transient I/O
@@ -180,6 +193,36 @@ export const REPLAY_MAX_SESSIONS_PER_PASS = 25;
  * replay RESULT is the same for every budget.
  */
 export const REPLAY_MAX_BYTES_PER_PASS = 32 * 1024 * 1024;
+
+/**
+ * Idle time the scheduled poll keeps after a pass, as a multiple of that
+ * pass's duration (OPS-16). At 2 a pass can hold the event loop for at most a
+ * third of the time, which leaves the hook receiver and the read API two
+ * thirds even when every pass is slow.
+ */
+export const POLL_BACKOFF_IDLE_RATIO = 2;
+
+/**
+ * Most scheduled intervals one pass can make the poll skip (OPS-16). The cap
+ * bounds how stale the dashboard can get: at the 3 s default a skip of 9 means
+ * the next pass starts about 30 s later. It also bounds a pass whose wall-clock
+ * duration a clock jump inflated.
+ */
+export const POLL_BACKOFF_MAX_SKIPPED_INTERVALS = 9;
+
+/**
+ * How many scheduled poll intervals to skip after a pass of `durationMs`
+ * (OPS-16). The idle time wanted is {@link POLL_BACKOFF_IDLE_RATIO} times the
+ * duration, and the interval that fires next already provides one interval of
+ * it, so the skip is `ceil(ratio x duration / interval) - 1`, clamped to
+ * `[0, POLL_BACKOFF_MAX_SKIPPED_INTERVALS]`. A pass up to half an interval long
+ * skips nothing. A negative duration (the wall clock stepped back mid-pass)
+ * skips nothing too.
+ */
+export function pollIntervalsToSkip(durationMs: number, intervalMs: number): number {
+  const wanted = Math.ceil((durationMs * POLL_BACKOFF_IDLE_RATIO) / intervalMs) - 1;
+  return Math.min(Math.max(wanted, 0), POLL_BACKOFF_MAX_SKIPPED_INTERVALS);
+}
 
 /** The limits of one capped pass; an absent field is no limit. */
 interface PassCap {
@@ -479,6 +522,11 @@ export interface CorpusWatcher {
    * can never disagree.
    */
   rejectionOf(sessionId: string): IngestRejection | undefined;
+  /**
+   * Scheduled poll intervals the adaptive back-off (OPS-16) skips after the
+   * last pass that ran: 0 when that pass was fast, or before any pass ran.
+   */
+  pollBackoffIntervals(): number;
 }
 
 /**
@@ -569,6 +617,10 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
   let inFlight = false;
   let stopped = false;
   let timer: ReturnType<typeof setInterval> | null = null;
+  /** OPS-16: intervals the last pass that ran made the poll skip. */
+  let backoffIntervals = 0;
+  /** OPS-16: intervals still to skip before the next scheduled pass. */
+  let skipsRemaining = 0;
 
   /**
    * Resolve pricing for THIS pass and re-admit parked sessions when the table
@@ -990,7 +1042,12 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
     } finally {
       inFlight = false;
       // In the finally so even a containment-halt pass reports its cost.
-      deps.onTickDuration?.(nowMs() - startedAtMs);
+      const durationMs = nowMs() - startedAtMs;
+      deps.onTickDuration?.(durationMs);
+      // A manual pass (the startup replay) sets the back-off too: its cost
+      // held the loop just the same.
+      backoffIntervals = pollIntervalsToSkip(durationMs, deps.intervalMs);
+      skipsRemaining = backoffIntervals;
     }
   }
 
@@ -999,6 +1056,12 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
       return;
     }
     timer = setInterval(() => {
+      // OPS-16: an interval the back-off skips reads nothing and reports
+      // nothing; the pass after it picks up every byte that moved meanwhile.
+      if (skipsRemaining > 0) {
+        skipsRemaining -= 1;
+        return;
+      }
       // Tick FIRST, report second: `deps.onTickOutcome?.(tick())` would
       // short-circuit past the tick itself whenever the seam is absent.
       const outcome = tick();
@@ -1038,5 +1101,12 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
     };
   }
 
-  return { tick, start, stop, exclusions, rejectionOf };
+  return {
+    tick,
+    start,
+    stop,
+    exclusions,
+    rejectionOf,
+    pollBackoffIntervals: () => backoffIntervals,
+  };
 }

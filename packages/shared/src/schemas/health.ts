@@ -56,6 +56,11 @@ export const HealthSchema = Type.Object(
     // poll ACTUALLY takes, so an operator can see it approaching the poll
     // interval. Omitted until a pass has finished.
     lastTickDurationMs: Type.Optional(Type.Number({ minimum: 0 })),
+    // OPS-16: scheduled poll intervals the adaptive back-off skips after that
+    // pass - 0 when it was fast. Non-zero means passes are slow enough that
+    // the poll is stretched to keep the event loop mostly idle. Present
+    // exactly when `lastTickDurationMs` is.
+    pollBackoffIntervals: Type.Optional(Type.Integer({ minimum: 0 })),
     // Shared message ids resolved by the M-12 ownership rule since boot (review
     // M-18) — a copy skipped, or taken over from a later-starting session
     // (DAT-15). Spend that IS counted, but under the earlier-starting session.

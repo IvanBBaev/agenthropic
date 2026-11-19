@@ -1328,6 +1328,9 @@ export async function start(
     // M-15: how long the last corpus pass took, so a poll outgrowing its
     // interval is visible from the dashboard side before it hurts.
     tickDurationMs: ingestWatcher === null ? undefined : () => lastTickDurationMs,
+    // OPS-16: how far the adaptive back-off is stretching the poll right now.
+    pollBackoffIntervals:
+      ingestWatcher === null ? undefined : () => ingestWatcher.pollBackoffIntervals(),
     // M-18: spend that a resume/fork replay deliberately did not re-count.
     usageCollisions: ingestWatcher === null ? undefined : () => crossSessionUsageCollisions,
     // How much of the corpus the dollar figures are NOT computed from. A

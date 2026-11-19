@@ -41,6 +41,19 @@ describe('HealthSchema', () => {
     expect(Value.Check(HealthSchema, { ...dto, lastBackupAgeSeconds: 1.5 })).toBe(false);
   });
 
+  it('accepts the OPS-16 poll back-off and rejects a negative or fractional one', () => {
+    const dto: HealthDto = {
+      status: 'ok',
+      schemaVersion: 18,
+      lastTickDurationMs: 4500,
+      pollBackoffIntervals: 2,
+    };
+    expect(Value.Check(HealthSchema, dto)).toBe(true);
+    expect(Value.Check(HealthSchema, { ...dto, pollBackoffIntervals: 0 })).toBe(true);
+    expect(Value.Check(HealthSchema, { ...dto, pollBackoffIntervals: -1 })).toBe(false);
+    expect(Value.Check(HealthSchema, { ...dto, pollBackoffIntervals: 0.5 })).toBe(false);
+  });
+
   it('accepts status "replaying": the server is up and still reading the corpus at boot', () => {
     const dto: HealthDto = { status: 'replaying', schemaVersion: 18, ingest: 'replaying' };
     expect(Value.Check(HealthSchema, dto)).toBe(true);
