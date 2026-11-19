@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Explicit input bounds on the HTTP surface (SEC-7).** A hook payload nested more
+  than 64 containers deep now gets `400` ("Hook payload nests deeper than 64 levels.")
+  instead of a stack-overflow `500`, and nothing is stored. `bodyLimit` (1 MiB) and
+  `maxParamLength` (256, up from Fastify's 100) are set and tested, not inherited.
+  `topTierModel` is capped at 256 characters. Session and agent ids longer than 256 in a
+  hook payload are no longer lifted into the `events` projection.
 - **Dashboard token generator and hand-typed-token refusal (SEC-6).**
   `pnpm --silent --filter @agenthropic/server token:generate` prints 32 random bytes as
   base64url, ready to redirect into an untracked file. Startup now also refuses a token that

@@ -38,6 +38,7 @@ import type { SqliteDatabase } from './db/connection';
 import { NOT_FOUND_MESSAGE, registerStaticSite } from './http/static-site';
 import { SECURITY_HEADERS } from './http/security-headers';
 import { RealtimeHub } from './realtime/hub';
+import { MAX_ID_LENGTH, MAX_REQUEST_BODY_BYTES } from './limits';
 
 /**
  * The R11 / OPS-5 health fields the composition root supplies. Every one is
@@ -285,7 +286,15 @@ export function buildServer(options: BuildServerOptions) {
   const maxStreamBacklogBytes = options.maxStreamBacklogBytes ?? MAX_STREAM_BACKLOG_BYTES;
   const hub = options.hub ?? new RealtimeHub();
 
-  const app: FastifyInstance = Fastify({ logger: buildLoggerOptions(options.logger ?? false) });
+  // SEC-7: the body and path-parameter limits are set, not inherited, so they
+  // are visible and tested.
+  const app: FastifyInstance = Fastify({
+    logger: buildLoggerOptions(options.logger ?? false),
+    bodyLimit: MAX_REQUEST_BODY_BYTES,
+    // The router answers a longer path parameter with 414 before any schema
+    // runs; Fastify's own default is 100.
+    maxParamLength: MAX_ID_LENGTH,
+  });
   const typed = app.withTypeProvider<TypeBoxTypeProvider>();
 
   // Uniform error contract for ROOT-scope routes. The hook receiver is

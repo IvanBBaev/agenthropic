@@ -43,6 +43,7 @@
  */
 import { createHash } from 'node:crypto';
 import { Type, type Static } from '@sinclair/typebox';
+import { MAX_ID_LENGTH, assertDepthWithinLimit } from '../limits';
 
 /**
  * HK-5 (2026-10-10). The longest hook name Claude Code emits is under 32
@@ -63,7 +64,12 @@ export const HookEnvelopeSchema = Type.Object(
      * string, or longer than {@link MAX_HOOK_NAME_LENGTH}.
      */
     hookName: Type.String({ minLength: 1, maxLength: MAX_HOOK_NAME_LENGTH }),
-    sessionId: Type.Optional(Type.String({ minLength: 1 })),
+    /**
+     * Self-reported session id; omitted when absent, not a string, or longer
+     * than MAX_ID_LENGTH (SEC-7) - like an over-long hookName, the body is
+     * still stored verbatim.
+     */
+    sessionId: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_ID_LENGTH })),
     /** ISO-8601 UTC receipt time. Excluded from the idempotency key. */
     receivedAt: Type.String({ minLength: 1 }),
     /**
@@ -89,13 +95,15 @@ export const UNKNOWN_HOOK_NAME = 'unknown';
  * entries are skipped in objects and become `null` in arrays; non-finite
  * numbers become `null`). Inputs come from `JSON.parse` of a request body,
  * so only plain JSON types occur in practice; the function is total over
- * acyclic values regardless.
+ * acyclic values nested at most MAX_PAYLOAD_DEPTH containers deep, and throws
+ * PayloadTooDeepError (a 400) past that instead of overflowing the stack
+ * (SEC-7).
  */
 export function canonicalJsonStringify(value: unknown): string {
-  return stringifyCanonical(value) ?? 'null';
+  return stringifyCanonical(value, 0) ?? 'null';
 }
 
-function stringifyCanonical(value: unknown): string | undefined {
+function stringifyCanonical(value: unknown, depth: number): string | undefined {
   if (value === null) {
     return 'null';
   }
@@ -107,19 +115,24 @@ function stringifyCanonical(value: unknown): string | undefined {
     case 'boolean':
       return value ? 'true' : 'false';
     case 'object':
-      break;
+      return stringifyContainer(value, depth);
     default:
       // undefined, function, symbol, bigint - not representable in JSON.
       return undefined;
   }
+}
+
+/** An array or object; `depth` counts the containers that enclose it. */
+function stringifyContainer(value: object, depth: number): string {
+  assertDepthWithinLimit(depth);
   if (Array.isArray(value)) {
-    const elements = value.map((element) => stringifyCanonical(element) ?? 'null');
+    const elements = value.map((element) => stringifyCanonical(element, depth + 1) ?? 'null');
     return `[${elements.join(',')}]`;
   }
   const record = value as Record<string, unknown>;
   const parts: string[] = [];
   for (const key of Object.keys(record).sort()) {
-    const encoded = stringifyCanonical(record[key]);
+    const encoded = stringifyCanonical(record[key], depth + 1);
     if (encoded !== undefined) {
       parts.push(`${JSON.stringify(key)}:${encoded}`);
     }
@@ -145,8 +158,11 @@ export function computeIdempotencyKey(envelope: HookEnvelope): string {
     deliveryId: envelope.deliveryId,
     payload: envelope.payload,
   };
+  // `material` wraps the payload in one object of its own; start that wrapper
+  // at depth -1 so the depth limit counts the PAYLOAD's nesting, the same
+  // nesting redactSecrets has already admitted.
   const digest = createHash('sha256')
-    .update(canonicalJsonStringify(material), 'utf8')
+    .update(stringifyContainer(material, -1), 'utf8')
     .digest('hex');
   return `hook:sha256:${digest}`;
 }
@@ -199,7 +215,11 @@ export function buildHookEnvelope(
     selfReported === undefined || selfReported.length > MAX_HOOK_NAME_LENGTH
       ? UNKNOWN_HOOK_NAME
       : selfReported;
-  const sessionId = readStringField(record, ['session_id', 'sessionId']);
+  const selfReportedSession = readStringField(record, ['session_id', 'sessionId']);
+  const sessionId =
+    selfReportedSession !== undefined && selfReportedSession.length <= MAX_ID_LENGTH
+      ? selfReportedSession
+      : undefined;
   const envelope: HookEnvelope = {
     source: 'hook',
     hookName,

@@ -31,6 +31,7 @@ import type {
 } from '@agenthropic/shared';
 import type { Statement } from 'better-sqlite3';
 import type { SqliteDatabase } from './connection';
+import { MAX_ID_LENGTH } from '../limits';
 
 interface EventRawDbRow {
   idempotency_key: string;
@@ -49,7 +50,7 @@ export interface LivenessIds {
 function readIdField(record: Record<string, unknown>, keys: readonly string[]): string | null {
   for (const key of keys) {
     const value = record[key];
-    if (typeof value === 'string' && value.length > 0) {
+    if (typeof value === 'string' && value.length > 0 && value.length <= MAX_ID_LENGTH) {
       return value;
     }
   }
@@ -68,7 +69,9 @@ function readIdField(record: Record<string, unknown>, keys: readonly string[]): 
  *    camelCase courtesy variants `sessionId` / `agentId` - the same
  *    precedence buildHookEnvelope uses;
  *  - only NON-EMPTY STRING values count. Numbers, booleans, objects, arrays
- *    and '' yield NULL - ids are never silently coerced to strings.
+ *    and '' yield NULL - ids are never silently coerced to strings;
+ *  - a string longer than MAX_ID_LENGTH (SEC-7) yields NULL too: it is no
+ *    real id, and the `events` id columns are indexed. The raw payload keeps it.
  */
 export function extractLivenessIds(payload: unknown): LivenessIds {
   if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {

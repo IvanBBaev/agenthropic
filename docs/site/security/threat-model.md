@@ -467,6 +467,22 @@ in time linear in its input, and must have a size or depth budget.
   a token holder can send such a body. The fix (a depth cap of about 64, plus an explicit
   `bodyLimit` that is visible and tested) is SEC-7, scheduled for v1.x.
 - Route parameters such as `id` have no `maxLength` (SEC-7, v1.x).
+
+*(Amended 2026-11-19 — SEC-7 closes both items above. Measured before the fix: a body of
+5,000 nested `[` got a 500, while 100 levels got a 202. The bounds now live in
+`apps/server/src/limits.ts` and are tested in `apps/server/test/input-bounds.test.ts`:*
+
+- *A hook payload may nest at most 64 containers deep. Past that, redaction and
+  canonicalisation throw `PayloadTooDeepError`, and the route answers `400` with the
+  message "Hook payload nests deeper than 64 levels." Nothing is stored, and a 100,000-deep
+  body gets the same 400.*
+- *`bodyLimit` is set explicitly to 1 MiB, the old default, so a larger body still gets
+  `413`.*
+- *Id-like inputs are capped at 256 characters. `/api/sessions/:id` and the other path
+  parameters are capped through `maxParamLength`: the router answers `414`. Fastify's own
+  default had been 100. The `topTierModel` query is capped through its schema, which
+  answers `400`. A longer `session_id` or `agent_id` in a hook payload is no longer lifted
+  into the envelope or the `events` columns; the raw payload still keeps it.)*
 - A cold replay of a multi-gigabyte corpus can still delay a hook POST past curl's
   3-second budget. The hook then fails open: Claude Code continues, and that one event is
   lost. This costs availability of a live status, never confidentiality.

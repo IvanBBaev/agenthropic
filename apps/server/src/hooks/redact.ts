@@ -27,6 +27,7 @@
  * values signed as D3, 2026-09-08), but the OPEN-3 field list below is still
  * PENDING Ivan's ratification and may be tightened or extended. Nothing here relaxes on sign-off - it can only grow.
  */
+import { assertDepthWithinLimit } from '../limits';
 
 /** Replacement marker for masked keys and matched value fragments. */
 export const REDACTED = '[REDACTED]';
@@ -196,26 +197,36 @@ export function maskCredentialShapes(text: string): string {
  * invariant - `Object.defineProperty` makes the copy mean what it says.
  */
 export function redactSecrets(value: unknown): unknown {
+  return redactAtDepth(value, 0);
+}
+
+/**
+ * SEC-7: `depth` counts the containers enclosing `value`. Past
+ * MAX_PAYLOAD_DEPTH the walk throws PayloadTooDeepError (a 400) instead of
+ * recursing on until the stack overflows into a generic 500.
+ */
+function redactAtDepth(value: unknown, depth: number): unknown {
   if (typeof value === 'string') {
     return maskCredentialShapes(value);
   }
+  if (typeof value !== 'object' || value === null) {
+    return value;
+  }
+  assertDepthWithinLimit(depth);
   if (Array.isArray(value)) {
-    return value.map((element) => redactSecrets(element));
+    return value.map((element) => redactAtDepth(element, depth + 1));
   }
-  if (typeof value === 'object' && value !== null) {
-    const record = value as Record<string, unknown>;
-    const scrubbed: Record<string, unknown> = {};
-    for (const [key, entry] of Object.entries(record)) {
-      // defineProperty, not assignment: assignment would route `__proto__`
-      // through Object.prototype's setter and silently lose the field.
-      Object.defineProperty(scrubbed, key, {
-        value: isSecretKeyName(key) ? REDACTED : redactSecrets(entry),
-        writable: true,
-        enumerable: true,
-        configurable: true,
-      });
-    }
-    return scrubbed;
+  const record = value as Record<string, unknown>;
+  const scrubbed: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(record)) {
+    // defineProperty, not assignment: assignment would route `__proto__`
+    // through Object.prototype's setter and silently lose the field.
+    Object.defineProperty(scrubbed, key, {
+      value: isSecretKeyName(key) ? REDACTED : redactAtDepth(entry, depth + 1),
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
   }
-  return value;
+  return scrubbed;
 }

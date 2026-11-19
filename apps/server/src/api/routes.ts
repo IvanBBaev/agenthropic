@@ -42,6 +42,7 @@ import type { SqliteDatabase } from '../db/connection';
 import { loadPricing } from '../db/pricing';
 import type { SubstrateLookup, SubstrateProvider } from './substrate-provider';
 import { rejectionResponse, type IngestRejection } from './ingest-rejections';
+import { MAX_ID_LENGTH } from '../limits';
 import {
   ISO_INSTANT_PATTERN,
   countSessions,
@@ -98,7 +99,7 @@ const SessionListQuerySchema = Type.Object(
 
 const SessionParamsSchema = Type.Object(
   {
-    id: Type.String({ minLength: 1 }),
+    id: Type.String({ minLength: 1, maxLength: MAX_ID_LENGTH }),
   },
   { additionalProperties: false },
 );
@@ -153,7 +154,7 @@ const CostAnalysisQuerySchema = Type.Object(
      * Optional routing alternative for the delegation-savings hypothetical
      * (WP-C5 rule 1); absent → per-subagent ancestor derivation.
      */
-    topTierModel: Type.Optional(Type.String({ minLength: 1 })),
+    topTierModel: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_ID_LENGTH })),
   },
   { additionalProperties: false },
 );
