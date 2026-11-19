@@ -44,6 +44,7 @@ import { agentTypeLabel, formatTokens, formatUsd, shortId } from '../format';
 import { CaveatDetails, caveatCountLabel } from './caveats';
 import { describeAgentGraph } from './chart-summary';
 import { computeLayeredLayout, fallbackLayerNotice } from './layout/layered';
+import { memoizeOnPayload } from './layout/memo';
 import { edgeProvenance, EDGE_PROVENANCE_LEGEND } from './provenance';
 import { snapshotAge } from './snapshot';
 import { statusMeta } from './status';
@@ -52,6 +53,21 @@ import { unpricedTitleSuffix } from './unpriced';
 
 /** Node cap requested from the server (its own max is higher). */
 export const DAG_NODE_LIMIT = 1000;
+
+/**
+ * UX-17: laid out once per read. The view re-renders on every clock tick to
+ * age its provenance label, and the tick does not move a node.
+ */
+const layoutOfDag = memoizeOnPayload((dag: GlobalDagDto) =>
+  computeLayeredLayout(
+    dag.nodes,
+    dag.edges.map((edge) => ({
+      parentId: edge.parentAgentId,
+      childId: edge.childAgentId,
+      payload: edge,
+    })),
+  ),
+);
 
 /**
  * Id of the prose text alternative. role="img" hides the SVG subtree (its
@@ -193,14 +209,7 @@ export function DagView({ token, onAuthRejected, replayEpoch }: ViewProps) {
     );
   }
 
-  const layout = computeLayeredLayout(
-    dag.nodes,
-    dag.edges.map((edge) => ({
-      parentId: edge.parentAgentId,
-      childId: edge.childAgentId,
-      payload: edge,
-    })),
-  );
+  const layout = layoutOfDag(dag);
   // Appended to each node's hover text only once the snapshot is aged: a node
   // read a second ago needs no qualifier, and a qualifier on every node in
   // every state is the kind of uniform caveat that stops being read.

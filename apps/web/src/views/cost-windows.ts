@@ -202,6 +202,19 @@ function add(totals: WindowTotals, row: DailyCostDto): WindowTotals {
   };
 }
 
+/**
+ * UX-17: the clock reading `computeCostWindows` can be memoised on.
+ *
+ * The windows read the clock only through the UTC date of the later of
+ * `nowMs` and `observedAtMs` (see KK4 below), so the start of that date in
+ * place of the tick gives the same windows. The tick changes every
+ * CLOCK_INTERVAL_MS; this value changes once a day, which is the only time the
+ * windows can.
+ */
+export function costWindowsClockMs(nowMs: number, observedAtMs: number): number {
+  return Math.floor(Math.max(nowMs, observedAtMs) / DAY_MS) * DAY_MS;
+}
+
 export function computeCostWindows(
   perDay: readonly DailyCostDto[],
   nowMs: number,

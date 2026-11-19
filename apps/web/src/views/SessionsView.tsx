@@ -86,6 +86,7 @@ import { sessionHash, useRoute } from '../router';
 import { isAgentStatusChangedEvent } from './live-model';
 import { describeAgentGraph } from './chart-summary';
 import { computeLayeredLayout, fallbackLayerNotice } from './layout/layered';
+import { memoizeOnPayload } from './layout/memo';
 import { edgeProvenance, EDGE_PROVENANCE_LEGEND } from './provenance';
 import { SessionCostAnalysis } from './SessionCostAnalysis';
 import { snapshotAge } from './snapshot';
@@ -391,6 +392,22 @@ function countClause(persisted: number, served: number, noun: string): string {
     : `${noun} count says ${String(persisted)} ${noun}${persisted === 1 ? '' : 's'} while ${servedText}`;
 }
 
+/**
+ * UX-17: laid out once per tree. The panel re-renders on every clock tick to
+ * age its snapshot label; a live patch rebuilds the tree object, and with it
+ * the layout.
+ */
+const layoutOfTree = memoizeOnPayload((tree: SessionTreeDto) =>
+  computeLayeredLayout(
+    tree.agents,
+    tree.edges.map((edge) => ({
+      parentId: edge.parentAgentId,
+      childId: edge.childAgentId,
+      payload: edge,
+    })),
+  ),
+);
+
 function TreePanel({
   tree,
   fetchedAtMs,
@@ -404,14 +421,7 @@ function TreePanel({
   readonly nowMs: number;
   readonly onRefresh: () => void;
 }) {
-  const layout = computeLayeredLayout(
-    tree.agents,
-    tree.edges.map((edge) => ({
-      parentId: edge.parentAgentId,
-      childId: edge.childAgentId,
-      payload: edge,
-    })),
-  );
+  const layout = layoutOfTree(tree);
   const age = snapshotAge(fetchedAtMs, nowMs);
   const countDisagreement = treeCountDisagreement(tree);
   // Appended to each node's hover text only once the snapshot is aged. A node

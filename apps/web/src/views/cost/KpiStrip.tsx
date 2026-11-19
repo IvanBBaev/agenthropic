@@ -4,9 +4,10 @@
  * UTC today / last-7-days windows with the paragraph stating their basis.
  * Split out of CostView.tsx in UX-16 (2026-11-19).
  */
+import { useMemo } from 'react';
 import type { CostSummaryDto } from '../../dto';
 import { formatTokens, formatUsd, impossibleCountText, isImpossibleCount } from '../../format';
-import { computeCostWindows } from '../cost-windows';
+import { computeCostWindows, costWindowsClockMs } from '../cost-windows';
 import type { WindowTotals } from '../cost-windows';
 import { DroppedUsageNote, MalformedLinesNote, PartialAggregateNote } from '../session-honesty';
 import { UnpricedModelsBanner } from '../unpriced';
@@ -268,7 +269,14 @@ export function WindowKpis({
   // dashboard exists to refuse. The discriminator is not inside `perDay` - an
   // idle day and an unread day are the same empty set - so the observation
   // time travels with the rows and `todayObserved` separates them.
-  const windows = computeCostWindows(summary.perDay, nowMs, observedAtMs);
+  //
+  // UX-17: computed once per summary and UTC day, not once per clock tick -
+  // `costWindowsClockMs` is the part of the tick the windows can see.
+  const clockMs = costWindowsClockMs(nowMs, observedAtMs);
+  const windows = useMemo(
+    () => computeCostWindows(summary.perDay, clockMs, observedAtMs),
+    [summary.perDay, clockMs, observedAtMs],
+  );
   // Only meaningful together with `!todayObserved`: an empty bucket the
   // snapshot could not have filled is a structural zero, a non-empty one is a
   // real (if incomplete) figure. Both count, because "0 tokens, $0.00" and

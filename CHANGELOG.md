@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Memoised layouts (UX-17): the global DAG and the session tree are laid out once per served
+  payload instead of on every clock tick, and the cost windows are cut once per summary and
+  UTC day. The snapshot labels still age every tick; the layout and the windows change only
+  when the payload or the UTC day does.
 - Version parity in the gate (OSS-18): a server test checks that the root `package.json`
   and the five workspace manifests carry one version, and that the RELEASE.md §7 version
   check lists exactly the packages in `pnpm-workspace.yaml`.

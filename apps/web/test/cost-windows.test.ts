@@ -5,7 +5,11 @@
  * excluded, and 'unknown' rows land in their own bucket instead of a window.
  */
 import { describe, expect, it } from 'vitest';
-import { computeCostWindows, WEEK_WINDOW_DAYS } from '../src/views/cost-windows';
+import {
+  computeCostWindows,
+  costWindowsClockMs,
+  WEEK_WINDOW_DAYS,
+} from '../src/views/cost-windows';
 
 /** Noon UTC, so no off-by-one lurks near a midnight boundary. */
 const NOW_MS = Date.UTC(2026, 7, 15, 12, 0, 0);
@@ -378,5 +382,50 @@ describe('rows computeCostWindows cannot read (M1)', () => {
     expect(windows.futureDated).toEqual(EMPTY_BUCKET);
     expect(windows.today.tokens).toBe(100);
     expect(windows.last7Days.tokens).toBe(100);
+  });
+});
+
+/**
+ * UX-17: the view memoises the windows on `costWindowsClockMs` instead of the
+ * tick. That is only sound if the substitution never changes an answer, so
+ * the suite compares the two readings over the cases where they could part:
+ * either reading being the later one, a snapshot from an earlier day, a fetch
+ * that lands just after midnight, and rows in every bucket.
+ */
+describe('costWindowsClockMs (UX-17)', () => {
+  const DAY = 86_400_000;
+  const ROWS = [
+    { day: '2026-08-16', tokens: 1, costUsd: 0.01, unpricedTokens: 0 },
+    { day: '2026-08-15', tokens: 2, costUsd: 0.02, unpricedTokens: 0 },
+    { day: '2026-08-09', tokens: 3, costUsd: 0.03, unpricedTokens: 0 },
+    { day: '2026-08-08', tokens: 4, costUsd: 0.04, unpricedTokens: 0 },
+    { day: 'unknown', tokens: 5, costUsd: 0.05, unpricedTokens: 0 },
+    { day: '2026-8-1', tokens: 6, costUsd: 0.06, unpricedTokens: 0 },
+  ];
+  const CASES: readonly (readonly [string, number, number])[] = [
+    ['the tick is later, same day', NOW_MS, OBSERVED_MS],
+    ['the observation is later, same day', OBSERVED_MS, NOW_MS],
+    ['the snapshot is a day old', NOW_MS, OBSERVED_MS - DAY],
+    [
+      'the fetch lands just after midnight',
+      Date.UTC(2026, 7, 15, 23, 59, 50),
+      Date.UTC(2026, 7, 16, 0, 0, 10),
+    ],
+    ['the tick is exactly midnight', Date.UTC(2026, 7, 16), OBSERVED_MS],
+    ['the last millisecond of a day', Date.UTC(2026, 7, 16) - 1, OBSERVED_MS],
+  ];
+
+  it.each(CASES)('gives the same windows as the tick when %s', (_name, nowMs, observedAtMs) => {
+    expect(computeCostWindows(ROWS, costWindowsClockMs(nowMs, observedAtMs), observedAtMs)).toEqual(
+      computeCostWindows(ROWS, nowMs, observedAtMs),
+    );
+  });
+
+  it('holds still for a whole UTC day and moves at its midnight', () => {
+    const dayStart = Date.UTC(2026, 7, 15);
+    expect(costWindowsClockMs(dayStart, 0)).toBe(dayStart);
+    expect(costWindowsClockMs(NOW_MS, OBSERVED_MS)).toBe(dayStart);
+    expect(costWindowsClockMs(dayStart + DAY - 1, 0)).toBe(dayStart);
+    expect(costWindowsClockMs(dayStart + DAY, 0)).toBe(dayStart + DAY);
   });
 });
