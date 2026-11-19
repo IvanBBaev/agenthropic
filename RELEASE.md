@@ -325,7 +325,10 @@ scan."**
       ```
 
       The workspace packages stay `private` and unpublished. The root tarball is
-      documentation only (see its `files` list).
+      documentation only (see its `files` list). Between releases,
+      `apps/server/test/workspace-version-parity.test.ts` keeps the six versions equal
+      in every gate, and fails if this list stops matching `pnpm-workspace.yaml`
+      (OSS-18).
 - [ ] **Cut the CHANGELOG** (OSS-4).
       1. Condense `[Unreleased]` into user-level bullets. Move WP ids and internal
          reasoning to `DONE.md`.

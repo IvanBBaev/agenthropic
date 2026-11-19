@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Version parity in the gate (OSS-18): a server test checks that the root `package.json`
+  and the five workspace manifests carry one version, and that the RELEASE.md §7 version
+  check lists exactly the packages in `pnpm-workspace.yaml`.
 - Dependabot major groups (OSS-13): packages that only work at matching majors get one PR
   per family instead of PRs that fail on their own. The families are vitest with
   @vitest/coverage-v8, eslint with @eslint/js, vite with @vitejs/plugin-react, and react
