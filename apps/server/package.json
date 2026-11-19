@@ -25,7 +25,7 @@
     "@agenthropic/core": "workspace:*",
     "@agenthropic/shared": "workspace:*",
     "@fastify/type-provider-typebox": "^6.3.0",
-    "@sinclair/typebox": "^0.34.51",
+    "@sinclair/typebox": "^0.34.52",
     "better-sqlite3": "^12.6.0",
     "fastify": "^5.12.8"
   },
@@ -34,7 +34,7 @@
     "@types/better-sqlite3": "^7.6.13",
     "@vitest/coverage-v8": "^4.1.10",
     "fast-check": "^4.10.3",
-    "tsx": "4.23.0",
+    "tsx": "4.23.15",
     "vitest": "^4.1.10"
   }
 }
