@@ -502,6 +502,14 @@ export function Shell({
    * went on showing its partial figures after the notice that excused them
    * had been taken down. Handed to the view as a prop; a view that holds a
    * corpus-wide read re-reads when it moves.
+   *
+   * AMENDED 2026-11-19 (ARC-7): it also moves when the stream reveals a
+   * server restart. What the views hold was read from the previous process,
+   * and what that process published after the tab stopped listening is gone
+   * with it; a restart whose startup replay finished before the health
+   * re-probe asked never showed `replaying`, so the replay ending alone did
+   * not cover it. The prop keeps its name: it counts the moments every
+   * corpus-wide read became stale.
    */
   const [replayEpoch, setReplayEpoch] = useState(0);
 
@@ -575,10 +583,12 @@ export function Shell({
     });
     const unsubscribeDrops = client.onFrameDropped((frame) => setDroppedFrames(frame.total));
     const unsubscribeGaps = client.onFrameGap((gap) => setMissedFrames(gap.total));
+    const unsubscribeRestarts = client.onServerRestart(() => setReplayEpoch((epoch) => epoch + 1));
     return () => {
       unsubscribe();
       unsubscribeDrops();
       unsubscribeGaps();
+      unsubscribeRestarts();
       client.close();
       setSse(null);
     };

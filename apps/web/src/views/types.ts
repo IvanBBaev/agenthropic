@@ -29,6 +29,8 @@ export interface ViewProps {
    * that fetches a corpus-wide answer once lists it among that fetch's
    * dependencies and so re-reads, keeping what is on screen until the new
    * answer lands. Optional: a view mounted on its own has no shell to count.
+   * AMENDED 2026-11-19 (ARC-7): it also moves on a server restart the stream
+   * reveals - figures read from the previous process are just as stale.
    */
   readonly replayEpoch?: number;
 }

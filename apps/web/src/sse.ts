@@ -27,7 +27,9 @@
  *   2026-09-26: the hub now keeps the last 256 frames and replays those after
  *   the `Last-Event-ID` EventSource sends on its own reconnect, so a short
  *   disconnect loses nothing; a longer one, or one across a server restart,
- *   still leaves a gap, and the tracking below is what reports it.) This wrapper
+ *   still leaves a gap, and the tracking below is what reports it. Amended
+ *   2026-11-19, ARC-7: the id is now `<bootId>-<n>`, so a restart is told
+ *   apart from a gap and reported through onServerRestart.) This wrapper
  *   read only `data` and discarded the number, so frames published while the
  *   tab was not listening left no trace at all. The sequence is now tracked and
  *   the missing range is reported through onFrameGap. It is a DETECTION, never
@@ -126,6 +128,24 @@ export interface SseFrameGap {
 export type SseGapHandler = (gap: SseFrameGap) => void;
 
 /**
+ * The server this client streams from was restarted (ARC-7, 2026-11-19): a
+ * frame arrived whose boot id differs from the one before it. `total` is the
+ * running count for this client.
+ *
+ * It is a STALENESS signal, not a loss count. Whatever the reader has on
+ * screen was read from the previous process, and anything that process
+ * published after this client stopped listening went down with it - so every
+ * corpus-wide read is due again. What the new process published before this
+ * client reconnected is replayed by the server from its buffer, and a part
+ * that buffer no longer holds is reported as a gap, as any other.
+ */
+export interface SseServerRestart {
+  readonly total: number;
+}
+
+export type SseRestartHandler = (restart: SseServerRestart) => void;
+
+/**
  * Observe the connection situation: the state word and, with it, how many
  * consecutive connection attempts have failed (D6).
  *
@@ -171,6 +191,15 @@ export interface SseClient {
   /** How many frames the server's id sequence proves this client never received. */
   readonly missedFrames: number;
   /**
+   * Observe server restarts, as the frame ids' boot id reveals them (ARC-7).
+   * Returns unsubscribe. Reported on the first frame from the new process,
+   * which the server's replay delivers as soon as the stream reopens if that
+   * process has published anything.
+   */
+  onServerRestart(handler: SseRestartHandler): () => void;
+  /** How many server restarts this client has seen in the id sequence. */
+  readonly serverRestarts: number;
+  /**
    * Observe connection-state changes. The handler is invoked immediately with
    * the current state, then on every change. Returns unsubscribe.
    *
@@ -209,6 +238,27 @@ export { SERVER_EVENT_TYPES };
 /** EventSource.CLOSED - named locally so mocks need no static constants. */
 const READY_STATE_CLOSED = 2;
 
+/**
+ * A frame id as the server writes it (ARC-7): `boot` names the process that
+ * numbered the frame, `seq` is its place in that process's sequence. A bare
+ * number - what a server before ARC-7 sent - has the empty boot id.
+ */
+interface FrameId {
+  readonly boot: string;
+  readonly seq: number;
+}
+
+/**
+ * Read an `id:` field: `<boot>-<seq>` (apps/server/src/realtime/hub.ts,
+ * `formatFrameId`) or a bare decimal. Anything else is null - not an id this
+ * client can compare.
+ */
+function parseFrameId(raw: string): FrameId | null {
+  const match = /^(?:([0-9a-z]{1,16})-)?(\d{1,15})$/.exec(raw);
+  if (match === null) return null;
+  return { boot: match[1] ?? '', seq: Number(match[2]) };
+}
+
 export function createSseClient(token: string, options: SseClientOptions = {}): SseClient {
   const source = new EventSource(`/api/stream?token=${encodeURIComponent(token)}`);
 
@@ -219,10 +269,12 @@ export function createSseClient(token: string, options: SseClientOptions = {}): 
   const dropHandlers = new Set<SseDropHandler>();
   const registeredTypes = new Set<string>();
   const gapHandlers = new Set<SseGapHandler>();
+  const restartHandlers = new Set<SseRestartHandler>();
   let droppedFrames = 0;
-  /** Highest comparable `id:` seen so far; null until the first one arrives. */
-  let lastFrameId: number | null = null;
+  /** The last comparable `id:` seen so far; null until the first one arrives. */
+  let lastFrameId: FrameId | null = null;
   let missedFrames = 0;
+  let serverRestarts = 0;
   /** Consecutive failed connection attempts; 0 until one fails, 0 again on open. */
   let failedAttempts = 0;
 
@@ -290,11 +342,19 @@ export function createSseClient(token: string, options: SseClientOptions = {}): 
   /**
    * Track the server's frame sequence and report what it proves was missed.
    *
-   * Only a FORWARD jump is a gap. A repeated id is a redelivery, a smaller id
-   * is a restarted server (the hub's counter begins at 1 again), and an id this
-   * build cannot compare is no evidence either way - counting any of those
-   * would invent losses that never happened, which is the same dishonesty in
-   * the opposite direction.
+   * Only a FORWARD jump within one boot is a gap. A repeated id is a
+   * redelivery, and an id this build cannot read is no evidence either way -
+   * counting either would invent losses that never happened, which is the same
+   * dishonesty in the opposite direction. A smaller id under the same boot id
+   * is no evidence either: a server before ARC-7 sent bare numbers and
+   * restarted them at 1, and that is the only way one can appear.
+   *
+   * A new boot id is a restarted server (ARC-7, 2026-11-19). It is reported
+   * as one, and the new process's sequence starts afresh: its first frame
+   * reaching this client as anything above 1 proves the frames before it were
+   * published and never arrived - the server replays its whole buffer to a
+   * client resuming from another boot, so those are the frames the buffer no
+   * longer held.
    *
    * A frame published under a type this build never registered raises no
    * listener at all, so it is invisible here until the NEXT frame arrives - and
@@ -303,15 +363,22 @@ export function createSseClient(token: string, options: SseClientOptions = {}): 
    * never registered) would now announce itself instead of passing for silence.
    */
   function noteFrameId(rawId: string): void {
-    if (rawId === '') return;
-    const id = Number(rawId);
-    if (!Number.isInteger(id)) return;
+    const id = parseFrameId(rawId);
+    if (id === null) return;
     const previous = lastFrameId;
     lastFrameId = id;
-    if (previous === null || id <= previous + 1) return;
-    const missed = id - previous - 1;
+    if (previous === null) return;
+    let expected = previous.seq + 1;
+    if (id.boot !== previous.boot) {
+      serverRestarts += 1;
+      const restart: SseServerRestart = { total: serverRestarts };
+      notifyAll(restartHandlers, (handler) => handler(restart));
+      expected = 1;
+    }
+    if (id.seq <= expected) return;
+    const missed = id.seq - expected;
     missedFrames += missed;
-    const gap: SseFrameGap = { from: previous + 1, to: id - 1, missed, total: missedFrames };
+    const gap: SseFrameGap = { from: expected, to: id.seq - 1, missed, total: missedFrames };
     notifyAll(gapHandlers, (handler) => handler(gap));
   }
 
@@ -430,6 +497,15 @@ export function createSseClient(token: string, options: SseClientOptions = {}): 
     },
     get missedFrames() {
       return missedFrames;
+    },
+    onServerRestart(handler: SseRestartHandler): () => void {
+      restartHandlers.add(handler);
+      return () => {
+        restartHandlers.delete(handler);
+      };
+    },
+    get serverRestarts() {
+      return serverRestarts;
     },
     get failedAttempts() {
       return failedAttempts;

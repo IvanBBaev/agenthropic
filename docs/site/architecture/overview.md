@@ -294,7 +294,7 @@ holds after that id — a 256-frame window per process (`DEFAULT_REPLAY_CAPACITY
 beyond the window or across a restart are lost, and a reconnecting client also re-fetches
 state from the read API. *(Amended 2026-10-08: until then this said "There is **no resume
 protocol** — event ids are a per-process counter and a reconnecting client re-fetches
-state from the read API.")*
+state from the read API.")* *(Amended 2026-11-19 — ARC-7: frame ids are now `<bootId>-<n>`, with a random boot id per server process. A client resuming with an id from another boot, or a legacy bare number, is replayed the whole buffer, and the dashboard reads the boot change as a server restart, not a gap, and re-reads every open view.)*
 
 ## Visualization surface: DAG + Sankey
 

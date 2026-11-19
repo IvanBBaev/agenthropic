@@ -37,7 +37,7 @@ import type { LogLevel } from './config';
 import type { SqliteDatabase } from './db/connection';
 import { NOT_FOUND_MESSAGE, registerStaticSite } from './http/static-site';
 import { SECURITY_HEADERS } from './http/security-headers';
-import { RealtimeHub } from './realtime/hub';
+import { parseLastEventId, RealtimeHub } from './realtime/hub';
 import { MAX_ID_LENGTH, MAX_REQUEST_BODY_BYTES } from './limits';
 
 /**
@@ -268,15 +268,6 @@ function extractToken(request: FastifyRequest, allowQueryToken: boolean): string
     }
   }
   return undefined;
-}
-
-/**
- * The `Last-Event-ID` request header as a frame id, or undefined when it is
- * absent, repeated, or not a plain decimal integer the hub could have issued.
- */
-export function parseLastEventId(header: string | string[] | undefined): number | undefined {
-  if (typeof header !== 'string' || !/^\d{1,15}$/.test(header)) return undefined;
-  return Number(header);
 }
 
 export function buildServer(options: BuildServerOptions) {

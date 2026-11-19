@@ -11,6 +11,7 @@ import {
   type SseConnectionState,
   type SseEvent,
   type SseFrameGap,
+  type SseServerRestart,
 } from '../src/sse';
 import { MockEventSource } from './mock-event-source';
 
@@ -369,6 +370,20 @@ describe('createSseClient frame-sequence gaps (LV-2)', () => {
     expect(client.missedFrames).toBe(0);
   });
 
+  it('reads the hub id format `<bootId>-<n>` exactly like a bare number', () => {
+    const client = createSseClient('t');
+    const gaps: SseFrameGap[] = [];
+    client.onFrameGap((gap) => gaps.push(gap));
+    const source = MockEventSource.latest();
+
+    source.emit('message', {}, { id: 'b00t-1' });
+    source.emit('message', {}, { id: 'b00t-2' });
+    source.emit('message', {}, { id: 'b00t-5' });
+
+    expect(gaps).toEqual([{ from: 3, to: 4, missed: 2, total: 2 }]);
+    expect(client.serverRestarts).toBe(0);
+  });
+
   it('ignores an id it cannot compare instead of guessing a gap from it', () => {
     const client = createSseClient('t');
     const gaps = vi.fn();
@@ -646,5 +661,98 @@ describe('createSseClient failed-attempt ledger (D6)', () => {
 
     client.close();
     expect(client.failedAttempts).toBe(2);
+  });
+});
+
+/**
+ * ARC-7 (2026-11-19). The hub's sequence restarts at 1 with every process,
+ * and its ids used to say nothing about which process issued them - so a
+ * restart could only show up as a smaller number, and the frames the new
+ * process published before this tab reconnected were lost without a trace.
+ * The id now carries the process's boot id.
+ */
+describe('createSseClient server restarts (ARC-7)', () => {
+  it('reports a new boot id as a restart, not as a gap', () => {
+    const client = createSseClient('t');
+    const restarts: SseServerRestart[] = [];
+    const gaps = vi.fn();
+    client.onServerRestart((restart) => restarts.push(restart));
+    client.onFrameGap(gaps);
+    const source = MockEventSource.latest();
+
+    source.emit('message', {}, { id: 'old-41' });
+    source.emit('message', {}, { id: 'new-1' });
+    source.emit('message', {}, { id: 'new-2' });
+
+    expect(restarts).toEqual([{ total: 1 }]);
+    expect(client.serverRestarts).toBe(1);
+    expect(gaps).not.toHaveBeenCalled();
+  });
+
+  it('counts the new process frames the replay no longer held as a gap from 1', () => {
+    const client = createSseClient('t');
+    const gaps: SseFrameGap[] = [];
+    client.onFrameGap((gap) => gaps.push(gap));
+    const source = MockEventSource.latest();
+
+    source.emit('message', {}, { id: 'old-3' });
+    // The server replays its whole buffer to a client from another boot; the
+    // oldest frame it still had was 6, so 1-5 were published and never came.
+    source.emit('message', {}, { id: 'new-6' });
+
+    expect(gaps).toEqual([{ from: 1, to: 5, missed: 5, total: 5 }]);
+    expect(client.serverRestarts).toBe(1);
+  });
+
+  it('treats an upgrade from bare numbers to boot ids as a restart', () => {
+    const client = createSseClient('t');
+    const source = MockEventSource.latest();
+    source.emit('message', {}, { id: '7' });
+    source.emit('message', {}, { id: 'b00t-1' });
+    expect(client.serverRestarts).toBe(1);
+    expect(client.missedFrames).toBe(0);
+  });
+
+  it('says nothing about the first frame it ever sees, whatever its number', () => {
+    const client = createSseClient('t');
+    const source = MockEventSource.latest();
+    source.emit('message', {}, { id: 'b00t-90' });
+    expect(client.serverRestarts).toBe(0);
+    expect(client.missedFrames).toBe(0);
+  });
+
+  it('ignores an id shaped like neither format', () => {
+    const client = createSseClient('t');
+    const source = MockEventSource.latest();
+    source.emit('message', {}, { id: 'b00t-1' });
+    for (const id of ['B00T-2', 'b00t-', '-3', 'b00t-1-2', '1.5', ' 4']) {
+      source.emit('message', {}, { id });
+    }
+    source.emit('message', {}, { id: 'b00t-2' });
+    expect(client.serverRestarts).toBe(0);
+    expect(client.missedFrames).toBe(0);
+  });
+
+  it('isolates a throwing restart subscriber and stops notifying after unsubscribe', () => {
+    const client = createSseClient('t');
+    const later = vi.fn();
+    const events = vi.fn();
+    client.onServerRestart(() => {
+      throw new Error('subscriber bug');
+    });
+    const unsubscribe = client.onServerRestart(later);
+    client.subscribe('message', events);
+    const source = MockEventSource.latest();
+
+    source.emit('message', {}, { id: 'a-1' });
+    source.emit('message', {}, { id: 'b-1' });
+    // The frame behind the throwing subscriber is still delivered.
+    expect(later).toHaveBeenCalledTimes(1);
+    expect(events).toHaveBeenCalledTimes(2);
+
+    unsubscribe();
+    source.emit('message', {}, { id: 'c-1' });
+    expect(later).toHaveBeenCalledTimes(1);
+    expect(client.serverRestarts).toBe(2);
   });
 });

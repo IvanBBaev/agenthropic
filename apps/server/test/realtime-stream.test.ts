@@ -6,7 +6,8 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { buildServer, parseLastEventId } from '../src/server';
+import { parseLastEventId } from '../src/realtime/hub';
+import { buildServer } from '../src/server';
 import { RealtimeHub, type RealtimeEvent } from '../src/realtime/hub';
 import { networkAddress, TEST_TOKEN } from './helpers';
 
@@ -97,7 +98,7 @@ describe('/api/stream with RealtimeHub', () => {
       readUntil(readerB, '"session-ingested"'),
     ]);
     for (const received of [receivedA, receivedB]) {
-      expect(received).toContain('id: 1\n');
+      expect(received).toMatch(/^id: [0-9a-f]{12}-1$/m);
       expect(received).toContain('event: session-ingested\n');
       expect(received).toContain(`data: ${JSON.stringify(testEvent)}\n`);
     }
@@ -185,23 +186,41 @@ describe('/api/stream with RealtimeHub', () => {
   it('resumes from Last-Event-ID: the frames missed while away arrive first', async () => {
     // WP-U1 "resumable" (2026-09-26): EventSource sends Last-Event-ID on its own
     // reconnect; the stream now replays what was published in between.
-    const hub = new RealtimeHub();
+    const hub = new RealtimeHub({ bootId: 'b00t' });
     const baseUrl = await listen(hub);
     for (let i = 0; i < 4; i += 1) hub.publish(testEvent);
 
     const controller = new AbortController();
     const response = await fetch(`${baseUrl}/api/stream`, {
-      headers: { authorization: `Bearer ${TEST_TOKEN}`, 'last-event-id': '2' },
+      headers: { authorization: `Bearer ${TEST_TOKEN}`, 'last-event-id': 'b00t-2' },
       signal: controller.signal,
     });
     expect(response.status).toBe(200);
     const received = await readUntil(response.body!.getReader(), ': connected');
-    const ids = [...received.matchAll(/^id: (\d+)$/gm)].map((match) => Number(match[1]));
+    const ids = [...received.matchAll(/^id: b00t-(\d+)$/gm)].map((match) => Number(match[1]));
     expect(ids).toEqual([3, 4]);
     // Replayed frames precede the ': connected' marker, so a client that has
     // seen it has every missed frame and is live.
-    expect(received.indexOf('id: 4')).toBeLessThan(received.indexOf(': connected'));
+    expect(received.indexOf('id: b00t-4')).toBeLessThan(received.indexOf(': connected'));
     expect(hub.subscriberCount).toBe(1);
+    controller.abort();
+  });
+
+  it('replays the whole buffer to a client resuming from another boot (ARC-7)', async () => {
+    // The client's last id was issued by the process before a restart; none
+    // of this process's frames has reached it, whatever the number says.
+    const hub = new RealtimeHub({ bootId: 'b00t' });
+    const baseUrl = await listen(hub);
+    for (let i = 0; i < 3; i += 1) hub.publish(testEvent);
+
+    const controller = new AbortController();
+    const response = await fetch(`${baseUrl}/api/stream`, {
+      headers: { authorization: `Bearer ${TEST_TOKEN}`, 'last-event-id': 'earlier-2' },
+      signal: controller.signal,
+    });
+    const received = await readUntil(response.body!.getReader(), ': connected');
+    const ids = [...received.matchAll(/^id: b00t-(\d+)$/gm)].map((match) => Number(match[1]));
+    expect(ids).toEqual([1, 2, 3]);
     controller.abort();
   });
 
@@ -232,9 +251,9 @@ describe('/api/stream with RealtimeHub', () => {
     expect(hub.droppedSubscribers).toBe(0);
   });
 
-  it('parses Last-Event-ID strictly: a plain decimal id or nothing', () => {
-    expect(parseLastEventId('0')).toBe(0);
-    expect(parseLastEventId('42')).toBe(42);
+  it('parses Last-Event-ID strictly: a hub id, a pre-ARC-7 decimal id, or nothing', () => {
+    expect(parseLastEventId('b00t-0')).toEqual({ bootId: 'b00t', seq: 0 });
+    expect(parseLastEventId('42')).toEqual({ bootId: null, seq: 42 });
     for (const header of [undefined, '', ' 4', '4 ', '-1', '1e3', '0x10', 'abc', '1'.repeat(16)]) {
       expect(parseLastEventId(header), String(header)).toBeUndefined();
     }

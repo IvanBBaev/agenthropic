@@ -924,6 +924,36 @@ describe('a server still replaying its corpus is a wait, not an error', () => {
       },
     );
 
+    it.each([
+      ['#/dag', '/api/dag/global'],
+      ['#/cost', '/api/cost/summary'],
+      ['#/sessions', '/api/sessions'],
+    ] as const)(
+      're-reads the open %s view, once, when the stream reveals a server restart (ARC-7)',
+      async (hash, endpoint) => {
+        // A restart whose startup replay ended before health was asked again
+        // never shows `replaying`; the boot id in the frame ids is what says
+        // the figures on screen came from a process that is gone.
+        window.location.hash = hash;
+        routeWith(ok);
+        render(<Shell token="secret-token" onLock={vi.fn()} onAuthRejected={vi.fn()} />);
+        await waitFor(() => expect(reads(endpoint)).toBe(1));
+        const source = MockEventSource.latest();
+        act(() => source.open());
+        act(() => source.emit('message', {}, { id: 'b00t1-1' }));
+        act(() => source.emit('message', {}, { id: 'b00t1-2' }));
+        await settle(30);
+        expect(reads(endpoint)).toBe(1);
+
+        act(() => source.fail());
+        act(() => source.open());
+        act(() => source.emit('message', {}, { id: 'b00t2-1' }));
+        await waitFor(() => expect(reads(endpoint)).toBe(2));
+        await settle(30);
+        expect(reads(endpoint)).toBe(2);
+      },
+    );
+
     it('leaves an open session tree alone when the replay is over', async () => {
       // The list is missing the sessions not replayed yet; an open tree is
       // not, because a session is ingested whole. Re-reading it would blank

@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { RealtimeHub, serializeSseFrame, type RealtimeEvent } from '../src/realtime/hub';
+import {
+  formatFrameId,
+  newBootId,
+  parseLastEventId,
+  RealtimeHub,
+  serializeSseFrame,
+  type RealtimeEvent,
+  type ResumePoint,
+} from '../src/realtime/hub';
 
 const ingestedEvent: RealtimeEvent = {
   type: 'session-ingested',
@@ -35,8 +43,8 @@ function offUnion(value: unknown): RealtimeEvent {
 
 describe('serializeSseFrame (WP-U1)', () => {
   it('produces an id/event/data frame whose data line round-trips as JSON', () => {
-    const frame = serializeSseFrame(ingestedEvent, 7);
-    expect(frame.startsWith('id: 7\nevent: session-ingested\ndata: ')).toBe(true);
+    const frame = serializeSseFrame(ingestedEvent, 'b00t-7');
+    expect(frame.startsWith('id: b00t-7\nevent: session-ingested\ndata: ')).toBe(true);
     expect(frame.endsWith('\n\n')).toBe(true);
     const dataLine = frame.split('\n')[2]!;
     expect(JSON.parse(dataLine.slice('data: '.length))).toEqual(ingestedEvent);
@@ -47,7 +55,7 @@ describe('serializeSseFrame (WP-U1)', () => {
     // depend on that: a newline inside any string field stays JSON-escaped.
     const frame = serializeSseFrame(
       { ...ingestFailedEvent, payload: { ...ingestFailedEvent.payload, reason: 'line1\nline2' } },
-      1,
+      'b00t-1',
     );
     // 5 lines total: id, event, data, and the two trailing empties.
     expect(frame.split('\n')).toHaveLength(5);
@@ -56,7 +64,7 @@ describe('serializeSseFrame (WP-U1)', () => {
   it('collapses CR/LF in a hostile event type so it cannot inject SSE fields', () => {
     // No arm of the closed union has such a `type`; this is the defence-in-depth
     // path for a value that escaped the type system.
-    const frame = serializeSseFrame(offUnion({ type: 'evil\r\ninjected', payload: {} }), 2);
+    const frame = serializeSseFrame(offUnion({ type: 'evil\r\ninjected', payload: {} }), 'b00t-2');
     expect(frame).toContain('event: evil injected\n');
     expect(frame).not.toContain('\ninjected');
   });
@@ -80,13 +88,13 @@ describe('RealtimeHub (WP-U1)', () => {
   });
 
   it('assigns strictly increasing frame ids across publishes', () => {
-    const hub = new RealtimeHub();
+    const hub = new RealtimeHub({ bootId: 'b00t' });
     const frames: string[] = [];
     hub.subscribe((frame) => frames.push(frame));
     expect(hub.publish(ingestedEvent)).toBe(1);
     expect(hub.publish(ingestFailedEvent)).toBe(2);
-    expect(frames[0]).toContain('id: 1\n');
-    expect(frames[1]).toContain('id: 2\n');
+    expect(frames[0]).toContain('id: b00t-1\n');
+    expect(frames[1]).toContain('id: b00t-2\n');
   });
 
   it('unsubscribe removes the writer and is idempotent', () => {
@@ -168,75 +176,93 @@ describe('RealtimeHub (WP-U1)', () => {
  */
 describe('RealtimeHub resumption from Last-Event-ID (WP-U1)', () => {
   const idsOf = (frames: readonly string[]): number[] =>
-    frames.map((frame) => Number(/^id: (\d+)\n/.exec(frame)?.[1]));
+    frames.map((frame) => Number(/^id: b00t-(\d+)\n/.exec(frame)?.[1]));
+  /** A resume point of the hub under test (boot id `b00t`). */
+  const at = (seq: number): ResumePoint => ({ bootId: 'b00t', seq });
 
   function publishN(hub: RealtimeHub, n: number): void {
     for (let i = 0; i < n; i += 1) hub.publish(ingestedEvent);
   }
 
   it('replays the frames after the given id, in order, then continues live', () => {
-    const hub = new RealtimeHub();
+    const hub = new RealtimeHub({ bootId: 'b00t' });
     publishN(hub, 5);
     const frames: string[] = [];
-    hub.subscribe((frame) => frames.push(frame), 2);
+    hub.subscribe((frame) => frames.push(frame), at(2));
     expect(idsOf(frames)).toEqual([3, 4, 5]);
     hub.publish(ingestedFailedLike());
     expect(idsOf(frames)).toEqual([3, 4, 5, 6]);
   });
 
   it('replays nothing without an id, or for an id already current', () => {
-    const hub = new RealtimeHub();
+    const hub = new RealtimeHub({ bootId: 'b00t' });
     publishN(hub, 3);
     const fresh: string[] = [];
     const current: string[] = [];
     hub.subscribe((frame) => fresh.push(frame));
-    hub.subscribe((frame) => current.push(frame), 3);
+    hub.subscribe((frame) => current.push(frame), at(3));
     expect(fresh).toEqual([]);
     expect(current).toEqual([]);
   });
 
-  it('replays nothing for an id beyond this hub, e.g. one from before a restart', () => {
-    // A restarted server numbers from 1 again, so a client may come back with an
-    // id this process has not reached; no buffered frame is larger, so nothing
-    // is replayed and live frames continue. (An old id INSIDE this process's
-    // range cannot be recognised at all - see the note on `subscribe`.)
-    const hub = new RealtimeHub();
+  it('replays nothing for an id of this process beyond its newest frame', () => {
+    const hub = new RealtimeHub({ bootId: 'b00t' });
     publishN(hub, 3);
     const frames: string[] = [];
-    hub.subscribe((frame) => frames.push(frame), 40);
+    hub.subscribe((frame) => frames.push(frame), at(40));
     expect(frames).toEqual([]);
     hub.publish(ingestedEvent);
     expect(idsOf(frames)).toEqual([4]);
   });
 
+  /**
+   * ARC-7 (2026-11-19). Ids used to restart at 1 with nothing saying which
+   * process issued them: an id from before a restart that fell inside the new
+   * process's range replayed only the frames after it, and the frames before
+   * it were lost with no gap to show for it.
+   */
+  it('replays the whole buffer for an id of another process, wherever its number falls', () => {
+    const hub = new RealtimeHub({ bootId: 'b00t' });
+    publishN(hub, 5);
+    for (const resume of [
+      { bootId: 'earlier', seq: 3 }, // inside this process's range
+      { bootId: 'earlier', seq: 900 }, // beyond it
+      { bootId: null, seq: 2 }, // a bare number from a server before ARC-7
+    ]) {
+      const frames: string[] = [];
+      hub.subscribe((frame) => frames.push(frame), resume);
+      expect(idsOf(frames), JSON.stringify(resume)).toEqual([1, 2, 3, 4, 5]);
+    }
+  });
+
   it('keeps only the newest frames: an older id is replayed what is left', () => {
-    const hub = new RealtimeHub({ replayCapacity: 2 });
+    const hub = new RealtimeHub({ replayCapacity: 2, bootId: 'b00t' });
     publishN(hub, 5);
     const frames: string[] = [];
-    hub.subscribe((frame) => frames.push(frame), 0);
+    hub.subscribe((frame) => frames.push(frame), at(0));
     // Frames 1-3 have left the buffer; the client sees 4 after its 0, a gap the
     // dashboard's id-sequence check already counts and discloses.
     expect(idsOf(frames)).toEqual([4, 5]);
   });
 
   it('replays nothing with a zero capacity, and refuses an invalid one', () => {
-    const hub = new RealtimeHub({ replayCapacity: 0 });
+    const hub = new RealtimeHub({ replayCapacity: 0, bootId: 'b00t' });
     publishN(hub, 3);
     const frames: string[] = [];
-    hub.subscribe((frame) => frames.push(frame), 1);
+    hub.subscribe((frame) => frames.push(frame), at(1));
     expect(frames).toEqual([]);
     expect(() => new RealtimeHub({ replayCapacity: -1 })).toThrow(RangeError);
     expect(() => new RealtimeHub({ replayCapacity: 1.5 })).toThrow(RangeError);
   });
 
   it('drops a writer that throws during replay: counted, never subscribed', () => {
-    const hub = new RealtimeHub();
+    const hub = new RealtimeHub({ bootId: 'b00t' });
     publishN(hub, 2);
     let calls = 0;
     const unsubscribe = hub.subscribe(() => {
       calls += 1;
       throw new Error('socket gone');
-    }, 0);
+    }, at(0));
     expect(calls).toBe(1);
     expect(hub.droppedSubscribers).toBe(1);
     expect(hub.subscriberCount).toBe(0);
@@ -250,3 +276,56 @@ describe('RealtimeHub resumption from Last-Event-ID (WP-U1)', () => {
 function ingestedFailedLike(): RealtimeEvent {
   return ingestFailedEvent;
 }
+
+describe('frame ids carry a boot id (ARC-7)', () => {
+  it('formats and parses `<bootId>-<seq>`, and reads a bare number as a pre-ARC-7 id', () => {
+    expect(formatFrameId('b00t', 42)).toBe('b00t-42');
+    expect(parseLastEventId('b00t-42')).toEqual({ bootId: 'b00t', seq: 42 });
+    expect(parseLastEventId('0123456789abcdef-0')).toEqual({
+      bootId: '0123456789abcdef',
+      seq: 0,
+    });
+    expect(parseLastEventId('42')).toEqual({ bootId: null, seq: 42 });
+    expect(parseLastEventId('0')).toEqual({ bootId: null, seq: 0 });
+  });
+
+  it('refuses anything else, so an unreadable header replays nothing', () => {
+    for (const header of [
+      undefined,
+      '',
+      '-1',
+      '1.5',
+      'abc',
+      'B00T-1', // upper case is never issued
+      'b00t-',
+      '-7',
+      'b00t-1-2',
+      '0123456789abcdefg-1', // 17-character boot id
+      'b00t-1234567890123456', // 16-digit sequence
+      '9'.repeat(16),
+      'b00t-1\nevent: x',
+    ]) {
+      expect(parseLastEventId(header), String(header)).toBeUndefined();
+    }
+    expect(parseLastEventId(['b00t-1', 'b00t-2'])).toBeUndefined();
+  });
+
+  it('gives every hub a fresh random boot id unless one is pinned', () => {
+    expect(newBootId()).toMatch(/^[0-9a-f]{12}$/);
+    const a = new RealtimeHub();
+    const b = new RealtimeHub();
+    expect(a.bootId).toMatch(/^[0-9a-f]{12}$/);
+    expect(a.bootId).not.toBe(b.bootId);
+    const frames: string[] = [];
+    a.subscribe((frame) => frames.push(frame));
+    a.publish(ingestedEvent);
+    expect(frames[0]?.startsWith(`id: ${a.bootId}-1\n`)).toBe(true);
+    expect(new RealtimeHub({ bootId: 'pinned' }).bootId).toBe('pinned');
+  });
+
+  it('refuses a boot id that could break the id line or its separator', () => {
+    for (const bootId of ['', 'UPPER', 'has-dash', 'a\nb', 'x'.repeat(17)]) {
+      expect(() => new RealtimeHub({ bootId }), JSON.stringify(bootId)).toThrow(RangeError);
+    }
+  });
+});

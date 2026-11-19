@@ -286,6 +286,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **SSE frame ids carry a boot id, and the dashboard re-reads on a server restart
+  (ARC-7).** Ids are now `<bootId>-<n>`, with a random 12-hex boot id per server process,
+  instead of a bare counter that restarted at 1. A client resuming with an id from another
+  boot (or a legacy bare number) is replayed the whole buffer instead of the frames after a
+  number that meant something else. The dashboard reads a boot change as a restart, not a
+  gap, and bumps its replay epoch, so the DAG, cost and sessions views re-read the corpus.
+  Frames the old process published before it died are still gone with it.
 - **`tsx` is pinned to an exact version, 4.23.0 (ARC-2).** Every stored migration checksum
   was produced by the tsx/esbuild transform, so a printer change in a tsx bump would make
   every existing database refuse to boot. `apps/server` and `packages/test-fixtures` used a

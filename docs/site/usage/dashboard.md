@@ -703,6 +703,7 @@ Two things follow directly from "no token → no data/stream":
 >   to the live feed, it does not redeliver frames missed while disconnected. `WP-U5`'s
 >   "resumable" wording is therefore not satisfied in the literal sense; the views
 >   compensate by refetching their snapshot on reconnect.")*
+>   *(Amended 2026-11-19 — ARC-7: frame ids are now `<bootId>-<n>`, with a random boot id per server process. A client resuming with an id from another boot, or a legacy bare number, is replayed the whole buffer, and the dashboard reads the boot change as a server restart, not a gap, and re-reads every open view.)*
 
 The full endpoint and stream reference — routes, payload shapes field by field, the
 health payload, and the reconnection semantics — lives on
@@ -748,7 +749,7 @@ resolution inline.)*
   after the client's `Last-Event-ID` — a 256-frame window per process; frames beyond
   that window or across a restart are lost, and the views refetch their snapshot on
   reconnect. Amended 2026-10-08: until then this said "No custom backoff, and no replay
-  of frames missed while disconnected.")*
+  of frames missed while disconnected.")* *(Amended 2026-11-19 — ARC-7: frame ids are now `<bootId>-<n>`, with a random boot id per server process. A client resuming with an id from another boot, or a legacy bare number, is replayed the whole buffer, and the dashboard reads the boot change as a server restart, not a gap, and re-reads every open view.)*
 - **The exact D3 layout** for the global DAG (§3) beyond "queried from persisted
   edges" — `DESIGN.md` §6 names ELK/Graphviz as the first extension "when needed," with
   no committed timing or library choice. *(As built: **still open.** The DAG ships on a

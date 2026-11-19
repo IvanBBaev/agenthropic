@@ -109,4 +109,4 @@ frames and `/api/stream` replays every buffered frame after the request's `Last-
 (which `EventSource` sends on its own reconnect) before the client joins live fan-out, in one
 synchronous step. Transport, origin check and auth gate are unchanged. Bounded, stated: a
 client gone longer than the window, or reconnecting across a server restart (ids restart at
-1), still misses frames, and the dashboard still reports the id gap it can see.
+1), still misses frames, and the dashboard still reports the id gap it can see. *(Amended 2026-11-19 — ARC-7: frame ids are now `<bootId>-<n>`, with a random boot id per server process. A client resuming with an id from another boot, or a legacy bare number, is replayed the whole buffer, and the dashboard reads the boot change as a server restart, not a gap, and re-reads every open view.)*
