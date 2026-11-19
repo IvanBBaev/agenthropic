@@ -151,8 +151,10 @@ describe('scheduleDailyBackups (review M-20 + L9 retention wiring)', () => {
     expect(written[0]).toContain(directory);
 
     scheduler.stop();
+    // QA-5: proven by the timer, not by a sleep - stop() left nothing armed,
+    // so no amount of elapsed time can start another run.
+    expect(vi.getTimerCount()).toBe(0);
     vi.advanceTimersByTime(3000);
-    await new Promise((resolve) => setTimeout(resolve, 25));
     expect(written).toHaveLength(1);
   });
 
@@ -566,9 +568,11 @@ describe('backup scheduling through start() (review M-20 + L9)', () => {
         await server.close();
       }
 
-      // close() cleared the timer: another day passes, no second backup.
+      // close() cleared the timer: nothing is left armed (QA-5 - asserted on
+      // the timer itself, not inferred from a sleep), so another day passes
+      // with no second backup.
+      expect(vi.getTimerCount()).toBe(0);
       vi.advanceTimersByTime(BACKUP_INTERVAL_MS);
-      await new Promise((resolve) => setTimeout(resolve, 25));
       expect(readdirSync(backupsDir)).toHaveLength(1);
     } finally {
       vi.useRealTimers();

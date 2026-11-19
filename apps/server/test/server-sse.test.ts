@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server';
 import { RealtimeHub, type SessionIngestedEvent } from '../src/realtime/hub';
@@ -26,8 +26,12 @@ describe('buildServer (WP-U0)', () => {
     };
   }
 
-  async function listen(options: Parameters<typeof buildServer>[0]): Promise<string> {
+  async function listen(
+    options: Parameters<typeof buildServer>[0],
+    beforeListen?: (server: FastifyInstance) => void,
+  ): Promise<string> {
     app = buildServer(options);
+    beforeListen?.(app);
     await app.listen({ host: '127.0.0.1', port: 0 });
     return `http://127.0.0.1:${networkAddress(app).port}`;
   }
@@ -92,9 +96,11 @@ describe('buildServer (WP-U0)', () => {
   });
 
   it('cleans up per-connection heartbeats when the client disconnects', async () => {
+    const hub = new RealtimeHub();
     const baseUrl = await listen({
       token: TEST_TOKEN,
       schemaVersion: 7,
+      hub,
       heartbeatIntervalMs: 10,
     });
     const controller = new AbortController();
@@ -103,12 +109,32 @@ describe('buildServer (WP-U0)', () => {
       signal: controller.signal,
     });
     await response.body!.getReader().read();
+    expect(hub.subscriberCount).toBe(1);
     controller.abort();
-    // Give the server a beat to observe the close; shutdown must be clean.
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    // The server observed the close: the same teardown that clears the
+    // heartbeat unsubscribed the stream. Shutdown after it must be clean.
+    await vi.waitFor(() => {
+      expect(hub.subscriberCount).toBe(0);
+    });
     await app!.close();
     app = undefined;
   });
+
+  /**
+   * Resolves once the server has seen the client's request close (QA-5: the
+   * event the SSE teardown itself listens to, instead of a fixed sleep). The
+   * listener is attached in `onRequest`, before the route attaches its own, and
+   * `emit` runs every listener synchronously - so by the time an `await` on
+   * this promise resumes, the route's teardown has run too.
+   */
+  function requestClosed(server: FastifyInstance): Promise<void> {
+    return new Promise((resolve) => {
+      server.addHook('onRequest', (request, _reply, done) => {
+        request.raw.once('close', () => resolve());
+        done();
+      });
+    });
+  }
 
   /**
    * Backpressure reaping. `raw.write()` to a peer that has stopped reading
@@ -124,13 +150,19 @@ describe('buildServer (WP-U0)', () => {
    */
   it('reaps a subscriber whose outbound backlog exceeds the bound', async () => {
     const hub = new RealtimeHub();
-    const baseUrl = await listen({
-      token: TEST_TOKEN,
-      schemaVersion: 7,
-      hub,
-      heartbeatIntervalMs: 60_000, // parked: the publish below is the trigger
-      maxStreamBacklogBytes: 0,
-    });
+    let peerClosed!: Promise<void>; // set before listen() returns
+    const baseUrl = await listen(
+      {
+        token: TEST_TOKEN,
+        schemaVersion: 7,
+        hub,
+        heartbeatIntervalMs: 60_000, // parked: the publish below is the trigger
+        maxStreamBacklogBytes: 0,
+      },
+      (server) => {
+        peerClosed = requestClosed(server);
+      },
+    );
     const response = await fetch(`${baseUrl}/api/stream`, {
       headers: { authorization: `Bearer ${TEST_TOKEN}` },
     });
@@ -155,7 +187,7 @@ describe('buildServer (WP-U0)', () => {
     expect(done).toBe(true);
     // The peer's own 'close' now fires on an already-reaped stream; a second
     // teardown must be a no-op, not a double unsubscribe.
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await peerClosed;
     expect(hub.subscriberCount).toBe(0);
   });
 

@@ -692,6 +692,25 @@ handful of files and buy nothing. No retries were added either, because a retry 
 real race. A genuine hang still fails, just later, and CI's job timeout bounds the run.
 `pnpm test` no longer needs `--testTimeout` flags.
 
+## 6.3 As built: no assertion after a fixed sleep (QA-5, 2026-11-19)
+
+A test that sleeps 25-30 ms and then asserts that nothing happened proves only that
+nothing happened in 25-30 ms: on a loaded machine it under-detects, and on an idle one it
+just slows the suite. Those sleeps are gone; each wait is anchored on an event instead:
+
+- **SSE teardown** (`server-sse.test.ts`) waits for the hub's `subscriberCount` to drop,
+  or for the server-side request `close` event the route's own teardown listens to.
+- **Backup scheduling** (`backup-scheduling.test.ts`) asserts `vi.getTimerCount() === 0`
+  after `stop()` / `close()`: with nothing armed, no amount of elapsed time can start a
+  second run.
+- **The live board** (`live-view.test.tsx`) awaits the render it expects
+  (`waitFor` / `findBy*`). Only the two assertions that prove a refetch or a render did
+  *not* happen keep a single macrotask turn (`flushMacrotask`); the mocked `fetch`
+  settles on microtasks, which all run before that turn.
+
+New tests follow the same rule: wait for an event, a timer count, or a positive render,
+never for a number of milliseconds.
+
 ## 7. Where this lands on the roadmap
 
 | Phase | Wave(s) | Testing-relevant exit gate |

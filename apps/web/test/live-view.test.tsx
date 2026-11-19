@@ -49,6 +49,17 @@ function renderView() {
   return render(<LiveView token="secret-token" sse={sse} onAuthRejected={onAuthRejected} />);
 }
 
+/**
+ * One macrotask turn, for the two assertions here that prove something did
+ * NOT happen (no refetch; a superseded response not rendered) and so have no
+ * positive event to await (QA-5). The mocked fetch settles on microtasks, and
+ * a macrotask runs only after every queued microtask, so one turn is enough
+ * for a resolved response to have been read and rendered - or dropped.
+ */
+async function flushMacrotask(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 function sessionsCalls(): readonly string[] {
   return fetchMock.mock.calls
     .map((call) => call[0] as string)
@@ -372,15 +383,17 @@ describe('LiveView', () => {
     expect(screen.getByText('Loading sessions…')).toBeDefined();
     expect(sessionsCalls()).toHaveLength(1);
 
-    await act(async () => {
+    act(() => {
       pending.resolve(jsonResponse(200, sessionList([session])));
-      await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
     // The snapshot arrives as the server told it - the dropped event was not
-    // replayed on top of it.
-    expect(screen.getByLabelText(`status counts for ${session.id}`).textContent).toContain(
-      '1 working',
+    // replayed on top of it. (QA-5: awaited on the render itself, not on a
+    // macrotask flush.)
+    await waitFor(() =>
+      expect(screen.getByLabelText(`status counts for ${session.id}`).textContent).toContain(
+        '1 working',
+      ),
     );
     // AMENDED 2026-09-09 (LV-9). This used to end here, at one call, on the
     // reasoning that there was nothing to patch and no point aborting a fetch
@@ -414,7 +427,7 @@ describe('LiveView', () => {
     // flight whose read could predate this transition: the next fetch, whenever
     // it is issued, is issued after this frame and so already contains it. The
     // error stands as the last thing the board actually knows.
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await flushMacrotask();
     expect(sessionsCalls()).toHaveLength(1);
     expect(screen.getByText(/Could not load sessions: Internal server error\./)).toBeDefined();
   });
@@ -462,9 +475,8 @@ describe('LiveView', () => {
         occurredAt: '2026-07-29T10:10:00.000Z',
       });
     });
-    await act(async () => {
+    act(() => {
       retry.resolve(jsonResponse(200, sessionList([session])));
-      await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
     await waitFor(() => expect(sessionsCalls()).toHaveLength(3));
@@ -517,9 +529,8 @@ describe('LiveView', () => {
     );
 
     // The in-flight read predates the transition and replaces the patched board.
-    await act(async () => {
+    act(() => {
       refetch.resolve(jsonResponse(200, sessionList([session])));
-      await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
     await waitFor(() => expect(sessionsCalls()).toHaveLength(3));
@@ -557,7 +568,7 @@ describe('LiveView', () => {
 
     await act(async () => {
       first.resolve(jsonResponse(200, sessionList([stale])));
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await flushMacrotask();
     });
 
     // The superseded response never replaces the newer persisted truth.
@@ -888,15 +899,14 @@ describe('LiveView', () => {
       expect(screen.getByRole('alert').textContent).toContain('Ingest failed for session');
       expect(screen.getByText('Loading sessions…')).toBeDefined();
 
-      await act(async () => {
+      act(() => {
         pending.resolve(jsonResponse(200, sessionList([sessionSummary()])));
-        await new Promise((resolve) => setTimeout(resolve, 0));
       });
 
       // The banner survives the snapshot's arrival - a quarantined session is
-      // still absent from it.
+      // still absent from it. (QA-5: the arrival is awaited, not slept for.)
+      expect(await screen.findByRole('list', { name: 'sessions' })).toBeDefined();
       expect(screen.getByRole('alert')).toBeDefined();
-      expect(screen.getByRole('list', { name: 'sessions' })).toBeDefined();
     });
 
     // The banner is a `role="alert"` whose entire purpose is to say WHY the
