@@ -36,24 +36,51 @@
  * `{ inserted: 0, corrected: 0 }` - the byte-identical double-replay proof
  * depends on that distinction.
  *
- * OWNERSHIP (M-12). UNIQUE(message_id, bucket) is GLOBAL, not per-session, and
- * a CLI resume/fork copies history lines VERBATIM into a NEW session file - so
- * the same message_id can legitimately arrive from two different sessions.
- * The rule: THE FIRST-INGESTED SESSION OWNS A message_id. A copy arriving from
- * any other session is EXCLUDED entirely (all five buckets, even when it
- * carries a larger `tokens` value - the convergence MAX above is a
- * WITHIN-session streaming repair, never a cross-session merge), counted in
- * `crossSessionCollisions`, and surfaced with one counts-only warn per write
- * call. Never silent, never double-counted: the replayed lines are the SAME
- * spend, already stored once under their owner, so global token totals are
- * identical whichever file happens to be ingested first - token counts stay
- * ground truth, read once and never invented. Attribution follows ownership
- * and never flips afterwards: without this guard the upsert's
- * `agent_id = excluded.agent_id` arm would silently rewrite who spent the
- * money on every replay of the other file. Zero colliding message ids exist
- * across this machine's whole corpus today (measured 2026-08-09, PROVISIONAL),
- * which is why the rule ships with no migration: it pre-empts CLI behavior
- * rather than repairing stored damage.
+ * OWNERSHIP (M-12, made order-independent by DAT-15). UNIQUE(message_id,
+ * bucket) is GLOBAL, not per-session, and a CLI resume/fork copies history
+ * lines VERBATIM into a NEW session file - so the same message_id can
+ * legitimately arrive from two different sessions. Exactly one session owns a
+ * message_id, and which one is decided by the sessions themselves, never by
+ * the order their files happen to be ingested in:
+ *   1. the session with the EARLIER `sessions.started_at` (compared as an
+ *      instant via `julianday()`, never as text) owns it;
+ *   2. a session with a known start precedes one whose start is NULL or not
+ *      an instant;
+ *   3. otherwise - the same start, or no usable start on either side - the
+ *      lexicographically SMALLER session id owns it.
+ * Rule 3 is not a corner case: a resumed or forked file usually opens with the
+ * copied history lines, so both sessions often report the same start. The
+ * tie-break carries no meaning beyond being stable; it exists so the owner is
+ * a function of the two sessions alone.
+ *
+ * A copy arriving from a session that does NOT precede the stored owner is
+ * EXCLUDED entirely (all five buckets, even when it carries a larger `tokens`
+ * value - the convergence MAX above is a WITHIN-session streaming repair,
+ * never a cross-session merge) and its id is returned in
+ * `crossSessionMessageIds`. A copy arriving from a session that DOES precede
+ * the stored owner TAKES THE MESSAGE OVER: the stored owner's five rows are
+ * deleted and the incoming copy is written as a fresh message. Either way the
+ * collision is counted in `crossSessionCollisions` and surfaced with one
+ * counts-only warn per write call - never silent, never double-counted: the
+ * replayed lines are the SAME spend, stored once under exactly one owner, so
+ * global token totals AND their attribution are identical whichever file is
+ * ingested first. Token counts stay ground truth, read once and never
+ * invented. Without this guard the upsert's `agent_id = excluded.agent_id` arm
+ * would silently rewrite who spent the money on every replay of the other
+ * file.
+ *
+ * A takeover removes rows from a session other than the one being written, so
+ * it does what the triggers cannot: migration 22's `ingest_seq` triggers stamp
+ * only `NEW.session_id` and a DELETE stamps nothing, so the previous owner is
+ * stamped here explicitly (its totals just changed, and /api/changes must say
+ * so), and the ledger epoch is bumped for the caches keyed on it. Because the
+ * ordering keys only ever settle - `started_at` never moves later - the owner
+ * converges once both sessions have been ingested at their final extent. Zero
+ * colliding message ids exist across this machine's whole corpus today
+ * (measured 2026-08-09, PROVISIONAL), which is why the rule ships with no
+ * migration: it pre-empts CLI behavior rather than repairing stored damage.
+ * *(Amended 2026-11-19, DAT-15 - the rule used to be "the first-ingested
+ * session owns a message_id", which made attribution depend on ingest order.)*
  *
  * CANONICAL occurred_at (M-21, second half). `occurred_at` is the OTHER operand
  * of the dated-rate comparison that migration 14 fixed on the `model_pricing`
@@ -73,6 +100,7 @@
  */
 import type { DedupedUsage } from '@agenthropic/core';
 import type { SqliteDatabase } from './connection';
+import { bumpLedgerEpoch } from './ledger-epoch';
 
 export interface TokenUsageInsertResult {
   /** Rows genuinely inserted - a (message_id, bucket) pair that did not exist. */
@@ -80,15 +108,18 @@ export interface TokenUsageInsertResult {
   /** Existing rows corrected in place by a later, fuller read of the same message. */
   readonly corrected: number;
   /**
-   * Messages (not rows) skipped because another session already owns their
-   * message_id - the M-12 ownership rule. Observable by contract: a collision
-   * is never silently swallowed.
+   * Messages (not rows) whose message_id another session also carries - the
+   * M-12 ownership rule. Each one was either skipped (the other session owns
+   * it) or taken over (this session owns it now, DAT-15). Observable by
+   * contract: a collision is never silently swallowed.
    */
   readonly crossSessionCollisions: number;
   /**
-   * The message ids behind `crossSessionCollisions`, in input order, so the
-   * caller can price what this session actually OWNS (PAR-3). Returned, never
-   * logged: the warn below stays counts-only.
+   * The SKIPPED subset of `crossSessionCollisions`, in input order - the
+   * messages this session does not own after the write - so the caller can
+   * price what this session actually OWNS (PAR-3). A taken-over message is
+   * owned, so it is not listed. Returned, never logged: the warn below stays
+   * counts-only.
    */
   readonly crossSessionMessageIds: readonly string[];
 }
@@ -228,27 +259,48 @@ export function insertTokenUsageRows(
   // five bucket rows inside one transaction, so the `output` row is present
   // exactly when the message is - one indexed lookup answers all three
   // questions, and the ownership check happens BEFORE any bucket row is
-  // touched so a foreign message can never be half-written.
+  // touched so a foreign message can never be half-written. The owner's start
+  // comes along through the join so the ownership rule costs no extra query.
   const storedOutputStatement = db.prepare(
-    `SELECT tokens, session_id AS sessionId FROM token_usage
-      WHERE message_id = ? AND bucket = 'output'`,
+    `SELECT tu.tokens AS tokens, tu.session_id AS sessionId,
+            julianday(s.started_at) AS ownerStart
+       FROM token_usage tu
+       LEFT JOIN sessions s ON s.id = tu.session_id
+      WHERE tu.message_id = ? AND tu.bucket = 'output'`,
+  );
+  const deleteMessageStatement = db.prepare('DELETE FROM token_usage WHERE message_id = ?');
+  const advanceClockStatement = db.prepare('UPDATE ingest_clock SET seq = seq + 1');
+  const stampSessionStatement = db.prepare(
+    'UPDATE sessions SET ingest_seq = (SELECT seq FROM ingest_clock) WHERE id = ?',
   );
 
   const writeAll = db.transaction((entries: readonly DedupedUsage[]): TokenUsageInsertResult => {
     let inserted = 0;
     let corrected = 0;
     let crossSessionCollisions = 0;
+    let takeovers = 0;
     const crossSessionMessageIds: string[] = [];
+    // Read inside the transaction: the projection upserts this session's row
+    // (and its start) earlier in the same transaction.
+    const incomingStart = sessionStart(db, sessionId);
     for (const entry of entries) {
-      const storedOutput = storedOutputStatement.get(entry.messageId) as
-        { tokens: number; sessionId: string } | undefined;
+      let storedOutput = storedOutputStatement.get(entry.messageId) as StoredOutput | undefined;
       if (storedOutput !== undefined && storedOutput.sessionId !== sessionId) {
-        // M-12: another session owns this message_id (see OWNERSHIP above).
-        // The spend is already counted once under its owner - skip the whole
-        // message, count the collision, and move on.
         crossSessionCollisions += 1;
-        crossSessionMessageIds.push(entry.messageId);
-        continue;
+        const owner = { start: storedOutput.ownerStart, id: storedOutput.sessionId };
+        if (!ownsBefore({ start: incomingStart, id: sessionId }, owner)) {
+          // The stored owner precedes this session (see OWNERSHIP above). The
+          // spend is already counted once under it - skip the whole message.
+          crossSessionMessageIds.push(entry.messageId);
+          continue;
+        }
+        // DAT-15 takeover: this session precedes the stored owner. Drop the
+        // owner's copy and write this one as a fresh message.
+        deleteMessageStatement.run(entry.messageId);
+        advanceClockStatement.run();
+        stampSessionStatement.run(storedOutput.sessionId);
+        takeovers += 1;
+        storedOutput = undefined;
       }
       const settles = storedOutput === undefined || entry.usage.output > storedOutput.tokens;
       // Once per message, not once per bucket: all five rows of a message share
@@ -275,6 +327,10 @@ export function insertTokenUsageRows(
         corrected += changes;
       }
     }
+    if (takeovers > 0) {
+      // Rows of ANOTHER session were deleted through this handle.
+      bumpLedgerEpoch(db);
+    }
     return { inserted, corrected, crossSessionCollisions, crossSessionMessageIds };
   });
 
@@ -282,9 +338,53 @@ export function insertTokenUsageRows(
   if (result.crossSessionCollisions > 0) {
     // Counts only, never ids: the log must not become a payload channel. One
     // line per write call is naturally rate-limited to the poll cadence.
+    const skipped = result.crossSessionMessageIds.length;
+    const takenOver = result.crossSessionCollisions - skipped;
     console.warn(
-      `[token-usage] skipped ${String(result.crossSessionCollisions)} message(s) owned by another session (resume/fork replay; spend already counted once under its owner)`,
+      `[token-usage] skipped ${String(skipped)} message(s) owned by another session, ` +
+        `took over ${String(takenOver)} message(s) from a later-starting session ` +
+        '(resume/fork replay; spend counted once under its owner)',
     );
   }
   return result;
+}
+
+interface StoredOutput {
+  readonly tokens: number;
+  readonly sessionId: string;
+  /** `julianday(sessions.started_at)` of the stored owner; null when unknown. */
+  readonly ownerStart: number | null;
+}
+
+/** A session's place in the ownership order (see OWNERSHIP above). */
+interface OwnershipKey {
+  /** `julianday(started_at)`; null when the start is NULL, not an instant, or the row is missing. */
+  readonly start: number | null;
+  readonly id: string;
+}
+
+function sessionStart(db: SqliteDatabase, sessionId: string): number | null {
+  const row = db
+    .prepare('SELECT julianday(started_at) AS start FROM sessions WHERE id = ?')
+    .get(sessionId) as { start: number | null } | undefined;
+  return row?.start ?? null;
+}
+
+/**
+ * True when `a` owns a shared message_id over `b`: the earlier known start
+ * wins, a known start beats an unknown one, and anything else falls to the
+ * smaller session id. A strict total order on distinct sessions, so exactly
+ * one of `ownsBefore(a, b)` and `ownsBefore(b, a)` holds.
+ */
+export function ownsBefore(a: OwnershipKey, b: OwnershipKey): boolean {
+  if (a.start !== null && b.start !== null && a.start !== b.start) {
+    return a.start < b.start;
+  }
+  if (a.start !== null && b.start === null) {
+    return true;
+  }
+  if (a.start === null && b.start !== null) {
+    return false;
+  }
+  return a.id < b.id;
 }

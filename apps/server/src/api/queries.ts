@@ -1312,8 +1312,9 @@ export function getGlobalDag(
  * Where the two CAN diverge is where the database itself lacks the rows, and
  * every such case is either reported or provably zero:
  *   1. M-12 cross-session `message_id` ownership — when two transcripts (fork
- *      or resume) carry the same message id, the first-ingested session keeps
- *      it and the loser's rows are not written at all. The aggregate therefore
+ *      or resume) carry the same message id, the earlier-starting session
+ *      keeps it (DAT-15; ties to the smaller session id) and the loser's rows
+ *      are not written at all, or are deleted when the owner arrives later. The aggregate therefore
  *      counts that usage once, under the owning session; a per-session
  *      substrate analysis of the LOSING session counts it too. This one is not
  *      countable from the DB (the loser leaves no row) — the server's

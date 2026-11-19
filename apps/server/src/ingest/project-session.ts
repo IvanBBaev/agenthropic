@@ -31,9 +31,12 @@ export interface ProjectionCounts {
   readonly agentsUpserted: number;
   readonly edgesInserted: number;
   readonly usageRowsInserted: number;
-  /** Messages skipped by the M-12 first-ingested-session ownership rule. */
+  /**
+   * Messages another session also carries, skipped or taken over by the M-12 /
+   * DAT-15 ownership rule.
+   */
   readonly crossSessionUsageCollisions: number;
-  /** Their message ids, so the integrator can price only what this session owns (PAR-3). */
+  /** The skipped ones' message ids, so the integrator prices only what this session owns (PAR-3). */
   readonly crossSessionUsageMessageIds: readonly string[];
   /**
    * Status transitions produced by replaying stored SubagentStop hooks onto

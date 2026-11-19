@@ -1625,10 +1625,15 @@ describe('migration 16 - token_usage_rollup equals a direct grouped scan', () =>
     });
 
     it('does not move the rollup when the M-12 cross-session guard skips a replay', () => {
-      // token-usage.ts:213-219: a resume/fork copies history lines verbatim
-      // into a new session file, and the first-ingested session owns the
-      // message_id. The replay must not be written - so the rollup must not
-      // move either, not by a token and not by a row.
+      // A resume/fork copies history lines verbatim into a new session file,
+      // and the earlier-starting session owns the message_id (token-usage.ts,
+      // OWNERSHIP; DAT-15). The replay must not be written - so the rollup
+      // must not move either, not by a token and not by a row. OTHER_SESSION
+      // sorts first by id, so it must start later to be the one refused.
+      db.prepare('UPDATE sessions SET started_at = ? WHERE id = ?').run(
+        '2026-07-11T06:00:00Z',
+        OTHER_SESSION,
+      );
       const entry: DedupedUsage = {
         messageId: 'shared-msg',
         model: MODEL,
@@ -1671,6 +1676,43 @@ describe('migration 16 - token_usage_rollup equals a direct grouped scan', () =>
       expectRollupMatchesScan(db);
       expect(readRollup(db)).toEqual(before);
       expect(countRows(db, `token_usage_rollup WHERE session_id = '${OTHER_SESSION}'`)).toBe(0);
+    });
+
+    it('moves the rollup with the message when an earlier-starting session takes it over', () => {
+      // DAT-15 takeover: the stored owner's five rows are DELETEd and the
+      // incoming copy INSERTed under the new owner, so the rollup's DELETE and
+      // INSERT triggers both fire inside one write call.
+      db.prepare('UPDATE sessions SET started_at = ? WHERE id = ?').run(
+        '2026-07-11T06:00:00Z',
+        SESSION,
+      );
+      const entry: DedupedUsage = {
+        messageId: 'shared-msg',
+        model: MODEL,
+        timestamp: '2026-05-01T01:00:00.000Z',
+        usage: { input: 100, output: 200, cacheRead: 7, cacheWrite5m: 0, cacheWrite1h: 0 },
+        agentId: null,
+      };
+      insertTokenUsageRows(db, SESSION, [entry]);
+      expectRollupMatchesScan(db);
+
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        expect(insertTokenUsageRows(db, OTHER_SESSION, [entry])).toEqual({
+          inserted: 5,
+          corrected: 0,
+          crossSessionCollisions: 1,
+          crossSessionMessageIds: [],
+        });
+      } finally {
+        warn.mockRestore();
+      }
+
+      expectRollupMatchesScan(db);
+      expect(countRows(db, `token_usage_rollup WHERE session_id = '${SESSION}'`)).toBe(0);
+      expect(countRows(db, `token_usage_rollup WHERE session_id = '${OTHER_SESSION}'`)).toBe(
+        countRows(db, 'token_usage_rollup'),
+      );
     });
 
     it("splits a rolled-up day through upsertPricingRate's INSERT arm", () => {

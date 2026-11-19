@@ -296,6 +296,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The owner of a message id shared by two sessions no longer depends on ingest order
+  (DAT-15). A resume or fork copies history lines verbatim, so two session files can
+  carry the same message. The first session ingested used to own it, so a rebuilt
+  database could attribute the spend differently. Now the earlier-starting session owns
+  it, a known start beats an unknown one, and a tie goes to the smaller session id. When
+  the owner arrives after the other copy was stored, it takes the message over: the
+  stored rows are replaced, the previous owner is reported as changed on `/api/changes`,
+  and the collision still counts in `crossSessionUsageCollisions`. Global token totals
+  were already order-independent and stay the same.
 - The live board and the open session tree coalesce ingest refetches (UX-15). A burst
   of `session-ingested` frames used to re-read the session list once per frame. Now
   the first frame re-reads at once and the rest of a 2-second window fold into one

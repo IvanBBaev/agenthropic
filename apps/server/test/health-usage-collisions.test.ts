@@ -1,6 +1,7 @@
 /**
  * Review M-18 - cross-session usage-ownership visibility. The M-12 rule gives a
- * `message_id` to the session that ingested it FIRST; a resume/fork replay of
+ * `message_id` to ONE session - the earlier-starting one since DAT-15, where it
+ * used to be the session that ingested it first; a resume/fork replay of
  * the same conversation deliberately does not re-count that spend. That is
  * correct, but silent: the second session's dollar total is legitimately lower
  * than its transcript suggests, and nothing on the running server said why.

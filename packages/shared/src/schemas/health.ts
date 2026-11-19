@@ -56,8 +56,9 @@ export const HealthSchema = Type.Object(
     // poll ACTUALLY takes, so an operator can see it approaching the poll
     // interval. Omitted until a pass has finished.
     lastTickDurationMs: Type.Optional(Type.Number({ minimum: 0 })),
-    // Messages skipped by the M-12 ownership rule since boot (review M-18) —
-    // spend that IS counted, but under the session that ingested it first.
+    // Shared message ids resolved by the M-12 ownership rule since boot (review
+    // M-18) — a copy skipped, or taken over from a later-starting session
+    // (DAT-15). Spend that IS counted, but under the earlier-starting session.
     crossSessionUsageCollisions: Type.Optional(Type.Integer({ minimum: 0 })),
     // Sessions whose latest ingest attempt failed. Each is absent from the
     // stored totals OR present there only at an older extent (a session

@@ -268,7 +268,7 @@ describe(`real-corpus contract (${String(corpusRoots.length)} root(s))`, () => {
     }
 
     // Completeness: each independently seen message is stored exactly once, by
-    // one of the sessions carrying it (M-12: the first-ingested copy owns it).
+    // one of the sessions carrying it (M-12 / DAT-15: the earlier-starting session's copy owns it).
     for (const [sessionId, messages] of ledger) {
       for (const messageId of messages.keys()) {
         if (!stored.has(messageId)) {

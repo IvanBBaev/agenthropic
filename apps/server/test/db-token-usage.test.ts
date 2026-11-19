@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import type { DedupedUsage } from '@agenthropic/core';
-import { insertTokenUsageRows } from '../src/db/token-usage';
+import { insertTokenUsageRows, ownsBefore } from '../src/db/token-usage';
+import { ledgerEpoch } from '../src/db/ledger-epoch';
 import { createMigratedTempDb, insertSession, type TempDb } from './helpers';
 
 describe('insertTokenUsageRows (WP-D8 / LONG token_usage matrix)', () => {
@@ -267,13 +268,26 @@ describe('insertTokenUsageRows (WP-D8 / LONG token_usage matrix)', () => {
 
   /**
    * M-12 ownership: a CLI resume/fork copies history lines VERBATIM into a new
-   * session file, so the same message_id can arrive from two sessions. The
-   * first-ingested session owns it; the copy is excluded (never double-counted,
-   * never re-attributed) and the exclusion is observable, never silent.
+   * session file, so the same message_id can arrive from two sessions. Exactly
+   * one session owns it - the earlier-starting one, ties to the smaller id
+   * (DAT-15) - whichever file is ingested first; the other copy is excluded
+   * (never double-counted) and the collision is observable, never silent.
    */
-  describe('cross-session message ownership (M-12)', () => {
+  describe('cross-session message ownership (M-12 / DAT-15)', () => {
+    // Lexicographically SMALLER than `sessionId` but starting LATER: every
+    // case below that expects the original to own the message would fail if
+    // the tie-break were consulted before the start time.
     const FORK_SESSION = 'sess-fork';
+    const FORK_STARTED_AT = '2026-07-11T06:00:00Z';
     let warnSpy: MockInstance;
+
+    const setStart = (db: TempDb['db'], id: string, startedAt: string | null): void => {
+      db.prepare('UPDATE sessions SET started_at = ? WHERE id = ?').run(startedAt, id);
+    };
+
+    const ingestSeqOf = (db: TempDb['db'], id: string): number =>
+      (db.prepare('SELECT ingest_seq AS seq FROM sessions WHERE id = ?').get(id) as { seq: number })
+        .seq;
 
     const shared = (agentId: string | null, output: number): DedupedUsage => ({
       messageId: 'msg-shared',
@@ -301,6 +315,7 @@ describe('insertTokenUsageRows (WP-D8 / LONG token_usage matrix)', () => {
 
     beforeEach(() => {
       insertSession(temp.db, FORK_SESSION);
+      setStart(temp.db, FORK_SESSION, FORK_STARTED_AT);
       warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     });
 
@@ -333,26 +348,108 @@ describe('insertTokenUsageRows (WP-D8 / LONG token_usage matrix)', () => {
       expect(sumTokens(temp.db)).toBe(60);
     });
 
-    it('keeps global totals identical under BOTH ingest orders', () => {
+    it('keeps global totals AND the owner identical under BOTH ingest orders', () => {
       // Order 1: original session first.
       insertTokenUsageRows(temp.db, sessionId, [shared('agent-owner', 50)]);
       insertTokenUsageRows(temp.db, FORK_SESSION, [shared('agent-fork', 50)]);
       const totalOrder1 = sumTokens(temp.db);
       expect(ownerOf(temp.db, 'msg-shared')).toBe(sessionId);
 
-      // Order 2: fork file discovered first — it becomes the owner, and that
-      // is the documented rule (first-ingested wins), not a defect.
+      // Order 2: fork file discovered first. Before DAT-15 the fork became the
+      // owner here; now the earlier-starting original takes the message over.
       const other = createMigratedTempDb();
       try {
         insertSession(other.db, sessionId);
         insertSession(other.db, FORK_SESSION);
+        setStart(other.db, FORK_SESSION, FORK_STARTED_AT);
         insertTokenUsageRows(other.db, FORK_SESSION, [shared('agent-fork', 50)]);
         insertTokenUsageRows(other.db, sessionId, [shared('agent-owner', 50)]);
-        expect(ownerOf(other.db, 'msg-shared')).toBe(FORK_SESSION);
+        expect(ownerOf(other.db, 'msg-shared')).toBe(sessionId);
         expect(sumTokens(other.db)).toBe(totalOrder1);
+        const rows = (db: TempDb['db']): unknown[] =>
+          db
+            .prepare(
+              `SELECT session_id, agent_id, message_id, model, bucket, tokens, occurred_at
+                 FROM token_usage ORDER BY message_id, bucket`,
+            )
+            .all();
+        expect(rows(other.db)).toEqual(rows(temp.db));
       } finally {
         other.cleanup();
       }
+    });
+
+    it('takes a message over from a later-starting owner: rows move, the old owner is stamped', () => {
+      insertTokenUsageRows(temp.db, FORK_SESSION, [shared('agent-fork', 50)]);
+      const forkSeqBefore = ingestSeqOf(temp.db, FORK_SESSION);
+      const epochBefore = ledgerEpoch(temp.db);
+
+      expect(insertTokenUsageRows(temp.db, sessionId, [shared('agent-owner', 50)])).toEqual({
+        inserted: 5,
+        corrected: 0,
+        crossSessionCollisions: 1,
+        crossSessionMessageIds: [],
+      });
+
+      expect(ownerOf(temp.db, 'msg-shared')).toBe(sessionId);
+      const agents = temp.db
+        .prepare('SELECT DISTINCT agent_id AS agentId FROM token_usage WHERE message_id = ?')
+        .all('msg-shared') as Array<{ agentId: string }>;
+      expect(agents).toEqual([{ agentId: 'agent-owner' }]);
+      expect(sumTokens(temp.db)).toBe(60);
+      // The fork's totals just changed, so /api/changes must report it, and
+      // the caches that ignore deletes must recompute.
+      expect(ingestSeqOf(temp.db, FORK_SESSION)).toBeGreaterThan(forkSeqBefore);
+      expect(ledgerEpoch(temp.db)).toBe(epochBefore + 1);
+
+      // Converged: replaying either side changes nothing further.
+      expect(insertTokenUsageRows(temp.db, FORK_SESSION, [shared('agent-fork', 50)])).toEqual({
+        inserted: 0,
+        corrected: 0,
+        crossSessionCollisions: 1,
+        crossSessionMessageIds: ['msg-shared'],
+      });
+      expect(insertTokenUsageRows(temp.db, sessionId, [shared('agent-owner', 50)])).toEqual({
+        inserted: 0,
+        corrected: 0,
+        crossSessionCollisions: 0,
+        crossSessionMessageIds: [],
+      });
+      expect(ledgerEpoch(temp.db)).toBe(epochBefore + 1);
+    });
+
+    it('breaks a start-time tie by the smaller session id, in both orders', () => {
+      // The common real case: a resumed file opens with the copied history, so
+      // both sessions report the same start.
+      setStart(temp.db, FORK_SESSION, '2026-07-11T00:00:00Z');
+      insertTokenUsageRows(temp.db, sessionId, [shared('agent-owner', 50)]);
+      insertTokenUsageRows(temp.db, FORK_SESSION, [shared('agent-fork', 50)]);
+      expect(ownerOf(temp.db, 'msg-shared')).toBe(FORK_SESSION);
+
+      // The same instant spelled differently is still a tie: compared as an
+      // instant, never as text.
+      const other = createMigratedTempDb();
+      try {
+        insertSession(other.db, sessionId);
+        insertSession(other.db, FORK_SESSION);
+        setStart(other.db, FORK_SESSION, '2026-07-11T02:00:00+02:00');
+        insertTokenUsageRows(other.db, FORK_SESSION, [shared('agent-fork', 50)]);
+        insertTokenUsageRows(other.db, sessionId, [shared('agent-owner', 50)]);
+        expect(ownerOf(other.db, 'msg-shared')).toBe(FORK_SESSION);
+      } finally {
+        other.cleanup();
+      }
+    });
+
+    it('lets a known start precede an unknown one', () => {
+      setStart(temp.db, sessionId, null);
+      insertTokenUsageRows(temp.db, sessionId, [shared('agent-owner', 50)]);
+      insertTokenUsageRows(temp.db, FORK_SESSION, [shared('agent-fork', 50)]);
+      expect(ownerOf(temp.db, 'msg-shared')).toBe(FORK_SESSION);
+
+      // And the unknown start never takes the message back.
+      insertTokenUsageRows(temp.db, sessionId, [shared('agent-owner', 50)]);
+      expect(ownerOf(temp.db, 'msg-shared')).toBe(FORK_SESSION);
     });
 
     it('never merges a larger foreign read — convergence MAX is within-session only', () => {
@@ -380,8 +477,21 @@ describe('insertTokenUsageRows (WP-D8 / LONG token_usage matrix)', () => {
       expect(warnSpy).toHaveBeenCalledTimes(1);
       const line = warnSpy.mock.calls[0]?.[0] as string;
       expect(line).toContain('skipped 1 message(s)');
+      expect(line).toContain('took over 0 message(s)');
       expect(line).not.toContain('msg-shared');
       expect(line).not.toContain(FORK_SESSION);
+    });
+
+    it('surfaces a takeover in the same counts-only line', () => {
+      insertTokenUsageRows(temp.db, FORK_SESSION, [shared('agent-fork', 50)]);
+      insertTokenUsageRows(temp.db, sessionId, [shared('agent-owner', 50)]);
+
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const line = warnSpy.mock.calls[0]?.[0] as string;
+      expect(line).toContain('skipped 0 message(s)');
+      expect(line).toContain('took over 1 message(s)');
+      expect(line).not.toContain('msg-shared');
+      expect(line).not.toContain(sessionId);
     });
 
     it('lets the owner session keep converging freely after a foreign replay was excluded', () => {
@@ -426,6 +536,19 @@ describe('insertTokenUsageRows (WP-D8 / LONG token_usage matrix)', () => {
 
       expect(ownerOf(temp.db, 'msg-fork-own')).toBe(FORK_SESSION);
       expect(ownerOf(temp.db, 'msg-shared')).toBe(sessionId);
+    });
+  });
+
+  describe('ownsBefore (DAT-15 ownership order)', () => {
+    it('orders by start, then known before unknown, then by id', () => {
+      expect(ownsBefore({ start: 1, id: 'b' }, { start: 2, id: 'a' })).toBe(true);
+      expect(ownsBefore({ start: 2, id: 'a' }, { start: 1, id: 'b' })).toBe(false);
+      expect(ownsBefore({ start: 5, id: 'z' }, { start: null, id: 'a' })).toBe(true);
+      expect(ownsBefore({ start: null, id: 'a' }, { start: 5, id: 'z' })).toBe(false);
+      expect(ownsBefore({ start: 1, id: 'a' }, { start: 1, id: 'b' })).toBe(true);
+      expect(ownsBefore({ start: 1, id: 'b' }, { start: 1, id: 'a' })).toBe(false);
+      expect(ownsBefore({ start: null, id: 'a' }, { start: null, id: 'b' })).toBe(true);
+      expect(ownsBefore({ start: null, id: 'b' }, { start: null, id: 'a' })).toBe(false);
     });
   });
 
