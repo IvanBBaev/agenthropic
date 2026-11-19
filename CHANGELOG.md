@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Historical-database upgrade matrix (QA-10): for every on-disk schema from 1 to head-1
+  (16 is 0.3.0), a database with representative rows written the way that build wrote them
+  is upgraded and compared with a fresh head database holding the same facts. Schema, every
+  data row, Σ tokens, the rollup and the cost summary must match, and Σ $ must equal the
+  raw-ledger price. See docs/site/contributing/testing.md section 6.7.
+
 - Property tests (QA-8): fast-check properties for usage dedup (against a reference
   model), timestamp canonicalization (offset spellings, text order equals instant
   order), the parser's cache-write mapping and malformed-line handling, plus a

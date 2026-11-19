@@ -803,6 +803,47 @@ all caught, then reverted:
 The runs are not seeded, so each CI run explores new cases. To replay a failure, pass the
 printed `seed` and `path` to `fc.assert`.
 
+## 6.7 As built: the historical-database upgrade matrix (QA-10, 2026-11-19)
+
+`apps/server/test/migrations-upgrade-matrix.test.ts` checks the claim an operator relies on
+when upgrading: a database written by any earlier build, holding real rows, upgrades to a
+database that matches one the current build wrote. It runs once for every schema a
+database can be at on disk, from 1 to head-1. Schema 16 is the 0.3.0 release.
+
+For each prefix N the test builds two temp-file databases from one logical seed:
+
+- **historical:** migrations 1..N, then the seed spelled the way a schema-N build wrote it,
+  then `runMigrations` to head. Before migration 14 an operator pricing row has a bare-date
+  `effective_from`. Before migration 15, usage timestamps are written `…Z` without
+  milliseconds or with `+02:00`/`-05:00` offsets. Before migration 8 a main-agent usage row
+  has a NULL `agent_id`.
+- **fresh:** every migration, then the same seed spelled the way head writes it, restricted
+  to the tables and columns that existed at N.
+
+The seed covers three sessions (one with no agents), a main agent with nested subagents,
+two edge sources, raw and projected events, a checkpoint, and four models: priced,
+repriced by a migration, priced only by a later migration, and never priced. It also has a
+compaction-baseline row, an untimed row, and the columns added later (`outcome_cause`,
+partial and malformed-line census, `pricing_audit`). The test asserts that the two
+databases agree on:
+
+- the applied migration ids and the `sqlite_master` schema;
+- every row of every data table;
+- Σ tokens per bucket, against the seed itself;
+- the token rollup;
+- the whole `getCostSummary` DTO, whose Σ $ must also equal the dollars priced straight
+  from the ledger.
+
+Two columns are excluded: `sessions.ingest_seq` and the `ingest_clock` table. Migration
+22's backfill stamps them on one side and the write triggers on the other, and migration
+22's own test pins the backfill.
+
+The review asked for committed binary snapshots. Instead, the test rebuilds each
+historical schema from its own migration prefix. That gives the same coverage, needs no
+binary fixtures, and a new migration adds its prefix to the matrix by itself. Before it was
+kept, the test caught two deliberate bugs: a misdated operator rate (prefixes 7–13 failed)
+and a misconverted offset timestamp (prefixes 6–14).
+
 ## 7. Where this lands on the roadmap
 
 | Phase | Wave(s) | Testing-relevant exit gate |
