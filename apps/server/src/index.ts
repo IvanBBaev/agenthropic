@@ -420,6 +420,13 @@ export function replayOutcomeLine(outcome: Exclude<TickOutcome, { kind: 'ingeste
           `corpus replay: the corpus could not be read this pass (${outcome.reason}) - ` +
           'retrying on the next poll.',
       };
+    case 'db-unavailable':
+      return {
+        level: 'error',
+        text:
+          `corpus replay: the database could not be written (${outcome.code}: ${outcome.reason}) - ` +
+          'no session was charged a retry; retrying on the next poll.',
+      };
     case 'containment-halt':
       // Points at the FATAL line rather than restating it: one containment
       // violation must never read as two separate incidents.
@@ -440,8 +447,8 @@ export function replayOutcomeLine(outcome: Exclude<TickOutcome, { kind: 'ingeste
   }
 }
 
-/** The two {@link TickOutcome} kinds that mean the corpus loop is in trouble. */
-export type TickTroubleKind = 'read-error' | 'no-corpus-root';
+/** The three {@link TickOutcome} kinds that mean the corpus loop is in trouble. */
+export type TickTroubleKind = 'read-error' | 'no-corpus-root' | 'db-unavailable';
 
 /**
  * Fold one scheduled tick outcome into the watcher's trouble state, emitting a
@@ -479,6 +486,22 @@ export function tickTroubleTransition(
                   'the dashboard is stale until this clears.',
               },
       };
+    case 'db-unavailable':
+      // OPS-13: logged once on entry like the others, with the SQLite code -
+      // a full disk and a locked file want different fixes.
+      return {
+        next: 'db-unavailable',
+        line:
+          previous === 'db-unavailable'
+            ? null
+            : {
+                level: 'error',
+                text:
+                  `corpus watcher: the database could not be written (${outcome.code}: ` +
+                  `${outcome.reason}) - ingest is paused and no session is charged a retry ` +
+                  'until this clears.',
+              },
+      };
     case 'no-corpus-root':
       return {
         next: 'no-corpus-root',
@@ -499,7 +522,10 @@ export function tickTroubleTransition(
             ? null
             : {
                 level: 'log',
-                text: 'corpus watcher: the corpus is readable again - resuming normal ingest.',
+                text:
+                  previous === 'db-unavailable'
+                    ? 'corpus watcher: the database takes writes again - resuming normal ingest.'
+                    : 'corpus watcher: the corpus is readable again - resuming normal ingest.',
               },
       };
   }
@@ -552,6 +578,18 @@ export function replayPhaseEndLine(outcome: TickOutcome): {
           "the phase ends here and health says 'ok' on what landed; the sessions the sweep " +
           'did not reach land through the scheduled poll in capped passes once the corpus ' +
           'reads again.',
+      };
+    case 'db-unavailable':
+      // Same ending as a read error, for the same reason: the watcher kept the
+      // sweep and its cap, and nothing is about to drain while the database
+      // refuses writes. The token screen waits on this phase with no timeout.
+      return {
+        level: 'error',
+        text:
+          `corpus replay: the database still could not be written on the next poll ` +
+          `(${outcome.code}: ${outcome.reason}) - the phase ends here and health says 'ok' ` +
+          'on what landed; the sessions the sweep did not reach land through the scheduled ' +
+          'poll once the database takes writes again.',
       };
     case 'no-corpus-root':
       return {
@@ -1401,7 +1439,11 @@ export async function start(
       maxSessionsPerPass: REPLAY_MAX_SESSIONS_PER_PASS,
       maxBytesPerPass: REPLAY_MAX_BYTES_PER_PASS,
     });
-    if (replay.kind === 'read-error' || replay.kind === 'no-corpus-root') {
+    if (
+      replay.kind === 'read-error' ||
+      replay.kind === 'no-corpus-root' ||
+      replay.kind === 'db-unavailable'
+    ) {
       tickTrouble = replay.kind;
     }
     // A read error ended the loop, not the replay: the sessions it did not
@@ -1409,7 +1451,8 @@ export async function start(
     // finishes the sweep in capped passes and ends the phase (onTickOutcome).
     // Every other ending - drained, nothing to read, no root - is final.
     // (With ingest off there is no watcher and the phase was 'idle' all along.)
-    if (replay.kind !== 'read-error') {
+    // A database fault (OPS-13) ends the loop the same way and owes the same.
+    if (replay.kind !== 'read-error' && replay.kind !== 'db-unavailable') {
       ingestPhase = 'idle';
     }
   }

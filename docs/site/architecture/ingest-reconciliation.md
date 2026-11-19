@@ -586,8 +586,9 @@ try/catch as belt-and-braces.
 A pass used to return a summary or `null`, which merged "the corpus is fully checkpointed and
 quiet" with "there is no corpus root" and with "the root could not be read". That is the same
 collapse of distinct facts the dashboard forbids for agent status, where `unknown` is never
-`null` — so the tick now returns a seven-armed outcome, six of whose arms carry no summary at
-all but are six *different* facts:
+`null` — so the tick now returns an eight-armed outcome, seven of whose arms carry no summary
+at all but are seven *different* facts *(amended 2026-11-19, OPS-13 — the eighth arm is
+`db-unavailable`)*:
 
 | Outcome | What it means |
 |---|---|
@@ -597,6 +598,7 @@ all but are six *different* facts:
 | `overlapped` | A re-entrant call arrived while a pass was in flight; this call did nothing. |
 | `stopped` | The watcher was already stopped; polling is over. |
 | `read-error` | Transient I/O trouble; the pass was skipped and retries next tick. |
+| `db-unavailable` | The database could not be written (`SQLITE_FULL`, `SQLITE_IOERR*`, `SQLITE_BUSY`, `SQLITE_READONLY`, …; carries the `code`). The pass stopped where it failed, no session was charged a retry, and the next tick retries. *(Added 2026-11-19, OPS-13.)* |
 | `containment-halt` | A `ContainmentError` escaped; the watcher stopped itself, for good. |
 
 Per-session failures inside a pass have their own posture. A fingerprint is committed only

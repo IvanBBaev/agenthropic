@@ -80,10 +80,17 @@ export const HealthSchema = Type.Object(
     // the watcher has stopped ticking.
     lastTickAt: Type.Optional(Type.String()),
     // The corpus trouble the poll loop is currently in: 'read-error' (the root
-    // or a transcript could not be read) or 'no-corpus-root'. Omitted while
-    // the last pass read the corpus cleanly, and on a boot with ingest off.
+    // or a transcript could not be read), 'no-corpus-root', or (OPS-13)
+    // 'db-unavailable' (the database could not be written - a full disk, an
+    // I/O error, a busy or read-only file; ingest pauses and no session is
+    // quarantined for it). Omitted while the last pass read the corpus
+    // cleanly, and on a boot with ingest off.
     corpusTrouble: Type.Optional(
-      Type.Union([Type.Literal('read-error'), Type.Literal('no-corpus-root')]),
+      Type.Union([
+        Type.Literal('read-error'),
+        Type.Literal('no-corpus-root'),
+        Type.Literal('db-unavailable'),
+      ]),
     ),
     // Newest successful database backup (ISO 8601): one this process wrote,
     // or else the newest `agenthropic-*.db` already in the backups directory

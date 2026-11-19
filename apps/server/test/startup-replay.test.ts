@@ -36,6 +36,9 @@ import { TEST_TOKEN } from './helpers';
 const hooks = vi.hoisted(() => ({
   beforeTick: null as ((options: TickOptions | undefined) => void) | null,
   app: null as FastifyInstance | null,
+  /** OPS-13: the server's own database handle, as handed to the watcher. */
+  db: null as
+    Parameters<typeof import('../src/ingest/corpus-watcher').createCorpusWatcher>[0]['db'] | null,
 }));
 
 vi.mock('../src/ingest/corpus-watcher', async (importOriginal) => {
@@ -44,6 +47,7 @@ vi.mock('../src/ingest/corpus-watcher', async (importOriginal) => {
     ...actual,
     REPLAY_MAX_SESSIONS_PER_PASS: 1,
     createCorpusWatcher: (deps: Parameters<typeof actual.createCorpusWatcher>[0]) => {
+      hooks.db = deps.db;
       const watcher = actual.createCorpusWatcher(deps);
       return {
         ...watcher,
@@ -576,6 +580,66 @@ describe('start(): the chunked replay end to end', () => {
           sessions: 1,
         });
       } finally {
+        await server.close();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('a database outage cuts the replay short without quarantining, and the poll finishes it (OPS-13)', async () => {
+    const { dbPath, corpusRoot } = seedCorpus();
+    let pass = 0;
+    hooks.beforeTick = () => {
+      pass += 1;
+      if (pass === 2) {
+        hooks.db?.pragma('query_only = ON');
+      }
+    };
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.useFakeTimers({ toFake: ['setInterval'] });
+    try {
+      const server = await start({
+        DASHBOARD_TOKEN: TEST_TOKEN,
+        DASHBOARD_PORT: '0',
+        DASHBOARD_DB_PATH: dbPath,
+        CLAUDE_PROJECTS_DIR: corpusRoot,
+        DASHBOARD_POLL_INTERVAL_MS: '1000',
+      });
+      try {
+        // The database refused the second pass's write: the loop is over, the
+        // replay is not, and health says which trouble it is.
+        expect(console.error).toHaveBeenCalledWith(
+          expect.stringMatching(
+            /^corpus replay: the database could not be written \(SQLITE_READONLY: .+\) - no session was charged a retry; retrying on the next poll\.$/,
+          ),
+        );
+        expect(await observe(server.app)).toEqual({
+          health: expect.objectContaining({
+            status: 'replaying',
+            ingest: 'replaying',
+            corpusTrouble: 'db-unavailable',
+          }),
+          sessions: 1,
+        });
+
+        // The database takes writes again. Nothing was quarantined, so the
+        // scheduled poll lands the two owed sessions, one capped pass each,
+        // and the recovery is said once.
+        hooks.db?.pragma('query_only = OFF');
+        vi.advanceTimersByTime(1000);
+        vi.advanceTimersByTime(1000);
+        const after = await observe(server.app);
+        expect(after).toEqual({
+          health: expect.objectContaining({ status: 'ok', ingest: 'idle' }),
+          sessions: 3,
+        });
+        expect(after.health).not.toHaveProperty('corpusTrouble');
+        expect(console.log).toHaveBeenCalledWith(
+          'corpus watcher: the database takes writes again - resuming normal ingest.',
+        );
+      } finally {
+        hooks.db?.pragma('query_only = OFF');
         await server.close();
       }
     } finally {

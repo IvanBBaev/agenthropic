@@ -357,9 +357,9 @@ untouched rather than being swallowed into a cache miss. `OVERLAP_BYTES` is 4096
 design property worth naming: the cache can cost speed when it is wrong, but it can never
 change an answer.
 
-**Tick outcome** — what one poll tick reports, as a seven-armed union rather than a
+**Tick outcome** — what one poll tick reports, as an eight-armed union rather than a
 boolean: `ingested`, `unchanged`, `no-corpus-root`, `overlapped`, `stopped`, `read-error`,
-`containment-halt`. The arms exist for the same reason `'unknown'` is a real agent status
+`db-unavailable`, `containment-halt`. *(Amended 2026-11-19, OPS-13 — `db-unavailable`.)* The arms exist for the same reason `'unknown'` is a real agent status
 and not a `NULL` — collapsing "nothing changed" together with "the corpus root does not
 exist" or "we halted on a containment violation" would let a broken deployment look
 identical to an idle one.

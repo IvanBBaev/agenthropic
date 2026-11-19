@@ -655,6 +655,18 @@ describe('composition root (src/index)', () => {
         level: 'error',
         text: expect.stringContaining('already in flight'),
       });
+      expect(
+        replayOutcomeLine({
+          kind: 'db-unavailable',
+          code: 'SQLITE_FULL',
+          reason: 'database or disk is full',
+        }),
+      ).toEqual({
+        level: 'error',
+        text:
+          'corpus replay: the database could not be written (SQLITE_FULL: database or disk ' +
+          'is full) - no session was charged a retry; retrying on the next poll.',
+      });
     });
 
     it('never restates a containment violation as a second incident', () => {
@@ -674,6 +686,7 @@ describe('composition root (src/index)', () => {
         { kind: 'containment-halt' },
         { kind: 'stopped' },
         { kind: 'overlapped' },
+        { kind: 'db-unavailable', code: 'SQLITE_FULL', reason: 'database or disk is full' },
       ] as const;
       const texts = outcomes.map((outcome) => replayOutcomeLine(outcome).text);
       expect(new Set(texts).size).toBe(outcomes.length);
@@ -770,6 +783,38 @@ describe('composition root (src/index)', () => {
       });
     });
 
+    it('a database outage logs once at error level, persists silently, and recovers in its own words (OPS-13)', () => {
+      const DB_FULL = {
+        kind: 'db-unavailable',
+        code: 'SQLITE_FULL',
+        reason: 'database or disk is full',
+      } as const;
+      expect(tickTroubleTransition(null, DB_FULL)).toEqual({
+        next: 'db-unavailable',
+        line: {
+          level: 'error',
+          text:
+            'corpus watcher: the database could not be written (SQLITE_FULL: database or ' +
+            'disk is full) - ingest is paused and no session is charged a retry until this clears.',
+        },
+      });
+      expect(tickTroubleTransition('db-unavailable', DB_FULL)).toEqual({
+        next: 'db-unavailable',
+        line: null,
+      });
+      // A different trouble is a different fact, so it re-announces.
+      expect(tickTroubleTransition('read-error', DB_FULL).line?.level).toBe('error');
+      expect(tickTroubleTransition('db-unavailable', READ_ERROR).next).toBe('read-error');
+      // "The corpus is readable again" would be wrong here: the corpus never stopped reading.
+      expect(tickTroubleTransition('db-unavailable', { kind: 'unchanged' })).toEqual({
+        next: null,
+        line: {
+          level: 'log',
+          text: 'corpus watcher: the database takes writes again - resuming normal ingest.',
+        },
+      });
+    });
+
     it("'stopped', 'overlapped' and 'containment-halt' neither log nor move the state", () => {
       // None of the three says anything about whether the corpus reads: the
       // halt already has its own FATAL line, and the other two are watcher
@@ -829,6 +874,23 @@ describe('composition root (src/index)', () => {
           "unreadable (EACCES)) - the phase ends here and health says 'ok' on what landed; " +
           'the sessions the sweep did not reach land through the scheduled poll in capped ' +
           'passes once the corpus reads again.',
+      });
+    });
+
+    it('a persisting database outage ends it at error level and says the remainder is still owed (OPS-13)', () => {
+      expect(
+        replayPhaseEndLine({
+          kind: 'db-unavailable',
+          code: 'SQLITE_IOERR_WRITE',
+          reason: 'disk I/O error',
+        }),
+      ).toEqual({
+        level: 'error',
+        text:
+          'corpus replay: the database still could not be written on the next poll ' +
+          "(SQLITE_IOERR_WRITE: disk I/O error) - the phase ends here and health says 'ok' on " +
+          'what landed; the sessions the sweep did not reach land through the scheduled poll ' +
+          'once the database takes writes again.',
       });
     });
 

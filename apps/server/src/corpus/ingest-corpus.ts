@@ -16,7 +16,11 @@
  * UNREADABLE corpus root (a plain Error) — returning the empty summary there
  * would report a root this runner could not even list as a quiet, fully
  * ingested corpus. The watcher's tick catch turns that throw into an honest
- * read-error outcome and retries next poll.
+ * read-error outcome and retries next poll. (Amended 2026-11-19, OPS-13: a
+ * THIRD thing ends the run - a {@link DatabaseUnavailableError}, thrown when a
+ * session failed because the database could not be written. Counting that as a
+ * per-session failure charged every healthy session a retry and quarantined
+ * the corpus after three polls of a full disk.)
  *
  * One check runs BEFORE the writer rather than after it: the session id the
  * substrate's records declare must equal the uuid the file name declares
@@ -36,6 +40,7 @@ import {
 } from '@agenthropic/core';
 import type { SessionPartialDto } from '@agenthropic/shared';
 import type { SqliteDatabase } from '../db/connection';
+import { DatabaseUnavailableError, databaseUnavailableCode } from '../db/sqlite-errors';
 import type { AgentStatusChangedEvent, SessionIngestedEvent } from '../ingest/ingest-events';
 import { ingestSession, type IngestDeps, type IngestOutcome } from '../ingest/ingest-session';
 import { resolveCorpusRoot } from './corpus-paths';
@@ -272,13 +277,15 @@ export function runCorpusIngest(deps: CorpusIngestDeps): CorpusIngestSummary {
       });
     } catch (err) {
       // Belt-and-braces: ingestSession contracts never to throw, but the runner
-      // must still isolate a would-be throw to this one session.
+      // must still isolate a would-be throw to this one session - unless the
+      // throw is the database itself (OPS-13), which ends the pass.
+      const error = err instanceof Error ? err.message : String(err);
+      const code = databaseUnavailableCode(err);
+      if (code !== null) {
+        throw new DatabaseUnavailableError(code, error);
+      }
       sessionsFailed += 1;
-      failures.push({
-        sessionId: ref.sessionId,
-        projectSlug: ref.projectSlug,
-        error: err instanceof Error ? err.message : String(err),
-      });
+      failures.push({ sessionId: ref.sessionId, projectSlug: ref.projectSlug, error });
       continue;
     }
 
@@ -305,11 +312,21 @@ export function runCorpusIngest(deps: CorpusIngestDeps): CorpusIngestSummary {
         deps.onUsageCollisions?.(outcome.crossSessionUsageCollisions);
       }
     } else {
+      const error = outcome.error ?? 'unknown ingest failure';
+      if (outcome.databaseUnavailable !== undefined) {
+        // OPS-13: the database, not this session, failed. Every session after
+        // it would fail the same way, and folding them into `failures` would
+        // charge each one a retry - three such polls quarantined the whole
+        // corpus. End the pass instead: nothing is settled, the watcher keeps
+        // its sweep, and the sessions already written this pass are re-read
+        // idempotently once the database takes writes again.
+        throw new DatabaseUnavailableError(outcome.databaseUnavailable, error);
+      }
       sessionsFailed += 1;
       failures.push({
         sessionId: outcome.sessionId ?? ref.sessionId,
         projectSlug: ref.projectSlug,
-        error: outcome.error ?? 'unknown ingest failure',
+        error,
       });
     }
   }

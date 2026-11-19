@@ -91,7 +91,9 @@
  * Concurrency: better-sqlite3 makes a tick fully synchronous, so two passes
  * can only overlap through re-entrancy (a callback calling `tick()`); a simple
  * in-flight flag makes the inner call a no-op. Error posture: a transient I/O
- * error skips the tick (retried next poll); {@link ContainmentError} — a
+ * error skips the tick (retried next poll), and so does a database that cannot
+ * be written (OPS-13) - reported apart, and charged to no session's retry
+ * budget; {@link ContainmentError} — a
  * crafted / compromised corpus — permanently stops the watcher and surfaces
  * through `onFatal` (the composition root turns it into a loud non-zero exit).
  */
@@ -111,6 +113,7 @@ import {
 import { runCorpusIngest, type CorpusIngestSummary, type IngestFn } from '../corpus/ingest-corpus';
 import { nodeCorpusFs } from '../corpus/node-corpus-fs';
 import type { SqliteDatabase } from '../db/connection';
+import { databaseUnavailableCode } from '../db/sqlite-errors';
 import type { ReplayCheckpointStore } from '../db/replay-checkpoints';
 import type { IngestEvent } from './ingest-events';
 import { runWatchdogSweep } from './watchdog';
@@ -292,6 +295,11 @@ export function sanitizeFailureReason(reason: string): string {
     : singleLine;
 }
 
+/** The sanitized reason a pass reports for a thrown value of any type. */
+function failureReasonOf(error: unknown): string {
+  return sanitizeFailureReason(error instanceof Error ? error.message : String(error));
+}
+
 export interface CorpusWatcherDeps {
   readonly db: SqliteDatabase;
   /**
@@ -398,8 +406,8 @@ export interface IngestRejection {
 }
 
 /**
- * The result of one pass. Six of the seven arms carry no summary — but they are
- * six DIFFERENT facts about the corpus and the watcher, and a caller that wants
+ * The result of one pass. Seven of the eight arms carry no summary — but they are
+ * seven DIFFERENT facts about the corpus and the watcher, and a caller that wants
  * to log, alert on or test one of them must be able to tell them apart. This
  * used to be `CorpusIngestSummary | null`, which merged "the corpus is fully
  * checkpointed and quiet" with "there is no corpus root" and with "the root
@@ -428,6 +436,12 @@ export type TickOutcome =
   | { readonly kind: 'stopped' }
   /** Transient I/O trouble; the pass was skipped and retries next tick. */
   | { readonly kind: 'read-error'; readonly reason: string }
+  /**
+   * OPS-13: the DATABASE could not be written (a full disk, an I/O error, a
+   * busy or read-only file). The pass stopped where it failed; no session was
+   * charged a retry for it, so none is quarantined, and the next tick retries.
+   */
+  | { readonly kind: 'db-unavailable'; readonly code: string; readonly reason: string }
   /** A {@link ContainmentError} escaped: the watcher stopped itself, for good. */
   | { readonly kind: 'containment-halt' };
 
@@ -694,7 +708,8 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
 
   /**
    * Enumerate, diff fingerprints, ingest the changed set. Throws
-   * ContainmentError only; every other end is named in the returned outcome.
+   * ContainmentError and a database fault (OPS-13) only; every other end is
+   * named in the returned outcome.
    */
   function ingestChanged(
     callCap: PassCap | undefined,
@@ -919,14 +934,32 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
         // staleness must surface even while the corpus is unreadable. The
         // reason travels with the outcome (sanitized: path-free, single-line,
         // capped) so the operator is told WHAT failed, not just that something
-        // did.
-        outcome = {
-          kind: 'read-error',
-          reason: sanitizeFailureReason(error instanceof Error ? error.message : String(error)),
-        };
+        // did. A database fault (OPS-13) is told apart from a corpus fault:
+        // the corpus may read perfectly while the disk under the database is
+        // full, and the operator's fix is a different one.
+        const reason = failureReasonOf(error);
+        const code = databaseUnavailableCode(error);
+        outcome =
+          code === null ? { kind: 'read-error', reason } : { kind: 'db-unavailable', code, reason };
       }
-      for (const transition of runWatchdogSweep(deps.db, nowMs(), deps.watchdogThresholdMs)) {
-        deps.onIngestEvent?.(transition);
+      try {
+        for (const transition of runWatchdogSweep(deps.db, nowMs(), deps.watchdogThresholdMs)) {
+          deps.onIngestEvent?.(transition);
+        }
+      } catch (error) {
+        // OPS-13: the watchdog writes too. Out of a scheduled poll its throw
+        // was an uncaught exception, so a full disk took the whole server down
+        // rather than reporting itself in health. Anything that is not a
+        // database fault is a bug and still escapes.
+        const code = databaseUnavailableCode(error);
+        if (code === null) {
+          throw error;
+        }
+        outcome = {
+          kind: 'db-unavailable',
+          code,
+          reason: failureReasonOf(error),
+        };
       }
       return outcome;
     } finally {

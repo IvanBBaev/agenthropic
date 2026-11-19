@@ -526,6 +526,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Database outages no longer quarantine sessions (OPS-13).** A database that cannot be
+  written - a full disk, an I/O error, a busy or read-only file (`SQLITE_FULL`,
+  `SQLITE_IOERR*`, `SQLITE_BUSY*`, `SQLITE_READONLY*` and the other codes in
+  `apps/server/src/db/sqlite-errors.ts`) - used to fail every session of every pass, so
+  three such polls quarantined the whole corpus and an idle session stayed out of every
+  dollar total until a restart. Such a fault now ends the pass instead: no session is
+  charged a retry, the sweep and the replay cap carry over, the poll logs the outage
+  once and its recovery once, and `GET /api/health` reports `corpusTrouble:
+  'db-unavailable'` (a boot replay it cuts short stays `replaying`, as with a read
+  error). A database fault the stale-agent watchdog hits is reported the same way
+  instead of escaping the poll timer. Content faults (a malformed line, a constraint
+  failure) keep the per-session retry and quarantine path.
+
 - A FIFO in the corpus no longer hangs an ingest pass (SEC-8). The confined reads now
   open with `O_NONBLOCK`, so a FIFO swapped in after the walk's `lstat` opens at once
   and is rejected as `ENOTREG` instead of blocking until something writes to it.

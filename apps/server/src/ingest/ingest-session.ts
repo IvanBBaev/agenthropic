@@ -43,6 +43,7 @@ import {
 } from '@agenthropic/core';
 import type { SessionPartialDto } from '@agenthropic/shared';
 import type { SqliteDatabase } from '../db/connection';
+import { databaseUnavailableCode } from '../db/sqlite-errors';
 import type { AgentStatusChangedEvent } from './ingest-events';
 import { normalizeSession } from './normalize-session';
 import { projectSession } from './project-session';
@@ -93,6 +94,14 @@ export interface IngestOutcome {
   /** M-12 messages skipped because another session owns the message_id. */
   readonly crossSessionUsageCollisions: number;
   readonly error: string | null;
+  /**
+   * OPS-13: set, to the SQLite code, when the failure was the DATABASE (a full
+   * disk, an I/O error, a busy or read-only file) rather than this session's
+   * content. Absent on success and on every content failure. The runner ends
+   * the pass on it, because every later session would fail the same way and
+   * none of them may be charged a retry for it.
+   */
+  readonly databaseUnavailable?: string;
 }
 
 /** The all-zero, no-session outcome returned on any failure. */
@@ -163,6 +172,8 @@ export function ingestSession(substrate: SessionSubstrate, deps: IngestDeps): In
   } catch (err) {
     // Both arms are exercised: the pipeline throws Error instances, and an
     // injected dependency (deps.now) can throw anything at all.
-    return failure(err instanceof Error ? err.message : String(err));
+    const failed = failure(err instanceof Error ? err.message : String(err));
+    const code = databaseUnavailableCode(err);
+    return code === null ? failed : { ...failed, databaseUnavailable: code };
   }
 }
