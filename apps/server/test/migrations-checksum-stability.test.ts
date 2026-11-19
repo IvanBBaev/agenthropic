@@ -19,9 +19,9 @@
  * The normaliser cancels the classes a transform is free to vary - comments
  * (including annotations a transform INJECTS, such as vite's `@__PURE__` block
  * annotation), whitespace, and separators that are redundant before a closing
- * bracket. After it, vitest agrees with tsx on 23 of the 28, up from 0 - and
+ * bracket. After it, vitest agrees with tsx on 24 of the 29, up from 0 - and
  * `node --experimental-strip-types` agrees on the same ids (1-6, 8, 9, 10, 12,
- * 13, 17, 18, 19, 20), also up from 0 (migrations 21-28 measured under
+ * 13, 17, 18, 19, 20), also up from 0 (migrations 21-29 measured under
  * tsx and vitest only). Re-measured 2026-09-01 by running all
  * three, again on 2026-09-10 when migration 18 was appended, and again under
  * tsx and vitest on 2026-09-26 when migration 19 was appended, and under all
@@ -33,7 +33,8 @@
  * 2026-10-30 when migration 25 was appended, and under tsx and vitest on
  * 2026-11-08 when migration 26 was appended, and under tsx and vitest on
  * 2026-11-14 when migration 27 was appended, and under tsx and vitest on
- * 2026-11-14 when migration 28 was appended.
+ * 2026-11-14 when migration 28 was appended, and under tsx and vitest on
+ * 2026-11-19 when migration 29 was appended.
  *
  * Migration 17 (`agents-outcome-cause`) is the twelfth, appended after the H-1
  * measurement above, and it agrees for a reason its body states: one `db.exec`
@@ -61,7 +62,8 @@
  * of a single template literal of two `ALTER TABLE` statements. Migration 28
  * (`orchestration-edges-prompt-id-source`) is the twenty-third, one `db.exec`
  * of a single template literal rebuilding the edge table, its indexes and its
- * clock trigger.
+ * clock trigger. Migration 29 (`sessions-cost-state`) is the twenty-fourth,
+ * migration 26's shape with one `ALTER TABLE`.
  *
  * It does NOT reach full executor independence, and that is not fixable while
  * the recorded checksums must stay byte-identical. The differences that survive
@@ -162,10 +164,11 @@ const OPERATOR_CHECKSUMS: Readonly<Record<number, string>> = {
   26: '084792449b0fe890e12a21ffa04037f4096f6ac4d14b1ceb736e68cfa8cf5e27',
   27: '447e64481647a9ddebcc2897a878d7fa4deecebb97d0ff128dba0d3d3544e5e8',
   28: '08086b97513ebf4617eda7ab87a4e8235dd789c6e7cf76118560bcd25e06bb67',
+  29: '8965228d9439fad6a0231b530f6b5a4834c9abecad70a969c939dba7ffe2801c',
 };
 
 /**
- * The same twenty-eight, computed inside this vitest process. Spelled as the
+ * The same twenty-nine, computed inside this vitest process. Spelled as the
  * operator table plus the five overrides, so a migration the two executors
  * agree on - which is every one not listed here, migrations 17 to 23
  * included - cannot drift in one table without drifting in the other.

@@ -27,12 +27,14 @@ const BUCKET_MAP = [
   { key: 'cacheWrite1h', bucket: 'cache_write_1h' },
 ] as const satisfies ReadonlyArray<{ key: keyof TokenBuckets; bucket: TokenBucket }>;
 
-interface DatedRate {
+/** @internal Shared with `reconcile-cost-state.ts`; not part of the package API. */
+export interface DatedRate {
   effectiveFromMs: number;
   usdPerMtok: number;
 }
 
-type PricingIndex = Map<string, Map<TokenBucket, DatedRate[]>>;
+/** @internal Shared with `reconcile-cost-state.ts`; not part of the package API. */
+export type PricingIndex = Map<string, Map<TokenBucket, DatedRate[]>>;
 
 /**
  * Models whose published price is tiered by prompt length, mapped to the
@@ -51,7 +53,8 @@ const BASE_TIER_PROMPT_LIMITS: ReadonlyMap<string, number> = new Map([
   ['claude-haiku-5-5', 100_000],
 ]);
 
-function buildPricingIndex(pricing: readonly PricingEntry[]): PricingIndex {
+/** @internal Validates and indexes a pricing table; shared with `reconcile-cost-state.ts`. */
+export function buildPricingIndex(pricing: readonly PricingEntry[]): PricingIndex {
   const index: PricingIndex = new Map();
   for (const entry of pricing) {
     if (!Number.isFinite(entry.usdPerMtok) || entry.usdPerMtok < 0) {
@@ -84,7 +87,7 @@ function buildPricingIndex(pricing: readonly PricingEntry[]): PricingIndex {
 }
 
 /** Latest rate with `effectiveFrom` <= the usage timestamp (WP-C2: old rate before a change, new rate at/after). */
-function resolveRate(rates: readonly DatedRate[], usageMs: number): DatedRate | undefined {
+export function resolveRate(rates: readonly DatedRate[], usageMs: number): DatedRate | undefined {
   let resolved: DatedRate | undefined;
   for (const rate of rates) {
     if (rate.effectiveFromMs <= usageMs) {

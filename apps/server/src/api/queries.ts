@@ -97,7 +97,7 @@ export function pricedCte(where = ''): string {
 const PRICED_CTE = pricedCte();
 
 /** USD over PRICED rows only - unpriced rows contribute $0, never a guess. */
-const COST_USD = `SUM(CASE WHEN rate IS NOT NULL THEN tokens * rate / 1000000.0 ELSE 0 END)`;
+export const COST_USD = `SUM(CASE WHEN rate IS NOT NULL THEN tokens * rate / 1000000.0 ELSE 0 END)`;
 
 /** Tokens whose rate could not be resolved - surfaced, never hidden. */
 const UNPRICED = `SUM(CASE WHEN rate IS NULL THEN tokens ELSE 0 END)`;

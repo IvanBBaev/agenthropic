@@ -34,8 +34,8 @@
  *
  *   vitest (vite's esbuild transform, what this file pins) and `tsx` (what
  *   `pnpm start`, `pnpm dev` and `pnpm bench` run) now produce an IDENTICAL
- *   checksum for TWENTY-THREE of the twenty-eight migrations - ids 1-6, 8, 9, 10,
- *   12, 13, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27 and 28. They differ on ids 7, 11, 14, 15 and 16. Running the pre-H-1
+ *   checksum for TWENTY-FOUR of the twenty-nine migrations - ids 1-6, 8, 9, 10,
+ *   12, 13, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28 and 29. They differ on ids 7, 11, 14, 15 and 16. Running the pre-H-1
  *   whitespace-only formula over the SAME two transform outputs puts the
  *   agreement at ZERO, so the agreeing set is what H-1 bought.
  *
@@ -91,6 +91,11 @@
  * function - and was measured identical under tsx and vitest
  * (08086b97513ebf4617eda7ab87a4e8235dd789c6e7cf76118560bcd25e06bb67) on the
  * day it was written, with migrations 24-27 re-measured unchanged.
+ * Migration 29 (`sessions-cost-state`, appended 2026-11-19) is one `db.exec`
+ * of a single template literal holding one `ALTER TABLE` - migration 26's
+ * shape - and was measured identical under tsx and vitest
+ * (8965228d9439fad6a0231b530f6b5a4834c9abecad70a969c939dba7ffe2801c) on the
+ * day it was written, with migrations 26-28 re-measured unchanged.
  * The residual five are still exactly ids 7, 11, 14,
  * 15 and 16.
  *
@@ -356,6 +361,11 @@ const PINNED: readonly PinnedChecksum[] = [
     id: 28,
     name: 'orchestration-edges-prompt-id-source',
     checksum: '08086b97513ebf4617eda7ab87a4e8235dd789c6e7cf76118560bcd25e06bb67',
+  },
+  {
+    id: 29,
+    name: 'sessions-cost-state',
+    checksum: '8965228d9439fad6a0231b530f6b5a4834c9abecad70a969c939dba7ffe2801c',
   },
 ];
 

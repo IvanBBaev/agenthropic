@@ -80,8 +80,11 @@ import type { SqliteDatabase } from './connection';
  *    `format_census`, and the parser began skipping (and counting) non-JSON
  *    lines instead of failing the session. A revision-2 checkpoint would leave
  *    every finished session with a NULL census, invisible to /api/health.
+ *  - 4: DAT-10 / migration 29 added `sessions.cost_state` and the parser began
+ *    reading Claude Code's `cost-state` records. A revision-3 checkpoint would
+ *    leave every finished session NULL, outside the reconciliation report.
  */
-export const REPLAY_CHECKPOINT_REVISION = 3;
+export const REPLAY_CHECKPOINT_REVISION = 4;
 
 export interface ReplayCheckpointStore {
   /**

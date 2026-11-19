@@ -7,7 +7,7 @@
  * root. Uses a named-parameter prepared statement. `last_activity_at` never
  * moves backwards and `status` follows the CASE below — see {@link upsertSession}.
  */
-import type { FormatCensus } from '@agenthropic/core';
+import type { FormatCensus, ParsedCostState } from '@agenthropic/core';
 import type { AgentStatus } from '@agenthropic/shared';
 import type { SqliteDatabase } from './connection';
 import { earlierInstantSql, isLaterInstantSql, laterInstantSql } from './instant-order';
@@ -45,6 +45,13 @@ export interface SessionUpsert {
    * Overwritten on every pass; a partial pass censuses only what it read.
    */
   readonly formatCensus?: FormatCensus | null;
+  /**
+   * DAT-10 - what this pass read of the main transcript's `cost-state`
+   * records (`ParsedCostState` from @agenthropic/core), stored as JSON.
+   * Omitted means null. A whole pass overwrites; a partial pass, which did not
+   * read the main, keeps the stored value unless it has one of its own.
+   */
+  readonly costState?: ParsedCostState | null;
 }
 
 /**
@@ -66,10 +73,10 @@ export function upsertSession(db: SqliteDatabase, row: SessionUpsert): void {
   db.prepare(
     `INSERT INTO sessions (id, project_slug, started_at, last_activity_at, status,
                            partial_reason, partial_skipped_bytes, usage_records_dropped,
-                           claude_code_versions, format_census)
+                           claude_code_versions, format_census, cost_state)
      VALUES (@id, @projectSlug, @startedAt, @lastActivityAt, @status,
              @partialReason, @partialSkippedBytes, @usageRecordsDropped,
-             @claudeCodeVersions, @formatCensus)
+             @claudeCodeVersions, @formatCensus, @costState)
      ON CONFLICT(id) DO UPDATE SET
        project_slug     = excluded.project_slug,
        -- Honesty facts about THIS pass, not accumulations: overwritten, so a
@@ -80,6 +87,15 @@ export function upsertSession(db: SqliteDatabase, row: SessionUpsert): void {
        -- replay writes identical bytes).
        claude_code_versions  = excluded.claude_code_versions,
        format_census         = excluded.format_census,
+       -- DAT-10: the record lives in the main transcript only. A partial pass
+       -- did not read the main, so its NULL is absence of evidence and the
+       -- stored value stands; a whole read is the truth and overwrites (a
+       -- session whose record vanished reads NULL again).
+       cost_state            = CASE
+         WHEN excluded.partial_reason IS NOT NULL
+           THEN COALESCE(excluded.cost_state, sessions.cost_state)
+         ELSE excluded.cost_state
+       END,
        -- One exception to "overwritten". A partial pass did not read the main,
        -- so its count misses the main's id-less records - while the totals
        -- still hold the main's usage from the passes that did read it, with
@@ -124,6 +140,7 @@ export function upsertSession(db: SqliteDatabase, row: SessionUpsert): void {
     claudeCodeVersions:
       row.claudeCodeVersions == null ? null : JSON.stringify([...row.claudeCodeVersions].sort()),
     formatCensus: row.formatCensus == null ? null : JSON.stringify(row.formatCensus),
+    costState: row.costState == null ? null : JSON.stringify(row.costState),
   });
 }
 

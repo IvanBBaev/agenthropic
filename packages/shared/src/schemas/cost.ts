@@ -379,3 +379,120 @@ export const CostAnalysisSchema = Type.Object(
 );
 
 export type CostAnalysisDto = Static<typeof CostAnalysisSchema>;
+
+/**
+ * Cap on the `sessions` SAMPLE of `GET /api/cost/reconciliation`. The counts
+ * in `verdicts` are never capped; the array is the worst sessions first, so a
+ * drift is always in it while there are at most this many.
+ */
+export const MAX_RECONCILIATION_SAMPLE = 50;
+
+/**
+ * DAT-10 verdict of one cost-state entry against our dated price table:
+ * `in-band` - Claude Code's own figure lies inside the band our rates give
+ * for ITS OWN token counts; `drift` - outside it (a rate changed upstream, or
+ * our table is wrong); `unpriced` - we hold no rate for a model or bucket it
+ * used; `unverifiable` - the record carries something we cannot price.
+ */
+export const CostStateVerdictSchema = Type.Union([
+  Type.Literal('drift'),
+  Type.Literal('unpriced'),
+  Type.Literal('unverifiable'),
+  Type.Literal('in-band'),
+]);
+
+export type CostStateVerdictDto = Static<typeof CostStateVerdictSchema>;
+
+export const CostStateReasonSchema = Type.Union([
+  /** Billed per request; we hold no such rate, so the band leaves them out. */
+  Type.Literal('web-search-requests'),
+  /** The record's 5m/1h split adds up to more than its cache-write total. */
+  Type.Literal('cache-split-exceeds-total'),
+  /** Claude Code's own `hasUnknownModelCost` flag. */
+  Type.Literal('unknown-model-cost'),
+]);
+
+export const ModelCostReconciliationSchema = Type.Object(
+  {
+    model: Type.String(),
+    verdict: CostStateVerdictSchema,
+    reason: nullable(CostStateReasonSchema),
+    reportedUsd: Type.Number({ minimum: 0 }),
+    /** Our band for the same tokens; null when it cannot be computed. */
+    computedLowUsd: nullable(Type.Number({ minimum: 0 })),
+    computedHighUsd: nullable(Type.Number({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
+
+export type ModelCostReconciliationDto = Static<typeof ModelCostReconciliationSchema>;
+
+export const SessionCostReconciliationSchema = Type.Object(
+  {
+    sessionId: Type.String(),
+    verdict: CostStateVerdictSchema,
+    reason: nullable(CostStateReasonSchema),
+    /** Claude Code's own `totalCostUSD`. */
+    reportedUsd: Type.Number({ minimum: 0 }),
+    /**
+     * What OUR ledger prices this session's transcript usage at - for
+     * reading only. The cost-state record also counts calls the transcript
+     * never logs, so the two figures differ legitimately and the verdict
+     * never compares them.
+     */
+    ledgerUsd: Type.Number({ minimum: 0 }),
+    models: Type.Array(ModelCostReconciliationSchema),
+  },
+  { additionalProperties: false },
+);
+
+export type SessionCostReconciliationDto = Static<typeof SessionCostReconciliationSchema>;
+
+/**
+ * `GET /api/cost/reconciliation` - the DAT-10 pricing drift alarm over every
+ * session whose transcript carried a `cost-state` record. ADVISORY: it is
+ * computed per request against the current price table and feeds no stored
+ * figure, total or alert.
+ *
+ * The scope is spelled out like the other corpus-wide figures:
+ * `sessionsWithCostState` = `sessionsReconciled` + every `skipped` count.
+ */
+export const CostReconciliationSchema = Type.Object(
+  {
+    isAdvisory: Type.Literal(true),
+    /** Relative tolerance the band was widened by (float sums, not pricing slack). */
+    tolerance: Type.Number({ minimum: 0 }),
+    sessionsWithCostState: Type.Integer({ minimum: 0 }),
+    sessionsReconciled: Type.Integer({ minimum: 0 }),
+    skipped: Type.Object(
+      {
+        /** Every cost-state record of the session was malformed. */
+        noValidRecord: Type.Integer({ minimum: 0 }),
+        /** The session has no usable started/last-activity span to pick rates by. */
+        noSpan: Type.Integer({ minimum: 0 }),
+        /** The stored snapshot does not have the expected shape. */
+        unreadable: Type.Integer({ minimum: 0 }),
+      },
+      { additionalProperties: false },
+    ),
+    /** Reconciled sessions per verdict. */
+    verdicts: Type.Object(
+      {
+        drift: Type.Integer({ minimum: 0 }),
+        unpriced: Type.Integer({ minimum: 0 }),
+        unverifiable: Type.Integer({ minimum: 0 }),
+        inBand: Type.Integer({ minimum: 0 }),
+      },
+      { additionalProperties: false },
+    ),
+    /** Σ of Claude Code's own `totalCostUSD` over the reconciled sessions. */
+    reportedUsd: Type.Number({ minimum: 0 }),
+    /** Malformed cost-state records skipped by the parser, over all sessions. */
+    malformedRecords: Type.Integer({ minimum: 0 }),
+    /** Worst first, then dearest; at most MAX_RECONCILIATION_SAMPLE. */
+    sessions: Type.Array(SessionCostReconciliationSchema),
+  },
+  { additionalProperties: false },
+);
+
+export type CostReconciliationDto = Static<typeof CostReconciliationSchema>;

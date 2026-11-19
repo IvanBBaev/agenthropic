@@ -1700,6 +1700,33 @@ export const migrations: readonly Migration[] = [
       `);
     },
   },
+  {
+    id: 29,
+    name: 'sessions-cost-state',
+    up(db) {
+      // WHY. DAT-10 (2026-11-19). Claude Code appends a cumulative
+      // `cost-state` record to the main transcript: its own per-model token
+      // counts and the dollar figure it computed for them. That figure is NOT
+      // ground truth (it counts side calls the JSONL never logs) and never
+      // feeds a total, but pricing ITS tokens with OUR dated rates and
+      // comparing with ITS dollars is a pricing drift alarm: a rate changed
+      // upstream and the table did not follow.
+      //
+      // cost_state: the JSON `ParsedCostState` of the latest pass that read
+      // the main transcript (`@agenthropic/core`) - the latest valid record,
+      // normalized, plus the valid/malformed record counts. NULL means no
+      // cost-state record was seen, the row was never re-parsed since this
+      // migration, or the row was created by a hook. The verdict is NOT
+      // stored: it is computed per request against the CURRENT price table,
+      // so a pricing migration or `pricing set` re-judges every session
+      // without a replay. Not listed in migration 22's ingest_seq trigger:
+      // a cost-state change is not a change /api/changes reports.
+      db.exec(`
+        ALTER TABLE sessions ADD COLUMN cost_state TEXT
+          CHECK (cost_state IS NULL OR json_valid(cost_state));
+      `);
+    },
+  },
 ];
 
 export interface MigrationRunResult {

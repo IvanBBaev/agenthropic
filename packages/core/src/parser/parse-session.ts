@@ -40,6 +40,7 @@ import type { DedupedUsage, TokenBuckets, UsageRow } from '../types';
 import { parseTimestampMs } from '../time';
 import { dedupeUsageByMessageId } from '../usage/dedupe';
 import { classifyAgentOutcomeCause } from './agent-outcome';
+import { extractCostState } from './cost-state';
 import { censusFormat } from './format-census';
 import { LEGACY_EXPLORE_EDGE_SOURCE, PROMPT_ID_EDGE_SOURCE } from './types';
 import type {
@@ -1232,6 +1233,7 @@ export function parseSession(substrate: SessionSubstrate): ParsedSession {
       })),
       malformedLines,
     ),
+    costState: extractCostState(mainRecords),
   };
 }
 

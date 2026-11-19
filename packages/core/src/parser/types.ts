@@ -5,6 +5,7 @@
  */
 import type { AgentOutcomeCause, OrchestrationEdgeSource } from '@agenthropic/shared';
 import type { DedupedUsage } from '../types';
+import type { ParsedCostState } from './cost-state';
 import type { FormatCensus } from './format-census';
 
 export type ParsedAgentType = 'main' | 'subagent';
@@ -172,4 +173,12 @@ export interface ParsedSession {
    * output, for the same additive reason as `outcomes`.
    */
   formatCensus?: FormatCensus;
+  /**
+   * DAT-10: Claude Code's own cost ledger from the main transcript's
+   * `cost-state` records - ADVISORY evidence for the pricing drift check,
+   * never a source of tokens or dollars. Null when the main transcript has no
+   * such record (or was not read). Optional on the type, always present on
+   * `parseSession`'s output, for the same additive reason as `outcomes`.
+   */
+  costState?: ParsedCostState | null;
 }

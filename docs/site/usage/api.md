@@ -15,12 +15,13 @@
 > _(planned shape — exact path undecided)_ marking below are out of date. What actually
 > ships in `apps/server/src`:
 >
-> - **Twelve routes, all under `/api/`, all behind the one auth gate** (re-counted
->   2026-09-19). Eleven `GET`
+> - **Thirteen routes, all under `/api/`, all behind the one auth gate** (re-counted
+>   2026-11-19). Twelve `GET`
 >   (`/api/health`, `/api/stream`, `/api/sessions`, `/api/sessions/:id`,
 >   `/api/sessions/:id/tree`, `/api/sessions/:id/events`,
 >   `/api/sessions/:id/cost-analysis`, `/api/cost/summary`,
->   `/api/cost/delegation-savings`, `/api/dag/global`, `/api/changes`) and one
+>   `/api/cost/delegation-savings`, `/api/cost/reconciliation`, `/api/dag/global`,
+>   `/api/changes`) and one
 >   `POST` (`/api/hooks/event`, the hook liveness receiver). Note the `/api` prefix — the
 >   design-era table below writes the tree route as `GET /sessions/:id/tree`; the real
 >   path is `/api/sessions/:id/tree`.
@@ -297,7 +298,7 @@ column names the route that actually shipped.)*
 |---|---|---|---|---|
 | `GET /sessions/:id/tree` | The session-scoped subagent tree (daily Q1/Q3/Q5) | Query over `orchestration_edges`, joined to `agents` | `WP-U3` — fixed path: "`GET /sessions/:id/tree` built from a query over `orchestration_edges` (proven, not reconstruction)" | `GET /api/sessions/:id/tree` — note the `/api` prefix |
 | Sessions & agents _(planned shape)_ | List/get sessions and their agents, including per-agent `status` (`working`/`waiting`/`completed`/`error`) | `sessions`, `agents` projection tables | `WP-U3` | `GET /api/sessions?limit&offset` (returns `{sessions,total,limit,offset}`) and `GET /api/sessions/:id`. The status enumeration gained a **fifth** value, `unknown` — see below |
-| Cost & delegation-savings _(planned shape)_ | Per-session/agent dollar cost and the Haiku/Sonnet-routing delegation-savings figure (daily Q2/Q4) | `token_usage` × `model_pricing`, via `CostEngine` (`WP-C3`), delegation-savings via `WP-C5` | `WP-U4` | Split in three: `GET /api/cost/summary?topN` (DB rollup: totals, per-model, per-day, top sessions), `GET /api/sessions/:id/cost-analysis?topTierModel` (compaction-aware cost + delegation savings, computed from the JSONL substrate) and `GET /api/cost/delegation-savings?topTierModel` (the corpus-wide delegation-savings estimate, rebuilt from stored `token_usage` / `agents` rows) |
+| Cost & delegation-savings _(planned shape)_ | Per-session/agent dollar cost and the Haiku/Sonnet-routing delegation-savings figure (daily Q2/Q4) | `token_usage` × `model_pricing`, via `CostEngine` (`WP-C3`), delegation-savings via `WP-C5` | `WP-U4` | Split in three: `GET /api/cost/summary?topN` (DB rollup: totals, per-model, per-day, top sessions), `GET /api/sessions/:id/cost-analysis?topTierModel` (compaction-aware cost + delegation savings, computed from the JSONL substrate) `GET /api/cost/delegation-savings?topTierModel` (the corpus-wide delegation-savings estimate, rebuilt from stored `token_usage` / `agents` rows) and `GET /api/cost/reconciliation` (DAT-10: the advisory pricing drift alarm - see below) |
 | Global orchestration DAG _(planned shape)_ | The cross-session, per-instance persisted DAG (the moat view) | Query over `orchestration_edges` across sessions, keyed by `instance`/`host_id` | `WP-U4`; see [the DAG moat](../architecture/dag-moat.md) | `GET /api/dag/global?limit` — returns nodes, edges and a `counts` block whose `truncated` flag the client must surface |
 | Token usage _(planned shape)_ | Fine-grained ground-truth token buckets (`speed`/`inference_geo`/`service_tier`), including PreCompact baselines | `token_usage` | `WP-U3`/`WP-U4`, backed by `WP-D8` | **No dedicated endpoint.** Token figures are served folded into the session, tree, DAG and cost responses (`totalTokens`, `costUsd`, `unpricedTokens`); there is no route that returns raw `token_usage` rows or per-bucket breakdowns |
 | Events _(planned shape)_ | Read access to normalized `events` (and, where exposed, `events_raw`) for a session/agent | `events`, `events_raw` | Implied by `WP-U2`'s Read API foundation over the projection; no dedicated WP names an events-listing endpoint explicitly | `GET /api/sessions/:id/events?limit&offset` (WP-D5). Serves the normalized `events` table only — `events_raw` is never exposed |
@@ -311,6 +312,18 @@ so a new route is gated by construction rather than by remembering.)*
 
 ### As-built details worth knowing before you call these
 
+- **`GET /api/cost/reconciliation` is advisory, never a cost figure (DAT-10).** It
+  prices the token counts of Claude Code's own `cost-state` record with our dated rates
+  and compares the result with Claude Code's own dollar figure, per model: `in-band`,
+  `drift` (outside the band - a rate in `model_pricing` is probably wrong), `unpriced`
+  (no rate row) or `unverifiable` (web-search requests, a cache split larger than its
+  total, or Claude Code's own unknown-cost flag). The payload pins `isAdvisory: true`,
+  counts every session it could not reconcile under `skipped` (`noValidRecord`,
+  `noSpan`, `unreadable`), and samples at most 50 sessions, worst verdict first.
+  `ledgerUsd` is what OUR ledger charges the session and is information only - the
+  record also counts side calls the JSONL never logs, so the two never have to agree. A
+  malformed price table is `422`, like every other cost route. See
+  [the cost model](../architecture/cost-model.md#the-pricing-drift-alarm-dat-10-2026-11-19).
 - **`GET /api/sessions/:id/events` never conflates "no events" with "no session".** A
   known session with zero hook events is `200` with an empty array; only an unknown
   session id is `404` (or `409` for a session ingest rejected - see below). Rows are oldest-first with `id` as tiebreak and carry a `total`

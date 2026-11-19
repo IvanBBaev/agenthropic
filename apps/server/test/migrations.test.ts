@@ -248,7 +248,7 @@ describe('migration runner (WP-D3)', () => {
           .run(),
       ).toThrow(/CHECK/);
 
-      expect(runMigrations(db).appliedIds).toEqual([28]);
+      expect(runMigrations(db).appliedIds).toEqual([28, 29]);
 
       expect(
         db.prepare(`SELECT * FROM orchestration_edges WHERE child_agent_id = 'child-a'`).get(),
@@ -1275,7 +1275,7 @@ describe('migration runner (WP-D3)', () => {
       // The fresh database is at the latest schema; migration 20 touches only
       // claude-sonnet-5, so the opus-5-5 rows read exactly as 19 wrote them.
       temp = createMigratedTempDb();
-      expect(currentSchemaVersion(temp.db)).toBe(28);
+      expect(currentSchemaVersion(temp.db)).toBe(29);
       expect(opus55Rows(temp.db)).toEqual(
         OFFICIAL_RATES.map((row) => ({ ...row, effective_from: FLOOR })),
       );
@@ -1421,7 +1421,7 @@ describe('migration runner (WP-D3)', () => {
 
     it('prices claude-sonnet-5 at the official per-bucket rates on a fresh database', () => {
       temp = createMigratedTempDb();
-      expect(currentSchemaVersion(temp.db)).toBe(28);
+      expect(currentSchemaVersion(temp.db)).toBe(29);
       expect(sonnet5Rows(temp.db)).toEqual(at(OFFICIAL_RATES));
     });
 
@@ -1534,7 +1534,7 @@ describe('migration runner (WP-D3)', () => {
         insertSession(db, 'sess-b');
         insertSession(db, 'sess-c');
 
-        expect(runMigrations(db, migrations).appliedIds).toEqual([22, 23, 24, 25, 26, 27, 28]);
+        expect(runMigrations(db, migrations).appliedIds).toEqual([22, 23, 24, 25, 26, 27, 28, 29]);
 
         expect(stamps(db)).toEqual([
           { id: 'sess-a', ingest_seq: 1 },
@@ -1644,7 +1644,7 @@ describe('migration runner (WP-D3)', () => {
 
     it('seeds claude-sonnet-5-5 with the official per-bucket rates at the canonical floor', () => {
       temp = createMigratedTempDb();
-      expect(currentSchemaVersion(temp.db)).toBe(28);
+      expect(currentSchemaVersion(temp.db)).toBe(29);
       expect(sonnet55Rows(temp.db)).toEqual(
         OFFICIAL_RATES.map((row) => ({ ...row, effective_from: FLOOR })),
       );
@@ -1710,7 +1710,7 @@ describe('migration runner (WP-D3)', () => {
 
     it('seeds claude-haiku-5-5 with the official base-tier rates at the canonical floor', () => {
       temp = createMigratedTempDb();
-      expect(currentSchemaVersion(temp.db)).toBe(28);
+      expect(currentSchemaVersion(temp.db)).toBe(29);
       expect(haiku55Rows(temp.db)).toEqual(
         OFFICIAL_RATES.map((row) => ({ ...row, effective_from: FLOOR })),
       );
@@ -1735,7 +1735,7 @@ describe('migration runner (WP-D3)', () => {
             .all();
         const before = otherRows();
 
-        expect(runMigrations(db).appliedIds).toEqual([25, 26, 27, 28]);
+        expect(runMigrations(db).appliedIds).toEqual([25, 26, 27, 28, 29]);
         expect(haiku55Rows(db)).toHaveLength(OFFICIAL_RATES.length);
         expect(otherRows()).toEqual(before);
         expect(runMigrations(db).appliedIds).toEqual([]);
@@ -1764,7 +1764,7 @@ describe('migration runner (WP-D3)', () => {
         );
         insertSession(db, 'sess-a');
 
-        expect(runMigrations(db).appliedIds).toEqual([26, 27, 28]);
+        expect(runMigrations(db).appliedIds).toEqual([26, 27, 28, 29]);
         expect(columns(db)).toEqual([{ claude_code_versions: null, format_census: null }]);
         expect(runMigrations(db).appliedIds).toEqual([]);
       } finally {
@@ -1790,6 +1790,58 @@ describe('migration runner (WP-D3)', () => {
       ]);
       expect(() => set('claude_code_versions', 'not json')).toThrow(/CHECK constraint failed/);
       expect(() => set('format_census', '{torn')).toThrow(/CHECK constraint failed/);
+    });
+  });
+  /**
+   * Migration 29 (DAT-10): Claude Code's own cost-state snapshot per session,
+   * nullable JSON so a row ingested before the migration reads as "not yet
+   * read" - outside the reconciliation report, never "in band".
+   */
+  describe('migration 29 (sessions-cost-state)', () => {
+    const costState = (db: SqliteDatabase): unknown[] =>
+      db.prepare('SELECT cost_state FROM sessions ORDER BY id').all();
+
+    it('adds the column as NULL to every existing session on a schema-28 database', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'agenthropic-mig29-'));
+      const db = openDatabase(join(dir, 'v28.db'));
+      try {
+        runMigrations(
+          db,
+          migrations.filter((m) => m.id <= 28),
+        );
+        insertSession(db, 'sess-a');
+
+        expect(runMigrations(db).appliedIds).toEqual([29]);
+        expect(costState(db)).toEqual([{ cost_state: null }]);
+        expect(runMigrations(db).appliedIds).toEqual([]);
+      } finally {
+        db.close();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('accepts valid JSON and rejects anything else', () => {
+      temp = createMigratedTempDb();
+      const { db } = temp;
+      insertSession(db, 'sess-a');
+      const set = (value: string): void => {
+        db.prepare(`UPDATE sessions SET cost_state = ? WHERE id = 'sess-a'`).run(value);
+      };
+      set('{"records":1,"malformedRecords":0,"latest":null}');
+      expect(costState(db)).toEqual([
+        { cost_state: '{"records":1,"malformedRecords":0,"latest":null}' },
+      ]);
+      expect(() => set('{torn')).toThrow(/CHECK constraint failed/);
+    });
+
+    it('does not bump ingest_seq when only the cost state changes', () => {
+      temp = createMigratedTempDb();
+      const { db } = temp;
+      insertSession(db, 'sess-a');
+      const seq = (): unknown => db.prepare(`SELECT ingest_seq FROM sessions`).get();
+      const before = seq();
+      db.prepare(`UPDATE sessions SET cost_state = '{}' WHERE id = 'sess-a'`).run();
+      expect(seq()).toEqual(before);
     });
   });
 });

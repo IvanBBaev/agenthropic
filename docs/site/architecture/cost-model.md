@@ -800,6 +800,37 @@ These endpoints inherit the same security posture as every other write/read surf
 the system — loopback bind, mandatory `timingSafeEqual` token, same-origin SSE (see
 [security model](../security/model.md)) — there is no cost-specific exemption.
 
+### The pricing drift alarm (DAT-10, 2026-11-19)
+
+Claude Code appends a `type: 'cost-state'` record to the main transcript: its running
+per-model token counts and the dollar figure it computed for them. The record is NOT
+ground truth and never feeds the ledger - its token counts include side calls (title
+generation and the like) that the JSONL never logs, so in the 2026-11-19 corpus scan only
+106 of 875 per-model entries matched the transcript's tokens. What it is good for is a
+check on OUR price table: price ITS OWN token counts with our dated rates and compare
+with ITS OWN dollar figure.
+
+- **Stored, not judged, at ingest.** The parser keeps the LAST valid record of the main
+  transcript (the record is cumulative); `sessions.cost_state` (migration 29) holds it as
+  JSON. A malformed record is skipped and counted, never thrown.
+- **Judged at read time.** `GET /api/cost/reconciliation` reconciles every stored
+  snapshot against the CURRENT `model_pricing`, so a corrected rate changes the verdict
+  at once and no stored verdict can go stale.
+- **A band, not a point.** Every rate in force at any time during the session's span
+  (`started_at` to `last_activity_at`) widens the band, and a cache write the record does
+  not split by TTL is priced at both the 5-minute and the 1-hour rate. A figure inside
+  the band, within a relative tolerance of `1e-6` for float noise, is `in-band`; outside
+  it is `drift`.
+- **What it cannot check is said, not guessed.** A model with no rate row is `unpriced`.
+  Web-search requests are billed per request, and `model_pricing` holds no per-request
+  rate, so a model that made any is `unverifiable` unless its figure is already below the
+  token floor (then it is `drift`). In the 2026-11-19 scan every one of the 92 entries
+  with web searches was explained by exactly $0.01 per request - recorded here as
+  evidence for DAT-8, not hardcoded. Claude Code's own `hasUnknownModelCost` flag also
+  makes an otherwise in-band session `unverifiable`.
+- **Result of the 2026-11-19 scan:** all 763 checkable entries were in band; the other
+  entries were the 92 web-search ones and 20 unpriced ones.
+
 ## 11. Why this needs no `ANTHROPIC_API_KEY`
 
 The cost model is a pure computation over data already resident in SQLite —

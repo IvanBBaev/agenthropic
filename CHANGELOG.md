@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Pricing drift alarm (DAT-10): the parser now reads Claude Code's own `cost-state`
+  record from the main transcript and stores the latest valid snapshot in
+  `sessions.cost_state` (migration 29). `GET /api/cost/reconciliation` prices that
+  record's token counts with the current dated rates and compares them with Claude
+  Code's own dollar figure, per model: `in-band`, `drift`, `unpriced` or
+  `unverifiable`. Advisory only - it never changes a ledger figure.
 - Money rounding rule (DAT-12): dollars stay doubles end to end and are rounded only for
   display. The ingest gate and the API are each held within a stated float bound of the
   exact total, checked against a BigInt pico-dollar oracle by a property test, a

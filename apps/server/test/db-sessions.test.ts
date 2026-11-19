@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { ParsedCostState } from '@agenthropic/core';
 import { type SessionUpsert, upsertSession } from '../src/db/sessions';
 import { createMigratedTempDb, type TempDb } from './helpers';
 
@@ -13,6 +14,7 @@ interface SessionRow {
   readonly usage_records_dropped: number;
   readonly claude_code_versions: string | null;
   readonly format_census: string | null;
+  readonly cost_state: string | null;
   readonly ingest_seq: number;
 }
 
@@ -26,6 +28,7 @@ const WHOLE = {
   usage_records_dropped: 0,
   claude_code_versions: null,
   format_census: null,
+  cost_state: null,
 };
 
 describe('upsertSession (WP-D4)', () => {
@@ -206,5 +209,72 @@ describe('upsertSession - R13 format census columns', () => {
         .prepare("UPDATE sessions SET format_census = 'not json' WHERE id = 'session-c'")
         .run(),
     ).toThrow(/CHECK constraint failed/);
+  });
+});
+
+describe('upsertSession - DAT-10 cost_state column', () => {
+  let temp: TempDb;
+
+  beforeEach(() => {
+    temp = createMigratedTempDb();
+  });
+
+  afterEach(() => {
+    temp.cleanup();
+  });
+
+  const BASE: SessionUpsert = {
+    id: 'session-k',
+    projectSlug: 'agenthropic',
+    startedAt: '2026-07-11T00:00:00Z',
+    lastActivityAt: '2026-07-11T00:05:00Z',
+    status: 'active',
+  };
+  const PARTIAL = { partialReason: 'main-transcript-oversize', partialSkippedBytes: 10 } as const;
+
+  function costState(records: number): ParsedCostState {
+    return {
+      records,
+      malformedRecords: 0,
+      latest: { totalCostUsd: records / 10, hasUnknownModelCost: false, models: [] },
+    };
+  }
+
+  function stored(): unknown {
+    const row = temp.db
+      .prepare('SELECT cost_state FROM sessions WHERE id = ?')
+      .get('session-k') as {
+      cost_state: string | null;
+    };
+    return row.cost_state === null ? null : JSON.parse(row.cost_state);
+  }
+
+  it('stores the snapshot as JSON and lets a whole pass overwrite it, NULL included', () => {
+    upsertSession(temp.db, { ...BASE, costState: costState(1) });
+    expect(stored()).toEqual(costState(1));
+    upsertSession(temp.db, { ...BASE, costState: costState(2) });
+    expect(stored()).toEqual(costState(2));
+    upsertSession(temp.db, { ...BASE, costState: null });
+    expect(stored()).toBeNull();
+  });
+
+  it('keeps the stored snapshot on a partial pass that read no main transcript', () => {
+    upsertSession(temp.db, { ...BASE, costState: costState(3) });
+    upsertSession(temp.db, { ...BASE, ...PARTIAL });
+    expect(stored()).toEqual(costState(3));
+  });
+
+  it('takes a partial pass snapshot when it has one of its own', () => {
+    upsertSession(temp.db, { ...BASE, costState: costState(3) });
+    upsertSession(temp.db, { ...BASE, ...PARTIAL, costState: costState(4) });
+    expect(stored()).toEqual(costState(4));
+  });
+
+  it('writes byte-identical JSON on an identical replay', () => {
+    const row: SessionUpsert = { ...BASE, costState: costState(5) };
+    upsertSession(temp.db, row);
+    const first = temp.db.prepare('SELECT * FROM sessions').get();
+    upsertSession(temp.db, row);
+    expect(temp.db.prepare('SELECT * FROM sessions').get()).toEqual(first);
   });
 });

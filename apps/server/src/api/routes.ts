@@ -16,6 +16,7 @@ import {
   ApiErrorSchema,
   ChangesResponseSchema,
   CostAnalysisSchema,
+  CostReconciliationSchema,
   CostSummaryResponseSchema,
   DEFAULT_COST_TOP_N,
   DEFAULT_DAG_NODE_LIMIT,
@@ -42,6 +43,7 @@ import type { SqliteDatabase } from '../db/connection';
 import { loadPricing } from '../db/pricing';
 import type { SubstrateLookup, SubstrateProvider } from './substrate-provider';
 import { rejectionResponse, type IngestRejection } from './ingest-rejections';
+import { getCostReconciliation } from './cost-reconciliation';
 import { MAX_ID_LENGTH } from '../limits';
 import {
   ISO_INSTANT_PATTERN,
@@ -557,6 +559,34 @@ export const apiRoutes: FastifyPluginAsync<ApiRoutesOptions> = async (app, optio
         loadPricing(db),
         topTierModel === undefined ? {} : { topTierModel },
       );
+    },
+  );
+
+  // DAT-10 - the advisory pricing drift alarm: Claude Code's own cost-state
+  // dollar figure against our dated rates applied to ITS OWN token counts,
+  // reconciled per request so no stored verdict can outlive a price change.
+  // A malformed price table answers 422 with the pricing message, like the
+  // per-session cost analysis; everything about the stored snapshots is
+  // tolerated and counted in the body instead. Bearer-gated by the app
+  // scope's global onRequest hook like its neighbours.
+  typed.get(
+    '/api/cost/reconciliation',
+    {
+      schema: {
+        response: {
+          200: CostReconciliationSchema,
+          422: ApiErrorSchema,
+          500: ApiErrorSchema,
+        },
+      },
+    },
+    async (_request, reply) => {
+      try {
+        return getCostReconciliation(db, loadPricing(db));
+      } catch (error) {
+        if (error instanceof PricingError) return reply.code(422).send({ error: error.message });
+        throw error;
+      }
     },
   );
 

@@ -324,6 +324,7 @@ export function normalizeSession(
       usageRecordsDropped: parsed.usageRecordsDropped ?? 0,
       claudeCodeVersions: parsed.claudeCodeVersions ?? null,
       formatCensus: parsed.formatCensus ?? null,
+      costState: parsed.costState ?? null,
     },
     agents,
     edges: parsed.edges.map((edge) => ({
