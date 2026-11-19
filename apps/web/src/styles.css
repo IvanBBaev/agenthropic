@@ -1,6 +1,73 @@
+/*
+ * UX-18: the palette lives here and nowhere else - every colour below this
+ * block is a var(). The dashboard ships dark only (one owner, one screen); a
+ * light theme is now a single `@media (prefers-color-scheme: light)` block
+ * that re-sets these properties and `color-scheme`, not a hunt through the
+ * file. There are no animations, so prefers-reduced-motion has nothing to
+ * turn off.
+ *
+ * Status colours are validated against --bg-page (dataviz palette run), and a
+ * status is never colour alone: the views pair a symbol and a word with it.
+ */
 :root {
   color-scheme: dark;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+
+  /* Surfaces, darkest to lightest. */
+  --bg-input: #101216;
+  --bg-page: #14161a;
+  --bg-panel: #171a1f;
+  --bg-surface: #1a1d22;
+  --bg-hover: #1f232a;
+  --bg-selected: #182029;
+  --bg-active: #22303f;
+  --bg-warn: #2a2416;
+  --bg-control: #2d5f9e;
+  --bg-control-hover: #3a72ba;
+  --bg-control-muted: #3a3f47;
+  --bg-control-muted-hover: #4a505a;
+
+  /* Borders. --bg-hover doubles as the faint row rule of tables and feeds. */
+  --border: #2a2f37;
+  --border-active: #3a5a7a;
+  --border-ok: #2f4a33;
+  --border-error: #4a2c2c;
+  --border-warn: #4a422a;
+
+  /* Text. */
+  --text: #e6e8eb;
+  --text-secondary: #b6bcc4;
+  --text-muted: #9aa2ad;
+  --text-link: #6ab0ff;
+  --accent: #4b8dd6;
+  --focus-ring: #8fc1f5;
+
+  /* Signals. --hazard is the amber of an honest gap (unpriced, partial,
+     estimated) and of the watchdog's `unknown`. */
+  --ok: #6fbf73;
+  --warn: #d6b95c;
+  --error: #e07070;
+  --hazard: #c98500;
+
+  /* Agent status (ux0 design, status vocabulary). `waiting` is grey per ux0,
+     the same grey as the waiting chip; it used to be purple, which ux0 never
+     specified and which nothing else on the page used for a state. */
+  --status-working: #3987e5;
+  --status-waiting: var(--text-muted);
+  --status-completed: #199e70;
+  --status-unknown: var(--hazard);
+  --status-unrecognised: #e66767;
+
+  /* Categorical series (model legend, sankey). Not states: a series colour
+     says "this model", never "this went wrong". */
+  --cat-0: #3987e5;
+  --cat-1: #d95926;
+  --cat-2: #199e70;
+  --cat-3: #c98500;
+  --cat-4: #d55181;
+  --cat-5: #008300;
+  --cat-6: #9085e9;
+  --cat-7: #e66767;
 }
 
 * {
@@ -14,7 +81,7 @@
  * :focus-visible keeps it off mouse clicks.
  */
 :focus-visible {
-  outline: 2px solid #8fc1f5;
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -38,8 +105,8 @@
 
 body {
   margin: 0;
-  background: #14161a;
-  color: #e6e8eb;
+  background: var(--bg-page);
+  color: var(--text);
   min-height: 100vh;
 }
 
@@ -52,13 +119,13 @@ h2 {
   font-size: 0.85rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: #9aa2ad;
+  color: var(--text-muted);
   margin: 0 0 0.4rem;
 }
 
 code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  background: #1f232a;
+  background: var(--bg-hover);
   padding: 0.1rem 0.35rem;
   border-radius: 4px;
 }
@@ -69,20 +136,20 @@ code {
   max-width: 26rem;
   margin: 4rem auto;
   padding: 1.5rem;
-  background: #1a1d22;
-  border: 1px solid #2a2f37;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
   border-radius: 10px;
 }
 
 .token-form p {
-  color: #9aa2ad;
+  color: var(--text-muted);
   margin: 0 0 1rem;
 }
 
 .token-form label {
   display: block;
   font-size: 0.85rem;
-  color: #9aa2ad;
+  color: var(--text-muted);
   margin-bottom: 0.3rem;
 }
 
@@ -91,21 +158,21 @@ code {
   width: 100%;
   padding: 0.5rem 0.6rem;
   margin-bottom: 1rem;
-  background: #101216;
-  color: #e6e8eb;
-  border: 1px solid #2a2f37;
+  background: var(--bg-input);
+  color: var(--text);
+  border: 1px solid var(--border);
   border-radius: 6px;
   font-size: 1rem;
 }
 
 .token-form input:focus {
-  border-color: #4b8dd6;
+  border-color: var(--accent);
 }
 
 button {
   padding: 0.5rem 1rem;
-  background: #2d5f9e;
-  color: #e6e8eb;
+  background: var(--bg-control);
+  color: var(--text);
   border: none;
   border-radius: 6px;
   font-size: 0.95rem;
@@ -113,11 +180,11 @@ button {
 }
 
 button:hover {
-  background: #3a72ba;
+  background: var(--bg-control-hover);
 }
 
 button:disabled {
-  background: #3a3f47;
+  background: var(--bg-control-muted);
   cursor: default;
 }
 
@@ -134,8 +201,8 @@ button:disabled {
   align-items: center;
   gap: 0.75rem;
   padding: 0.6rem 1rem;
-  background: #1a1d22;
-  border-bottom: 1px solid #2a2f37;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
 }
 
 .brand {
@@ -149,11 +216,11 @@ button:disabled {
 
 .lock {
   margin-left: auto;
-  background: #3a3f47;
+  background: var(--bg-control-muted);
 }
 
 .lock:hover {
-  background: #4a505a;
+  background: var(--bg-control-muted-hover);
 }
 
 .shell-body {
@@ -168,26 +235,26 @@ button:disabled {
   gap: 0.25rem;
   width: 10rem;
   padding: 0.75rem 0.5rem;
-  background: #171a1f;
-  border-right: 1px solid #2a2f37;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
 }
 
 .nav-link {
   display: block;
   padding: 0.45rem 0.7rem;
-  color: #9aa2ad;
+  color: var(--text-muted);
   text-decoration: none;
   border-radius: 6px;
 }
 
 .nav-link:hover {
-  background: #1f232a;
-  color: #e6e8eb;
+  background: var(--bg-hover);
+  color: var(--text);
 }
 
 .nav-active {
-  background: #22303f;
-  color: #e6e8eb;
+  background: var(--bg-active);
+  color: var(--text);
 }
 
 .legend {
@@ -195,8 +262,8 @@ button:disabled {
   padding: 0.5rem 0.7rem;
   font-size: 0.72rem;
   line-height: 1.6;
-  color: #9aa2ad;
-  border-top: 1px solid #2a2f37;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border);
 }
 
 .view {
@@ -211,26 +278,26 @@ button:disabled {
   padding: 0.15rem 0.6rem;
   font-size: 0.8rem;
   border-radius: 999px;
-  border: 1px solid #2a2f37;
+  border: 1px solid var(--border);
 }
 
 .chip-ok {
-  color: #6fbf73;
-  border-color: #2f4a33;
+  color: var(--ok);
+  border-color: var(--border-ok);
 }
 
 .chip-wait {
-  color: #9aa2ad;
+  color: var(--status-waiting);
 }
 
 .chip-warn {
-  color: #d6b95c;
-  border-color: #4a422a;
+  color: var(--warn);
+  border-color: var(--border-warn);
 }
 
 .chip-error {
-  color: #e07070;
-  border-color: #4a2c2c;
+  color: var(--error);
+  border-color: var(--border-error);
 }
 
 /* The failure detail, beside the chip rather than inside a `title`. A tooltip
@@ -283,7 +350,7 @@ button:disabled {
    one panel on screen that is NOT reporting data - a reader scanning past it
    must not mistake it for an empty state. */
 .view-error {
-  border: 1px solid #4a2c2c;
+  border: 1px solid var(--border-error);
   border-radius: 6px;
   padding: 1rem;
 }
@@ -295,22 +362,22 @@ button:disabled {
 /* --- Status text + empty states --- */
 
 .muted {
-  color: #9aa2ad;
+  color: var(--text-muted);
 }
 
 .status-error {
-  color: #e07070;
+  color: var(--error);
 }
 
 .status-warn {
-  color: #d6b95c;
+  color: var(--warn);
 }
 
 .empty-state {
   padding: 1rem;
-  color: #9aa2ad;
-  background: #1a1d22;
-  border: 1px dashed #2a2f37;
+  color: var(--text-muted);
+  background: var(--bg-surface);
+  border: 1px dashed var(--border);
   border-radius: 8px;
 }
 
@@ -328,18 +395,18 @@ button:disabled {
   align-items: baseline;
   gap: 0.6rem;
   padding: 0.35rem 0.2rem;
-  border-bottom: 1px solid #1f232a;
+  border-bottom: 1px solid var(--bg-hover);
 }
 
 .feed-time {
-  color: #9aa2ad;
+  color: var(--text-muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.75rem;
   white-space: nowrap;
 }
 
 .feed-type {
-  color: #4b8dd6;
+  color: var(--accent);
   font-weight: 600;
   white-space: nowrap;
 }
@@ -349,33 +416,33 @@ button:disabled {
 }
 
 /* --- Status vocabulary (WP-U6..U9) ---
-   Colors validated against the dark surface #14161a (dataviz palette run);
-   a status is never color alone - views always pair symbol + label. */
+   Colors validated against --bg-page (dataviz palette run); a status is never
+   color alone - views always pair symbol + label. */
 
 .status-working {
-  color: #3987e5;
+  color: var(--status-working);
 }
 
 .status-waiting {
-  color: #9085e9;
+  color: var(--status-waiting);
 }
 
 .status-completed {
-  color: #199e70;
+  color: var(--status-completed);
 }
 
 .status-unknown {
-  color: #c98500;
+  color: var(--status-unknown);
 }
 
 .status-null {
-  color: #9aa2ad;
+  color: var(--text-muted);
 }
 
 /* A status word this build does not know: shown as a hazard, never quietly
    folded into a known state. The `?` symbol carries it without color. */
 .status-unrecognised {
-  color: #e66767;
+  color: var(--status-unrecognised);
 }
 
 /* A figure that could not be COMPUTED - not a state an agent is in. Shares the
@@ -384,7 +451,7 @@ button:disabled {
    its own class because it previously borrowed `.status-unknown`, and a
    computation gap painted in the watchdog's amber reads as an agent gap. */
 .gap-no-figure {
-  color: #9aa2ad;
+  color: var(--text-muted);
 }
 
 /* Session-level status chip: symbol + word, so the color is decoration. */
@@ -397,40 +464,40 @@ button:disabled {
    cycled (extra series fold into "other"). SVG marks use currentColor. */
 
 .cat-0 {
-  color: #3987e5;
+  color: var(--cat-0);
 }
 
 .cat-1 {
-  color: #d95926;
+  color: var(--cat-1);
 }
 
 .cat-2 {
-  color: #199e70;
+  color: var(--cat-2);
 }
 
 .cat-3 {
-  color: #c98500;
+  color: var(--cat-3);
 }
 
 .cat-4 {
-  color: #d55181;
+  color: var(--cat-4);
 }
 
 .cat-5 {
-  color: #008300;
+  color: var(--cat-5);
 }
 
 .cat-6 {
-  color: #9085e9;
+  color: var(--cat-6);
 }
 
 .cat-7 {
-  color: #e66767;
+  color: var(--cat-7);
 }
 
 /* Unpriced tokens: an honest gap, marked with ~ and never silently $0. */
 .unpriced {
-  color: #c98500;
+  color: var(--hazard);
 }
 
 /* Per-session honesty (owner decisions 1 and 2, views/session-honesty.tsx):
@@ -440,15 +507,15 @@ button:disabled {
    `.dropped-usage` (records excluded for want of a dedupe key) and
    `.malformed-lines` (transcript lines ingest skipped, OPS-14) stay inline. */
 .partial-badge {
-  color: #c98500;
-  border: 1px solid #4a422a;
+  color: var(--hazard);
+  border: 1px solid var(--border-warn);
   border-radius: 4px;
   padding: 0 0.3rem;
 }
 
 .dropped-usage,
 .malformed-lines {
-  color: #c98500;
+  color: var(--hazard);
 }
 
 /* --- Live status board (WP-U6) --- */
@@ -464,8 +531,8 @@ button:disabled {
 
 .card {
   padding: 0.7rem 0.9rem;
-  background: #1a1d22;
-  border: 1px solid #2a2f37;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
   border-radius: 8px;
 }
 
@@ -490,11 +557,11 @@ button:disabled {
 }
 
 .card-attention {
-  border-left: 3px solid #e07070;
+  border-left: 3px solid var(--error);
 }
 
 .card-running {
-  border-left: 3px solid #3987e5;
+  border-left: 3px solid var(--status-working);
 }
 
 .card-link {
@@ -566,9 +633,9 @@ button:disabled {
 .session-filter input,
 .session-filter select {
   padding: 0.4rem 0.6rem;
-  background: #101216;
-  color: #e6e8eb;
-  border: 1px solid #2a2f37;
+  background: var(--bg-input);
+  color: var(--text);
+  border: 1px solid var(--border);
   border-radius: 6px;
   font-size: 0.95rem;
 }
@@ -595,18 +662,18 @@ button:disabled {
   display: block;
   width: 100%;
   text-align: left;
-  background: #1a1d22;
-  border: 1px solid #2a2f37;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
   font-size: 0.85rem;
 }
 
 .session-row:hover {
-  background: #1f232a;
+  background: var(--bg-hover);
 }
 
 .session-active {
-  background: #22303f;
-  border-color: #3a5a7a;
+  background: var(--bg-active);
+  border-color: var(--border-active);
 }
 
 /* A session row plus its "analyse" action (M-9): the row button keeps the
@@ -624,8 +691,8 @@ button:disabled {
 
 .chart-scroll {
   overflow-x: auto;
-  background: #171a1f;
-  border: 1px solid #2a2f37;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 0.5rem;
 }
@@ -635,11 +702,11 @@ button:disabled {
 }
 
 .edge-observed {
-  stroke: #9aa2ad;
+  stroke: var(--text-muted);
 }
 
 .edge-inferred {
-  stroke: #9aa2ad;
+  stroke: var(--text-muted);
   stroke-dasharray: 5 4;
   stroke-opacity: 0.8;
 }
@@ -649,24 +716,24 @@ button:disabled {
    channel an edge has, so the three provenances get three patterns. See
    views/provenance.ts. */
 .edge-unrecognised {
-  stroke: #9aa2ad;
+  stroke: var(--text-muted);
   stroke-dasharray: 1 4;
   stroke-opacity: 0.8;
 }
 
 .node-symbol {
-  fill: #14161a;
+  fill: var(--bg-page);
   font-size: 10px;
   pointer-events: none;
 }
 
 .node-label {
-  fill: #e6e8eb;
+  fill: var(--text);
   font-size: 11px;
 }
 
 .node-figures {
-  fill: #9aa2ad;
+  fill: var(--text-muted);
   font-size: 10px;
 }
 
@@ -680,23 +747,23 @@ button:disabled {
 .chart-summary {
   margin: 0.4rem 0 0;
   font-size: 0.8rem;
-  color: #b6bcc4;
+  color: var(--text-secondary);
 }
 
 .unattributed {
   padding: 0.5rem 0.7rem;
-  background: #1a1d22;
-  border: 1px solid #2a2f37;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
   border-radius: 8px;
   font-size: 0.85rem;
 }
 
 .truncation-banner {
   padding: 0.5rem 0.7rem;
-  background: #2a2416;
-  border: 1px solid #4a422a;
+  background: var(--bg-warn);
+  border: 1px solid var(--border-warn);
   border-radius: 8px;
-  color: #d6b95c;
+  color: var(--warn);
   font-size: 0.85rem;
 }
 
@@ -715,8 +782,8 @@ button:disabled {
   gap: 0.15rem;
   min-width: 9rem;
   padding: 0.7rem 0.9rem;
-  background: #1a1d22;
-  border: 1px solid #2a2f37;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
   border-radius: 8px;
 }
 
@@ -724,7 +791,7 @@ button:disabled {
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: #9aa2ad;
+  color: var(--text-muted);
 }
 
 .kpi-value {
@@ -749,7 +816,7 @@ button:disabled {
 }
 
 .flow-neutral {
-  color: #9aa2ad;
+  color: var(--text-muted);
 }
 
 .chart-legend {
@@ -771,7 +838,7 @@ button:disabled {
 .data-table th,
 .data-table td {
   padding: 0.35rem 0.8rem 0.35rem 0;
-  border-bottom: 1px solid #1f232a;
+  border-bottom: 1px solid var(--bg-hover);
   text-align: left;
 }
 
@@ -788,7 +855,7 @@ button:disabled {
   display: inline-block;
   height: 0.55rem;
   border-radius: 0 4px 4px 0;
-  background: #3987e5;
+  background: var(--status-working);
   vertical-align: middle;
 }
 
@@ -799,7 +866,7 @@ button:disabled {
   padding: 0;
   border: 0;
   background: none;
-  color: #6ab0ff;
+  color: var(--text-link);
   font: inherit;
   cursor: pointer;
   text-align: left;
@@ -811,7 +878,7 @@ button:disabled {
 }
 
 .row-selected {
-  background: #182029;
+  background: var(--bg-selected);
 }
 
 /* Marks a modelled figure. Never decorative: it is the visible half of the
@@ -819,9 +886,9 @@ button:disabled {
 .badge-estimate {
   margin-left: 0.5rem;
   padding: 0.1rem 0.4rem;
-  border: 1px solid #c98500;
+  border: 1px solid var(--hazard);
   border-radius: 4px;
-  color: #c98500;
+  color: var(--hazard);
   font-size: 0.7rem;
   font-weight: 600;
   text-transform: uppercase;
@@ -836,7 +903,7 @@ button:disabled {
   margin: 0.6rem 0 0.2rem;
   font-size: 0.78rem;
   font-weight: 600;
-  color: #9aa2ad;
+  color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -860,7 +927,7 @@ div.truncation-banner {
 
 .caveat-details > summary {
   cursor: pointer;
-  color: #9aa2ad;
+  color: var(--text-muted);
 }
 
 .caveat-details > .caveat-body {
@@ -892,7 +959,7 @@ div.truncation-banner {
     align-items: center;
     width: auto;
     border-right: none;
-    border-bottom: 1px solid #2a2f37;
+    border-bottom: 1px solid var(--border);
   }
 
   .legend {

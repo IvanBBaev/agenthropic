@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Palette as CSS custom properties (UX-18): every colour of the stylesheet is a property on
+  `:root`, so a light theme becomes one `prefers-color-scheme` override, and a gate test keeps
+  colour literals out of the rules. The `waiting` status is now grey, as the ux0 design
+  specifies and as the waiting chip already was, instead of purple.
 - Dense-table dollar cells (UX-19): the cost tables show every amount in cents, so a column
   lines up on its decimal point. A non-zero sub-cent amount shows `<$0.01` (or `>-$0.01`),
   never `$0.00`, and its precise figure is in the cell's tooltip. KPIs keep four decimals.
