@@ -8,6 +8,17 @@
 # bumps arrive as one grouped PR a week, and each major as its own PR, because a
 # major is a decision, not maintenance. Every PR runs the full CI gate.
 #
+# OSS-13: some packages only work at matching majors, so a major of one alone
+# fails CI and is closed. Each such family gets one major PR: vitest with
+# @vitest/coverage-v8, eslint with @eslint/js, vite with @vitejs/plugin-react,
+# and react with react-dom and their @types. Dependabot puts a dependency in the
+# first group it matches. A major never matches minor-and-patch, so it falls
+# through to its family group, or to its own PR when it has no family.
+#
+# @types/node majors are ignored. The types follow the Node pin, which moves on
+# purpose (docs/site/guide/running.md, "Node support policy"), not with Node's
+# newest release line.
+#
 # `tsx` is pinned to an exact version on purpose (ARC-2): stored migration
 # checksums depend on its printer. A tsx bump PR is welcome, but merge it only
 # when migrations-checksum-stability.test.ts is green on it.
@@ -34,6 +45,21 @@ updates:
     commit-message:
       prefix: build
       include: scope
+    ignore:
+      - dependency-name: '@types/node'
+        update-types: [version-update:semver-major]
     groups:
       minor-and-patch:
         update-types: [minor, patch]
+      vitest-major:
+        patterns: [vitest, '@vitest/*']
+        update-types: [major]
+      eslint-major:
+        patterns: [eslint, '@eslint/*']
+        update-types: [major]
+      vite-major:
+        patterns: [vite, '@vitejs/*']
+        update-types: [major]
+      react-major:
+        patterns: [react, react-dom, '@types/react', '@types/react-dom']
+        update-types: [major]

@@ -704,8 +704,10 @@ undecided rather than gloss over it:
   in `.github/workflows` runs from a full commit SHA, with its release in a trailing
   comment, so a moved or hijacked tag cannot change what CI executes. CI installs with
   `pnpm install --frozen-lockfile`. `.github/dependabot.yml` proposes weekly updates for
-  both the Actions and the npm workspace. `apps/server/test/workflow-supply-chain.test.ts`
-  fails on an unpinned `uses:` line. Open, stated plainly: Dependabot alerts and
+  both the Actions and the npm workspace. Packages that only work at matching majors
+  (the vitest, eslint, vite and react families) get one major PR per family, and
+  `@types/node` majors wait for the Node pin to move (OSS-13).
+  `apps/server/test/workflow-supply-chain.test.ts` fails on an unpinned `uses:` line. Open, stated plainly: Dependabot alerts and
   security updates are switched on in the GitHub repository settings, which this
   repository cannot do for itself.
 - **`GET`/read endpoints are token-gated, not left to the loopback bind alone** —

@@ -1,5 +1,5 @@
 /**
- * SEC-9 / OSS-10 / OSS-12 - the CI supply-chain policy, read from the files themselves.
+ * SEC-9 / OSS-10 / OSS-12 / OSS-13 - the CI supply-chain policy, read from the files themselves.
  *
  * A major tag such as `actions/checkout@v7` can be moved by whoever controls
  * the Action's repository, and the next CI run executes whatever it now points
@@ -124,5 +124,27 @@ describe('workflow supply chain (SEC-9)', () => {
     expect(config).toMatch(/^version: 2$/m);
     expect(config).toMatch(/package-ecosystem: github-actions/);
     expect(config).toMatch(/package-ecosystem: npm/);
+  });
+
+  it('coupled majors arrive as one PR per family, and @types/node majors wait for the pin (OSS-13)', () => {
+    const config = readRepoFile('.github/dependabot.yml');
+    const npm = config.slice(config.indexOf('package-ecosystem: npm'));
+    // A family's packages only work at matching majors: one PR per family.
+    const families: Array<[string, string]> = [
+      ['vitest-major', "[vitest, '@vitest/*']"],
+      ['eslint-major', "[eslint, '@eslint/*']"],
+      ['vite-major', "[vite, '@vitejs/*']"],
+      ['react-major', "[react, react-dom, '@types/react', '@types/react-dom']"],
+    ];
+    for (const [group, patterns] of families) {
+      expect(npm).toContain(
+        `      ${group}:\n        patterns: ${patterns}\n        update-types: [major]\n`,
+      );
+    }
+    // Dependabot assigns the first matching group; minors and patches stay one weekly PR.
+    expect(npm.indexOf('minor-and-patch:')).toBeLessThan(npm.indexOf('vitest-major:'));
+    expect(npm).toContain(
+      "      - dependency-name: '@types/node'\n        update-types: [version-update:semver-major]\n",
+    );
   });
 });

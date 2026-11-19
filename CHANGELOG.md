@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Dependabot major groups (OSS-13): packages that only work at matching majors get one PR
+  per family instead of PRs that fail on their own. The families are vitest with
+  @vitest/coverage-v8, eslint with @eslint/js, vite with @vitejs/plugin-react, and react
+  with react-dom and their @types. `@types/node` majors are ignored: the types follow the
+  Node pin, which moves by the Node support policy.
 - Node 24 rehearsal (OSS-12): a non-required `node24` CI job runs the full gate (install,
   typecheck, web build, every suite with the coverage thresholds) under Node 24, with
   `.nvmrc` rewritten to `24` in its own checkout only. A "Node support policy" section in
