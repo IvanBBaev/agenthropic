@@ -306,6 +306,23 @@ scan."**
       [`real-corpus-boot-2026-10-31.md`](docs/measurement/real-corpus-boot-2026-10-31.md).
       This is not a CI job, because the CI corpus uses deliberately unpriced synthetic
       models.
+- [ ] **[HUMAN] The installed hook fires once from real Claude Code (QA-12).** The test
+      suite never executes the generated hook command. The no-spawner gate bans
+      subprocesses, so `hooks-end-to-end.test.ts` parses the curl string and replays it with
+      `fetch`. Shell quoting, the curl flags, the timeout and the `|| true` exit path are
+      therefore proven only by this box.
+      1. Run the release commit with `pnpm start`, with `DASHBOARD_TOKEN` exported and
+         `DASHBOARD_DB_PATH` pointing at a throwaway database.
+      2. Install the hooks into a scratch project:
+         `node hooks/install.mjs --out <scratch-project>/.claude/settings.json`.
+      3. In a shell that exports the same `DASHBOARD_TOKEN`, start Claude Code in that
+         project and send one prompt.
+      4. Read `GET /api/health` (see [`hooks/README.md`](hooks/README.md), "Verifying the
+         wiring"). The pass is `hookDeliveries.stored` at 1 or more with
+         `unauthorized: 0`, and `GET /api/sessions/:id/events` for that session listing
+         the `UserPromptSubmit` event. If nothing arrived, check the three causes in that
+         README section: a token mismatch, curl older than 8.3.0, or the wrong settings
+         file.
 - [ ] **README truth pass.** Re-read [`README.md`](README.md) on the release commit.
       - Its Status section must describe v1.0.0, not the pre-tag state.
       - The Quickstart block must work as pasted on a clean machine.

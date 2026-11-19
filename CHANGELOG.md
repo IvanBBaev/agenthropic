@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Release hook step (QA-12): `RELEASE.md` §6 has the owner fire the installed hook once from
+  real Claude Code and confirm the delivery on `/api/health`, because the test suite replays
+  the generated curl command with `fetch` and never runs it.
 - Release bench step (QA-13): `RELEASE.md` §3 runs the corpus-scale bench on the release
   commit and records cold-replay and warm-tick times next to the previous tag's run, so a
   performance regression is caught before a tag instead of after it.
