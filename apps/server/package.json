@@ -33,6 +33,7 @@
     "@agenthropic/test-fixtures": "workspace:*",
     "@types/better-sqlite3": "^7.6.13",
     "@vitest/coverage-v8": "^4.1.10",
+    "fast-check": "^4.10.3",
     "tsx": "4.23.0",
     "vitest": "^4.1.10"
   }

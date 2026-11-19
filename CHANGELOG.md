@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Property tests (QA-8): fast-check properties for usage dedup (against a reference
+  model), timestamp canonicalization (offset spellings, text order equals instant
+  order), the parser's cache-write mapping and malformed-line handling, plus a
+  byte-level fuzz of the JSONL line splitter and the tail cache's
+  cached-read-equals-full-read guarantee. See docs/site/contributing/testing.md section
+  6.6.
 - Adaptive poll back-off (OPS-16): a corpus pass blocks the event loop for its whole
   duration, so after a pass longer than half the poll interval the watcher skips enough
   scheduled polls to keep the loop idle at least twice as long as the pass ran, capped at

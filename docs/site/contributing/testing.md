@@ -758,6 +758,51 @@ in `.github/workflows/ci.yml`, `macos`, runs on `macos-latest`:
 exactly `ci` and `macos`, the job runs on `macos-latest` with a timeout, it runs the guard
 and both suites, and it never passes `--coverage`.
 
+## 6.6 As built: property tests (QA-8, 2026-11-19)
+
+The example tests pin the cases someone thought of. The parser and cost core rest on a few
+rules that must hold for every input, and those are now also checked as properties with
+[fast-check](https://fast-check.dev) (MIT, a devDependency of `packages/core` and
+`apps/server` only). Each property runs hundreds to a few thousand generated cases per
+`pnpm test`; a failure prints a shrunk counterexample.
+
+- **`packages/core/test/property-dedupe.test.ts`.** `dedupeUsageByMessageId` is compared
+  with a deliberately naive reference model on arbitrary row sets, including which sets
+  must throw `UsageConflictError`. It is also checked for idempotence, first-seen order,
+  order-independent per-message totals, a cache-write pair that is always one row's pair
+  (C-4), and rejection of any non-integer or negative bucket. Values are drawn from tiny
+  ranges on purpose, so the ties that make dedup subtle actually occur.
+- **`packages/core/test/property-time.test.ts`.** `canonicalizeTimestamp` returns a
+  canonical value byte-identical and maps every `±hh:mm` spelling of one instant to the
+  same string. It truncates sub-millisecond digits. Text order of canonical strings
+  equals instant order, which is what the server's text comparisons rely on. Any other
+  string either throws `RangeError` or comes back canonical and idempotent.
+- **`packages/core/test/property-parse-session.test.ts`.** A record's cache-write total
+  is `max(flat, 5m + 1h)`, never their sum (NN2). Malformed lines inserted anywhere are
+  counted and change nothing else (DAT-7). On generated records whose every field may
+  take a wrong type, `parseSession` either returns or throws `SubstrateError` or
+  `UsageConflictError`, never a `TypeError`.
+- **`apps/server/test/property-transcript-reads.test.ts`.** A byte-level fuzz of the
+  two places raw bytes become lines. `splitTranscriptLines` yields exactly the
+  newline-terminated records, and a growing file only extends its earlier result. The
+  tail cache's "cached read ≡ full read" is checked after every step of random
+  append / truncate / same-size-rewrite / touch sequences. The bytes include invalid
+  UTF-8, multi-byte characters torn across appends, NULs and a leading BOM. The one
+  case left out is a rewrite that grows the file and leaves the overlap window intact,
+  the cache's documented residual blind spot (STO-2).
+
+Each property was checked against a deliberate bug before it was kept. These bugs were
+all caught, then reverted:
+
+- a cache-write tie going to the earlier row;
+- a model collision not being recorded;
+- the flat cache-write being added on top of the split;
+- the tail cache stripping a BOM;
+- the tail cache ignoring a same-size rewrite.
+
+The runs are not seeded, so each CI run explores new cases. To replay a failure, pass the
+printed `seed` and `path` to `fc.assert`.
+
 ## 7. Where this lands on the roadmap
 
 | Phase | Wave(s) | Testing-relevant exit gate |
