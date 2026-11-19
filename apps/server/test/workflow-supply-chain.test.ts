@@ -83,6 +83,25 @@ describe('workflow supply chain (SEC-9)', () => {
     expect(ci).toMatch(/^ {2}cancel-in-progress: true$/m);
   });
 
+  it('a macOS job re-runs the real-fs suites without coverage, and the required `ci` job stays (QA-6)', () => {
+    const ci = readRepoFile('.github/workflows/ci.yml');
+    // Job ids are the two-space-indented keys under `jobs:`.
+    const jobsBlock = ci.slice(ci.indexOf('\njobs:\n'));
+    const jobIds = [...jobsBlock.matchAll(/^ {2}([\w-]+):$/gm)].map((match) => match[1]);
+    // `ci` is the context branch protection requires; renaming it drops the rule.
+    expect(jobIds).toEqual(['ci', 'macos']);
+
+    const macos = jobsBlock.slice(jobsBlock.indexOf('\n  macos:\n'));
+    expect(macos).toMatch(/^ {4}runs-on: macos-latest$/m);
+    expect(macos).toMatch(/^ {4}timeout-minutes: \d+$/m);
+    // Direct `vitest run` skips the package scripts' Node guard, so the job runs it.
+    expect(macos).toContain('run: node scripts/check-node-version.mjs');
+    expect(macos).toContain('run: pnpm --filter @agenthropic/server exec vitest run');
+    expect(macos).toContain('run: pnpm --filter @agenthropic/test-fixtures exec vitest run');
+    // Thresholds belong to the `ci` job; on a subset they would fail on code never run.
+    expect(macos).not.toContain('--coverage');
+  });
+
   it('Dependabot watches both the Actions and the npm workspace', () => {
     const config = readRepoFile('.github/dependabot.yml');
     expect(config).toMatch(/^version: 2$/m);

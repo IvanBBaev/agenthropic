@@ -734,6 +734,30 @@ unchanged):
   a string, a number) of every guarded fixture and recording, a payload the guard refuses
   must be one the schema refuses too.
 
+## 6.5 As built: the macOS job (QA-6, 2026-11-19)
+
+The product runs on macOS, but the `ci` job runs on `ubuntu-latest` only, so the real
+filesystem behaviour the corpus reader, backups, restore and retention depend on was
+proven on Linux alone. APFS differs in ways those tests care about: it is case-insensitive
+by default, and `lstat`, `O_NOFOLLOW`, `fsync` and `chmod` behave differently. A second job
+in `.github/workflows/ci.yml`, `macos`, runs on `macos-latest`:
+
+- **What it runs.** The whole `apps/server` suite and the whole `packages/test-fixtures`
+  suite, the two packages whose tests touch the real filesystem. These are whole suites,
+  not a hand-picked list of files, so a new filesystem test is covered without anyone
+  editing the job. The server suite takes about 35 s on an M4.
+- **No coverage.** It calls `vitest run` directly, without `--coverage`. The thresholds
+  are the `ci` job's gate, and enforcing them on two packages would fail on code this job
+  never runs. Because calling vitest directly skips the package scripts' Node-major guard,
+  the job runs `scripts/check-node-version.mjs` first.
+- **Not required yet.** Branch protection names only the `ci` context, so a red `macos`
+  run is visible but does not block a merge. Making it required is an owner step on
+  github.com, to be taken once the job has stayed green for a while.
+
+`apps/server/test/workflow-supply-chain.test.ts` pins the job's shape: the job ids are
+exactly `ci` and `macos`, the job runs on `macos-latest` with a timeout, it runs the guard
+and both suites, and it never passes `--coverage`.
+
 ## 7. Where this lands on the roadmap
 
 | Phase | Wave(s) | Testing-relevant exit gate |

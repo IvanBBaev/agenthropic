@@ -3,6 +3,9 @@
 # The security gate runs first so a broken invariant fails in seconds rather
 # than after the suite.
 #
+# A second, non-required job (`macos`, QA-6, at the bottom) re-runs the
+# filesystem-touching suites on macOS without coverage.
+#
 # NOTE: this workflow used to carry a note saying that making it merge-blocking
 # required a GitHub branch-protection rule that was an owner action, still unset.
 # That rule exists as of 2026-08-25: `main` requires the status-check context
@@ -96,3 +99,46 @@ jobs:
 
       - name: License gate (CD-9 allowlist)
         run: pnpm run gate:licenses
+
+  # QA-6: the product runs on macOS (APFS: case-insensitive by default, its own
+  # lstat / O_NOFOLLOW / fsync / chmod behaviour), while the `ci` job above runs
+  # on Linux only, so the fake-vs-real fs parity was proven on one OS. This job
+  # runs the suites that touch the real filesystem on macOS: all of apps/server
+  # (corpus reader, backup/restore, retention, file modes, hooks installer,
+  # service installer) and packages/test-fixtures. It runs whole suites, not a
+  # hand-picked file list, so a new fs test is covered without anyone editing
+  # this job; the server suite takes about 35 s on an M4.
+  #
+  # Coverage is OFF here (`vitest run`, no `--coverage`): the thresholds are the
+  # `ci` job's gate, and enforcing them on a subset of packages would fail on
+  # code this job never runs. It is NOT a required check: branch protection
+  # names only the `ci` context, so a red run here is loud but does not withhold
+  # a merge. Promote it to required (add `macos` to the protection rule on
+  # github.com) once it has been green for a while.
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Enable corepack (pnpm from packageManager field)
+        run: corepack enable
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+
+      # The same Node-major guard the package `test` scripts run first, since
+      # `vitest run` below is invoked directly and would otherwise skip it.
+      - name: Node major matches .nvmrc
+        run: node scripts/check-node-version.mjs
+
+      - name: Server tests on macOS (no coverage)
+        run: pnpm --filter @agenthropic/server exec vitest run
+
+      - name: Test-fixtures tests on macOS (no coverage)
+        run: pnpm --filter @agenthropic/test-fixtures exec vitest run

@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- CI: a non-required `macos` job (QA-6) runs the whole `apps/server` and
+  `packages/test-fixtures` suites on `macos-latest`, without coverage and behind the
+  Node-major guard. The real-filesystem tests (corpus reader, backup/restore, retention,
+  file modes) now run on APFS as well as Linux. `workflow-supply-chain.test.ts` pins the
+  job's shape.
 - Running guide: two troubleshooting entries (OPS-12). One covers `pnpm install --prod`:
   `start` needs the `vite` and `tsx` devDependencies, so the dev-tooling checkout is the
   only run path. The other recovers a `better-sqlite3` `NODE_MODULE_VERSION` mismatch
