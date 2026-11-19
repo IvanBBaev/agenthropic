@@ -9,6 +9,7 @@
  */
 import { createHash } from 'node:crypto';
 import type { SqliteDatabase } from './connection';
+import { fileMigrations } from './migration-files/index';
 
 export interface Migration {
   /** Strictly increasing, never reused, never reordered. */
@@ -69,7 +70,7 @@ const PRICING_SEED: ReadonlyArray<{
   { model: '<synthetic>', inputUsdPerMtok: 0, outputUsdPerMtok: 0 },
 ];
 
-export const migrations: readonly Migration[] = [
+const inCodeMigrations: readonly Migration[] = [
   {
     id: 1,
     name: 'events-raw-append-only',
@@ -1728,6 +1729,17 @@ export const migrations: readonly Migration[] = [
     },
   },
 ];
+
+/**
+ * ARC-4 (2026-11-19): the in-code list above is FROZEN at migration
+ * {@link FROZEN_THROUGH_MIGRATION_ID} - it is never edited and no longer
+ * extended. Migration 30 onwards lives one module per migration in
+ * `db/migration-files/` (its index states the convention); this module only
+ * concatenates the two lists, so the runner and every importer are unchanged.
+ */
+export const FROZEN_THROUGH_MIGRATION_ID = 29;
+
+export const migrations: readonly Migration[] = [...inCodeMigrations, ...fileMigrations];
 
 export interface MigrationRunResult {
   /** Ids applied by THIS run (empty when the schema was already current). */

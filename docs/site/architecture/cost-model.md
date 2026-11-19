@@ -443,7 +443,7 @@ row that was live at the time, per bucket.
 > **As built:** exactly this lookup shipped, twice. `resolveRate` in
 > `packages/core/src/cost/compute-cost.ts` picks the latest `effective_from` at or
 > before the usage row's `occurred_at` for the exact `(model, bucket)`; the read-side
-> SQL in `apps/server/src/api/queries.ts` performs the same dated join. A bucket with
+> SQL (`pricedCte` in `apps/server/src/api/read-models/shared.ts`) performs the same dated join. A bucket with
 > **zero** tokens needs no price row; a bucket with nonzero tokens and no resolvable
 > rate raises `PricingError` in the engine — and in the read aggregates is surfaced as
 > `unpricedTokens` rather than silently priced.
@@ -456,7 +456,7 @@ halts ingest, which it does not.
 | Case | Where | What happens |
 |---|---|---|
 | Model id / bucket with nonzero tokens and **no** dated row at or before `occurred_at` | `computeCostUsd`, `packages/core/src/cost/compute-cost.ts` | **`PricingError`, unchanged.** At ingest this halts before the write transaction opens; at `GET /api/sessions/:id/cost-analysis` it is a `422`. The docblock still reads "silence here is phantom-free but money-wrong". |
-| A dated row exists but `usd_per_mtok` is negative, non-finite or text-coerced | the read SQL in `apps/server/src/api/queries.ts` | **Resolves to NULL: the tokens are served as unpriced and contribute `$0`, visibly.** No halt, no 500, and no dollar figure derived from the bad value. |
+| A dated row exists but `usd_per_mtok` is negative, non-finite or text-coerced | the read SQL in `apps/server/src/api/read-models/shared.ts` | **Resolves to NULL: the tokens are served as unpriced and contribute `$0`, visibly.** No halt, no 500, and no dollar figure derived from the bad value. |
 
 Three specifics worth stating, because each was a live wrong answer before:
 

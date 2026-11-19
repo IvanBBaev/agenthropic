@@ -74,7 +74,8 @@ follows the development plan.
 ## Migrations and the `schema_version` ledger
 
 Every table below is created by a numbered migration in
-`apps/server/src/db/migrations.ts`. There is no `.sql` directory and no external
+`apps/server/src/db/migrations.ts` (1-29, frozen) or, from 30 on, one module per migration in
+`apps/server/src/db/migration-files/`. There is no `.sql` directory and no external
 migration tool: a migration is an `{ id, name, up(db) }` record, the list is asserted to be
 ordered at startup, and the runner applies each pending `up()` **inside its own
 transaction** together with the row that records it. A second run applies nothing and

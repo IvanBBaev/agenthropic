@@ -487,7 +487,10 @@ const COST_SUMMARY_URL = '/api/cost/summary';
  * between two runs that may have measured the same code twice or two different
  * programs once each.
  */
-const QUERIES_SOURCE = new URL('../src/api/queries.ts', import.meta.url);
+// ARC-4 (2026-11-19): the cost summary read moved out of `api/queries.ts`
+// (now a re-export barrel) into its read-model module, so that is the file
+// whose bytes pin a cost figure.
+const QUERIES_SOURCE = new URL('../src/api/read-models/cost.ts', import.meta.url);
 
 /**
  * The exact `message.model` byte-strings the pricing seed knows, weighted by
@@ -1788,7 +1791,7 @@ async function main(): Promise<void> {
   // L-26 / M-19. The cost summary, on its own, repeatedly, at a stated scale.
   console.log('\n## cost summary (GET /api/cost/summary), repeated - review L-26 / M-19');
   console.log(
-    `  measured against src/api/queries.ts sha256:${provenance.sha} ` +
+    `  measured against src/api/read-models/cost.ts sha256:${provenance.sha} ` +
       `(contains the string "token_usage_rollup": ${provenance.mentionsRollup ? 'yes' : 'no'})`,
   );
   console.log(

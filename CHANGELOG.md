@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Server module split (ARC-4): the API reads moved out of `api/queries.ts` into one module
+  per read model under `apps/server/src/api/read-models/` (`sessions`, `cost`, `dag`,
+  `savings`, `changes`, plus the shared priced-CTE fragments); `api/queries.ts` is now a
+  re-export of the same public names. The ops policy moved out of the composition root
+  into `apps/server/src/ops/` (startup replay, tick-trouble state machine, ingest-failure
+  and skipped-file reporting, daily backups, health fields, boot retention report);
+  `index.ts` keeps the wiring and re-exports them. `db/migrations.ts` is frozen at
+  migration 29: migration 30 onwards is one module per migration in
+  `apps/server/src/db/migration-files/`, held to that convention by a test. Code motion
+  only - no change to any query, response or schema.
 - Cost view split (UX-16): `CostView.tsx` is now the orchestrator - the three reads,
   their state and the page order - and each section renders from its own module under
   `apps/web/src/views/cost/` (totals and window tiles, delegation savings, cost flow,

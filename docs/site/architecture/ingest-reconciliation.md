@@ -530,7 +530,7 @@ achievable at all: **"replay-from-fixtures needs a deterministic durable source"
 [testing](../contributing/testing.md)) is replayed against exactly this mechanism.
 
 > **As built: replay-on-startup is a sweep of capped watcher ticks.** There is no separate
-> replay mode — `runStartupReplay` (`apps/server/src/index.ts`) runs the watcher's own tick
+> replay mode — `runStartupReplay` (`apps/server/src/ops/startup-replay.ts`) runs the watcher's own tick
 > in passes of at most 25 sessions and at most 32 MiB of transcript
 > (`REPLAY_MAX_SESSIONS_PER_PASS` / `REPLAY_MAX_BYTES_PER_PASS` in `corpus-watcher.ts`; a
 > single session larger than the budget is admitted alone), pausing `REPLAY_YIELD_MS`

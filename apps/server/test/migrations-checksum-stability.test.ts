@@ -205,6 +205,14 @@ const MIGRATIONS_PATH = join(SERVER_ROOT, 'src/db/migrations.ts');
 const TSX_BIN = join(SERVER_ROOT, 'node_modules/.bin/tsx');
 /** Erased at runtime; replacing it lets a copy of the module load standalone. */
 const CONNECTION_IMPORT = "import type { SqliteDatabase } from './connection';";
+/**
+ * ARC-4: migrations from 30 on live in `db/migration-files/`. A copy in a
+ * temporary directory cannot resolve that relative import, so it is pointed
+ * back at the real directory by absolute path - the file migrations are then
+ * measured exactly as shipped, and only the in-code list is patched.
+ */
+const FILE_MIGRATIONS_IMPORT = "import { fileMigrations } from './migration-files/index';";
+const FILE_MIGRATIONS_PATH = join(SERVER_ROOT, 'src/db/migration-files/index.ts');
 
 /**
  * Run `migrationChecksum` over every migration in a separate `tsx` process -
@@ -226,9 +234,15 @@ const checksumsUnderTsx = (patch?: (source: string) => string): Record<number, s
     if (patch !== undefined) {
       const source = readFileSync(MIGRATIONS_PATH, 'utf8');
       expect(source).toContain(CONNECTION_IMPORT);
+      expect(source).toContain(FILE_MIGRATIONS_IMPORT);
       writeFileSync(
         join(dir, 'migrations.ts'),
-        patch(source).replace(CONNECTION_IMPORT, 'type SqliteDatabase = never;'),
+        patch(source)
+          .replace(CONNECTION_IMPORT, 'type SqliteDatabase = never;')
+          .replace(
+            FILE_MIGRATIONS_IMPORT,
+            `import { fileMigrations } from ${JSON.stringify(FILE_MIGRATIONS_PATH)};`,
+          ),
       );
       importSpecifier = join(dir, 'migrations.ts');
     }

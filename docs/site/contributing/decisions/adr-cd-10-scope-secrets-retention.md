@@ -108,7 +108,7 @@ selects a branch awaits Ivan's ratification. Concretely:
   deletion policy is never interpreted generously.
 
 **What is wired, and what is not.** Backup-file pruning is live: the daily backup
-scheduler in `apps/server/src/index.ts` runs a keep-minimum-floored pass after each
+scheduler (`apps/server/src/ops/backups.ts`) runs a keep-minimum-floored pass after each
 write, so backup files on disk are bounded today. The **row**-level runner
 (`createRetentionRunner`) is constructed only by its tests — no bootstrap path calls
 it. That is consistent with the policy being unset, since wiring it up would run a

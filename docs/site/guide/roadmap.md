@@ -557,7 +557,7 @@ a dated, versioned price.
 >
 > Two of the exit-gate clauses hold literally. The tree and global DAG are served by
 > SQL over the persisted `orchestration_edges` table (`apps/server/src/db/edges.ts` →
-> `apps/server/src/api/queries.ts`), not rebuilt in the browser; and every dollar
+> `apps/server/src/api/read-models/`), not rebuilt in the browser; and every dollar
 > figure is ground-truth tokens times a dated, versioned price, with anything unpriced
 > surfacing as `unpricedTokens` rather than a silent `$0`. The cost-analysis panel keeps
 > the same discipline in a harder place: delegation savings is a counterfactual about a
