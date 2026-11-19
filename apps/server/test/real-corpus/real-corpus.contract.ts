@@ -13,7 +13,10 @@
  *     the very bytes the ingest consumed (see ./independent-ledger.ts), and no
  *     independently seen message is missing;
  *  3. every usage row is attributed to exactly one agent of its own session;
- *  4. 0 orphans: every subagent has a parent and a persisted spawn edge;
+ *  4. 0 anchorable orphans: every subagent has a parent and a persisted spawn
+ *     edge, unless the raw bytes prove no join path could reach it
+ *     (./unanchorable-orphan.ts; parser-spec section 4.1, amendment 2026-11-19) —
+ *     those are counted and reported separately, and any other orphan fails;
  *  5. the edge census does not regress against the last recorded value.
  *
  * It never runs in `pnpm test` (its `.contract.ts` suffix is outside the default `*.test.ts` glob) and
@@ -40,7 +43,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, join, resolve } from 'node:path';
+import { basename, delimiter, dirname, join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parseSession, type SessionSubstrate } from '@agenthropic/core';
 import {
@@ -60,6 +63,7 @@ import {
   type ExpectedMessage,
   type TappedTranscript,
 } from './independent-ledger';
+import { classifyOrphan, type OrphanVerdict } from './unanchorable-orphan';
 
 const CORPUS_ENV = 'AGENTHROPIC_REAL_CORPUS';
 const CENSUS_ENV = 'AGENTHROPIC_REAL_CORPUS_CENSUS';
@@ -315,7 +319,34 @@ describe(`real-corpus contract (${String(corpusRoots.length)} root(s))`, () => {
     expect(split, `messages split across agents: ${sample(split)}`).toEqual([]);
   });
 
-  it('has 0 orphans: every subagent has a parent and a persisted spawn edge', () => {
+  /** The section 4.1 proof for one orphan, read from the files the ingest read. */
+  function orphanVerdict(sessionId: string, hex: string): OrphanVerdict {
+    let own: string | undefined;
+    const foreign: string[] = [];
+    for (const [absPath, transcript] of tapped) {
+      if (transcript.sessionId !== sessionId) {
+        continue;
+      }
+      if (transcript.owner === hex) {
+        own = absPath;
+      } else {
+        foreign.push(readFileSync(absPath, 'utf8'));
+      }
+    }
+    if (own === undefined) {
+      return { unanchorable: false, reason: 'transcript never read by the ingest' };
+    }
+    const sidecarPath = own.replace(/\.jsonl$/, '.meta.json');
+    return classifyOrphan({
+      hex,
+      transcript: readFileSync(own, 'utf8'),
+      sidecar: existsSync(sidecarPath) ? readFileSync(sidecarPath, 'utf8') : undefined,
+      flat: basename(dirname(own)) === 'subagents' && basename(dirname(dirname(own))) === sessionId,
+      foreign,
+    });
+  }
+
+  it('has 0 anchorable orphans: every joinable subagent has a parent and a spawn edge', () => {
     const orphans = db
       .prepare(
         `SELECT a.session_id, a.id, a.parent_agent_id IS NULL AS parentless
@@ -325,10 +356,28 @@ describe(`real-corpus contract (${String(corpusRoots.length)} root(s))`, () => {
                  OR NOT EXISTS (SELECT 1 FROM orchestration_edges e
                                  WHERE e.child_agent_id = a.id AND e.session_id = a.session_id))`,
       )
-      .all();
-    expect(orphans, `${String(orphans.length)} orphan(s); first: ${sample(orphans)}`).toHaveLength(
-      0,
+      .all() as { session_id: string; id: string; parentless: number }[];
+    const unanchorable: { session_id: string; id: string }[] = [];
+    const anchorable: { session_id: string; id: string; parentless: number; reason: string }[] = [];
+    for (const orphan of orphans) {
+      // A parent without an edge is a storage defect, never an honest orphan.
+      const verdict: OrphanVerdict =
+        orphan.parentless === 1
+          ? orphanVerdict(orphan.session_id, orphan.id)
+          : { unanchorable: false, reason: 'a parent without a persisted spawn edge' };
+      if (verdict.unanchorable) {
+        unanchorable.push({ session_id: orphan.session_id, id: orphan.id });
+      } else {
+        anchorable.push({ ...orphan, reason: verdict.reason });
+      }
+    }
+    console.log(
+      `[real-corpus] ${JSON.stringify({ unanchorableOrphans: unanchorable.length, ids: unanchorable.slice(0, SAMPLE) }, null, 2)}`,
     );
+    expect(
+      anchorable,
+      `${String(anchorable.length)} anchorable orphan(s); first: ${sample(anchorable)}`,
+    ).toHaveLength(0);
   });
 
   it('does not regress the edge census against the last recorded value', () => {

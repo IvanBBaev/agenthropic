@@ -269,6 +269,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The real-corpus contract tolerates only provably unanchorable orphans.** The R17 suite
+  used to require 0 orphan subagents, which a corpus holding one honest orphan can never
+  satisfy without inventing a parent. It now requires 0 *anchorable* orphans. A parentless
+  subagent passes only when an independent read of the raw bytes shows that no join path in
+  parser-spec §4.1 has anything to join on: no directory parent, no sidecar anchor, no task
+  notification, no foreign mention of its hex, and no foreign mention of its first record's
+  `promptId`. Such orphans are printed by count and id. Every other orphan still fails, and
+  so does a subagent with a parent but no stored edge (parser-spec §4.1, amendment
+  2026-11-19).
+
 - **README, docs landing page and release checklist rewritten (R22, OSS-3/4/6/8).** The README
   leads with a five-line Quickstart, explains why hooks matter, and lists what agenthropic
   refuses to report. The docs landing page describes the current tree instead of the pre-code

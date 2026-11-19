@@ -188,13 +188,14 @@ run, not against a local run.
       `AGENTHROPIC_REAL_CORPUS=~/.claude/projects pnpm test:real` on the release commit,
       with `AGENTHROPIC_REAL_CORPUS_CENSUS` pointing at the census file of the previous
       release run.
-      - It asserts 0 failed sessions, P0-1 exact per message, 0 orphan subagents, and an
-        edge census that has not regressed.
+      - It asserts 0 failed sessions, P0-1 exact per message, 0 anchorable orphan
+        subagents, and an edge census that has not regressed.
       - It is local-only by design: CI sees only the synthetic corpus (D14(a)).
       - Record the printed counts in the release notes.
-      - An orphan whose spawn evidence is absent from the corpus is honest, not a bug. If
-        one remains, name it and its reason in the release notes, rather than ticking the
-        box over it.
+      - An orphan whose spawn evidence is absent from the corpus is honest, not a bug. The
+        suite proves this from the raw bytes and prints such orphans as
+        `unanchorableOrphans` instead of failing (parser-spec §4.1, amendment 2026-11-19).
+        Name each one in the release notes.
 - [ ] **[HUMAN-dependent] Hierarchy correctness ≥95%** against the labelled corpus
       (testing.md §4). This bar only means something once the §0 LABEL-ME box is done.
       **Waived in writing 2026-10-30 (D8).** Unless Ivan labels the trees before the tag,

@@ -205,6 +205,19 @@ never a substring (item #5):
 
   No path → **orphan, no edge** (a parent is never fabricated).
 
+  *(Amended 2026-11-19 — real-corpus contract.)* An orphan is a **defect unless it is
+  provably unanchorable**. The R17 contract (`apps/server/test/real-corpus/`) used to
+  assert 0 orphans outright, which a corpus carrying one honest orphan (the fiftieth
+  forked skill above) can never satisfy without fabricating a parent. It now asserts
+  **0 anchorable orphans**: a parentless subagent passes only when an independent read of
+  the raw bytes (`unanchorable-orphan.ts`, substring searches that can only err towards
+  failing) proves every path above is empty: the transcript is flat (no directory
+  parent), its sidecar names no `toolUseId`, its first record carries no
+  `<task-notification>`, no foreign transcript of its session mentions its hex, and its
+  first record carries a `promptId` that no foreign transcript of its session mentions.
+  Such orphans are counted and reported by id; every other orphan, and any subagent that
+  has a parent but no persisted edge, still fails the suite.
+
 **The provenance set is closed at the storage layer.** Migration 13 rebuilds
 `orchestration_edges` with `CHECK (source IN ('tool_use','directory','task_notification',
 'queue_operation','legacy_explore'))` (`apps/server/src/db/migrations.ts`); migration 28

@@ -247,7 +247,7 @@ asserts:
 | 0 failed sessions | Every failure is reported by session id and class (`SubstrateError`, `UsageConflictError`, ...), never by content |
 | P0-1 exact, per message and bucket | Each transcript the ingest reads passes through a tapping `CorpusFs`, and an independent reader (`test/p0/raw-usage.ts`, the same one the synthetic P0-1 uses) reads exactly those bytes. A live corpus that grows during a multi-minute ingest therefore cannot make the two sides disagree. Every `token_usage` cell must equal the reader's value, and every message the reader saw must be stored. |
 | Attribution | Every usage row's `agent_id` is a transcript that carried the message |
-| 0 orphans | Every subagent has a parent and an `orchestration_edges` row in its session (parser-spec: a parent is never fabricated) |
+| 0 anchorable orphans | Every subagent has a parent and an `orchestration_edges` row in its session (parser-spec: a parent is never fabricated). The one exception is a parentless subagent that is **provably unanchorable**: an independent read of the raw bytes (`test/real-corpus/unanchorable-orphan.ts`) shows that no join path of parser-spec §4.1 has anything to join on. These orphans are counted and printed by id. Any other orphan fails (parser-spec §4.1, amendment 2026-11-19). |
 | Census ratchet | With `AGENTHROPIC_REAL_CORPUS_CENSUS=<file>`, the share of subagents with an edge may not fall below the stored run. The absolute edge count is compared only when the corpus did not shrink, because Claude Code prunes old sessions. A green run rewrites the file. |
 
 The run prints one JSON block of counts: sessions, transcripts, usage messages, cross-session
