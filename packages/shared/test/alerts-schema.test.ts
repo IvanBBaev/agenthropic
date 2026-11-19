@@ -4,13 +4,13 @@ import {
   AlertKindSchema,
   AlertsConfigSchema,
   DEFAULT_ALERTS_PER_MINUTE,
-  InMemoryAlertSink,
   MAX_ALERTS_PER_MINUTE,
   TelegramTargetConfigSchema,
   alertsConfigProblems,
   type AlertNotification,
   type AlertsConfig,
 } from '../src/index';
+import { InMemoryAlertSink } from '../src/testing/index';
 
 const target = {
   id: 'phone',

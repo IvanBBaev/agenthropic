@@ -20,15 +20,13 @@ import Fastify, {
   type FastifyServerOptions,
 } from 'fastify';
 import type { TypeBoxTypeProvider } from '@fastify/type-provider-typebox';
+import { type FormatDriftDto, type HealthDto, HealthSchema } from '@agenthropic/shared';
 import {
-  type FormatDriftDto,
-  type HealthDto,
-  HealthSchema,
   isAllowedHost,
   isAllowedOrigin,
   redactTokenInUrl,
   timingSafeTokenEqual,
-} from '@agenthropic/shared';
+} from '@agenthropic/shared/node';
 import { apiRoutes } from './api/routes';
 import type { IngestRejection } from './api/ingest-rejections';
 import type { SubstrateProvider } from './api/substrate-provider';

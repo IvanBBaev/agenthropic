@@ -13,7 +13,7 @@
  */
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { timingSafeTokenEqual } from '@agenthropic/shared';
+import { timingSafeTokenEqual } from '@agenthropic/shared/node';
 import {
   buildServer,
   HOOK_EVENT_PATH,

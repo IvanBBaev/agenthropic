@@ -6,7 +6,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { InMemoryEventStore, type EventStorePort } from '@agenthropic/shared';
+import type { EventStorePort } from '@agenthropic/shared';
+import { InMemoryEventStore } from '@agenthropic/shared/testing';
 import { SqliteEventStore } from '../src/db/event-store';
 import {
   HOOK_DELIVERY_ID_HEADER,

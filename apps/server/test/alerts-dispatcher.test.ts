@@ -6,7 +6,7 @@
  * message is never relayed) and single-flight passes.
  */
 import type { AlertSinkPort, AlertsConfig, DeliveryOutcome } from '@agenthropic/shared';
-import { InMemoryAlertSink } from '@agenthropic/shared';
+import { InMemoryAlertSink } from '@agenthropic/shared/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   createAlertDispatcher,

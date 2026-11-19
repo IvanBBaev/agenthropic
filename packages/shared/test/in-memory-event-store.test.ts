@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { InMemoryEventStore, type RawEventEnvelope } from '../src/index';
+import type { RawEventEnvelope } from '../src/index';
+import { InMemoryEventStore } from '../src/testing/index';
 
 function envelope(overrides: Partial<RawEventEnvelope> = {}): RawEventEnvelope {
   return {

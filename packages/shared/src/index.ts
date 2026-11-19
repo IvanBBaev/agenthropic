@@ -1,8 +1,14 @@
+/**
+ * The browser-safe entry of `@agenthropic/shared`: schemas, DTO types, port
+ * types and constants that both the server and the SPA read. ARC-12: nothing
+ * reachable from here imports a `node:` module or a test double -
+ * `@agenthropic/shared/node` holds the node-only security primitives and
+ * `@agenthropic/shared/testing` the in-memory fakes. `test/entry-points.test.ts`
+ * walks this module graph and fails if either leaks back in.
+ */
 export type { TokenBucket, RawEventSource } from './types/enums';
 export type * from './ports/event-store';
-export { InMemoryEventStore } from './testing/in-memory-event-store';
 export type { AlertSinkPort, DeliveryOutcome } from './ports/alert-sink';
-export { InMemoryAlertSink } from './testing/in-memory-alert-sink';
 export {
   AlertKindSchema,
   AlertTargetKindSchema,
@@ -32,17 +38,6 @@ export type {
   ErrorNotification,
   AlertNotification,
 } from './schemas/alerts';
-export {
-  MIN_TOKEN_DISTINCT_CHARACTERS,
-  MIN_TOKEN_LENGTH,
-  generateDashboardToken,
-  requireDashboardToken,
-  timingSafeTokenEqual,
-  assertLoopbackHost,
-  isAllowedHost,
-  isAllowedOrigin,
-  redactTokenInUrl,
-} from './security/index';
 export { HealthSchema, VersionFormatDriftSchema } from './schemas/health';
 export type { FormatDriftDto, HealthDto, VersionFormatDriftDto } from './schemas/health';
 export {

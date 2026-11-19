@@ -8,7 +8,8 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { InMemoryAlertSink, type AlertsConfig, type DeliveryOutcome } from '@agenthropic/shared';
+import type { AlertsConfig, DeliveryOutcome } from '@agenthropic/shared';
+import { InMemoryAlertSink } from '@agenthropic/shared/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { startAlerting } from '../src/alerts/index';
 import { countDeliveries, listTargets } from '../src/db/alerts';

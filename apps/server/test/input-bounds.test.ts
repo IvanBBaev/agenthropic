@@ -10,7 +10,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { InMemoryEventStore } from '@agenthropic/shared';
+import { InMemoryEventStore } from '@agenthropic/shared/testing';
 import {
   MAX_ID_LENGTH,
   MAX_PAYLOAD_DEPTH,

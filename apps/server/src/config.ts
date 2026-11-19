@@ -15,7 +15,7 @@
  */
 import { isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { requireDashboardToken } from '@agenthropic/shared';
+import { requireDashboardToken } from '@agenthropic/shared/node';
 import { DEFAULT_MAX_FILE_BYTES } from './corpus/fs-port';
 import { MAX_RETENTION_DAYS, type SignedRetentionValues } from './retention/policy';
 

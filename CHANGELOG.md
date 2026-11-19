@@ -286,6 +286,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`@agenthropic/shared` splits off its node-only and test-only code (ARC-12).** The root
+  entry, which the SPA imports, no longer re-exports the `node:crypto` security primitives
+  or the in-memory test doubles. They moved to two subpath entries:
+  `@agenthropic/shared/node` and `@agenthropic/shared/testing`.
+  `packages/shared/test/entry-points.test.ts` walks the root entry's module graph and
+  fails if a `node:` import or a test double comes back.
 - **CI also runs on a pushed `v*` tag (OSS-11).** Until now a tag push started no run,
   so the post-tag "CI green on the tag ref" check named a run that did not exist.
   `timeout-minutes` and the cancel-superseded `concurrency` group were already in place;

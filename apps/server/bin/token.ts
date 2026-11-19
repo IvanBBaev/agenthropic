@@ -13,6 +13,6 @@
  * (`generateDashboardToken`); this wrapper is kept small enough to read
  * instead of being tested.
  */
-import { generateDashboardToken } from '@agenthropic/shared';
+import { generateDashboardToken } from '@agenthropic/shared/node';
 
 process.stdout.write(`${generateDashboardToken()}\n`);

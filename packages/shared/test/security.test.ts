@@ -9,7 +9,7 @@ import {
   redactTokenInUrl,
   requireDashboardToken,
   timingSafeTokenEqual,
-} from '../src/index';
+} from '../src/node';
 
 const VALID_TOKEN = 'a-valid-token-of-16'; // 19 chars
 

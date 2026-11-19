@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { EventStorePort } from '@agenthropic/shared';
-import { InMemoryEventStore } from '@agenthropic/shared';
+import { InMemoryEventStore } from '@agenthropic/shared/testing';
 import { DEFAULT_LOG_LEVEL, loadConfig } from '../src/config';
 import {
   errorDeliveryOutcome,
