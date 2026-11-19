@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Narrow-screen layout (UX-13).** Below 800px the sidebar becomes a wrapping top nav,
+  the header wraps, the Sessions split stacks into one column, and wide tables and
+  charts scroll inside the view instead of widening the page. This is for reaching the
+  dashboard from a phone over the tunnel.
 - **Keyboard focus ring and skip link (UX-14).** Every control now shows one focus ring
   when it is reached from the keyboard. The ring is drawn outside the control, so it
   stays visible on the blue buttons, and the token input no longer removes it. A **Skip

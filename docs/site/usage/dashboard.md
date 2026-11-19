@@ -125,6 +125,11 @@ open view. It is a button rather than a `#main` link because the hash is the rou
 same light-blue focus ring when it is reached from the keyboard, and the ring stays off
 mouse clicks.
 
+**Narrow screens** *(Amended 2026-11-19, UX-13)*. Below 800px wide, for example a phone
+reaching the dashboard over the tunnel, the sidebar folds into a wrapping row of links
+above the view, the session list and its detail stack instead of sitting side by side,
+and a table or chart wider than the screen scrolls inside the view.
+
 ## (a) Live status board — working / unknown / done
 
 **Answers:** Q3 ("did any session get stuck / error without me noticing?") and,

@@ -853,3 +853,42 @@ div.truncation-banner {
 .caveat-details > .caveat-body > p {
   margin: 0.3rem 0;
 }
+
+/*
+ * UX-13: narrow screens (a phone over the Tailscale tunnel). Below 800px the
+ * sidebar folds into a wrapping top nav, the two-column session split stacks,
+ * and the header wraps instead of pushing its chips off-screen. Wide tables
+ * and charts scroll inside the view rather than widening the whole page.
+ */
+@media (max-width: 800px) {
+  .shell-header {
+    flex-wrap: wrap;
+  }
+
+  .shell-body {
+    flex-direction: column;
+  }
+
+  .sidebar {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    width: auto;
+    border-right: none;
+    border-bottom: 1px solid #2a2f37;
+  }
+
+  .legend {
+    flex-basis: 100%;
+    margin-top: 0.25rem;
+  }
+
+  .view {
+    padding: 1rem;
+    overflow-x: auto;
+  }
+
+  .split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
