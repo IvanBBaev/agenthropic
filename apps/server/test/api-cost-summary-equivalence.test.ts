@@ -303,6 +303,18 @@ function ledgerOracle(db: SqliteDatabase, topN = TOP_N): CostSummaryDto {
          (SELECT COALESCE(SUM(usage_records_dropped), 0) FROM sessions) AS d`,
     )
     .get() as { p: number; d: number };
+  // OPS-14, read in JS rather than with json_extract, so the oracle does not
+  // share the query's SQL: a non-negative integer counts, anything else is 0.
+  const malformedPerSession = (
+    db.prepare('SELECT format_census FROM sessions').all() as { format_census: string | null }[]
+  ).map(({ format_census }) => {
+    const census: unknown = format_census === null ? null : JSON.parse(format_census);
+    const lines =
+      census !== null && typeof census === 'object'
+        ? (census as Record<string, unknown>)['malformedLines']
+        : undefined;
+    return Number.isInteger(lines) && (lines as number) > 0 ? (lines as number) : 0;
+  });
   return {
     totals,
     perModel,
@@ -335,6 +347,8 @@ function ledgerOracle(db: SqliteDatabase, topN = TOP_N): CostSummaryDto {
     hasMore: bySession.size > top.length,
     partialSessions: honesty.p,
     usageRecordsDropped: honesty.d,
+    sessionsWithMalformedLines: malformedPerSession.filter((lines) => lines > 0).length,
+    malformedLinesSkipped: malformedPerSession.reduce((sum, lines) => sum + lines, 0),
   };
 }
 
@@ -932,6 +946,8 @@ describe('cost summary equals an uncached scan (M-19)', () => {
       hasMore: false,
       partialSessions: 0,
       usageRecordsDropped: 0,
+      sessionsWithMalformedLines: 0,
+      malformedLinesSkipped: 0,
     });
     expect(summary).toEqual(ledgerOracle(temp.db));
     // A migrated database is NOT empty of prices - so "no rows" here is the

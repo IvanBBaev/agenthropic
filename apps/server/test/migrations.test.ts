@@ -1489,11 +1489,12 @@ describe('migration runner (WP-D3)', () => {
           { bucket: 'input', rate_effective_from: FLOOR, tokens: 1_000_000 },
           { bucket: 'output', rate_effective_from: FLOOR, tokens: 100_000 },
         ]);
-        // The cost reader is today's, and it reads migration 21's session
-        // columns; stand those in on this schema-19 database so the read-time
-        // re-pricing below is observed through the real reader. Migration 21
-        // touches only `sessions`, never pricing or the rollup.
-        migrations.find((m) => m.id === 21)!.up(db);
+        // The cost reader is today's, and it reads migration 21's and 26's
+        // session columns (26's census since OPS-14); stand those in on this
+        // schema-19 database so the read-time re-pricing below is observed
+        // through the real reader. Both touch only `sessions`, never pricing
+        // or the rollup.
+        for (const id of [21, 26]) migrations.find((m) => m.id === id)!.up(db);
         // 1M input @ $3 + 100k output @ $15 = 3 + 1.5.
         expect(getCostSummary(db, 10).totals.costUsd).toBeCloseTo(4.5, 9);
 

@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Cost summary: `/api/cost/summary` now carries `sessionsWithMalformedLines` and
+  `malformedLinesSkipped`, the corpus-wide count of transcript lines ingest skipped as
+  invalid JSON (R13), and the cost view's honesty line says "N transcript lines in M
+  sessions could not be read and were skipped" so the totals beside it read as a lower
+  bound. Until now the count reached only `/api/health` `formatDrift`. Troubleshooting
+  §6 gains the runbook entry (OPS-14).
 - Contract parity tests (QA-11, ARC-10): every web fixture builder and the recorded P0
   payload of every guarded route are checked against the shared TypeBox schemas, and
   every single-leaf mutation proves the web guards are never stricter than the contract.

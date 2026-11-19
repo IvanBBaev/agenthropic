@@ -122,6 +122,8 @@ describe('the cost summary requires the corpus-wide aggregates', () => {
     hasMore: false,
     partialSessions: 2,
     usageRecordsDropped: 7,
+    sessionsWithMalformedLines: 1,
+    malformedLinesSkipped: 4,
   };
 
   it('accepts them and refuses a payload without either', () => {
@@ -131,5 +133,13 @@ describe('the cost summary requires the corpus-wide aggregates', () => {
       false,
     );
     expect(Value.Check(CostSummaryResponseSchema, { ...base, partialSessions: -1 })).toBe(false);
+  });
+
+  it('requires the unreadable-line aggregates as non-negative integers (OPS-14)', () => {
+    for (const key of ['sessionsWithMalformedLines', 'malformedLinesSkipped'] as const) {
+      expect(Value.Check(CostSummaryResponseSchema, without(base, key))).toBe(false);
+      expect(Value.Check(CostSummaryResponseSchema, { ...base, [key]: -1 })).toBe(false);
+      expect(Value.Check(CostSummaryResponseSchema, { ...base, [key]: 1.5 })).toBe(false);
+    }
   });
 });

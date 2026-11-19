@@ -437,7 +437,8 @@ button:disabled {
    the same family of honest gap as `.unpriced` - a figure that is real but
    incomplete - so it wears the same amber. `.partial-badge` (a lower bound:
    the main transcript was never read) is the stronger claim and is boxed;
-   `.dropped-usage` (records excluded for want of a dedupe key) stays inline. */
+   `.dropped-usage` (records excluded for want of a dedupe key) and
+   `.malformed-lines` (transcript lines ingest skipped, OPS-14) stay inline. */
 .partial-badge {
   color: #c98500;
   border: 1px solid #4a422a;
@@ -445,7 +446,8 @@ button:disabled {
   padding: 0 0.3rem;
 }
 
-.dropped-usage {
+.dropped-usage,
+.malformed-lines {
   color: #c98500;
 }
 

@@ -60,7 +60,12 @@ import { computeCostWindows, isReadableDay } from './cost-windows';
 import type { WindowTotals } from './cost-windows';
 import { computeCostFlow, type CostFlowLayout, type FlowNode } from './layout/cost-flow';
 import { SessionCostAnalysis } from './SessionCostAnalysis';
-import { DroppedUsageNote, PartialAggregateNote, PartialBadge } from './session-honesty';
+import {
+  DroppedUsageNote,
+  MalformedLinesNote,
+  PartialAggregateNote,
+  PartialBadge,
+} from './session-honesty';
 import { snapshotAge } from './snapshot';
 import { NO_FIGURE_META } from './status';
 import { LocalWindowsStrip } from './LocalWindows';
@@ -105,9 +110,19 @@ const FLOW_BALANCE_ID = 'cost-flow-balance';
 const FLOW_UNDRAWABLE_ID = 'cost-flow-undrawable';
 
 /**
- * Id of the partial-sessions / dropped-usage note under the totals row. It
- * qualifies every total on the page, so each group, table and figure that
- * prints one names it (F-18) - and only while it is rendered.
+ * What joins the unreadable-line note (OPS-14) to the notes before it. The
+ * dropped-usage sentence is the only one that ends without a full stop - it is
+ * also printed bare beside a session row - so the join supplies it.
+ */
+function malformedLinesLead(partialSessions: number, usageRecordsDropped: number): string {
+  if (usageRecordsDropped !== 0 && !isImpossibleCount(usageRecordsDropped)) return '. ';
+  return partialSessions === 0 && usageRecordsDropped === 0 ? '' : ' ';
+}
+
+/**
+ * Id of the partial-sessions / dropped-usage / unreadable-line note under the
+ * totals row. It qualifies every total on the page, so each group, table and
+ * figure that prints one names it (F-18) - and only while it is rendered.
  */
 const COST_HONESTY_ID = 'cost-honesty';
 
@@ -882,7 +897,10 @@ export function CostView({ token, onAuthRejected, replayEpoch }: ViewProps) {
   // Owner decisions 1 and 2. Derived once: the note and every description
   // that names it have to agree about whether it is on the page, because an
   // idref to a paragraph that was not rendered is a caveat that vanishes.
-  const hasCostHonesty = summary.partialSessions !== 0 || summary.usageRecordsDropped !== 0;
+  const hasMalformedLines =
+    summary.sessionsWithMalformedLines !== 0 || summary.malformedLinesSkipped !== 0;
+  const hasCostHonesty =
+    summary.partialSessions !== 0 || summary.usageRecordsDropped !== 0 || hasMalformedLines;
   const costHonestyDescribedBy = hasCostHonesty ? COST_HONESTY_ID : undefined;
 
   return (
@@ -1014,15 +1032,21 @@ export function CostView({ token, onAuthRejected, replayEpoch }: ViewProps) {
       <UnpricedModelsBanner perModel={summary.perModel} />
       {/* Owner decisions 1 and 2: every total on this page is a lower bound
           while any session is partial, and excludes usage records that had no
-          dedupe key. Corpus-wide, not per slice, so it sits with the totals
-          rather than under any one breakdown, and the groups, tables and
-          diagram below name it by id. See views/session-honesty.tsx. */}
+          dedupe key; OPS-14 adds the transcript lines ingest could not read.
+          Corpus-wide, not per slice, so it sits with the totals rather than
+          under any one breakdown, and the groups, tables and diagram below
+          name it by id. See views/session-honesty.tsx. */}
       {hasCostHonesty && (
         <p className="muted" id={COST_HONESTY_ID} data-testid="cost-honesty">
           <PartialAggregateNote count={summary.partialSessions} />
           <DroppedUsageNote
             count={summary.usageRecordsDropped}
             lead={summary.partialSessions === 0 ? '' : ' '}
+          />
+          <MalformedLinesNote
+            sessions={summary.sessionsWithMalformedLines}
+            lines={summary.malformedLinesSkipped}
+            lead={malformedLinesLead(summary.partialSessions, summary.usageRecordsDropped)}
           />
         </p>
       )}

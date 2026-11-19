@@ -451,7 +451,8 @@ every row instead of letting a reader assume it is when the thing happened. If a
 event time is ever wired, the union widens and old rows stay honestly labelled.
 
 **`GET /api/cost/summary`** → `{ totals, perModel, perDay, topSessions, sessionCount,
-hasMore, partialSessions, usageRecordsDropped, coverage? }`. `perDay` uses `YYYY-MM-DD` keys, with the literal string `"unknown"` for usage
+hasMore, partialSessions, usageRecordsDropped, sessionsWithMalformedLines,
+malformedLinesSkipped, coverage? }`. `perDay` uses `YYYY-MM-DD` keys, with the literal string `"unknown"` for usage
 rows that carry no timestamp — again a named bucket rather than a silent omission.
 `topSessions` is the `topN` costliest sessions, a slice; `sessionCount` is the number of
 sessions with any usage that the slice was cut from, and `hasMore` is `true` when the
@@ -460,7 +461,14 @@ that five might be the whole corpus (added 2026-09-09, closing-plan L1). Each
 `topSessions` row also carries `partial` and `usageRecordsDropped`, as the session
 summary does. The top-level `partialSessions` and `usageRecordsDropped` are corpus-wide
 counts, covering every session and not only the slice; a non-zero value means `totals`
-is a lower bound. `coverage` is
+is a lower bound. `malformedLinesSkipped` is the corpus-wide count of transcript lines
+that were not valid JSON and that ingest skipped instead of failing the session (R13),
+and `sessionsWithMalformedLines` is how many sessions they are in. Each such session is
+ingested and counted in `totals`, but whatever usage the skipped line held is not, so a
+non-zero value also means `totals` is a lower bound. Both are read from the same
+per-session census as `formatDrift.malformedLinesSkipped` on `/api/health`, so a session
+ingested before R13 is counted only once it is re-read. *(Added 2026-11-19, OPS-14.)*
+`coverage` is
 `{ sessionsExcluded, sessionsQuarantined }`: sessions the ingest could not read or price
 on its latest attempt. Each is either absent from `totals` or present in it only at an
 older extent than the corpus now holds — a session that ingested cleanly and was later

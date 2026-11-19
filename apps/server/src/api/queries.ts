@@ -800,6 +800,18 @@ interface CostSummaryCacheEntry {
  * policy: the dashboard issues one topN per view, so a second slot has no
  * known consumer yet.
  */
+/**
+ * OPS-14: a session's skipped non-JSON line count, from the format census the
+ * parser stores (DAT-7/R13). Anything but a non-negative integer reads as 0,
+ * matching the census reader behind `/api/health` `formatDrift`, which drops a
+ * census it cannot read instead of guessing at it. `format_census` is
+ * `json_valid` by its CHECK constraint, so `json_type` cannot throw here.
+ */
+const MALFORMED_LINES_SQL = `CASE
+    WHEN json_type(format_census, '$.malformedLines') = 'integer'
+     AND json_extract(format_census, '$.malformedLines') > 0
+    THEN json_extract(format_census, '$.malformedLines') ELSE 0 END`;
+
 const costSummaryCache = new WeakMap<SqliteDatabase, CostSummaryCacheEntry>();
 
 /**
@@ -1068,10 +1080,19 @@ export function getCostSummary(
   const honestyTotals = db
     .prepare(
       `SELECT COUNT(partial_reason) AS partial_sessions,
-              COALESCE(SUM(usage_records_dropped), 0) AS usage_records_dropped
-         FROM sessions`,
+              COALESCE(SUM(usage_records_dropped), 0) AS usage_records_dropped,
+              COUNT(CASE WHEN malformed_lines > 0 THEN 1 END) AS malformed_sessions,
+              COALESCE(SUM(malformed_lines), 0) AS malformed_lines
+         FROM (SELECT partial_reason, usage_records_dropped,
+                      ${MALFORMED_LINES_SQL} AS malformed_lines
+                 FROM sessions)`,
     )
-    .get() as { partial_sessions: number; usage_records_dropped: number };
+    .get() as {
+    partial_sessions: number;
+    usage_records_dropped: number;
+    malformed_sessions: number;
+    malformed_lines: number;
+  };
 
   const summary: CostSummaryDto = {
     totals,
@@ -1100,6 +1121,8 @@ export function getCostSummary(
     hasMore: bySession.size > top.length,
     partialSessions: honestyTotals.partial_sessions,
     usageRecordsDropped: honestyTotals.usage_records_dropped,
+    sessionsWithMalformedLines: honestyTotals.malformed_sessions,
+    malformedLinesSkipped: honestyTotals.malformed_lines,
   };
   // Stored under the key OBSERVED BEFORE the scan — safe because better-sqlite3
   // is synchronous: nothing on this connection can write between the two.

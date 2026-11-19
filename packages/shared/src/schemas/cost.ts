@@ -149,6 +149,15 @@ export const CostSummaryResponseSchema = Type.Object(
     partialSessions: Type.Integer({ minimum: 0 }),
     /** Usage records excluded corpus-wide because they had no `message.id`. */
     usageRecordsDropped: Type.Integer({ minimum: 0 }),
+    /**
+     * Sessions whose latest parse skipped at least one non-JSON transcript line
+     * (a torn write or byte-level corruption, DAT-7/R13), and how many lines in
+     * all. A skipped line may have carried usage, so non-zero means `totals` is
+     * a lower bound. Read from the stored format census, so a session ingested
+     * before R13 counts only once it is re-read (OPS-14).
+     */
+    sessionsWithMalformedLines: Type.Integer({ minimum: 0 }),
+    malformedLinesSkipped: Type.Integer({ minimum: 0 }),
     coverage: Type.Optional(CostCoverageSchema),
   },
   { additionalProperties: false },

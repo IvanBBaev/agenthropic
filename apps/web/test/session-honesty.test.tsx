@@ -13,6 +13,7 @@ import { LiveView } from '../src/views/LiveView';
 import { SessionsView } from '../src/views/SessionsView';
 import {
   DroppedUsageNote,
+  MalformedLinesNote,
   PARTIAL_SESSION_TEXT,
   PartialAggregateNote,
   PartialBadge,
@@ -143,6 +144,36 @@ describe('the shared honesty components', () => {
     );
     rerender(<PartialAggregateNote count={-3} />);
     expect(container.textContent).toContain('came back as -3, a count that cannot be right');
+  });
+
+  it('says how many transcript lines were skipped and where, silent at zero (OPS-14)', () => {
+    const { container, rerender } = render(<MalformedLinesNote sessions={0} lines={0} lead="" />);
+    expect(container.textContent).toBe('');
+    rerender(<MalformedLinesNote sessions={1} lines={1} lead="" />);
+    expect(container.textContent).toBe(
+      "1 transcript line in 1 session could not be read and was skipped, so that session's totals are a lower bound.",
+    );
+    rerender(<MalformedLinesNote sessions={2} lines={5} lead=" " />);
+    expect(container.textContent).toBe(
+      " 5 transcript lines in 2 sessions could not be read and were skipped, so those sessions' totals are a lower bound.",
+    );
+  });
+
+  it('names an impossible unreadable-line count rather than printing it (OPS-14)', () => {
+    const { container, rerender } = render(
+      <MalformedLinesNote sessions={2} lines={Number.NaN} lead="" />,
+    );
+    expect(container.textContent).toBe(
+      'The unreadable-line count came back as unreadable and its session count as 2, so how much transcript was skipped is unknown - treat every total as a lower bound.',
+    );
+    rerender(<MalformedLinesNote sessions={-1} lines={3} lead="" />);
+    expect(container.textContent).toBe(
+      'The unreadable-line count came back as 3 and its session count as -1, a count that cannot be right, so how much transcript was skipped is unknown - treat every total as a lower bound.',
+    );
+    // A non-zero line count with zero sessions is no state ingest can write,
+    // but neither number is impossible on its own: it is printed as read.
+    rerender(<MalformedLinesNote sessions={0} lines={4} lead="" />);
+    expect(container.textContent).toContain('4 transcript lines in 0 sessions');
   });
 });
 
@@ -333,6 +364,54 @@ describe('CostView', () => {
     render(<CostView token="secret-token" sse={sse} onAuthRejected={onAuthRejected} />);
     const note = await screen.findByTestId('cost-honesty');
     expect(note.textContent).toBe('2 usage records could not be deduplicated and were excluded');
+  });
+
+  it('states skipped transcript lines alone, and joins them to the notes before (OPS-14)', async () => {
+    route(
+      costSummary({
+        totals: { tokens: 1000, costUsd: 1, unpricedTokens: 0 },
+        topSessions: [sessionCost()],
+        sessionsWithMalformedLines: 1,
+        malformedLinesSkipped: 2,
+      }),
+    );
+    render(<CostView token="secret-token" sse={sse} onAuthRejected={onAuthRejected} />);
+    const note = await screen.findByTestId('cost-honesty');
+    expect(note.textContent).toBe(
+      "2 transcript lines in 1 session could not be read and were skipped, so that session's totals are a lower bound.",
+    );
+  });
+
+  it.each([
+    [
+      'after the dropped-usage sentence, closing it',
+      { usageRecordsDropped: 2 },
+      'were excluded. 3 transcript lines',
+    ],
+    [
+      'after the partial-session sentence',
+      { partialSessions: 1 },
+      '(lower bound). 3 transcript lines',
+    ],
+    [
+      'after an unreadable dropped-usage count, which closes itself',
+      { usageRecordsDropped: Number.NaN },
+      'is unknown. 3 transcript lines',
+    ],
+  ])('joins the unreadable-line note %s (OPS-14)', async (_case, overrides, joined) => {
+    route(
+      costSummary({
+        totals: { tokens: 1000, costUsd: 1, unpricedTokens: 0 },
+        topSessions: [sessionCost()],
+        sessionsWithMalformedLines: 2,
+        malformedLinesSkipped: 3,
+        ...overrides,
+      }),
+    );
+    render(<CostView token="secret-token" sse={sse} onAuthRejected={onAuthRejected} />);
+    const note = await screen.findByTestId('cost-honesty');
+    expect(note.textContent).toContain(joined);
+    expect(note.textContent).not.toContain('..');
   });
 
   it('names unreadable honesty counts instead of pointing every description at NaN (W-3, 2026-10-12)', async () => {

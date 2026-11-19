@@ -667,7 +667,14 @@ whole and had nothing excluded.
 The cost view adds a corpus-wide line above the top-sessions table:
 *"Includes N partial sessions (lower bound)."* and the corpus-wide count of excluded usage
 records. Both cover every session, not only the rows listed. A server that does not send
-these fields is refused as out of date rather than shown as "whole". See
+these fields is refused as out of date rather than shown as "whole".
+
+*Added 2026-11-19 (OPS-14).* The same line also says *"N transcript lines in M sessions
+could not be read and were skipped, so those sessions' totals are a lower bound."* when
+ingest met lines in a transcript that were not valid JSON, typically a write torn by a
+crash. Those sessions are still ingested and their other lines are counted; only the
+unreadable lines are missing. This note is corpus-wide only. The session rows do not
+carry it. See
 [troubleshooting §6](../operations/troubleshooting.md) for what to do about either note
 (usually nothing).
 

@@ -357,6 +357,8 @@ describe('cost and DAG schemas', () => {
       hasMore: false,
       partialSessions: 0,
       usageRecordsDropped: 0,
+      sessionsWithMalformedLines: 0,
+      malformedLinesSkipped: 0,
     };
     expect(Value.Check(CostSummaryResponseSchema, summary)).toBe(true);
     expect(Value.Check(CostSummaryResponseSchema, { ...summary, totals: undefined })).toBe(false);
@@ -370,6 +372,8 @@ describe('cost and DAG schemas', () => {
       topSessions: [],
       partialSessions: 0,
       usageRecordsDropped: 0,
+      sessionsWithMalformedLines: 0,
+      malformedLinesSkipped: 0,
     };
     // Both fields are mandatory: a payload without them is the pre-L1 shape,
     // which a client must refuse rather than render as "0 of 0".

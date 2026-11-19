@@ -11,6 +11,12 @@
  *   no dedupe key, and counting it could double-count a streamed retry, so it
  *   is excluded rather than guessed at. `usageRecordsDropped` is how many.
  *
+ * - UNREADABLE LINES (OPS-14). A non-JSON transcript line (a torn write, a
+ *   byte-level corruption) is skipped and counted instead of failing the whole
+ *   session (DAT-7/R13). The line may have carried usage, so every total that
+ *   includes the session is a LOWER BOUND. `malformedLinesSkipped` is how many
+ *   lines, `sessionsWithMalformedLines` in how many sessions.
+ *
  * Like `unpriced.tsx`, the disclosure is the PRESENCE of the clause, so its
  * absence must mean "nothing to disclose" and nothing else: `null` / zero is
  * the only silent case. A count no read can produce (NaN, an infinity, a
@@ -97,6 +103,34 @@ export function PartialAggregateNote({ count }: { readonly count: number }) {
       {isImpossibleCount(count)
         ? `The partial-session count came back as ${impossibleCountText(count)}, so how many of these sessions are partial is unknown - treat every total as a lower bound.`
         : `Includes ${String(count)} partial ${count === 1 ? 'session' : 'sessions'} (lower bound).`}
+    </span>
+  );
+}
+
+/**
+ * OPS-14: "N transcript lines in M sessions could not be read", or nothing when
+ * both counts are zero. Corpus-wide, like the partial note beside it.
+ */
+export function MalformedLinesNote({
+  sessions,
+  lines,
+  lead,
+}: {
+  readonly sessions: number;
+  readonly lines: number;
+  readonly lead: string;
+}) {
+  if (sessions === 0 && lines === 0) return null;
+  const describe = (count: number): string =>
+    isImpossibleCount(count) ? impossibleCountText(count) : String(count);
+  const text =
+    isImpossibleCount(sessions) || isImpossibleCount(lines)
+      ? `The unreadable-line count came back as ${describe(lines)} and its session count as ${describe(sessions)}, so how much transcript was skipped is unknown - treat every total as a lower bound.`
+      : `${String(lines)} transcript ${lines === 1 ? 'line' : 'lines'} in ${String(sessions)} ${sessions === 1 ? 'session' : 'sessions'} could not be read and ${lines === 1 ? 'was' : 'were'} skipped, so ${sessions === 1 ? "that session's" : "those sessions'"} totals are a lower bound.`;
+  return (
+    <span className="malformed-lines">
+      {lead}
+      {text}
     </span>
   );
 }

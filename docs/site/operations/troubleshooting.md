@@ -579,6 +579,21 @@ means that many usage records in the session had no `message.id`. Dedupe is by
 same message; it is excluded from every total rather than guessed at. Such records are
 not an ingest failure and do not quarantine the session.
 
+**"N transcript lines in M sessions could not be read and were skipped"** (OPS-14,
+2026-11-19) is the cost view's note for lines that were not valid JSON. Usually this is
+a write torn by a crash or a full disk, and sometimes a corrupted file. Since R13 such a
+line is skipped and counted rather than failing the session. The session is ingested,
+its readable lines are in every total, and the totals are a lower bound by whatever
+usage the skipped lines held. The same count is `formatDrift.malformedLinesSkipped` on
+`/api/health` (§5), and `/api/cost/summary` carries it as `malformedLinesSkipped` with
+`sessionsWithMalformedLines`. The dashboard does not say which sessions are affected.
+To find them, look for lines in `~/.claude/projects/**/*.jsonl` that do not parse as
+JSON; a torn write is normally the last line of a transcript that was being written when
+the process died. What to do: usually nothing, because a torn final line held at most
+one record. If you repair or delete the bad line, the file's bytes change, the next
+ingest re-reads the session, and the new census replaces the old count. Back up the
+file first. Claude Code still owns it, and the dashboard never writes to it.
+
 **A session that fails to ingest** is a different event from a skipped file, and gets
 its own line:
 

@@ -184,6 +184,8 @@ export function costSummary(overrides: Partial<CostSummaryDto> = {}): CostSummar
     perDay: [],
     partialSessions: 0,
     usageRecordsDropped: 0,
+    sessionsWithMalformedLines: 0,
+    malformedLinesSkipped: 0,
     ...overrides,
     topSessions,
     sessionCount,

@@ -397,8 +397,16 @@ function hasOptionalCoverage(body: Record<string, unknown>): boolean {
  * `partialSessions` / `usageRecordsDropped` (owner decisions 1 and 2) are the
  * corpus-wide honesty aggregates: each gates the "includes N partial sessions
  * (lower bound)" / "N usage records ... excluded" note, so absence is refused.
+ * `sessionsWithMalformedLines` / `malformedLinesSkipped` (OPS-14) gate the
+ * "N transcript lines could not be read" note the same way.
  */
-const COST_SUMMARY_NUMBERS = ['sessionCount', 'partialSessions', 'usageRecordsDropped'] as const;
+const COST_SUMMARY_NUMBERS = [
+  'sessionCount',
+  'partialSessions',
+  'usageRecordsDropped',
+  'sessionsWithMalformedLines',
+  'malformedLinesSkipped',
+] as const;
 
 /** A top-sessions row prints a session total, so it carries the honesty pair. */
 function isTopSession(row: Record<string, unknown>): boolean {
