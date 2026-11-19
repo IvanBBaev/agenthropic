@@ -244,6 +244,13 @@ request.
 > Generate one with `openssl rand -hex 32` or equivalent; this matters more, not
 > less, once a tunnel is in play, since the tunnel widens who can attempt the
 > guess.
+>
+> *(Amended 2026-11-19 — SEC-6.)* The startup check also refuses hand-typed filler:
+> a token that repeats one short unit (`passwordpassword`) or uses fewer than 6
+> distinct characters. `pnpm --silent --filter @agenthropic/server token:generate`
+> prints a 256-bit base64url token without needing OpenSSL. The 16-character floor
+> is unchanged. There is still no rate limiting on 401s, so over a tunnel the
+> token's randomness is the whole control.
 
 ## Choosing between the two
 

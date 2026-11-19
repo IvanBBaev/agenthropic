@@ -214,18 +214,28 @@ discard every row at exit and put the backups under a working-directory-relative
 ### `DASHBOARD_TOKEN` is mandatory, and why there is no anonymous mode
 
 `loadConfig` calls `requireDashboardToken` before anything else, and that function
-throws — the process exits non-zero with the message, never a stack trace — in three
-cases (update 2026-10-10: this page previously said two; the third check is new):
+throws — the process exits non-zero with the message, never a stack trace — in four
+cases (update 2026-10-10: this page previously said two; update 2026-11-19: the fourth,
+SEC-6, is new). The unset, too-short and hand-typed messages end with the generator hint
+quoted in the first one:
 
 - unset or empty:
-  `DASHBOARD_TOKEN is not set. The dashboard refuses to start without an auth token: set DASHBOARD_TOKEN to a secret of at least 16 characters.`
+  `DASHBOARD_TOKEN is not set. The dashboard refuses to start without an auth token: set DASHBOARD_TOKEN to a secret of at least 16 characters. Generate one with `pnpm --filter @agenthropic/server token:generate` or `openssl rand -hex 32`.`
 - shorter than 16 characters:
   `DASHBOARD_TOKEN is too short (N characters). It must be at least 16 characters.`
 - padded with leading or trailing whitespace, or carrying a control character (the classic
   `echo` without `-n` into an env file):
   `DASHBOARD_TOKEN contains leading/trailing whitespace or a control character. No HTTP header can carry such a value, so no request could ever authenticate: set a plain token without padding.`
   Such a token used to pass the length check, start the server, and then refuse every
-  request. The value itself is never echoed.
+  request.
+- hand-typed filler: one short unit repeated (`passwordpassword`, `xxxx…`) or fewer than
+  6 distinct characters (`MIN_TOKEN_DISTINCT_CHARACTERS`):
+  `DASHBOARD_TOKEN looks hand-typed: it repeats one short unit or uses fewer than 6 distinct characters.`
+  Length alone admitted these. A random token of the minimum length clears the bar by a
+  wide margin: 16 random hex digits fall below 6 distinct values about 3 times in 100 000,
+  and a regenerated token fixes that.
+
+The value itself is never echoed.
 
 The reason there is no opt-out is the failure mode this project was built against: a
 dashboard whose auth "is optional" is a dashboard that ships unauthenticated, and this
@@ -237,11 +247,16 @@ it is compared with `timingSafeEqual`, and a global `onRequest` hook applies it 
 `/api/*` route before any route handler runs.
 
 The 16-character floor is a **chosen** number, not a measured one. Its practical effect
-is that the value has to come from a generator rather than from typing:
+is that the value has to come from a generator rather than from typing. Either of these
+works. The first needs no OpenSSL and prints 32 random bytes as base64url (SEC-6):
 
 ```sh
+pnpm --silent --filter @agenthropic/server token:generate
 openssl rand -hex 32
 ```
+
+Keep `--silent` when you redirect the output into a file, so pnpm's banner stays out of
+the token.
 
 **Never commit the token.** It belongs in your shell profile, a `launchd`/`systemd`
 unit, or a secret manager — not in the repository, not in a checked-in `.env`, not in a
@@ -451,11 +466,12 @@ If you move the port, **re-run the hooks installer with the matching `--port`** 
 generated `curl` command has the old port baked in and will otherwise post into a closed
 socket, silently, because the hooks are fail-silent by construction.
 
-### It refuses to start: no token, too short a token, or a padded token
+### It refuses to start: no token, too short a token, a padded or a hand-typed token
 
-You get one of the three messages quoted above and a non-zero exit. This is the intended
+You get one of the four messages quoted above and a non-zero exit. This is the intended
 behaviour and there is no flag that relaxes it. Export a generated value
-(`openssl rand -hex 32`) and start again. A common variant on the operator path: the
+(`pnpm --silent --filter @agenthropic/server token:generate` or `openssl rand -hex 32`)
+and start again. A common variant on the operator path: the
 token was exported in the shell that ran `pnpm start` but a *different* value was pasted
 into the browser — the SPA then reports the gate as unauthorized while the server is
 perfectly healthy. `echo "$DASHBOARD_TOKEN"` in the server's own shell is the

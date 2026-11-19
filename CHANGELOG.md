@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Dashboard token generator and hand-typed-token refusal (SEC-6).**
+  `pnpm --silent --filter @agenthropic/server token:generate` prints 32 random bytes as
+  base64url, ready to redirect into an untracked file. Startup now also refuses a token that
+  repeats one short unit or uses fewer than 6 distinct characters, and every refusal names
+  the generator. The 16-character minimum is unchanged.
 - **Dashboard UX minimum (R21, UX-1/2/3/5/6/8/9).** A session has its own link
   (`#/sessions/<id>`), and Live cards link to it. The Live board now groups sessions into
   Needs attention / Running / Recent bands with a coloured edge, and it hides empty bands and

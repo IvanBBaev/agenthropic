@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  MIN_TOKEN_DISTINCT_CHARACTERS,
   MIN_TOKEN_LENGTH,
   assertLoopbackHost,
+  generateDashboardToken,
   isAllowedHost,
   isAllowedOrigin,
   redactTokenInUrl,
@@ -27,6 +29,36 @@ describe('requireDashboardToken', () => {
   it(`throws when DASHBOARD_TOKEN is shorter than ${MIN_TOKEN_LENGTH} characters`, () => {
     const short = 'x'.repeat(MIN_TOKEN_LENGTH - 1);
     expect(() => requireDashboardToken({ DASHBOARD_TOKEN: short })).toThrow(/too short/);
+  });
+
+  it('points every refusal at the token generator', () => {
+    for (const env of [{}, { DASHBOARD_TOKEN: 'short' }, { DASHBOARD_TOKEN: 'x'.repeat(32) }]) {
+      expect(() => requireDashboardToken(env)).toThrow(
+        /pnpm --filter @agenthropic\/server token:generate/,
+      );
+    }
+  });
+
+  it('refuses a token that repeats one short unit (SEC-6)', () => {
+    for (const filler of ['x'.repeat(32), 'passwordpassword', 'abc1'.repeat(8), 'ab'.repeat(9)]) {
+      expect(() => requireDashboardToken({ DASHBOARD_TOKEN: filler })).toThrow(/hand-typed/);
+    }
+  });
+
+  it(`refuses a token with fewer than ${MIN_TOKEN_DISTINCT_CHARACTERS} distinct characters (SEC-6)`, () => {
+    expect(() => requireDashboardToken({ DASHBOARD_TOKEN: 'aaaabbbbcccddeeaa' })).toThrow(
+      /hand-typed/,
+    );
+    expect(requireDashboardToken({ DASHBOARD_TOKEN: 'aaaabbbbcccddeefa' })).toBe(
+      'aaaabbbbcccddeefa',
+    );
+  });
+
+  it('never includes a hand-typed token value in the error message', () => {
+    const secret = 'passwordpassword';
+    expect(() => requireDashboardToken({ DASHBOARD_TOKEN: secret })).toThrow(
+      expect.objectContaining({ message: expect.not.stringContaining(secret) as string }),
+    );
   });
 
   it('never includes the token value in the error message', () => {
@@ -73,7 +105,7 @@ describe('requireDashboardToken', () => {
   });
 
   it(`returns the token when it is exactly ${MIN_TOKEN_LENGTH} characters`, () => {
-    const token = 'x'.repeat(MIN_TOKEN_LENGTH);
+    const token = 'k7Qm2xVp9Lr4Tz8B'.slice(0, MIN_TOKEN_LENGTH);
     expect(requireDashboardToken({ DASHBOARD_TOKEN: token })).toBe(token);
   });
 
@@ -326,5 +358,23 @@ describe('isAllowedHost (SEC-4, DNS rebinding)', () => {
 
   it('rejects a name that is not on the allowlist', () => {
     expect(isAllowedHost('other.tailnet.ts.net', [TUNNEL])).toBe(false);
+  });
+});
+
+describe('generateDashboardToken (SEC-6)', () => {
+  it('returns 32 random bytes as unpadded base64url', () => {
+    const token = generateDashboardToken();
+    expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(Buffer.from(token, 'base64url')).toHaveLength(32);
+  });
+
+  it('returns a token the startup policy accepts', () => {
+    const token = generateDashboardToken();
+    expect(requireDashboardToken({ DASHBOARD_TOKEN: token })).toBe(token);
+  });
+
+  it('returns a different token on every call', () => {
+    const tokens = new Set(Array.from({ length: 64 }, () => generateDashboardToken()));
+    expect(tokens.size).toBe(64);
   });
 });

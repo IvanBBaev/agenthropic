@@ -10,17 +10,34 @@
  *
  * Secrets are never included in error messages, logs, or persisted data.
  */
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
 export const MIN_TOKEN_LENGTH = 16;
+
+/**
+ * SEC-6: the fewest distinct characters a token may use. A random token of
+ * the minimum length clears it by a wide margin (16 random hex digits fall
+ * below 6 distinct values about 3 times in 100 000), while `aaaa...`,
+ * `abababab...` and other hand-typed filler does not.
+ */
+export const MIN_TOKEN_DISTINCT_CHARACTERS = 6;
+
+/** How every token error tells the operator to make a good one. */
+const GENERATE_HINT =
+  'Generate one with `pnpm --filter @agenthropic/server token:generate` or `openssl rand -hex 32`.';
+
+/** Random bytes behind a generated token: 256 bits, the strength of `openssl rand -hex 32`. */
+const GENERATED_TOKEN_BYTES = 32;
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost']);
 
 /**
  * Read the mandatory dashboard auth token from the environment. Throws when
  * `DASHBOARD_TOKEN` is unset, empty, shorter than {@link MIN_TOKEN_LENGTH}
- * characters, or padded with whitespace / carrying a control character (a
- * value no HTTP header could ever match) - a token that silently no-ops when
+ * characters, padded with whitespace / carrying a control character (a
+ * value no HTTP header could ever match), or hand-typed filler (SEC-6: one
+ * repeated unit, or fewer than {@link MIN_TOKEN_DISTINCT_CHARACTERS} distinct
+ * characters) - a token that silently no-ops when
  * unset is the exact field-wide mistake this project walks away from.
  */
 export function requireDashboardToken(env: Record<string, string | undefined>): string {
@@ -28,13 +45,14 @@ export function requireDashboardToken(env: Record<string, string | undefined>): 
   if (token === undefined || token.length === 0) {
     throw new Error(
       'DASHBOARD_TOKEN is not set. The dashboard refuses to start without an auth token: ' +
-        `set DASHBOARD_TOKEN to a secret of at least ${MIN_TOKEN_LENGTH} characters.`,
+        `set DASHBOARD_TOKEN to a secret of at least ${MIN_TOKEN_LENGTH} characters. ` +
+        GENERATE_HINT,
     );
   }
   if (token.length < MIN_TOKEN_LENGTH) {
     throw new Error(
       `DASHBOARD_TOKEN is too short (${token.length} characters). ` +
-        `It must be at least ${MIN_TOKEN_LENGTH} characters.`,
+        `It must be at least ${MIN_TOKEN_LENGTH} characters. ${GENERATE_HINT}`,
     );
   }
   // SEC-1: a padded or control-bearing value can never arrive in an HTTP
@@ -48,7 +66,35 @@ export function requireDashboardToken(env: Record<string, string | undefined>): 
         'set a plain token without padding.',
     );
   }
+  // SEC-6: length alone admits `passwordpassword`. Refuse a token that is one
+  // short unit repeated, or that uses too few distinct characters - shapes a
+  // generator never produces and a guesser tries first.
+  if (isRepeatedUnit(token) || new Set(token).size < MIN_TOKEN_DISTINCT_CHARACTERS) {
+    throw new Error(
+      'DASHBOARD_TOKEN looks hand-typed: it repeats one short unit or uses fewer than ' +
+        `${MIN_TOKEN_DISTINCT_CHARACTERS} distinct characters. ${GENERATE_HINT}`,
+    );
+  }
   return token;
+}
+
+/**
+ * SEC-6: a fresh dashboard token - 32 random bytes as base64url (43
+ * characters, no padding, header-safe). Nothing is logged or stored here;
+ * the caller decides where the secret goes.
+ */
+export function generateDashboardToken(): string {
+  return randomBytes(GENERATED_TOKEN_BYTES).toString('base64url');
+}
+
+/** `true` when `value` is a shorter unit repeated at least twice (`abcabc`). */
+function isRepeatedUnit(value: string): boolean {
+  for (let unit = 1; unit <= value.length / 2; unit += 1) {
+    if (value.length % unit === 0 && value.slice(0, unit).repeat(value.length / unit) === value) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** `true` when any UTF-16 unit is a C0 control (U+0000-U+001F) or DEL (U+007F). */

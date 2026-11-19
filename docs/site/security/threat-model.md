@@ -534,6 +534,13 @@ does not throttle or lock out repeated 401s, and the policy checks only length (
 generator, a stronger minimum and 401 backoff are scheduled for v1.x; until then, use a
 32-byte random token before you enable any tunnel ([remote access](remote-access.md)).
 
+*(Amended 2026-11-19 — SEC-6: the server ships a generator,
+`pnpm --silent --filter @agenthropic/server token:generate` (32 random bytes, base64url), and
+startup also refuses a token that repeats one short unit or has fewer than 6 distinct
+characters. Every refusal names the generator. The minimum length stays 16, so existing
+tokens keep working. A check on shape cannot measure entropy, and 401 backoff is still open;
+the 32-byte advice above stands.)*
+
 ### 6.4 Redaction scope
 
 **The gap.** "Hook payloads are redacted" is easy to read as "the database holds no

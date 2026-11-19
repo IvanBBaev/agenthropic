@@ -16,6 +16,7 @@
     "bench": "node ../../scripts/check-node-version.mjs && tsx bench/corpus-scale.ts",
     "db:vacuum": "node ../../scripts/check-node-version.mjs && tsx bin/vacuum.ts",
     "pricing": "node ../../scripts/check-node-version.mjs && tsx bin/pricing.ts",
+    "token:generate": "tsx bin/token.ts",
     "drill:restore": "node ../../scripts/check-node-version.mjs && tsx bin/restore-drill.ts",
     "test": "node ../../scripts/check-node-version.mjs && vitest run --coverage",
     "test:real": "node ../../scripts/check-node-version.mjs && vitest run --config vitest.real-corpus.config.ts"
