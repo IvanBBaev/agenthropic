@@ -8,6 +8,9 @@ export default tseslint.config(
       '**/node_modules/**',
       '**/dist/**',
       '**/coverage/**',
+      // Stryker one-off mutation runs (QA-9): sandbox copies and reports.
+      '**/.stryker-tmp/**',
+      '**/reports/**',
       // Harness-local, never committed (see .git/info/exclude): AI worktrees
       // and session scratch. Linting them reports on files that are not part
       // of the repo, and the noise masks a real warning in code that is.

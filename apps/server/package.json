@@ -19,6 +19,7 @@
     "token:generate": "tsx bin/token.ts",
     "drill:restore": "node ../../scripts/check-node-version.mjs && tsx bin/restore-drill.ts",
     "test": "node ../../scripts/check-node-version.mjs && vitest run --coverage",
+    "mutation": "node ../../scripts/check-node-version.mjs && stryker run",
     "test:real": "node ../../scripts/check-node-version.mjs && vitest run --config vitest.real-corpus.config.ts"
   },
   "dependencies": {
@@ -31,6 +32,8 @@
   },
   "devDependencies": {
     "@agenthropic/test-fixtures": "workspace:*",
+    "@stryker-mutator/core": "^10.1.1",
+    "@stryker-mutator/vitest-runner": "^10.1.1",
     "@types/better-sqlite3": "^7.6.13",
     "@vitest/coverage-v8": "^4.1.10",
     "fast-check": "^4.10.3",

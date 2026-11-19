@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Mutation baseline (QA-9): a one-off Stryker run over `packages/core` (parser, usage
+  dedupe, cost) and the server read models, recorded in
+  `docs/measurement/mutation-2026-11-19.md` — core 89.74 %, server 92.13 %, with the
+  surviving mutants sorted into test gaps, message text and equivalent mutants. Not a CI
+  gate; `RELEASE.md` §1 asks for a comparison run before each tag.
 - Real-browser smoke (QA-7): `pnpm --filter @agenthropic/web e2e` boots the real server on
   the synthetic fixture corpus with the built SPA. Headless Chromium checks the five routes
   and one SSE update that reaches the page without a reload. It is a local pre-tag step in

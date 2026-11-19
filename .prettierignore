@@ -2,6 +2,8 @@
 node_modules/
 dist/
 coverage/
+.stryker-tmp/
+reports/
 data/
 pnpm-lock.yaml
 

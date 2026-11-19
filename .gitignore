@@ -10,3 +10,7 @@ data/
 .env
 .env.*
 !.env.example
+
+# Stryker one-off mutation runs (QA-9): sandbox and reports
+.stryker-tmp/
+reports/

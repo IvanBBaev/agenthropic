@@ -102,6 +102,20 @@ Run each gate locally on the release commit. The six below plus the web producti
       `apps/web/vitest.config.ts` on the release commit. The history is in
       [`docs/site/contributing/testing.md`](docs/site/contributing/testing.md)
       §"Three asymmetries".
+- [ ] **Mutation score, recorded and not gated (QA-9).** Coverage shows which lines ran,
+      not whether a test would notice them breaking. Run
+      `pnpm --filter @agenthropic/core mutation`, then
+      `pnpm --filter @agenthropic/server mutation`, one after the other: both mutate the
+      source in place.
+      - Scope: the parser, usage dedupe and cost arithmetic in `packages/core`, and the
+        server read models in `apps/server/src/api/read-models/`.
+      - Record each score in the release notes, next to the baseline in
+        [`docs/measurement/mutation-2026-11-19.md`](docs/measurement/mutation-2026-11-19.md),
+        and name every new survivor in that scope.
+      - No score fails the tag. A drop below the baseline needs one sentence in the
+        release notes.
+      - If a run is killed, run `git checkout -- src` in that package before anything
+        else: an interrupted in-place run can leave a mutant in the source.
 - [ ] `pnpm run gate:spawner`: the WP-F5 static gate over `apps/`, `packages/`, `scripts/`
       and `hooks/` ([`scripts/check-no-spawner.mjs`](scripts/check-no-spawner.mjs)). It
       rejects a spawner, a wide bind, a WebSocket server, dynamic evaluation, and outbound
