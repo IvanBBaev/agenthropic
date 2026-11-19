@@ -685,6 +685,9 @@ undecided rather than gloss over it:
   of redaction — [section 6](#6-gaps-the-rival-findings-did-not-cover). Its open items
   (a recursion depth cap and explicit `bodyLimit`, 401 backoff and a token generator, a
   token file instead of an inherited env variable) are v1.x / v2.0 work, not claims.
+  *(Amended 2026-11-19 — the recursion depth cap and explicit `bodyLimit` are built
+  (SEC-7), and so is the token generator (SEC-6). 401 backoff and the token file are still
+  open.)*
 - **Browser-side hardening is built** *(resolved 2026-11-08, R18)*. Every response now
   carries a CSP with `frame-ancestors 'none'`, plus `X-Frame-Options: DENY` and
   `Referrer-Policy: no-referrer`; that closes clickjacking and limits what an XSS could
