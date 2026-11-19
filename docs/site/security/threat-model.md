@@ -383,6 +383,13 @@ all four mitigations above leave in place. The reader is therefore built to be
   earlier `lstat`. Two swap targets survive an `O_NOFOLLOW` open and are rejected on the
   descriptor: a directory (`EISDIR`) and a character device (`ENOTREG`). Both arms are
   exercised against real syscalls, not mocks.
+  *(Amended 2026-11-19 — SEC-8: the open also passes `O_NONBLOCK`. Before, a FIFO swapped
+  into that window blocked the `open` until a writer appeared and hung the ingest pass
+  (reproduced by hand). Now it opens at once and the descriptor check rejects it as
+  `ENOTREG`. A test cannot create a FIFO without spawning `mkfifo`, which `gate:spawner`
+  forbids, so the flags themselves are pinned by a test. The alerts-side items of SEC-8
+  (`load-config` and `token-ref`) belong to the frozen v2.0 alerts lane and are not
+  changed.)*
 - **A traversal-shaped name stops the whole ingest instead of being skipped.** Every
   other hazard on this list is a skip: the file is recorded, the walk continues, the
   dashboard shows slightly less. A `ContainmentError` — an entry name containing a path

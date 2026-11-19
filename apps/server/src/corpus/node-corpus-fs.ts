@@ -9,6 +9,12 @@
  * with `O_NOFOLLOW` so a symlink swapped in after the caller's `lstat` cannot be
  * followed (TOCTOU defence), re-checks via `fstat` on the OPEN descriptor that
  * the target is a regular file within the size cap, and always closes the fd.
+ *
+ * SEC-8 (2026-11-19): both confined reads also open with `O_NONBLOCK`. A FIFO
+ * swapped in after the caller's `lstat` would otherwise block `open` until a
+ * writer appeared, hanging the ingest pass; with `O_NONBLOCK` a read-only open
+ * of a FIFO returns at once and the `fstat` guard rejects it as `ENOTREG`. On a
+ * regular file the flag changes nothing.
  */
 import {
   closeSync,
@@ -27,6 +33,12 @@ import { OversizeError } from './fs-port';
 type NodeError = Error & { code?: string };
 
 /**
+ * Flags of both confined opens: read-only, never follow a symlink, never wait
+ * on a FIFO (SEC-8).
+ */
+export const CONFINED_OPEN_FLAGS = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
+
+/**
  * The shared post-open guard of both confined reads: `fstat` the OPEN
  * descriptor (TOCTOU defence — the path may have been swapped since the
  * caller's lstat) and enforce the size cap. Returns the file's byte size and
@@ -42,10 +54,10 @@ function confinedStat(
     // TOCTOU: the lstat'd regular file became a dir/fifo/socket before open.
     const err = new Error(`not a regular file: ${absPath}`) as NodeError;
     // A directory opened O_RDONLY|O_NOFOLLOW fstats as a dir → EISDIR. A
-    // fifo or socket never reaches here (the open itself blocks or
-    // errors), but a character device does: it opens cleanly and fstats as
-    // neither file nor directory → ENOTREG. Both arms are integration
-    // tested against real syscalls.
+    // fifo (opened O_NONBLOCK, so it does not wait for a writer) or a
+    // character device opens cleanly and fstats as neither file nor
+    // directory → ENOTREG; a socket never reaches here (its open errors).
+    // Both arms are integration tested against real syscalls.
     err.code = st.isDirectory() ? 'EISDIR' : 'ENOTREG';
     throw err;
   }
@@ -79,7 +91,8 @@ export function nodeCorpusFs(): CorpusFs {
     readFileConfined(absPath: string, maxBytes: number): string {
       // O_NOFOLLOW: if `absPath` is (or was swapped to) a symlink, openSync
       // fails with ELOOP instead of following it out of the corpus root.
-      const fd = openSync(absPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+      // O_NONBLOCK: a FIFO opens at once and is rejected by the fstat guard.
+      const fd = openSync(absPath, CONFINED_OPEN_FLAGS);
       try {
         confinedStat(fd, absPath, maxBytes);
         return readFileSync(fd, 'utf8');
@@ -89,7 +102,7 @@ export function nodeCorpusFs(): CorpusFs {
     },
 
     readFileTailConfined(absPath: string, fromByte: number, maxBytes: number): TailRead {
-      const fd = openSync(absPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+      const fd = openSync(absPath, CONFINED_OPEN_FLAGS);
       try {
         const { sizeBytes, mtimeMs } = confinedStat(fd, absPath, maxBytes);
         const start = Math.min(fromByte, sizeBytes);

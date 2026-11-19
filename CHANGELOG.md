@@ -512,6 +512,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A FIFO in the corpus no longer hangs an ingest pass (SEC-8). The confined reads now
+  open with `O_NONBLOCK`, so a FIFO swapped in after the walk's `lstat` opens at once
+  and is rejected as `ENOTREG` instead of blocking until something writes to it.
 - **No Fastify deprecation warning at startup.** The SEC-7 path-parameter cap was passed as
   the top-level `maxParamLength` option, which Fastify 5 deprecates (FSTDEP022) and warned
   about on every server build. It now sits under `routerOptions`; the cap (256) and its 414

@@ -11,10 +11,11 @@
  * i.e. a symlink swapped in after the walk's `lstat` cannot be followed out of
  * the corpus root.
  *
- * The `ENOTREG` arm IS reachable through real syscalls after all - not via a
- * fifo or socket (which block or error on `open` itself, so `fstat` never sees
- * them) but via a character device such as `/dev/null`, which opens cleanly and
- * then fstats as neither a regular file nor a directory.
+ * The `ENOTREG` arm IS reachable through real syscalls after all - via a
+ * character device such as `/dev/null`, which opens cleanly and then fstats as
+ * neither a regular file nor a directory. A FIFO reaches it too since SEC-8
+ * (the open is `O_NONBLOCK`), but a test cannot create one; see
+ * `node-corpus-fs-open-flags.test.ts`.
  */
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -171,10 +172,9 @@ describe('nodeCorpusFs.readFileConfined', () => {
   });
 
   it('throws ENOTREG for a character device (the non-directory non-regular arm)', () => {
-    // `/dev/null` is the one non-regular, non-directory kind that a real
-    // `open(O_RDONLY | O_NOFOLLOW)` actually SUCCEEDS on (a fifo blocks, a
-    // socket errors), so it is what reaches the fstat guard as neither a file
-    // nor a directory. Reading it is side-effect free and touches no user data.
+    // `/dev/null` is a non-regular, non-directory kind that a real confined
+    // open SUCCEEDS on (as a fifo does under O_NONBLOCK; a socket errors), so
+    // it is what reaches the fstat guard as neither a file nor a directory. Reading it is side-effect free and touches no user data.
     const err = thrownBy(() => fs.readFileConfined('/dev/null', CAP));
     expect(errnoCodeOf(err)).toBe('ENOTREG');
     expect((err as Error).message).toContain('/dev/null');
