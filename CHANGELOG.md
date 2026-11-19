@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Pinned CI supply chain and an update policy (SEC-9, OSS-10).** Every GitHub Action
+  now runs from a full commit SHA with its release in a trailing comment, instead of a
+  movable major tag. A new `.github/dependabot.yml` proposes weekly updates for the
+  Actions and the npm workspace: minor and patch bumps grouped, majors one per PR.
+  `apps/server/test/workflow-supply-chain.test.ts` fails on an unpinned `uses:`, on one
+  Action pinned to two SHAs, or on a CI install without `--frozen-lockfile`.
 - **Explicit input bounds on the HTTP surface (SEC-7).** A hook payload nested more
   than 64 containers deep now gets `400` ("Hook payload nests deeper than 64 levels.")
   instead of a stack-overflow `500`, and nothing is stored. `bodyLimit` (1 MiB) and

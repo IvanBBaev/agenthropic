@@ -690,6 +690,14 @@ undecided rather than gloss over it:
   `Referrer-Policy: no-referrer`; that closes clickjacking and limits what an XSS could
   exfiltrate. A Host-header allowlist answers `421` to DNS-rebinding names on every
   route, the static SPA included. See [security model](model.md) rule 10.
+- **The CI supply chain is pinned** *(resolved 2026-11-19, SEC-9)*. Every GitHub Action
+  in `.github/workflows` runs from a full commit SHA, with its release in a trailing
+  comment, so a moved or hijacked tag cannot change what CI executes. CI installs with
+  `pnpm install --frozen-lockfile`. `.github/dependabot.yml` proposes weekly updates for
+  both the Actions and the npm workspace. `apps/server/test/workflow-supply-chain.test.ts`
+  fails on an unpinned `uses:` line. Open, stated plainly: Dependabot alerts and
+  security updates are switched on in the GitHub repository settings, which this
+  repository cannot do for itself.
 - **`GET`/read endpoints are token-gated, not left to the loopback bind alone** —
   resolved in [security model](model.md) (rule 5), which closes exactly the gap
   flagged in the `cast` section above.
