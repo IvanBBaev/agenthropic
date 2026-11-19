@@ -1,0 +1,18 @@
+{
+  "actualUsd": 0.004939000000000001,
+  "hypotheticalUsd": 0.004939000000000001,
+  "savingsUsd": 0,
+  "isEstimate": true,
+  "basis": "stored-usage-rows",
+  "sessionsTotal": 11,
+  "sessionsWithSubagents": 11,
+  "sessionsPriced": 11,
+  "skippedSessionCount": 0,
+  "skippedSessions": [],
+  "subagentsPriced": 11,
+  "subagentsSkipped": 3,
+  "untypedAgents": 0,
+  "hypotheticalModels": [
+    "synthetic-model-a"
+  ]
+}

@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Contract parity tests (QA-11, ARC-10): every web fixture builder and the recorded P0
+  payload of every guarded route are checked against the shared TypeBox schemas, and
+  every single-leaf mutation proves the web guards are never stricter than the contract.
+  TypeBox is a web devDependency only; the bundle is unchanged.
 - Watchdog clock-jump guard (OPS-21): after a Mac sleep or an NTP step forward, the
   corpus watcher sees the wall clock run ahead of the monotonic clock by more than 30 s
   and measures each agent's silence from the wake, so `working` agents get one full

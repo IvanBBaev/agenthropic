@@ -711,6 +711,29 @@ just slows the suite. Those sleeps are gone; each wait is anchored on an event i
 New tests follow the same rule: wait for an event, a timer count, or a positive render,
 never for a number of milliseconds.
 
+## 6.4 As built: the web/server contract, checked at runtime (QA-11, ARC-10, 2026-11-19)
+
+The web bundle carries no validator: `apps/web/src/dto.ts` is an erased `import type`
+bridge to `@agenthropic/shared`, and `apps/web/src/dto-guards.ts` hand-mirrors the
+TypeBox schemas. Nothing at runtime tied those shapes together, so a view test could pass
+against a fixture the server can never send. `apps/web/test/contract-parity.test.ts`
+closes that gap with TypeBox as a web **devDependency** (test-only; the bundle is
+unchanged):
+
+- **Fixture builders.** Every DTO builder in `apps/web/test/fixtures.ts` (default and
+  populated variants) must pass `Value.Check` against its shared schema. A completeness
+  check fails when a new builder is exported without being listed.
+- **Recorded P0 payloads.** The P0 proof (`p0-five-daily-questions.test.ts`) records the
+  real response of every route `api.ts` guards into `apps/web/test/recorded/` as file
+  snapshots. The web test checks each one against its schema and its guard. A server
+  change that alters a payload fails the P0 test until the recording is refreshed with
+  `vitest -u`, so a contract change cannot land without anyone seeing it.
+- **Guards never stricter than the schemas.** The guards are deliberately looser than the
+  contract ("shape, not sanity"), so the claim is not equality. The claim is the direction
+  that turns into a blackout when it breaks: for every single-leaf mutation (delete, `null`,
+  a string, a number) of every guarded fixture and recording, a payload the guard refuses
+  must be one the schema refuses too.
+
 ## 7. Where this lands on the roadmap
 
 | Phase | Wave(s) | Testing-relevant exit gate |

@@ -1,0 +1,78 @@
+{
+  "sessionId": "66666666-7777-4888-8999-aaaaaaaaaaaa",
+  "agents": [
+    {
+      "id": "66666666-7777-4888-8999-aaaaaaaaaaaa",
+      "sessionId": "66666666-7777-4888-8999-aaaaaaaaaaaa",
+      "type": "main",
+      "subagentType": null,
+      "status": "waiting",
+      "outcomeCause": null,
+      "parentAgentId": null,
+      "firstSeenAt": "2026-04-02T00:00:00.000Z",
+      "lastSeenAt": "2026-04-02T00:00:01.000Z",
+      "totalTokens": 890,
+      "costUsd": 0.0008900000000000001,
+      "unpricedTokens": 0
+    },
+    {
+      "id": "d1d1a001",
+      "sessionId": "66666666-7777-4888-8999-aaaaaaaaaaaa",
+      "type": "subagent",
+      "subagentType": "depth1-agent",
+      "status": "working",
+      "outcomeCause": null,
+      "parentAgentId": "66666666-7777-4888-8999-aaaaaaaaaaaa",
+      "firstSeenAt": "2026-04-02T00:00:02.000Z",
+      "lastSeenAt": "2026-04-02T00:00:03.000Z",
+      "totalTokens": 760,
+      "costUsd": 0.00076,
+      "unpricedTokens": 0
+    },
+    {
+      "id": "d2d2b002",
+      "sessionId": "66666666-7777-4888-8999-aaaaaaaaaaaa",
+      "type": "subagent",
+      "subagentType": "grandchild-agent",
+      "status": "completed",
+      "outcomeCause": null,
+      "parentAgentId": "d1d1a001",
+      "firstSeenAt": "2026-04-02T00:00:04.000Z",
+      "lastSeenAt": "2026-04-02T00:00:05.000Z",
+      "totalTokens": 25,
+      "costUsd": 0.000025,
+      "unpricedTokens": 0
+    }
+  ],
+  "edges": [
+    {
+      "id": 6,
+      "sessionId": "66666666-7777-4888-8999-aaaaaaaaaaaa",
+      "parentAgentId": "66666666-7777-4888-8999-aaaaaaaaaaaa",
+      "childAgentId": "d1d1a001",
+      "source": "tool_use",
+      "instance": "p0-proof-4",
+      "hostId": "Baevs-MacBook-Pro-M5.local",
+      "createdAt": "2026-03-01T12:00:00.000Z"
+    },
+    {
+      "id": 7,
+      "sessionId": "66666666-7777-4888-8999-aaaaaaaaaaaa",
+      "parentAgentId": "d1d1a001",
+      "childAgentId": "d2d2b002",
+      "source": "tool_use",
+      "instance": "p0-proof-4",
+      "hostId": "Baevs-MacBook-Pro-M5.local",
+      "createdAt": "2026-03-01T12:00:00.000Z"
+    }
+  ],
+  "agentCount": 3,
+  "edgeCount": 2,
+  "unattributed": {
+    "totalTokens": 0,
+    "costUsd": 0,
+    "unpricedTokens": 0
+  },
+  "partial": null,
+  "usageRecordsDropped": 0
+}

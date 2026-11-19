@@ -1,0 +1,81 @@
+{
+  "compaction": {
+    "naiveUsd": 0.0016750000000000003,
+    "repricedUsd": 0.001675,
+    "deltaUsd": -2.168404344971009e-19,
+    "compactionCount": 0,
+    "segments": [
+      {
+        "agentId": null,
+        "index": 0,
+        "boundary": null,
+        "usd": 0.0008900000000000001,
+        "messageCount": 1,
+        "tokens": {
+          "input": 30,
+          "output": 60,
+          "cacheRead": 800,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 0
+        }
+      },
+      {
+        "agentId": "d1d1a001",
+        "index": 0,
+        "boundary": null,
+        "usd": 0.00076,
+        "messageCount": 1,
+        "tokens": {
+          "input": 20,
+          "output": 40,
+          "cacheRead": 500,
+          "cacheWrite5m": 200,
+          "cacheWrite1h": 0
+        }
+      },
+      {
+        "agentId": "d2d2b002",
+        "index": 0,
+        "boundary": null,
+        "usd": 0.000025,
+        "messageCount": 1,
+        "tokens": {
+          "input": 10,
+          "output": 15,
+          "cacheRead": 0,
+          "cacheWrite5m": 0,
+          "cacheWrite1h": 0
+        }
+      }
+    ]
+  },
+  "delegationSavings": {
+    "actualUsd": 0.000785,
+    "hypotheticalUsd": 0.000785,
+    "savingsUsd": 0,
+    "perAgent": [
+      {
+        "agentId": "d1d1a001",
+        "parentAgentId": "66666666-7777-4888-8999-aaaaaaaaaaaa",
+        "actualUsd": 0.00076,
+        "hypotheticalUsd": 0.00076,
+        "savingsUsd": 0,
+        "hypotheticalModel": "synthetic-model-a",
+        "isEstimate": true
+      },
+      {
+        "agentId": "d2d2b002",
+        "parentAgentId": "d1d1a001",
+        "actualUsd": 0.000025,
+        "hypotheticalUsd": 0.000025,
+        "savingsUsd": 0,
+        "hypotheticalModel": "synthetic-model-a",
+        "isEstimate": true
+      }
+    ],
+    "skippedAgentIds": [],
+    "isEstimate": true
+  },
+  "partial": null,
+  "usageRecordsDropped": 0
+}

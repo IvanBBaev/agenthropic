@@ -1,0 +1,315 @@
+{
+  "sessions": [
+    {
+      "id": "66666666-7777-4888-8999-aaaaaaaaaaaa",
+      "projectSlug": "-Users-synthetic-p0-project",
+      "status": "waiting",
+      "startedAt": "2026-04-02T00:00:00.000Z",
+      "lastActivityAt": "2026-04-02T00:00:05.000Z",
+      "agentCount": 3,
+      "totalTokens": 1675,
+      "totalCostUsd": 0.001675,
+      "unpricedTokens": 0,
+      "statusCounts": {
+        "working": 1,
+        "waiting": 1,
+        "completed": 1,
+        "error": 0,
+        "unknown": 0
+      },
+      "outcomeCauseCounts": {
+        "concurrency_limit": 0,
+        "user_interrupt": 0,
+        "permission_failed": 0,
+        "dispatch_unavailable": 0,
+        "terminated_early": 0,
+        "unclassified": 0
+      },
+      "partial": null,
+      "usageRecordsDropped": 0
+    },
+    {
+      "id": "c0c0b000-1111-4222-8333-444444444444",
+      "projectSlug": "-Users-synthetic-p0-project",
+      "status": "unknown",
+      "startedAt": "2026-01-22T15:00:01.000Z",
+      "lastActivityAt": "2026-01-22T15:00:14.000Z",
+      "agentCount": 2,
+      "totalTokens": 2403,
+      "totalCostUsd": 0.002403,
+      "unpricedTokens": 0,
+      "statusCounts": {
+        "working": 0,
+        "waiting": 0,
+        "completed": 0,
+        "error": 0,
+        "unknown": 2
+      },
+      "outcomeCauseCounts": {
+        "concurrency_limit": 0,
+        "user_interrupt": 0,
+        "permission_failed": 0,
+        "dispatch_unavailable": 0,
+        "terminated_early": 0,
+        "unclassified": 0
+      },
+      "partial": null,
+      "usageRecordsDropped": 0
+    },
+    {
+      "id": "c0c0a000-1111-4222-8333-444444444444",
+      "projectSlug": "-Users-synthetic-p0-project",
+      "status": "unknown",
+      "startedAt": "2026-01-22T15:00:00.000Z",
+      "lastActivityAt": "2026-01-22T15:00:13.000Z",
+      "agentCount": 2,
+      "totalTokens": 2403,
+      "totalCostUsd": 0.002403,
+      "unpricedTokens": 0,
+      "statusCounts": {
+        "working": 0,
+        "waiting": 0,
+        "completed": 0,
+        "error": 0,
+        "unknown": 2
+      },
+      "outcomeCauseCounts": {
+        "concurrency_limit": 0,
+        "user_interrupt": 0,
+        "permission_failed": 0,
+        "dispatch_unavailable": 0,
+        "terminated_early": 0,
+        "unclassified": 0
+      },
+      "partial": null,
+      "usageRecordsDropped": 0
+    },
+    {
+      "id": "c7a5bed0-1111-4222-8333-444444444444",
+      "projectSlug": "-Users-synthetic-p0-project",
+      "status": "unknown",
+      "startedAt": "2026-01-21T09:00:00.000Z",
+      "lastActivityAt": "2026-01-21T09:00:10.000Z",
+      "agentCount": 2,
+      "totalTokens": 1798,
+      "totalCostUsd": 0.0017980000000000001,
+      "unpricedTokens": 0,
+      "statusCounts": {
+        "working": 0,
+        "waiting": 0,
+        "completed": 0,
+        "error": 0,
+        "unknown": 2
+      },
+      "outcomeCauseCounts": {
+        "concurrency_limit": 0,
+        "user_interrupt": 0,
+        "permission_failed": 0,
+        "dispatch_unavailable": 0,
+        "terminated_early": 0,
+        "unclassified": 0
+      },
+      "partial": null,
+      "usageRecordsDropped": 0
+    },
+    {
+      "id": "a9c0de00-1111-4222-8333-444444444444",
+      "projectSlug": "-Users-synthetic-p0-project",
+      "status": "unknown",
+      "startedAt": "2026-01-20T10:00:00.000Z",
+      "lastActivityAt": "2026-01-20T10:00:08.000Z",
+      "agentCount": 3,
+      "totalTokens": 1815,
+      "totalCostUsd": 0.001815,
+      "unpricedTokens": 0,
+      "statusCounts": {
+        "working": 0,
+        "waiting": 0,
+        "completed": 0,
+        "error": 1,
+        "unknown": 2
+      },
+      "outcomeCauseCounts": {
+        "concurrency_limit": 0,
+        "user_interrupt": 1,
+        "permission_failed": 0,
+        "dispatch_unavailable": 0,
+        "terminated_early": 1,
+        "unclassified": 0
+      },
+      "partial": null,
+      "usageRecordsDropped": 0
+    },
+    {
+      "id": "55555555-6666-4777-8888-999999999999",
+      "projectSlug": "-Users-synthetic-p0-project",
+      "status": "working",
+      "startedAt": "2026-01-19T11:00:01.000Z",
+      "lastActivityAt": "2026-01-19T11:00:12.000Z",
+      "agentCount": 1,
+      "totalTokens": 177324,
+      "totalCostUsd": 0.177324,
+      "unpricedTokens": 0,
+      "statusCounts": {
+        "working": 0,
+        "waiting": 0,
+        "completed": 0,
+        "error": 0,
+        "unknown": 1
+      },
+      "outcomeCauseCounts": {
+        "concurrency_limit": 0,
+        "user_interrupt": 0,
+        "permission_failed": 0,
+        "dispatch_unavailable": 0,
+        "terminated_early": 0,
+        "unclassified": 0
+      },
+      "partial": null,
+      "usageRecordsDropped": 0
+    },
+    {
+      "id": "99999999-aaaa-4bbb-8ccc-dddddddddddd",
+      "projectSlug": "-Users-synthetic-p0-project",
+      "status": "unknown",
+      "startedAt": "2026-01-18T10:00:00.000Z",
+      "lastActivityAt": "2026-01-18T10:00:10.000Z",
+      "agentCount": 2,
+      "totalTokens": 1287,
+      "totalCostUsd": 0.001287,
+      "unpricedTokens": 0,
+      "statusCounts": {
+        "working": 0,
+        "waiting": 0,
+        "completed": 0,
+        "error": 0,
+        "unknown": 2
+      },
+      "outcomeCauseCounts": {
+        "concurrency_limit": 0,
+        "user_interrupt": 0,
+        "permission_failed": 0,
+        "dispatch_unavailable": 0,
+        "terminated_early": 0,
+        "unclassified": 0
+      },
+      "partial": null,
+      "usageRecordsDropped": 0
+    },
+    {
+      "id": "44444444-5555-4666-8777-888888888888",
+      "projectSlug": "-Users-synthetic-p0-project",
+      "status": "unknown",
+      "startedAt": "2026-01-18T08:00:00.000Z",
+      "lastActivityAt": "2026-01-18T08:00:07.000Z",
+      "agentCount": 2,
+      "totalTokens": 600,
+      "totalCostUsd": 0.0006000000000000001,
+      "unpricedTokens": 0,
+      "statusCounts": {
+        "working": 0,
+        "waiting": 0,
+        "completed": 0,
+        "error": 0,
+        "unknown": 2
+      },
+      "outcomeCauseCounts": {
+        "concurrency_limit": 0,
+        "user_interrupt": 0,
+        "permission_failed": 0,
+        "dispatch_unavailable": 0,
+        "terminated_early": 0,
+        "unclassified": 0
+      },
+      "partial": null,
+      "usageRecordsDropped": 0
+    },
+    {
+      "id": "33333333-4444-4555-8666-777777777777",
+      "projectSlug": "-Users-synthetic-p0-project",
+      "status": "unknown",
+      "startedAt": "2026-01-17T14:00:00.000Z",
+      "lastActivityAt": "2026-01-17T14:00:01.000Z",
+      "agentCount": 2,
+      "totalTokens": 3183,
+      "totalCostUsd": 0.003183,
+      "unpricedTokens": 0,
+      "statusCounts": {
+        "working": 0,
+        "waiting": 0,
+        "completed": 0,
+        "error": 0,
+        "unknown": 2
+      },
+      "outcomeCauseCounts": {
+        "concurrency_limit": 0,
+        "user_interrupt": 0,
+        "permission_failed": 0,
+        "dispatch_unavailable": 0,
+        "terminated_early": 0,
+        "unclassified": 0
+      },
+      "partial": null,
+      "usageRecordsDropped": 0
+    },
+    {
+      "id": "22222222-3333-4444-8555-666666666666",
+      "projectSlug": "-Users-synthetic-p0-project",
+      "status": "unknown",
+      "startedAt": "2026-01-16T09:00:00.000Z",
+      "lastActivityAt": "2026-01-16T09:00:08.000Z",
+      "agentCount": 3,
+      "totalTokens": 4686,
+      "totalCostUsd": 0.004686,
+      "unpricedTokens": 0,
+      "statusCounts": {
+        "working": 0,
+        "waiting": 0,
+        "completed": 0,
+        "error": 0,
+        "unknown": 3
+      },
+      "outcomeCauseCounts": {
+        "concurrency_limit": 0,
+        "user_interrupt": 0,
+        "permission_failed": 0,
+        "dispatch_unavailable": 0,
+        "terminated_early": 0,
+        "unclassified": 0
+      },
+      "partial": null,
+      "usageRecordsDropped": 0
+    },
+    {
+      "id": "11111111-2222-4333-8444-555555555555",
+      "projectSlug": "-Users-synthetic-p0-project",
+      "status": "unknown",
+      "startedAt": "2026-01-15T10:00:00.000Z",
+      "lastActivityAt": "2026-01-15T10:00:09.000Z",
+      "agentCount": 2,
+      "totalTokens": 1666,
+      "totalCostUsd": 0.001666,
+      "unpricedTokens": 0,
+      "statusCounts": {
+        "working": 0,
+        "waiting": 0,
+        "completed": 0,
+        "error": 0,
+        "unknown": 2
+      },
+      "outcomeCauseCounts": {
+        "concurrency_limit": 0,
+        "user_interrupt": 0,
+        "permission_failed": 0,
+        "dispatch_unavailable": 0,
+        "terminated_early": 0,
+        "unclassified": 0
+      },
+      "partial": null,
+      "usageRecordsDropped": 0
+    }
+  ],
+  "total": 11,
+  "limit": 50,
+  "offset": 0
+}

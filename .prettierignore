@@ -5,6 +5,9 @@ coverage/
 data/
 pnpm-lock.yaml
 
+# File snapshots the server P0 test writes verbatim (QA-11); `vitest -u` owns them
+apps/web/test/recorded/
+
 # Not owned by the toolchain: docs corpus, source material, spike, root markdown
 docs/
 due-diligence/

@@ -1,0 +1,128 @@
+{
+  "totals": {
+    "tokens": 198840,
+    "costUsd": 0.1988400000000001,
+    "unpricedTokens": 0
+  },
+  "perModel": [
+    {
+      "model": "synthetic-model-a",
+      "tokens": 117816,
+      "costUsd": 0.11781600000000002,
+      "unpricedTokens": 0
+    },
+    {
+      "model": "synthetic-model-b",
+      "tokens": 81024,
+      "costUsd": 0.08102400000000001,
+      "unpricedTokens": 0
+    }
+  ],
+  "perDay": [
+    {
+      "day": "2026-04-02",
+      "tokens": 1675,
+      "costUsd": 0.001675,
+      "unpricedTokens": 0
+    },
+    {
+      "day": "2026-01-22",
+      "tokens": 4806,
+      "costUsd": 0.0048059999999999995,
+      "unpricedTokens": 0
+    },
+    {
+      "day": "2026-01-21",
+      "tokens": 1798,
+      "costUsd": 0.0017980000000000001,
+      "unpricedTokens": 0
+    },
+    {
+      "day": "2026-01-20",
+      "tokens": 1815,
+      "costUsd": 0.0018149999999999998,
+      "unpricedTokens": 0
+    },
+    {
+      "day": "2026-01-19",
+      "tokens": 177324,
+      "costUsd": 0.177324,
+      "unpricedTokens": 0
+    },
+    {
+      "day": "2026-01-18",
+      "tokens": 1887,
+      "costUsd": 0.001887,
+      "unpricedTokens": 0
+    },
+    {
+      "day": "2026-01-17",
+      "tokens": 3183,
+      "costUsd": 0.0031829999999999996,
+      "unpricedTokens": 0
+    },
+    {
+      "day": "2026-01-16",
+      "tokens": 4686,
+      "costUsd": 0.004686,
+      "unpricedTokens": 0
+    },
+    {
+      "day": "2026-01-15",
+      "tokens": 1666,
+      "costUsd": 0.0016659999999999997,
+      "unpricedTokens": 0
+    }
+  ],
+  "topSessions": [
+    {
+      "sessionId": "55555555-6666-4777-8888-999999999999",
+      "projectSlug": "-Users-synthetic-p0-project",
+      "tokens": 177324,
+      "costUsd": 0.177324,
+      "unpricedTokens": 0,
+      "partial": null,
+      "usageRecordsDropped": 0
+    },
+    {
+      "sessionId": "22222222-3333-4444-8555-666666666666",
+      "projectSlug": "-Users-synthetic-p0-project",
+      "tokens": 4686,
+      "costUsd": 0.004686,
+      "unpricedTokens": 0,
+      "partial": null,
+      "usageRecordsDropped": 0
+    },
+    {
+      "sessionId": "33333333-4444-4555-8666-777777777777",
+      "projectSlug": "-Users-synthetic-p0-project",
+      "tokens": 3183,
+      "costUsd": 0.0031829999999999996,
+      "unpricedTokens": 0,
+      "partial": null,
+      "usageRecordsDropped": 0
+    },
+    {
+      "sessionId": "c0c0a000-1111-4222-8333-444444444444",
+      "projectSlug": "-Users-synthetic-p0-project",
+      "tokens": 2403,
+      "costUsd": 0.0024030000000000006,
+      "unpricedTokens": 0,
+      "partial": null,
+      "usageRecordsDropped": 0
+    },
+    {
+      "sessionId": "c0c0b000-1111-4222-8333-444444444444",
+      "projectSlug": "-Users-synthetic-p0-project",
+      "tokens": 2403,
+      "costUsd": 0.0024030000000000006,
+      "unpricedTokens": 0,
+      "partial": null,
+      "usageRecordsDropped": 0
+    }
+  ],
+  "sessionCount": 11,
+  "hasMore": true,
+  "partialSessions": 0,
+  "usageRecordsDropped": 0
+}

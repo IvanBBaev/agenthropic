@@ -73,6 +73,7 @@ import {
   SqliteEventStore,
   applyHookLiveness,
   buildServer,
+  createSubstrateProvider,
   currentSchemaVersion,
   loadPricing,
   registerHookRoutes,
@@ -500,7 +501,14 @@ describe('P0 proof 4 - the five daily questions, answered over real HTTP', () =>
     expect(aged.every((transition) => transition.newStatus === 'unknown')).toBe(true);
 
     // 3. The real server, wired the way the composition root wires it.
-    app = buildServer({ token: TEST_TOKEN, schemaVersion: currentSchemaVersion(db), db });
+    // The corpus seam is wired as the composition root wires it, so the
+    // cost-analysis route answers from the same corpus (QA-11 records it).
+    app = buildServer({
+      token: TEST_TOKEN,
+      schemaVersion: currentSchemaVersion(db),
+      db,
+      substrateProvider: createSubstrateProvider({ env: { CLAUDE_PROJECTS_DIR: corpusRoot } }),
+    });
     await registerHookRoutes(app, {
       eventStore: new SqliteEventStore(db),
       applyStatus: (hookName, payload) => {
@@ -1090,5 +1098,36 @@ describe('P0 proof 4 - the five daily questions, answered over real HTTP', () =>
     });
     expect(bogus.statusCode).toBe(400);
     expect(Object.keys(bogus.json() as object)).toEqual(['error']);
+  });
+
+  /**
+   * QA-11: the web package's runtime guards (`apps/web/src/dto-guards.ts`) are
+   * hand-written mirrors of the shared schemas, and until now they were only
+   * ever fed hand-built fixtures. This step records the bodies this server
+   * actually sends for every route the web client guards, after the same
+   * choreography the five questions were answered from, so
+   * `apps/web/test/contract-parity.test.ts` can feed real payloads through the
+   * guards. The recordings are file snapshots: a server change that alters a
+   * body fails here until it is re-recorded (`vitest -u`), so the web side can
+   * never be checking a shape the server has stopped sending. It runs last
+   * and only reads, so it cannot disturb the answers above.
+   */
+  it('QA-11: records the payload of every web-guarded route for the web contract test', async () => {
+    const recorded = [
+      { name: 'sessions', url: '/api/sessions' },
+      { name: 'session-tree', url: `/api/sessions/${LIVE_SESSION}/tree` },
+      { name: 'session-cost-analysis', url: `/api/sessions/${LIVE_SESSION}/cost-analysis` },
+      { name: 'cost-summary', url: '/api/cost/summary' },
+      { name: 'delegation-savings', url: '/api/cost/delegation-savings' },
+      { name: 'dag-global', url: '/api/dag/global' },
+      { name: 'changes', url: '/api/changes?since=2026-01-01' },
+    ];
+    for (const { name, url } of recorded) {
+      const response = await app.inject({ method: 'GET', url, headers: AUTH });
+      expect(response.statusCode, url).toBe(200);
+      await expect(`${JSON.stringify(response.json(), null, 2)}\n`).toMatchFileSnapshot(
+        `../../../web/test/recorded/p0-${name}.json`,
+      );
+    }
   });
 });
