@@ -58,6 +58,8 @@ export {
   KNOWN_RECORD_TYPES,
   KNOWN_USAGE_KEYS,
   MISSING_RECORD_TYPE,
+  PRICED_USAGE_VALUES,
+  SERVER_TOOL_USE_KEY,
   UNVERSIONED,
 } from './parser/format-census';
 export type { CensusFile, FormatCensus, VersionFormatCensus } from './parser/format-census';

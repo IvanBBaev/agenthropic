@@ -101,6 +101,7 @@ describe('HealthSchema', () => {
           unknownRecordTypes: { 'brand-new': 1 },
           unknownUsageKeys: { prompt_tokens: 2 },
           zeroUsageRecords: 2,
+          unpricedUsage: { 'speed=fast': 3 },
         },
       },
     };
@@ -119,11 +120,37 @@ describe('HealthSchema', () => {
         formatDrift: {
           ...formatDrift,
           byClaudeCodeVersion: {
-            '2.2.0': { unknownRecordTypes: {}, unknownUsageKeys: {}, zeroUsageRecords: 0, x: 1 },
+            '2.2.0': {
+              unknownRecordTypes: {},
+              unknownUsageKeys: {},
+              zeroUsageRecords: 0,
+              unpricedUsage: {},
+              x: 1,
+            },
           },
         },
       }),
     ).toBe(false);
+    // DAT-8: unpricedUsage is required and holds integer counts.
+    for (const unpricedUsage of [undefined, { 'speed=fast': -1 }]) {
+      expect(
+        Value.Check(HealthSchema, {
+          status: 'ok',
+          schemaVersion: 26,
+          formatDrift: {
+            ...formatDrift,
+            byClaudeCodeVersion: {
+              '2.2.0': {
+                unknownRecordTypes: {},
+                unknownUsageKeys: {},
+                zeroUsageRecords: 0,
+                unpricedUsage,
+              },
+            },
+          },
+        }),
+      ).toBe(false);
+    }
   });
 
   it('requires exactly status and schemaVersion, so an optional field cannot silently become required', () => {

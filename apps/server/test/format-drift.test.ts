@@ -63,6 +63,7 @@ describe('readFormatDrift()', () => {
             unknownRecordTypes: { novel: 1 },
             unknownUsageKeys: { prompt_tokens: 2 },
             zeroUsageRecords: 2,
+            unpricedUsage: { 'speed=fast': 2 },
           },
         },
       }),
@@ -77,11 +78,13 @@ describe('readFormatDrift()', () => {
             unknownRecordTypes: { another: 1, novel: 4 },
             unknownUsageKeys: {},
             zeroUsageRecords: 1,
+            unpricedUsage: { 'server_tool_use.web_search_requests': 1, 'speed=fast': 3 },
           },
           '(none)': {
             unknownRecordTypes: { '(missing)': 1 },
             unknownUsageKeys: {},
             zeroUsageRecords: 0,
+            unpricedUsage: {},
           },
         },
       }),
@@ -98,11 +101,13 @@ describe('readFormatDrift()', () => {
           unknownRecordTypes: { '(missing)': 1 },
           unknownUsageKeys: {},
           zeroUsageRecords: 0,
+          unpricedUsage: {},
         },
         '2.2.0': {
           unknownRecordTypes: { another: 1, novel: 5 },
           unknownUsageKeys: { prompt_tokens: 2 },
           zeroUsageRecords: 3,
+          unpricedUsage: { 'server_tool_use.web_search_requests': 1, 'speed=fast': 5 },
         },
       },
     });
@@ -129,6 +134,42 @@ describe('readFormatDrift()', () => {
     expect(readFormatDrift(temp.db)).toEqual({ ...EMPTY, claudeCodeVersions: { '2.1.80': 1 } });
   });
 
+  it('reads a census stored before DAT-8 as having no unpriced usage', () => {
+    store(
+      'pre-dat8',
+      null,
+      JSON.stringify({
+        malformedLines: 0,
+        byVersion: {
+          '2.1.80': { unknownRecordTypes: { novel: 1 }, unknownUsageKeys: {}, zeroUsageRecords: 0 },
+        },
+      }),
+    );
+    store(
+      'post-dat8',
+      null,
+      census({
+        malformedLines: 0,
+        byVersion: {
+          '2.1.80': {
+            unknownRecordTypes: {},
+            unknownUsageKeys: {},
+            zeroUsageRecords: 0,
+            unpricedUsage: { 'service_tier=priority': 4 },
+          },
+        },
+      }),
+    );
+    expect(readFormatDrift(temp.db).byClaudeCodeVersion).toEqual({
+      '2.1.80': {
+        unknownRecordTypes: { novel: 1 },
+        unknownUsageKeys: {},
+        zeroUsageRecords: 0,
+        unpricedUsage: { 'service_tier=priority': 4 },
+      },
+    });
+  });
+
   it('skips a stored value of the wrong shape instead of failing the probe', () => {
     const good = { unknownRecordTypes: {}, unknownUsageKeys: {}, zeroUsageRecords: 0 };
     store('versions-object', '{"not":"an array"}', null);
@@ -139,6 +180,14 @@ describe('readFormatDrift()', () => {
       'bad-entry',
       null,
       JSON.stringify({ malformedLines: 0, byVersion: { v: { ...good, zeroUsageRecords: 1.5 } } }),
+    );
+    store(
+      'bad-unpriced',
+      null,
+      JSON.stringify({
+        malformedLines: 0,
+        byVersion: { v: { ...good, unpricedUsage: { 'speed=fast': -1 } } },
+      }),
     );
     store(
       'bad-counts',
@@ -231,7 +280,8 @@ describe('ingest persists the census (end to end)', () => {
                 model: 'claude-opus-4-5',
                 role: 'assistant',
                 content: [],
-                usage: { prompt_tokens: 10, completion_tokens: 20 },
+                // DAT-8: a known key with a value the pricing table has no rate for.
+                usage: { prompt_tokens: 10, completion_tokens: 20, speed: 'fast' },
               },
             }),
           ],
@@ -280,6 +330,7 @@ describe('ingest persists the census (end to end)', () => {
           unknownRecordTypes: {},
           unknownUsageKeys: { completion_tokens: 1, prompt_tokens: 1 },
           zeroUsageRecords: 1,
+          unpricedUsage: { 'speed=fast': 1 },
         },
       },
     });

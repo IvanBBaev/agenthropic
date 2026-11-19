@@ -16,6 +16,15 @@
  * since that scan. Adding one here, after checking it does not carry tokens
  * the parser misses, is how a drift report is acknowledged.
  *
+ * DAT-8 / DAT-9 - a known key can still carry a value the pricing table has no
+ * rate for. `speed: "fast"`, a `service_tier` other than standard, a
+ * data-residency `inference_geo` or a non-zero `server_tool_use` request count
+ * would all be billed differently from the token buckets the parser prices,
+ * and every one of them is read as standard today. The census counts them as
+ * `unpricedUsage`, so a premium shows up on `/api/health` instead of being
+ * under-reported in silence. The priced values below are the ones the
+ * 2026-11-19 corpus scan saw on every record.
+ *
  * Pure and deterministic: every map is built with sorted keys, so the same
  * substrate always serializes to the same JSON (the byte-identical replay
  * proof depends on it).
@@ -77,6 +86,29 @@ export const KNOWN_CACHE_CREATION_KEYS: ReadonlySet<string> = new Set([
   'ephemeral_5m_input_tokens',
 ]);
 
+/**
+ * The values of each usage dimension that the token-bucket pricing covers, per
+ * the 2026-11-19 corpus scan (520,391 `service_tier: "standard"`, 391,392
+ * `speed: "standard"`, 331,754 `inference_geo: "global"`, 188,637
+ * `inference_geo: "not_available"`, 799 of each null). An absent or null
+ * dimension is priced too. Any other value is reported as `<key>=<value>`.
+ */
+export const PRICED_USAGE_VALUES: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ['inference_geo', new Set(['global', 'not_available'])],
+  ['service_tier', new Set(['standard'])],
+  ['speed', new Set(['standard'])],
+]);
+
+/**
+ * The `usage` block whose per-request counters are billed outside the token
+ * buckets (web search, web fetch). A non-zero counter is reported as
+ * `server_tool_use.<key>`, counting the usage blocks that carry one.
+ */
+export const SERVER_TOOL_USE_KEY = 'server_tool_use';
+
+/** Longest dimension value a census key carries; a longer one is cut and marked. */
+const MAX_DIMENSION_VALUE_LENGTH = 64;
+
 /** Census key for a record that is not a JSON object or has no string `type`. */
 export const MISSING_RECORD_TYPE = '(missing)';
 
@@ -102,6 +134,14 @@ export interface VersionFormatCensus {
    * bucket key was renamed and is now read as zero.
    */
   zeroUsageRecords: number;
+  /**
+   * DAT-8 / DAT-9: census key -> assistant usage blocks carrying a dimension
+   * the pricing table has no rate for (see {@link PRICED_USAGE_VALUES} and
+   * {@link SERVER_TOOL_USE_KEY}). Counts records, not messages: a streamed
+   * message repeats its usage block on every partial. Any entry means the
+   * dollar figures of those records are priced as standard and may be low.
+   */
+  unpricedUsage: Record<string, number>;
 }
 
 /** The census of one session's latest parse. */
@@ -159,6 +199,7 @@ interface MutableVersionCensus {
   unknownRecordTypes: Map<string, number>;
   unknownUsageKeys: Map<string, number>;
   zeroUsageRecords: number;
+  unpricedUsage: Map<string, number>;
 }
 
 /** The usage keys of one block that are outside the known lists. */
@@ -171,6 +212,31 @@ function unknownUsageKeys(usage: JsonRecord): string[] {
     }
   }
   return unknown;
+}
+
+function dimensionValue(value: unknown): string {
+  const text = typeof value === 'string' ? value : JSON.stringify(value);
+  return text.length > MAX_DIMENSION_VALUE_LENGTH
+    ? `${text.slice(0, MAX_DIMENSION_VALUE_LENGTH - 3)}...`
+    : text;
+}
+
+/** The census keys of one usage block's unpriced dimensions (DAT-8 / DAT-9). */
+function unpricedDimensions(usage: JsonRecord): string[] {
+  const unpriced: string[] = [];
+  for (const [key, priced] of PRICED_USAGE_VALUES) {
+    const value = usage[key];
+    if (value === undefined || value === null) continue;
+    if (typeof value === 'string' && priced.has(value)) continue;
+    unpriced.push(`${key}=${dimensionValue(value)}`);
+  }
+  const serverToolUse = asRecord(usage[SERVER_TOOL_USE_KEY]);
+  if (serverToolUse !== undefined) {
+    for (const [key, value] of Object.entries(serverToolUse)) {
+      if (!isZero(value)) unpriced.push(`${SERVER_TOOL_USE_KEY}.${key}`);
+    }
+  }
+  return unpriced;
 }
 
 function isZero(value: unknown): boolean {
@@ -199,7 +265,12 @@ export function censusFormat(files: readonly CensusFile[], malformedLines: numbe
   const at = (version: string): MutableVersionCensus => {
     let entry = byVersion.get(version);
     if (entry === undefined) {
-      entry = { unknownRecordTypes: new Map(), unknownUsageKeys: new Map(), zeroUsageRecords: 0 };
+      entry = {
+        unknownRecordTypes: new Map(),
+        unknownUsageKeys: new Map(),
+        zeroUsageRecords: 0,
+        unpricedUsage: new Map(),
+      };
       byVersion.set(version, entry);
     }
     return entry;
@@ -234,6 +305,9 @@ export function censusFormat(files: readonly CensusFile[], malformedLines: numbe
       for (const key of unknownUsageKeys(usage)) {
         increment(at(inForce).unknownUsageKeys, key);
       }
+      for (const key of unpricedDimensions(usage)) {
+        increment(at(inForce).unpricedUsage, key);
+      }
       if (message?.['model'] !== SYNTHETIC_MODEL && isAllZeroUsage(usage)) {
         at(inForce).zeroUsageRecords += 1;
       }
@@ -247,6 +321,7 @@ export function censusFormat(files: readonly CensusFile[], malformedLines: numbe
       unknownRecordTypes: sortedObject(entry.unknownRecordTypes),
       unknownUsageKeys: sortedObject(entry.unknownUsageKeys),
       zeroUsageRecords: entry.zeroUsageRecords,
+      unpricedUsage: sortedObject(entry.unpricedUsage),
     };
   }
   return { malformedLines, byVersion: out };

@@ -192,7 +192,12 @@ describe('upsertSession - R13 format census columns', () => {
       formatCensus: {
         malformedLines: 0,
         byVersion: {
-          '2.1.80': { unknownRecordTypes: { novel: 1 }, unknownUsageKeys: {}, zeroUsageRecords: 0 },
+          '2.1.80': {
+            unknownRecordTypes: { novel: 1 },
+            unknownUsageKeys: {},
+            zeroUsageRecords: 0,
+            unpricedUsage: {},
+          },
         },
       },
     };

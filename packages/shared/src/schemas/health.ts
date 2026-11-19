@@ -23,6 +23,11 @@ export const VersionFormatDriftSchema = Type.Object(
     unknownUsageKeys: Type.Record(Type.String(), Count),
     // Non-synthetic assistant records whose usage reads as zero in every bucket.
     zeroUsageRecords: Count,
+    // DAT-8 / DAT-9: `<dimension>=<value>` (`speed=fast`, `service_tier=priority`,
+    // `inference_geo=us`) or `server_tool_use.<counter>` -> assistant usage blocks
+    // carrying a dimension the pricing table has no rate for. Those records are
+    // priced as standard, so any entry means the dollar figures may be low.
+    unpricedUsage: Type.Record(Type.String(), Count),
   },
   { additionalProperties: false },
 );

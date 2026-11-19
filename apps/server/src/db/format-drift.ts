@@ -9,6 +9,11 @@
  * the rows. One pass over `sessions` per health request; at the census scale
  * of record (141 sessions) that is well under a millisecond.
  *
+ * DAT-8 / DAT-9 added `unpricedUsage` to each version's census. A row written
+ * before that has no such field and reads as `{}`: its records were never
+ * looked at for unpriced dimensions, and the next ingest pass that re-reads
+ * the session fills the field in.
+ *
  * A stored value that does not have the expected shape (hand-edited, or
  * written by a future build) is skipped rather than thrown: a health probe
  * must keep answering, and the next ingest pass rewrites the row.
@@ -35,18 +40,24 @@ function isCountMap(value: unknown): value is CountMap {
   return isRecord(value) && Object.values(value).every(isCount);
 }
 
-function isVersionCensus(value: unknown): value is VersionFormatDriftDto {
+/** A stored version census; `unpricedUsage` is absent on rows written before DAT-8. */
+type StoredVersionCensus = Omit<VersionFormatDriftDto, 'unpricedUsage'> & {
+  readonly unpricedUsage?: CountMap;
+};
+
+function isVersionCensus(value: unknown): value is StoredVersionCensus {
   return (
     isRecord(value) &&
     isCountMap(value['unknownRecordTypes']) &&
     isCountMap(value['unknownUsageKeys']) &&
-    isCount(value['zeroUsageRecords'])
+    isCount(value['zeroUsageRecords']) &&
+    (value['unpricedUsage'] === undefined || isCountMap(value['unpricedUsage']))
   );
 }
 
 interface StoredCensus {
   readonly malformedLines: number;
-  readonly byVersion: Record<string, VersionFormatDriftDto>;
+  readonly byVersion: Record<string, StoredVersionCensus>;
 }
 
 function parseJson(text: string): unknown {
@@ -64,7 +75,7 @@ function readCensus(text: string): StoredCensus | undefined {
   if (!isRecord(byVersion) || !Object.values(byVersion).every(isVersionCensus)) return undefined;
   return {
     malformedLines: value['malformedLines'],
-    byVersion: byVersion as Record<string, VersionFormatDriftDto>,
+    byVersion: byVersion as Record<string, StoredVersionCensus>,
   };
 }
 
@@ -100,7 +111,12 @@ export function readFormatDrift(db: SqliteDatabase): FormatDriftDto {
   const versions: CountMap = {};
   const byVersion = new Map<
     string,
-    { unknownRecordTypes: CountMap; unknownUsageKeys: CountMap; zeroUsageRecords: number }
+    {
+      unknownRecordTypes: CountMap;
+      unknownUsageKeys: CountMap;
+      zeroUsageRecords: number;
+      unpricedUsage: CountMap;
+    }
   >();
 
   for (const row of rows) {
@@ -119,12 +135,18 @@ export function readFormatDrift(db: SqliteDatabase): FormatDriftDto {
       const source = census.byVersion[version]!;
       let entry = byVersion.get(version);
       if (entry === undefined) {
-        entry = { unknownRecordTypes: {}, unknownUsageKeys: {}, zeroUsageRecords: 0 };
+        entry = {
+          unknownRecordTypes: {},
+          unknownUsageKeys: {},
+          zeroUsageRecords: 0,
+          unpricedUsage: {},
+        };
         byVersion.set(version, entry);
       }
       addInto(entry.unknownRecordTypes, source.unknownRecordTypes);
       addInto(entry.unknownUsageKeys, source.unknownUsageKeys);
       entry.zeroUsageRecords += source.zeroUsageRecords;
+      addInto(entry.unpricedUsage, source.unpricedUsage ?? {});
     }
   }
 
@@ -135,6 +157,7 @@ export function readFormatDrift(db: SqliteDatabase): FormatDriftDto {
       unknownRecordTypes: sortedCounts(entry.unknownRecordTypes),
       unknownUsageKeys: sortedCounts(entry.unknownUsageKeys),
       zeroUsageRecords: entry.zeroUsageRecords,
+      unpricedUsage: sortedCounts(entry.unpricedUsage),
     };
   }
 

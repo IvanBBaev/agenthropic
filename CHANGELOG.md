@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Unpriced usage in the format census (DAT-8, DAT-9): `/api/health` `formatDrift` now
+  counts, per Claude Code version, the usage blocks the pricing table has no rate for - a
+  `speed` such as `fast`, a non-standard `service_tier`, a data-residency `inference_geo`, or
+  a non-zero web search / fetch counter in `server_tool_use`. Those records are still priced
+  as standard; the census makes the possible under-report visible instead of silent.
 - Palette as CSS custom properties (UX-18): every colour of the stylesheet is a property on
   `:root`, so a light theme becomes one `prefers-color-scheme` override, and a gate test keeps
   colour literals out of the rules. The `waiting` status is now grey, as the ux0 design

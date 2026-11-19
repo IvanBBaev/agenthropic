@@ -110,6 +110,7 @@ describe('parseSession - renamed usage keys raise the counters (QA-3)', () => {
           unknownRecordTypes: {},
           unknownUsageKeys: { completion_tokens: 2, prompt_tokens: 2 },
           zeroUsageRecords: 2,
+          unpricedUsage: {},
         },
       },
     });
@@ -229,11 +230,13 @@ describe('parseSession - unknown record types and version attribution', () => {
           unknownRecordTypes: { 'brand-new-record': 3 },
           unknownUsageKeys: {},
           zeroUsageRecords: 0,
+          unpricedUsage: {},
         },
         '2.1.81': {
           unknownRecordTypes: { [MISSING_RECORD_TYPE]: 2 },
           unknownUsageKeys: {},
           zeroUsageRecords: 0,
+          unpricedUsage: {},
         },
       },
     });
@@ -276,7 +279,12 @@ describe('parseSession - unknown record types and version attribution', () => {
       ]),
     );
     expect(result.formatCensus?.byVersion).toEqual({
-      '2.1.80': { unknownRecordTypes: { novel: 1 }, unknownUsageKeys: {}, zeroUsageRecords: 0 },
+      '2.1.80': {
+        unknownRecordTypes: { novel: 1 },
+        unknownUsageKeys: {},
+        zeroUsageRecords: 0,
+        unpricedUsage: {},
+      },
     });
   });
 
@@ -345,14 +353,98 @@ describe('censusFormat - determinism', () => {
       JSON.stringify({
         malformedLines: 0,
         byVersion: {
-          '1.0.0': { unknownRecordTypes: { beta: 1 }, unknownUsageKeys: {}, zeroUsageRecords: 0 },
+          '1.0.0': {
+            unknownRecordTypes: { beta: 1 },
+            unknownUsageKeys: {},
+            zeroUsageRecords: 0,
+            unpricedUsage: {},
+          },
           '2.0.0': {
             unknownRecordTypes: { alpha: 1, zeta: 1 },
             unknownUsageKeys: {},
             zeroUsageRecords: 0,
+            unpricedUsage: {},
           },
         },
       }),
     );
+  });
+});
+
+describe('censusFormat - usage the pricing table has no rate for (DAT-8, DAT-9)', () => {
+  function census(usages: Array<Record<string, unknown>>) {
+    return censusFormat(
+      [
+        {
+          isTranscript: true,
+          records: usages.map((usage) => ({
+            type: 'assistant',
+            version: '2.3.0',
+            message: { model: 'claude-opus-4-5', usage },
+          })),
+        },
+      ],
+      0,
+    );
+  }
+
+  it('flags a non-standard speed, service tier and inference geo', () => {
+    const result = census([
+      { ...FULL_USAGE, speed: 'fast' },
+      { ...FULL_USAGE, speed: 'fast', service_tier: 'priority' },
+      { ...FULL_USAGE, inference_geo: 'us' },
+    ]);
+    expect(result.byVersion['2.3.0']?.unpricedUsage).toEqual({
+      'inference_geo=us': 1,
+      'service_tier=priority': 1,
+      'speed=fast': 2,
+    });
+  });
+
+  it('reports nothing for the priced values, a null or an absent dimension', () => {
+    const result = census([
+      { ...FULL_USAGE, speed: 'standard', inference_geo: 'global' },
+      { ...FULL_USAGE, inference_geo: 'not_available' },
+      { ...FULL_USAGE, speed: null, service_tier: null, inference_geo: null },
+      { input_tokens: 1, output_tokens: 1 },
+    ]);
+    expect(result.byVersion).toEqual({});
+  });
+
+  it('flags a non-zero server tool counter and ignores a zero one', () => {
+    const result = census([
+      {
+        ...FULL_USAGE,
+        server_tool_use: { web_search_requests: 2, web_fetch_requests: 0 },
+      },
+      { ...FULL_USAGE, server_tool_use: { web_search_requests: 0, web_fetch_requests: 0 } },
+      { ...FULL_USAGE, server_tool_use: 'not-an-object' },
+    ]);
+    expect(result.byVersion['2.3.0']?.unpricedUsage).toEqual({
+      'server_tool_use.web_search_requests': 1,
+    });
+  });
+
+  it('serializes a non-string value and cuts a long one', () => {
+    const result = census([
+      { ...FULL_USAGE, speed: 2 },
+      { ...FULL_USAGE, service_tier: 'x'.repeat(100) },
+    ]);
+    expect(result.byVersion['2.3.0']?.unpricedUsage).toEqual({
+      [`service_tier=${'x'.repeat(61)}...`]: 1,
+      'speed=2': 1,
+    });
+  });
+
+  it('files a version whose only drift is unpriced usage', () => {
+    const result = census([{ ...FULL_USAGE, speed: 'fast' }]);
+    expect(result.byVersion).toEqual({
+      '2.3.0': {
+        unknownRecordTypes: {},
+        unknownUsageKeys: {},
+        zeroUsageRecords: 0,
+        unpricedUsage: { 'speed=fast': 1 },
+      },
+    });
   });
 });
