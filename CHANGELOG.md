@@ -686,6 +686,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Two load-sensitive server tests are now deterministic (QA-FLAKE-1).** Both failed in the
+  2026-11-20 rehearsal at load ~76 and passed in isolation.
+  - The startup-replay cases that drive the scheduled poll by hand advanced one interval per
+    expected pass. A startup pass that took over half an interval of real time triggered
+    the poll back-off (OPS-16), which skipped the next interval, so the OPS-13 case saw 2 of
+    3 sessions. They now advance until the watcher reports the next pass, capped at the
+    back-off ceiling. A clock that makes the startup pass slow reproduces the old failure
+    every time and passes with the fix.
+  - The DAT-12 long-horizon rounding case keeps its 20,000 messages and gets its own 240 s
+    ceiling. It took 75.6 s under load against the 60 s default, mostly writing 100,000
+    `token_usage` rows. The exact-rate oracle now checks each of its twenty rates once
+    rather than per term.
 - **Database outages no longer quarantine sessions (OPS-13).** A database that cannot be
   written - a full disk, an I/O error, a busy or read-only file (`SQLITE_FULL`,
   `SQLITE_IOERR*`, `SQLITE_BUSY*`, `SQLITE_READONLY*` and the other codes in

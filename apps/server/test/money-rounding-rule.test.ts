@@ -85,12 +85,24 @@ function seedRates(db: TempDb['db']): void {
   }
 }
 
+/**
+ * Every rate the oracle has converted, keyed by the rate itself. There are only
+ * twenty, and checking each once keeps a horizon of 100,000 terms from spending
+ * its time on 100,000 identical assertions (QA-FLAKE-1).
+ */
+const microRates = new Map<number, bigint>();
+
 /** Rate as an exact integer of micro-dollars per Mtok; refuses a rate with more than six decimals. */
 function microRate(model: string, bucket: string, timestamp: string): bigint {
   const pair = RATES[model as (typeof MODELS)[number]][bucket]!;
   const rate = timestamp >= REPRICE_AT ? pair[1] : pair[0];
+  const known = microRates.get(rate);
+  if (known !== undefined) {
+    return known;
+  }
   const micro = Math.round(rate * 1e6);
   expect(Math.abs(rate * 1e6 - micro)).toBeLessThan(1e-6);
+  microRates.set(rate, BigInt(micro));
   return BigInt(micro);
 }
 
@@ -223,26 +235,36 @@ describe('money rounding rule: gate vs API (DAT-12)', () => {
     );
   });
 
-  it('holds over a long horizon: 20,000 messages, four sessions, sixty days', () => {
-    // A fixed LCG, so this case is the same on every run.
-    let state = 0x2545f491;
-    const next = (mod: number): number => {
-      state = (Math.imul(state, 1103515245) + 12345) >>> 0;
-      return state % mod;
-    };
-    const usages: Usage[] = Array.from({ length: 20_000 }, () => ({
-      session: next(4),
-      model: MODELS[next(2)]!,
-      day: next(60),
-      tokens: [next(20_000), next(4_000), next(2_000_000), next(60_000), next(30_000)],
-    }));
-    const m = measure(freshDb(), usages);
-    assertRule(m);
-    // Big enough to be a real long-horizon total, and the two paths really are
-    // different sums: far fewer rollup groups than gate terms.
-    expect(Number(m.exactPico / PICO_PER_USD)).toBeGreaterThan(1000);
-    expect(m.apiTerms).toBeLessThan(m.gateTerms / 10);
-  });
+  // The horizon IS the point - float drift lives in long sums - so it is not
+  // shrunk to fit the suite's 60 s default. The work is fixed (a seeded LCG);
+  // only wall-clock time varies, and most of it is the real write path landing
+  // 100,000 token_usage rows. About 18 s alone at load 55, 75.6 s inside the
+  // full suite at load 76 (2026-11-20 rehearsal), so this case gets its own
+  // ceiling with room above that (QA-FLAKE-1).
+  it(
+    'holds over a long horizon: 20,000 messages, four sessions, sixty days',
+    { timeout: 240_000 },
+    () => {
+      // A fixed LCG, so this case is the same on every run.
+      let state = 0x2545f491;
+      const next = (mod: number): number => {
+        state = (Math.imul(state, 1103515245) + 12345) >>> 0;
+        return state % mod;
+      };
+      const usages: Usage[] = Array.from({ length: 20_000 }, () => ({
+        session: next(4),
+        model: MODELS[next(2)]!,
+        day: next(60),
+        tokens: [next(20_000), next(4_000), next(2_000_000), next(60_000), next(30_000)],
+      }));
+      const m = measure(freshDb(), usages);
+      assertRule(m);
+      // Big enough to be a real long-horizon total, and the two paths really are
+      // different sums: far fewer rollup groups than gate terms.
+      expect(Number(m.exactPico / PICO_PER_USD)).toBeGreaterThan(1000);
+      expect(m.apiTerms).toBeLessThan(m.gateTerms / 10);
+    },
+  );
 
   it('flags a path that rounds early: per-term rounding to the cent breaks the bound', () => {
     // The guard rail for rule 1: a "helpful" Math.round(x * 100) / 100 on each

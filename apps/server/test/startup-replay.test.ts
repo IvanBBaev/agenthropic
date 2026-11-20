@@ -19,6 +19,7 @@ import { getFixture } from '@agenthropic/test-fixtures';
 import type { CorpusIngestSummary } from '../src/corpus/ingest-corpus';
 import { HOOK_EVENT_PATH } from '../src/hooks/routes';
 import {
+  POLL_BACKOFF_MAX_SKIPPED_INTERVALS,
   REPLAY_MAX_BYTES_PER_PASS,
   type TickOptions,
   type TickOutcome,
@@ -36,6 +37,8 @@ import { TEST_TOKEN } from './helpers';
 const hooks = vi.hoisted(() => ({
   beforeTick: null as ((options: TickOptions | undefined) => void) | null,
   app: null as FastifyInstance | null,
+  /** Every pass the real watcher has run, startup replay and scheduled poll alike. */
+  ticks: 0,
   /** OPS-13: the server's own database handle, as handed to the watcher. */
   db: null as
     Parameters<typeof import('../src/ingest/corpus-watcher').createCorpusWatcher>[0]['db'] | null,
@@ -48,7 +51,16 @@ vi.mock('../src/ingest/corpus-watcher', async (importOriginal) => {
     REPLAY_MAX_SESSIONS_PER_PASS: 1,
     createCorpusWatcher: (deps: Parameters<typeof actual.createCorpusWatcher>[0]) => {
       hooks.db = deps.db;
-      const watcher = actual.createCorpusWatcher(deps);
+      const watcher = actual.createCorpusWatcher({
+        ...deps,
+        // Counted at the duration seam: the watcher reports it in the finally
+        // of EVERY pass, and the scheduled poll calls its own tick() directly,
+        // past the wrapper below.
+        onTickDuration: (durationMs) => {
+          hooks.ticks += 1;
+          deps.onTickDuration?.(durationMs);
+        },
+      });
       return {
         ...watcher,
         tick: (options?: TickOptions) => {
@@ -321,6 +333,31 @@ describe('start(): the chunked replay end to end', () => {
   }
 
   /**
+   * Runs the next `passes` scheduled polls, however many intervals that takes.
+   *
+   * One `advanceTimersByTime(intervalMs)` is NOT one pass. The poll backs off
+   * (OPS-16): a pass that took more than half an interval of REAL time - only
+   * setInterval is faked, the watcher's clock is Date.now - makes it skip the
+   * intervals after it. On a loaded machine a startup pass does take that long,
+   * so a fixed number of advances landed on a skipped interval and the test saw
+   * 2 of 3 sessions (2026-11-20 rehearsal, QA-FLAKE-1). Advancing one interval
+   * at a time until the pass count moves is exact at any load, and still
+   * observes the server after each pass rather than after the whole remainder.
+   */
+  function runScheduledPasses(passes: number): void {
+    const target = hooks.ticks + passes;
+    const ceiling = passes * (POLL_BACKOFF_MAX_SKIPPED_INTERVALS + 1);
+    for (let advanced = 0; hooks.ticks < target; advanced += 1) {
+      if (advanced === ceiling) {
+        throw new Error(
+          `${String(passes)} scheduled pass(es) did not run in ${String(ceiling)} intervals`,
+        );
+      }
+      vi.advanceTimersByTime(1000);
+    }
+  }
+
+  /**
    * Makes the corpus root unreadable just before pass `atPass`: the real root
    * is parked aside and a symlink loop takes its place, so realpath() fails
    * with ELOOP (a read error) instead of ENOENT (an absent root, which ends a
@@ -506,7 +543,7 @@ describe('start(): the chunked replay end to end', () => {
         // The root is back. Each scheduled pass admits ONE session - the cap
         // the replay was given - not the whole remainder in one go.
         mend();
-        vi.advanceTimersByTime(1000);
+        runScheduledPasses(1);
         expect(await observe(server.app)).toEqual({
           health: expect.objectContaining({ status: 'replaying', ingest: 'replaying' }),
           sessions: 2,
@@ -518,7 +555,7 @@ describe('start(): the chunked replay end to end', () => {
         expect(console.log).not.toHaveBeenCalledWith(
           expect.stringContaining('corpus replay: the scheduled poll finished the sweep'),
         );
-        vi.advanceTimersByTime(1000);
+        runScheduledPasses(1);
         expect(await observe(server.app)).toEqual({
           health: expect.objectContaining({ status: 'ok', ingest: 'idle' }),
           sessions: 3,
@@ -560,7 +597,7 @@ describe('start(): the chunked replay end to end', () => {
         // the phase ends here: the dashboard opens on what did land - and the
         // log says so (2026-10-08), with the two sessions still owed named as
         // the scheduled poll's to land once the corpus reads again.
-        vi.advanceTimersByTime(1000);
+        runScheduledPasses(1);
         expect(await observe(server.app)).toEqual({
           health: expect.objectContaining({ status: 'ok', ingest: 'idle' }),
           sessions: 1,
@@ -574,7 +611,7 @@ describe('start(): the chunked replay end to end', () => {
 
         // It ended for good ('ok' for the life of the process): a later poll
         // that still fails does not bring it back.
-        vi.advanceTimersByTime(1000);
+        runScheduledPasses(1);
         expect(await observe(server.app)).toEqual({
           health: expect.objectContaining({ status: 'ok', ingest: 'idle' }),
           sessions: 1,
@@ -627,8 +664,7 @@ describe('start(): the chunked replay end to end', () => {
         // scheduled poll lands the two owed sessions, one capped pass each,
         // and the recovery is said once.
         hooks.db?.pragma('query_only = OFF');
-        vi.advanceTimersByTime(1000);
-        vi.advanceTimersByTime(1000);
+        runScheduledPasses(2);
         const after = await observe(server.app);
         expect(after).toEqual({
           health: expect.objectContaining({ status: 'ok', ingest: 'idle' }),
