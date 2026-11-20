@@ -27,7 +27,7 @@
     "@agenthropic/shared": "workspace:*",
     "@fastify/type-provider-typebox": "^6.3.0",
     "@sinclair/typebox": "^0.34.51",
-    "better-sqlite3": "^12.6.0",
+    "better-sqlite3": "^13.2.0",
     "fastify": "^5.12.8"
   },
   "devDependencies": {
