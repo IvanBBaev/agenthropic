@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Mutation follow-up (QA-9c): core tests now kill the remaining parser survivors from the
+  QA-9 baseline — decoy blocks in the spawn and error-result scans (an `is_error` on a
+  non-`tool_result` block, an `Agent` name on a non-`tool_use` block, an id-less
+  `Workflow` block, a `workflow_id` on an `Agent` block, stray entries before the
+  `toolUseResult` join block), the legacy join key read only from `progress` records,
+  the usage-owner index limited to assistant records with usage, fork parents recorded
+  only for forks, and the `null` / numeric shapes the compaction and cost-state type
+  guards must refuse.
 - Mutation follow-up (QA-9b): server tests now kill the read-model survivors from the
   QA-9 baseline — the `isEstimate` / `basis` and `interval` / `basis` literals checked on
   the read models themselves (the response schema serializes literals from the schema,

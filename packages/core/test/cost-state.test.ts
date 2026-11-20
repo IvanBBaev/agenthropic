@@ -128,6 +128,8 @@ describe('extractCostState', () => {
     ['a non-boolean unknown-cost flag', { hasUnknownModelCost: 'no' }],
     ['a missing modelUsage map', { modelUsage: undefined }],
     ['an array modelUsage', { modelUsage: [] }],
+    ['a null modelUsage', { modelUsage: null }],
+    ['a numeric modelUsage', { modelUsage: 5 }],
   ])('skips and counts a record with %s', (_label, overrides) => {
     const result = extractCostState([costState(undefined, overrides)]);
     expect(result).toEqual({ records: 0, malformedRecords: 1, latest: null });
@@ -135,6 +137,7 @@ describe('extractCostState', () => {
 
   it.each([
     ['a non-object entry', 42],
+    ['a null entry', null],
     ['a missing input count', modelUsage({ inputTokens: undefined })],
     ['a fractional output count', modelUsage({ outputTokens: 1.5 })],
     ['a negative cache-read count', modelUsage({ cacheReadInputTokens: -1 })],

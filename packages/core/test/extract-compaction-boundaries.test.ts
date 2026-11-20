@@ -180,6 +180,41 @@ describe('extractCompactionBoundaries', () => {
     expect(() => extractCompactionBoundaries(noTs)).toThrow(/cannot be placed in time/);
   });
 
+  it('names the 1-based line of a boundary without a timestamp (QA-9c)', () => {
+    const noTs = substrate([
+      {
+        path: `${SESSION}.jsonl`,
+        lines: [
+          jline({ type: 'user', timestamp: '2026-02-01T09:00:00Z' }),
+          jline({ type: 'system', subtype: 'compact_boundary' }),
+        ],
+      },
+    ]);
+    expect(() => extractCompactionBoundaries(noTs)).toThrow(`${SESSION}.jsonl:2: `);
+  });
+
+  it('tolerates a null line and a null compactMetadata (QA-9c)', () => {
+    const result = extractCompactionBoundaries(
+      substrate([
+        {
+          path: `${SESSION}.jsonl`,
+          lines: [
+            'null',
+            jline({
+              type: 'system',
+              subtype: 'compact_boundary',
+              timestamp: '2026-02-01T10:00:00.000Z',
+              compactMetadata: null,
+            }),
+          ],
+        },
+      ]),
+    );
+    expect(result).toEqual([
+      { agentId: null, timestamp: '2026-02-01T10:00:00.000Z', trigger: null, preTokens: null },
+    ]);
+  });
+
   it('finds the compact_boundary of the task-notification-recovery fixture', () => {
     const result = extractCompactionBoundaries(getFixture('task-notification-recovery'));
     expect(result).toEqual([
