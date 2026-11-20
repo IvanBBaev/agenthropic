@@ -16,5 +16,6 @@
  * `test/db-migration-files.test.ts` holds the directory to this convention.
  */
 import type { Migration } from '../migrations';
+import { migration as migration030 } from './030-ingest-failures';
 
-export const fileMigrations: readonly Migration[] = [];
+export const fileMigrations: readonly Migration[] = [migration030];

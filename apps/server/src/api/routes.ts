@@ -78,7 +78,11 @@ export interface ApiRoutesOptions {
    * Optional because a DB-only server has no ingest to ask; the field is then
    * omitted rather than reported as zero (see {@link CostCoverageSchema}).
    */
-  readonly ingestExclusions?: () => { readonly failing: number; readonly quarantined: number };
+  readonly ingestExclusions?: () => {
+    readonly failing: number;
+    readonly quarantined: number;
+    readonly stale: number;
+  };
   /**
    * Owner decision (2026-10-01): whether ingest rejected this session, and
    * why. Consulted ONLY where a per-session read would otherwise answer 404,
@@ -506,13 +510,16 @@ export const apiRoutes: FastifyPluginAsync<ApiRoutesOptions> = async (app, optio
       //
       // So these two counts do NOT mean "this much usage is missing from the
       // number above". They mean "this many sessions are either absent from it
-      // or present in it at an older extent than the corpus now holds", and
-      // the route cannot tell the reader which - the watcher's `attempts` map
-      // is in memory, keyed by session, and carries no record of whether a
-      // parked session ever committed a pass. Narrowing that is a change to
-      // what ingest REMEMBERS, not to what this route reads, so it is not
-      // quietly fixed here; `totals` remains a lower bound whenever
-      // `sessionsQuarantined` is non-zero, and the UI copy says so.
+      // or present in it at an older extent than the corpus now holds".
+      //
+      // AMENDED 2026-11-20 (ARC-5). The route could not tell the reader which
+      // of the two, because nothing recorded whether a parked session ever
+      // committed a pass. `sessionsStale` now does: it is the subset of
+      // `sessionsExcluded` that still has a `sessions` row, i.e. is IN
+      // `totals` at an older extent, and `sessionsExcluded - sessionsStale`
+      // are absent from it. The watcher asks the database on every call, so
+      // the split is as fresh as the rows. `totals` remains a lower bound
+      // whenever `sessionsExcluded` is non-zero, and the UI copy says so.
       const exclusions = options.ingestExclusions?.();
       return exclusions === undefined
         ? summary
@@ -521,6 +528,7 @@ export const apiRoutes: FastifyPluginAsync<ApiRoutesOptions> = async (app, optio
             coverage: {
               sessionsExcluded: exclusions.failing,
               sessionsQuarantined: exclusions.quarantined,
+              sessionsStale: exclusions.stale,
             },
           };
     },

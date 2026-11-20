@@ -451,7 +451,7 @@ describe('corpus watcher: chunked passes and rejectionOf', () => {
       }
       corpus.watcher.tick();
       expect(corpus.watcher.rejectionOf(id)?.code).toBe('quarantined');
-      expect(corpus.watcher.exclusions()).toEqual({ failing: 1, quarantined: 1 });
+      expect(corpus.watcher.exclusions()).toEqual({ failing: 1, quarantined: 1, stale: 0 });
     });
 
     it('carries the sanitized reason: no path, one line', () => {

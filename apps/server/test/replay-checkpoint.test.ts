@@ -483,7 +483,7 @@ describe('WP-IN10 replay checkpoint', () => {
       expect(calls.sort()).toEqual([SESSION_A, SESSION_B]);
     });
 
-    it('never checkpoints a quarantined session — a restart gets a fresh budget', () => {
+    it('never checkpoints a quarantined session — without the failure store, a fresh budget', () => {
       const tree = twoSessions();
       const failing = new Set([SESSION_A]);
       const first: string[] = [];
@@ -498,8 +498,9 @@ describe('WP-IN10 replay checkpoint', () => {
       expect(watcher.tick()).toEqual({ kind: 'unchanged' });
       expect(first.filter((id) => id === SESSION_A)).toHaveLength(MAX_INGEST_ATTEMPTS);
 
-      // A restart must NOT inherit the quarantine — it is a within-process
-      // circuit breaker, not a persisted verdict.
+      // No failure store is wired here, so the restart does not inherit the
+      // quarantine: the checkpoint store alone never parks a session. With the
+      // ARC-5 store wired the budget survives (test/ingest-failures.test.ts).
       const second: string[] = [];
       createCorpusWatcher(
         makeDeps(tree, { ingest: projectingIngest(temp, second, failing) }),

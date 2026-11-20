@@ -263,7 +263,7 @@ describe('corpus watcher: a transient read failure is retried on the next poll',
       expect(watcher.tick().kind).toBe('ingested');
     }
     expect(seen).toHaveLength(MAX_INGEST_ATTEMPTS);
-    expect(watcher.exclusions()).toEqual({ failing: 1, quarantined: 1 });
+    expect(watcher.exclusions()).toEqual({ failing: 1, quarantined: 1, stale: 0 });
 
     // Quarantined: the read mark must not reopen the hot loop it closed.
     expect(watcher.tick().kind).toBe('unchanged');

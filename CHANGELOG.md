@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Persisted ingest failure budget (ARC-5): migration 30 adds `ingest_failures`, a
+  per-corpus snapshot of the watcher's retry budget (session, consecutive failed
+  attempts, sanitized reason), replaced after every pass that changed it. A restart now
+  restores it, so `/api/health` and `/api/cost/summary` report excluded and quarantined
+  sessions before the first pass, a per-session read of a rejected session answers
+  `409` instead of `404`, and a quarantined session no longer gets a fresh budget; each
+  restored session is read once on the first pass. `coverage` on `/api/cost/summary`
+  gains `sessionsStale`, the excluded sessions still in `totals` at an older extent, and
+  the KPI strip says how many. The 2026-11-20 release rehearsal (on `ba6010b`) predates
+  this change and does not cover it.
 - Mutation follow-up (QA-9c): core tests now kill the remaining parser survivors from the
   QA-9 baseline — decoy blocks in the spawn and error-result scans (an `is_error` on a
   non-`tool_result` block, an `Agent` name on a non-`tool_use` block, an id-less

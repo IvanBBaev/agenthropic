@@ -977,7 +977,7 @@ describe('CostView', () => {
     }
 
     it('names the excluded sessions and calls the totals a lower bound', async () => {
-      await renderWithCoverage({ sessionsExcluded: 16, sessionsQuarantined: 16 });
+      await renderWithCoverage({ sessionsExcluded: 16, sessionsQuarantined: 16, sessionsStale: 0 });
 
       const banner = screen.getByTestId('coverage-banner');
       expect(banner.textContent).toContain('16 sessions could not be ingested');
@@ -989,7 +989,7 @@ describe('CostView', () => {
       // Excluded but not quarantined is a transient state the watcher intends
       // to fix by itself; telling the user it needs a pricing row would send
       // them chasing a problem that resolves on the next poll.
-      await renderWithCoverage({ sessionsExcluded: 3, sessionsQuarantined: 0 });
+      await renderWithCoverage({ sessionsExcluded: 3, sessionsQuarantined: 0, sessionsStale: 0 });
 
       const banner = screen.getByTestId('coverage-banner');
       expect(banner.textContent).toContain('3 sessions could not be ingested');
@@ -997,7 +997,7 @@ describe('CostView', () => {
     });
 
     it('reads correctly for a single session', async () => {
-      await renderWithCoverage({ sessionsExcluded: 1, sessionsQuarantined: 1 });
+      await renderWithCoverage({ sessionsExcluded: 1, sessionsQuarantined: 1, sessionsStale: 0 });
 
       const banner = screen.getByTestId('coverage-banner');
       expect(banner.textContent).toContain(
@@ -1011,7 +1011,7 @@ describe('CostView', () => {
       // later append still has its earlier rows in these totals, so "their
       // spend is missing from every figure" would overstate the gap. The
       // lower-bound conclusion holds either way; that is what is asserted.
-      await renderWithCoverage({ sessionsExcluded: 2, sessionsQuarantined: 0 });
+      await renderWithCoverage({ sessionsExcluded: 2, sessionsQuarantined: 0, sessionsStale: 0 });
 
       const banner = screen.getByTestId('coverage-banner');
       expect(banner.textContent).toContain('on the latest pass');
@@ -1020,7 +1020,7 @@ describe('CostView', () => {
     });
 
     it('stays silent on a measured zero', async () => {
-      await renderWithCoverage({ sessionsExcluded: 0, sessionsQuarantined: 0 });
+      await renderWithCoverage({ sessionsExcluded: 0, sessionsQuarantined: 0, sessionsStale: 0 });
 
       expect(screen.queryByTestId('coverage-banner')).toBeNull();
     });
@@ -1030,7 +1030,11 @@ describe('CostView', () => {
       // unreadable count rendered the page as if every session had ingested -
       // the same hole the unpriced KPI closed in CV-3. Unreadable is its own
       // case here too, and it still ends on the lower-bound conclusion.
-      await renderWithCoverage({ sessionsExcluded: Number.NaN, sessionsQuarantined: 0 });
+      await renderWithCoverage({
+        sessionsExcluded: Number.NaN,
+        sessionsQuarantined: 0,
+        sessionsStale: 0,
+      });
 
       const banner = screen.getByTestId('coverage-banner');
       expect(banner.textContent).toContain('The excluded-session count came back as');
@@ -1039,7 +1043,7 @@ describe('CostView', () => {
     });
 
     it('names a negative excluded count as one that cannot be right (WEB-4)', async () => {
-      await renderWithCoverage({ sessionsExcluded: -2, sessionsQuarantined: 0 });
+      await renderWithCoverage({ sessionsExcluded: -2, sessionsQuarantined: 0, sessionsStale: 0 });
 
       const banner = screen.getByTestId('coverage-banner');
       expect(banner.textContent).toContain('-2, a count that cannot be right');
@@ -1053,6 +1057,7 @@ describe('CostView', () => {
       await renderWithCoverage({
         sessionsExcluded: Number.POSITIVE_INFINITY,
         sessionsQuarantined: 0,
+        sessionsStale: 0,
       });
 
       const banners = screen.getAllByTestId('coverage-banner');
@@ -1064,7 +1069,11 @@ describe('CostView', () => {
     it('names an unreadable quarantined count inside the excluded banner (W-1)', async () => {
       // `> 0` kept the quarantine clause silent for NaN and for a negative,
       // and printed "Infinity of those will not be retried" for an infinity.
-      await renderWithCoverage({ sessionsExcluded: 3, sessionsQuarantined: Number.NaN });
+      await renderWithCoverage({
+        sessionsExcluded: 3,
+        sessionsQuarantined: Number.NaN,
+        sessionsStale: 0,
+      });
 
       const banner = screen.getByTestId('coverage-banner');
       expect(banner.textContent).toContain('3 sessions could not be ingested');
@@ -1075,7 +1084,7 @@ describe('CostView', () => {
     });
 
     it('names a negative quarantined count as one that cannot be right (W-1)', async () => {
-      await renderWithCoverage({ sessionsExcluded: 3, sessionsQuarantined: -1 });
+      await renderWithCoverage({ sessionsExcluded: 3, sessionsQuarantined: -1, sessionsStale: 0 });
 
       const banner = screen.getByTestId('coverage-banner');
       expect(banner.textContent).toContain('came back as -1, a count that cannot be right');
@@ -1085,12 +1094,78 @@ describe('CostView', () => {
     it('says so when more sessions are quarantined than were excluded (W-1)', async () => {
       // "20 of those" beside an excluded count of 3 is a sentence that cannot
       // be true; the two served counts disagree and the page says which.
-      await renderWithCoverage({ sessionsExcluded: 3, sessionsQuarantined: 20 });
+      await renderWithCoverage({ sessionsExcluded: 3, sessionsQuarantined: 20, sessionsStale: 0 });
 
       const banner = screen.getByTestId('coverage-banner');
       expect(banner.textContent).toContain('The quarantined count says 20 will not be retried');
       expect(banner.textContent).toContain('more than the 3 sessions excluded');
       expect(banner.textContent).not.toContain('20 of those');
+    });
+
+    describe('absent-or-stale clause (ARC-5, 2026-11-20)', () => {
+      it('says a single excluded session with no earlier rows is absent', async () => {
+        await renderWithCoverage({ sessionsExcluded: 1, sessionsQuarantined: 0, sessionsStale: 0 });
+
+        expect(screen.getByTestId('coverage-banner').textContent).toContain(
+          'It has no rows from an earlier pass, so it is absent from them entirely.',
+        );
+      });
+
+      it('says every excluded session is absent on a measured zero', async () => {
+        await renderWithCoverage({ sessionsExcluded: 3, sessionsQuarantined: 0, sessionsStale: 0 });
+
+        expect(screen.getByTestId('coverage-banner').textContent).toContain(
+          'None of them has rows from an earlier pass, so all are absent from them entirely.',
+        );
+      });
+
+      it('splits the excluded sessions into stale and absent', async () => {
+        await renderWithCoverage({ sessionsExcluded: 3, sessionsQuarantined: 0, sessionsStale: 1 });
+
+        expect(screen.getByTestId('coverage-banner').textContent).toContain(
+          '1 of those is in these totals at an older extent, from an earlier pass that succeeded; 2 are absent from them entirely.',
+        );
+      });
+
+      it('names a single absent session in the singular', async () => {
+        await renderWithCoverage({ sessionsExcluded: 3, sessionsQuarantined: 0, sessionsStale: 2 });
+
+        expect(screen.getByTestId('coverage-banner').textContent).toContain(
+          '2 of those are in these totals at an older extent, from an earlier pass that succeeded; 1 is absent from them entirely.',
+        );
+      });
+
+      it('says none is absent when every excluded session is stale', async () => {
+        await renderWithCoverage({ sessionsExcluded: 2, sessionsQuarantined: 2, sessionsStale: 2 });
+
+        const text = screen.getByTestId('coverage-banner').textContent;
+        expect(text).toContain('2 of those are in these totals at an older extent');
+        expect(text).toContain('none is absent from them entirely.');
+        expect(text).toContain('2 of those will not be retried');
+      });
+
+      it('names an unreadable stale count', async () => {
+        await renderWithCoverage({
+          sessionsExcluded: 3,
+          sessionsQuarantined: 0,
+          sessionsStale: Number.NaN,
+        });
+
+        const text = screen.getByTestId('coverage-banner').textContent;
+        expect(text).toContain(
+          'How many of those still have rows from an earlier pass came back as unreadable.',
+        );
+        expect(text).not.toContain('NaN');
+      });
+
+      it('says so when more sessions are stale than were excluded', async () => {
+        await renderWithCoverage({ sessionsExcluded: 3, sessionsQuarantined: 0, sessionsStale: 5 });
+
+        const text = screen.getByTestId('coverage-banner').textContent;
+        expect(text).toContain('The stale count says 5 still have rows from an earlier pass');
+        expect(text).toContain('more than the 3 sessions excluded');
+        expect(text).not.toContain('absent from them entirely');
+      });
     });
 
     it('stays silent when the server published no coverage claim', async () => {

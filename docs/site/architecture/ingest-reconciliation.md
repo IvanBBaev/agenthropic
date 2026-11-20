@@ -419,7 +419,12 @@ that, four rules keep the cache from ever becoming an answer:
 
 And what is deliberately *not* trusted is the fingerprint on its own: only a session this
 process successfully projected in that pass is checkpointed. A failed or quarantined session
-is never written, so a restart always hands it a fresh retry budget.
+is never written here. Its retry budget lives in a separate table, `ingest_failures`
+*(amended 2026-11-20, ARC-5 — until then a restart handed every failed session a fresh
+budget)*: the watcher writes the budget there after every pass that changed it, restores it
+on boot, and reads each restored session once on the first pass — a session that now
+ingests leaves the table, one that still fails continues its count. See
+[`ingest_failures`](data-model.md#ingest_failures--the-retry-budget-across-restarts).
 
 ### 6.2 Reading the corpus without being tricked by it
 

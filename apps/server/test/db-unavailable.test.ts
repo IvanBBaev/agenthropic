@@ -232,7 +232,7 @@ describe('database outages during ingest (OPS-13)', () => {
       }
       // No session was charged a retry: none is failing, none is quarantined,
       // and none carries a rejection the dashboard would show.
-      expect(watcher.exclusions()).toEqual({ failing: 0, quarantined: 0 });
+      expect(watcher.exclusions()).toEqual({ failing: 0, quarantined: 0, stale: 0 });
       expect(watcher.rejectionOf(SESSION_A)).toBeUndefined();
       expect(watcher.rejectionOf(SESSION_B)).toBeUndefined();
       // Each pass stopped at the first session rather than failing the second.

@@ -118,6 +118,13 @@ export const CostCoverageSchema = Type.Object(
      * table change - the ones that need a human, typically a missing price.
      */
     sessionsQuarantined: Type.Integer({ minimum: 0 }),
+    /**
+     * ARC-5: subset of `sessionsExcluded` that still has rows from an earlier
+     * pass that succeeded, so it IS in the totals, at an older extent than the
+     * corpus now holds. `sessionsExcluded - sessionsStale` are absent from the
+     * totals entirely.
+     */
+    sessionsStale: Type.Integer({ minimum: 0 }),
   },
   { additionalProperties: false },
 );

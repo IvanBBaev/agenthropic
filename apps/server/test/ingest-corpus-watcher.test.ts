@@ -394,7 +394,7 @@ describe('createCorpusWatcher', () => {
       expect(failures).toEqual([
         { sessionId: SESSION_A, reason: REASON, attempt: MAX_INGEST_ATTEMPTS, willRetry: false },
       ]);
-      expect(watcher.exclusions()).toEqual({ failing: 1, quarantined: 1 });
+      expect(watcher.exclusions()).toEqual({ failing: 1, quarantined: 1, stale: 0 });
     });
 
     it('advances the fingerprint once a retry finally succeeds', () => {
@@ -628,9 +628,9 @@ describe('createCorpusWatcher', () => {
       };
       const watcher = createCorpusWatcher(makeDeps(slugTree, { ingest: recorder([]) }));
 
-      expect(watcher.exclusions()).toEqual({ failing: 0, quarantined: 0 });
+      expect(watcher.exclusions()).toEqual({ failing: 0, quarantined: 0, stale: 0 });
       expect(ingested(watcher.tick()).sessionsOk).toBe(2);
-      expect(watcher.exclusions()).toEqual({ failing: 0, quarantined: 0 });
+      expect(watcher.exclusions()).toEqual({ failing: 0, quarantined: 0, stale: 0 });
     });
 
     it('counts a failing session from its first failure, quarantined only once the budget is spent', () => {
@@ -647,17 +647,17 @@ describe('createCorpusWatcher', () => {
       // still intends to retry it on its own.
       for (let attempt = 1; attempt < MAX_INGEST_ATTEMPTS; attempt += 1) {
         watcher.tick();
-        expect(watcher.exclusions()).toEqual({ failing: 1, quarantined: 0 });
+        expect(watcher.exclusions()).toEqual({ failing: 1, quarantined: 0, stale: 0 });
       }
 
       watcher.tick();
-      expect(watcher.exclusions()).toEqual({ failing: 1, quarantined: 1 });
+      expect(watcher.exclusions()).toEqual({ failing: 1, quarantined: 1, stale: 0 });
 
       // Quiet passes must not inflate the count: the session is excluded once,
       // not once per poll interval.
       watcher.tick();
       watcher.tick();
-      expect(watcher.exclusions()).toEqual({ failing: 1, quarantined: 1 });
+      expect(watcher.exclusions()).toEqual({ failing: 1, quarantined: 1, stale: 0 });
     });
 
     it('counts only the sessions that failed, not the whole corpus', () => {
@@ -679,7 +679,7 @@ describe('createCorpusWatcher', () => {
         watcher.tick();
       }
 
-      expect(watcher.exclusions()).toEqual({ failing: 1, quarantined: 1 });
+      expect(watcher.exclusions()).toEqual({ failing: 1, quarantined: 1, stale: 0 });
     });
 
     it('drops a session that vanished from the corpus - absent is not excluded', () => {
@@ -691,7 +691,7 @@ describe('createCorpusWatcher', () => {
         }),
       );
       watcher.tick();
-      expect(watcher.exclusions()).toEqual({ failing: 1, quarantined: 0 });
+      expect(watcher.exclusions()).toEqual({ failing: 1, quarantined: 0, stale: 0 });
 
       delete slugTree[`${SESSION_A}.jsonl`];
       watcher.tick();
@@ -699,7 +699,7 @@ describe('createCorpusWatcher', () => {
       // A file the user deleted is missing from the totals for a reason the
       // dashboard cannot fix, and reporting it forever would make the coverage
       // figure monotonically worse for no actionable reason.
-      expect(watcher.exclusions()).toEqual({ failing: 0, quarantined: 0 });
+      expect(watcher.exclusions()).toEqual({ failing: 0, quarantined: 0, stale: 0 });
     });
 
     it('returns to zero once the missing price arrives and the session ingests', () => {
@@ -718,13 +718,13 @@ describe('createCorpusWatcher', () => {
       for (let i = 0; i < MAX_INGEST_ATTEMPTS + 2; i += 1) {
         watcher.tick();
       }
-      expect(watcher.exclusions()).toEqual({ failing: 1, quarantined: 1 });
+      expect(watcher.exclusions()).toEqual({ failing: 1, quarantined: 1, stale: 0 });
 
       pricing = [ROW];
       healed = true;
       expect(ingested(watcher.tick()).sessionsOk).toBe(1);
 
-      expect(watcher.exclusions()).toEqual({ failing: 0, quarantined: 0 });
+      expect(watcher.exclusions()).toEqual({ failing: 0, quarantined: 0, stale: 0 });
     });
   });
 

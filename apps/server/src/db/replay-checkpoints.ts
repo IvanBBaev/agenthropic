@@ -54,7 +54,9 @@
  * What is deliberately NOT trusted: the fingerprint alone. It is written by the
  * watcher only for a session that was successfully ingested in that pass; a
  * failed or quarantined session is never checkpointed, so a restart always
- * gives it a fresh retry budget, exactly like today.
+ * reads it again. Its retry budget is not this store's: ARC-5 keeps it in
+ * `ingest_failures` (db/ingest-failures.ts), and without that store wired a
+ * restart gives the session a fresh budget.
  */
 import { createHash } from 'node:crypto';
 import type { SqliteDatabase } from './connection';
@@ -117,7 +119,7 @@ export interface ReplayCheckpointStoreOptions {
  * path: the value is persisted, and an absolute path here would put the user's
  * home directory and project names into the database for no benefit.
  */
-function scopeKeyOf(corpusRoot: string): string {
+export function scopeKeyOf(corpusRoot: string): string {
   return createHash('sha256').update(corpusRoot).digest('hex');
 }
 

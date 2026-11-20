@@ -147,7 +147,11 @@ export interface BuildServerOptions {
    * standing fact. When absent (a server built without ingest wiring) both
    * fields are omitted rather than faking a zero.
    */
-  readonly ingestExclusions?: () => { readonly failing: number; readonly quarantined: number };
+  readonly ingestExclusions?: () => {
+    readonly failing: number;
+    readonly quarantined: number;
+    readonly stale: number;
+  };
   /**
    * Whether ingest rejected a session (and why), so the per-session read
    * routes can answer 409 instead of a misleading 404. See

@@ -483,13 +483,19 @@ non-zero value also means `totals` is a lower bound. Both are read from the same
 per-session census as `formatDrift.malformedLinesSkipped` on `/api/health`, so a session
 ingested before R13 is counted only once it is re-read. *(Added 2026-11-19, OPS-14.)*
 `coverage` is
-`{ sessionsExcluded, sessionsQuarantined }`: sessions the ingest could not read or price
-on its latest attempt. Each is either absent from `totals` or present in it only at an
-older extent than the corpus now holds — a session that ingested cleanly and was later
-quarantined at the pricing gate keeps its last good pass in `totals` and in
-`/api/sessions` — and the route cannot say which. The gap is still one-directional:
-`totals` is a lower bound whenever these counts are non-zero. *(Amended 2026-09-25 (OO):
-this used to say excluded sessions are in "no stored total".)* It is **omitted, not zeroed**, when the
+`{ sessionsExcluded, sessionsQuarantined, sessionsStale }`: sessions the ingest could not
+read or price on its latest attempt. Each is either absent from `totals` or present in it
+only at an older extent than the corpus now holds — a session that ingested cleanly and was
+later quarantined at the pricing gate keeps its last good pass in `totals` and in
+`/api/sessions`. `sessionsStale` says which: it is the subset of `sessionsExcluded` that
+still has a session row from an earlier good pass, so `sessionsExcluded - sessionsStale`
+sessions are absent from `totals` entirely. It is computed from the database on every
+request, and is `0` when the database cannot be read. The gap is still one-directional:
+`totals` is a lower bound whenever `sessionsExcluded` is non-zero. The counts survive a
+restart: the retry budget behind them is persisted, so a fresh server reports them before
+its first pass. *(Amended 2026-09-25 (OO): this used to say excluded sessions are in "no
+stored total". Amended 2026-11-20, ARC-5: `sessionsStale` added; until then the route could
+not say which, and a restart reset both counts to zero.)* It is **omitted, not zeroed**, when the
 server has no ingest seam wired (a DB-only deployment): "we did not ask" and "we asked
 and the answer is none" are different facts.
 

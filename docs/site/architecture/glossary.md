@@ -371,7 +371,8 @@ state is legible rather than inferred. The budget is deliberately small — the 
 for a transient cause such as a half-written line, not as a substitute for fixing the
 corpus. One event re-admits every parked session with a fresh budget: a change to the
 pricing table, so a session that burned its attempts against a missing price is retried
-the moment the row is seeded. Failure reasons are sanitized before they are recorded —
+the moment the row is seeded. The budget survives a restart: it is persisted in
+`ingest_failures` and restored on boot *(ARC-5, 2026-11-20)*. Failure reasons are sanitized before they are recorded —
 paths replaced with `<path>`, whitespace collapsed, capped at 300 characters — so an error
 message cannot leak a filesystem layout into a durable record.
 

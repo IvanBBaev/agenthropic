@@ -377,12 +377,12 @@ export function isGlobalDag(body: Record<string, unknown>): boolean {
   );
 }
 
-const COVERAGE_NUMBERS = ['sessionsExcluded', 'sessionsQuarantined'] as const;
+const COVERAGE_NUMBERS = ['sessionsExcluded', 'sessionsQuarantined', 'sessionsStale'] as const;
 
 /**
  * `coverage` is `Type.Optional` in the schema and its absence is meaningful -
  * "the server has no ingest seam wired", which is a different fact from zero and
- * must not be refused as malformed. Present, though, it prints two counts, so it
+ * must not be refused as malformed. Present, though, it prints three counts, so it
  * is held to the same standard as any other figure.
  */
 function hasOptionalCoverage(body: Record<string, unknown>): boolean {

@@ -34,8 +34,8 @@
  *
  *   vitest (vite's esbuild transform, what this file pins) and `tsx` (what
  *   `pnpm start`, `pnpm dev` and `pnpm bench` run) now produce an IDENTICAL
- *   checksum for TWENTY-FOUR of the twenty-nine migrations - ids 1-6, 8, 9, 10,
- *   12, 13, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28 and 29. They differ on ids 7, 11, 14, 15 and 16. Running the pre-H-1
+ *   checksum for TWENTY-FIVE of the thirty migrations - ids 1-6, 8, 9, 10,
+ *   12, 13, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29 and 30. They differ on ids 7, 11, 14, 15 and 16. Running the pre-H-1
  *   whitespace-only formula over the SAME two transform outputs puts the
  *   agreement at ZERO, so the agreeing set is what H-1 bought.
  *
@@ -96,6 +96,11 @@
  * shape - and was measured identical under tsx and vitest
  * (8965228d9439fad6a0231b530f6b5a4834c9abecad70a969c939dba7ffe2801c) on the
  * day it was written, with migrations 26-28 re-measured unchanged.
+ * Migration 30 (`ingest-failures`, appended 2026-11-20, ARC-5) is the first
+ * file migration (`migration-files/`): one `db.exec` of a single template
+ * literal holding one `CREATE TABLE`, and was measured identical under tsx and
+ * vitest (a80c0837db53f7e36f1fa7a73c38feeed828a6c9be915cd234805404dca7a3ee)
+ * on the day it was written.
  * The residual five are still exactly ids 7, 11, 14,
  * 15 and 16.
  *
@@ -366,6 +371,11 @@ const PINNED: readonly PinnedChecksum[] = [
     id: 29,
     name: 'sessions-cost-state',
     checksum: '8965228d9439fad6a0231b530f6b5a4834c9abecad70a969c939dba7ffe2801c',
+  },
+  {
+    id: 30,
+    name: 'ingest-failures',
+    checksum: 'a80c0837db53f7e36f1fa7a73c38feeed828a6c9be915cd234805404dca7a3ee',
   },
 ];
 

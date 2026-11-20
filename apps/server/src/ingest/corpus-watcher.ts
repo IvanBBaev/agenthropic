@@ -57,6 +57,15 @@
  * costs a bounded number of passes, not a hot loop. Every failure is reported
  * through `onIngestFailure` with a SANITIZED reason (see
  * {@link sanitizeFailureReason}) — session id and reason, never the substrate.
+ * PERSISTED BUDGET (opt-in, ARC-5). Supply `failures` and the retry budget is
+ * written to the database after every pass that changed it, and read back on
+ * the first tick against a corpus root. A restart then keeps each session's
+ * count, its quarantine and its reason, so the exclusion counts and the 409 a
+ * per-session read answers are right from the first request after boot rather
+ * than from the first pass that re-failed everything. A restored session is
+ * re-read once on that first pass whatever its fingerprint says (its bytes,
+ * or the code reading them, may have changed while the process was down); a
+ * quarantined one that fails again resumes its backoff from a one-pass gap.
  * Sessions that yield no substrate at all (`sessionsSkipped`) are not failures
  * and are not retried.
  *
@@ -127,6 +136,7 @@ import { runCorpusIngest, type CorpusIngestSummary, type IngestFn } from '../cor
 import { nodeCorpusFs } from '../corpus/node-corpus-fs';
 import type { SqliteDatabase } from '../db/connection';
 import { databaseUnavailableCode } from '../db/sqlite-errors';
+import type { IngestFailureStore } from '../db/ingest-failures';
 import type { ReplayCheckpointStore } from '../db/replay-checkpoints';
 import type { IngestEvent } from './ingest-events';
 import { detectClockJump, runWatchdogSweep, type ClockReading } from './watchdog';
@@ -321,6 +331,14 @@ export interface IngestExclusions {
   readonly failing: number;
   /** Subset of `failing` whose retry budget is spent (see MAX_INGEST_ATTEMPTS). */
   readonly quarantined: number;
+  /**
+   * Subset of `failing` that still has a `sessions` row from an earlier pass
+   * that succeeded (ARC-5): such a session IS in the totals, counted at the
+   * extent that pass read, while `failing - stale` are absent from them
+   * entirely. 0 when the database cannot be read, which reports every failing
+   * session as absent rather than claiming rows nothing confirmed.
+   */
+  readonly stale: number;
 }
 
 /**
@@ -386,6 +404,14 @@ export interface CorpusWatcherDeps {
    * P0 double-replay proof runs), every restart replays the whole corpus.
    */
   readonly checkpoints?: ReplayCheckpointStore;
+  /**
+   * Persisted retry budget (ARC-5). When supplied, the budget is saved after
+   * every pass that changed it and restored on the first tick against a
+   * corpus root, so a restart neither forgets a quarantine nor reports a
+   * failing session as covered. When omitted, every restart starts with an
+   * empty budget, as before.
+   */
+  readonly failures?: IngestFailureStore;
   /** The live-loop seam: session-ingested and agent-status-changed events. */
   readonly onIngestEvent?: (event: IngestEvent) => void;
   /** Per-file skip diagnostics forwarded from the runner. */
@@ -612,6 +638,8 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
   let carriedCap: PassCap | undefined;
   /** Corpus root the persisted checkpoint was hydrated from; null = not yet. */
   let hydratedRoot: string | null = null;
+  /** Budget snapshot the failure store last accepted; null = nothing written yet. */
+  let persistedBudget: string | null = null;
   /** Pricing content seen by the previous pass; null = no pass yet. */
   let pricingFingerprint: string | null = null;
   let inFlight = false;
@@ -640,6 +668,35 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
     }
     pricingFingerprint = fingerprint;
     return pricing;
+  }
+
+  /** Order-independent text form of the retry budget, for change detection. */
+  function budgetSnapshot(): string {
+    return JSON.stringify(
+      [...attempts].map(([sessionId, { count, reason }]) => [sessionId, count, reason]).sort(),
+    );
+  }
+
+  /**
+   * Write the retry budget for `corpusRoot` when it differs from what the
+   * store last accepted. A failed write leaves the snapshot alone, so the next
+   * pass tries again.
+   */
+  function persistBudget(corpusRoot: string): void {
+    if (deps.failures === undefined) {
+      return;
+    }
+    const snapshot = budgetSnapshot();
+    if (snapshot === persistedBudget) {
+      return;
+    }
+    const entries = new Map<string, { attempts: number; reason: string }>();
+    for (const [sessionId, { count, reason }] of attempts) {
+      entries.set(sessionId, { attempts: count, reason });
+    }
+    if (deps.failures.save(corpusRoot, entries)) {
+      persistedBudget = snapshot;
+    }
   }
 
   /**
@@ -716,9 +773,10 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
    * success event). Deliberately narrower than the in-memory commit set:
    *  - a session that yielded no substrate has no session row to prove the
    *    checkpoint against, so persisting it would be a promise nothing backs;
-   *  - a QUARANTINED session is never persisted, so a restart hands it a fresh
-   *    retry budget exactly as it does today. Quarantine is a within-process
-   *    circuit breaker, not a permanent verdict.
+   *  - a QUARANTINED session is never checkpointed: its fingerprint stands
+   *    for bytes no pass projected. What survives a restart is its retry
+   *    budget, and only when the `failures` store is wired (ARC-5); without
+   *    it a restart hands the session a fresh budget.
    */
   function settlePass(
     changed: ReadonlySet<string>,
@@ -790,6 +848,11 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
       attempts.clear();
       rereadSchedule.clear();
       slugs.clear();
+      if (hydratedRoot !== null) {
+        // The persisted budget follows the in-memory one: a reappearing corpus
+        // starts from scratch, so its old verdicts must not be restored.
+        persistBudget(hydratedRoot);
+      }
       hydratedRoot = null;
       sweep = null;
       carriedCap = undefined;
@@ -801,7 +864,10 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
     // checkpoints that are current-revision, same-scope and still backed by a
     // session row, and an empty map on any doubt — so the worst case here is
     // the full replay this watcher would have done anyway.
-    if (deps.checkpoints !== undefined && hydratedRoot !== corpusRoot) {
+    if (
+      (deps.checkpoints !== undefined || deps.failures !== undefined) &&
+      hydratedRoot !== corpusRoot
+    ) {
       fingerprints.clear();
       attempts.clear();
       slugs.clear();
@@ -812,9 +878,19 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
         // replay pass that failed before it could hydrate is still owed.
         carriedCap = callCap;
       }
-      for (const [sessionId, fingerprint] of deps.checkpoints.load(corpusRoot)) {
+      for (const [sessionId, fingerprint] of deps.checkpoints?.load(corpusRoot) ?? []) {
         fingerprints.set(sessionId, fingerprint);
       }
+      // ARC-5: restore the retry budget, and drop the fingerprint of every
+      // restored session so this first pass reads it once: whatever made it
+      // fail may have been fixed while the process was down. A zero gap makes
+      // a quarantined session due at once; a failure there doubles from 1.
+      for (const [sessionId, { attempts: count, reason }] of deps.failures?.load(corpusRoot) ??
+        []) {
+        attempts.set(sessionId, { count, gap: 0, dueAt: 0, reason });
+        fingerprints.delete(sessionId);
+      }
+      persistedBudget = budgetSnapshot();
       hydratedRoot = corpusRoot;
     }
 
@@ -827,7 +903,9 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
       // The root exists but its listing failed. Crucially, NOTHING is pruned:
       // a failed enumeration proves nothing about which sessions are gone, and
       // dropping fingerprints here would replay (or worse, forget) sessions
-      // that never moved. Report the trouble and retry next tick.
+      // that never moved. Report the trouble and retry next tick. A pricing
+      // change above may still have re-admitted the parked sessions.
+      persistBudget(corpusRoot);
       return {
         kind: 'read-error',
         reason: `corpus root unreadable (${enumeration.code ?? 'unknown'})`,
@@ -897,6 +975,7 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
     };
 
     if (changed.size === 0) {
+      persistBudget(corpusRoot); // the prune above may have dropped entries
       settleSweep();
       return { kind: 'unchanged' };
     }
@@ -960,6 +1039,7 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
     // `present`, not the enumerated set: a session hidden by an unreadable slug
     // keeps its persisted checkpoint, as it keeps its in-memory fingerprint.
     deps.checkpoints?.commit(corpusRoot, checkpointable, present);
+    persistBudget(corpusRoot);
     settleSweep();
     return { kind: 'ingested', summary, pending };
   }
@@ -1086,7 +1166,27 @@ export function createCorpusWatcher(deps: CorpusWatcherDeps): CorpusWatcher {
         quarantined += 1;
       }
     }
-    return { failing: attempts.size, quarantined };
+    return { failing: attempts.size, quarantined, stale: staleCount() };
+  }
+
+  /**
+   * How many failing sessions still have a row from an earlier successful
+   * pass (ARC-5). Asked of the database on every call, not tracked alongside
+   * the budget, for the reason {@link exclusions} gives: a session row can
+   * also come and go through retention, and a mirrored flag would drift.
+   */
+  function staleCount(): number {
+    if (attempts.size === 0) {
+      return 0;
+    }
+    try {
+      const row = deps.db
+        .prepare('SELECT COUNT(*) AS n FROM sessions WHERE id IN (SELECT value FROM json_each(?))')
+        .get(JSON.stringify([...attempts.keys()])) as { n: number };
+      return row.n;
+    } catch {
+      return 0;
+    }
   }
 
   /** Same source of truth as {@link exclusions}, per session. */

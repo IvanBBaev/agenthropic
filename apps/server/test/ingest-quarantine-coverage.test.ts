@@ -28,6 +28,12 @@
  * `sessionsExcluded` and `sessionsQuarantined` WHILE its own (now frozen,
  * now partial) figures are inside the totals that coverage qualifies.
  *
+ * ARC-5 (2026-11-20) closes the gap these tests opened: the watcher now asks
+ * the database which failing sessions still have a `sessions` row, and the
+ * coverage object carries that subset as `sessionsStale`. The fact pinned
+ * below is unchanged - the rows ARE still served - but the disclosure now
+ * says so instead of leaving the reader to guess.
+ *
  * These tests do not argue about the wording; they establish the fact the
  * wording has to survive. The direction of the error is the point: a reader
  * told "N sessions are missing from this number" will read the number as a
@@ -211,7 +217,9 @@ describe('a session that ingested, then began failing, then was quarantined', ()
     // earlier rows are still here: "wrote nothing" is not "removed what was
     // there", and only the first of those two would make the claim true.
     expect(usageRows()).toBe(afterHealthyPass);
-    expect(watcher.exclusions()).toEqual({ failing: 1, quarantined: 1 });
+    // ARC-5: and the watcher now knows it - the one failing session has a
+    // row, so it is stale (in the totals at an older extent), not absent.
+    expect(watcher.exclusions()).toEqual({ failing: 1, quarantined: 1, stale: 1 });
 
     const app = buildServer({
       token: TEST_TOKEN,
@@ -233,7 +241,11 @@ describe('a session that ingested, then began failing, then was quarantined', ()
       // and it reads zero while two million tokens in this very session went
       // unpriced - truthfully, in its own terms, because it counts stored rows
       // and the halt gate stored none. A reader sees "nothing unpriced".
-      expect(body.coverage).toEqual({ sessionsExcluded: 1, sessionsQuarantined: 1 });
+      expect(body.coverage).toEqual({
+        sessionsExcluded: 1,
+        sessionsQuarantined: 1,
+        sessionsStale: 1,
+      });
       // Exact, not `> 0`: these are day one's own million tokens and day one's
       // own dollar. The corpus holds three million for this session.
       expect(body.totals).toEqual({ tokens: 1_000_000, costUsd: 1, unpricedTokens: 0 });

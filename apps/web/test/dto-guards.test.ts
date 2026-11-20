@@ -322,9 +322,23 @@ describe('isCostSummary', () => {
   it('accepts a complete `coverage`', () => {
     expect(
       isCostSummary(
-        body(costSummary({ coverage: { sessionsExcluded: 3, sessionsQuarantined: 1 } })),
+        body(
+          costSummary({
+            coverage: { sessionsExcluded: 3, sessionsQuarantined: 1, sessionsStale: 1 },
+          }),
+        ),
       ),
     ).toBe(true);
+  });
+
+  it('refuses a `coverage` without the ARC-5 stale count', () => {
+    // The banner splits excluded sessions into stale and absent off this
+    // figure; a missing one would print "undefined of those".
+    expect(
+      isCostSummary(
+        body(costSummary({ coverage: { sessionsExcluded: 3, sessionsQuarantined: 1 } as never })),
+      ),
+    ).toBe(false);
   });
 
   it('refuses a `coverage` that is present and half-filled', () => {

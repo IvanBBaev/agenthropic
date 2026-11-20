@@ -27,7 +27,8 @@ describe('/api/health ingest exclusions', () => {
     const app = buildServer({
       token: TEST_TOKEN,
       schemaVersion: 0,
-      ingestExclusions: () => ({ failing: 5, quarantined: 3 }),
+      // `stale` is a cost-summary figure (ARC-5); health keeps its two.
+      ingestExclusions: () => ({ failing: 5, quarantined: 3, stale: 2 }),
     });
     try {
       const health = await app.inject({ method: 'GET', url: '/api/health', headers: AUTH });
@@ -52,7 +53,7 @@ describe('/api/health ingest exclusions', () => {
     const app = buildServer({
       token: TEST_TOKEN,
       schemaVersion: 0,
-      ingestExclusions: () => ({ failing: 16, quarantined: 16 }),
+      ingestExclusions: () => ({ failing: 16, quarantined: 16, stale: 0 }),
     });
     try {
       const health = await app.inject({ method: 'GET', url: '/api/health', headers: AUTH });
@@ -67,7 +68,7 @@ describe('/api/health ingest exclusions', () => {
     const app = buildServer({
       token: TEST_TOKEN,
       schemaVersion: 0,
-      ingestExclusions: () => ({ failing: 0, quarantined: 0 }),
+      ingestExclusions: () => ({ failing: 0, quarantined: 0, stale: 0 }),
     });
     try {
       const health = await app.inject({ method: 'GET', url: '/api/health', headers: AUTH });
@@ -120,7 +121,7 @@ describe('/api/cost/summary coverage', () => {
       token: TEST_TOKEN,
       schemaVersion: 7,
       db: seeded().db,
-      ingestExclusions: () => ({ failing: 16, quarantined: 16 }),
+      ingestExclusions: () => ({ failing: 16, quarantined: 16, stale: 4 }),
     });
     try {
       const response = await app.inject({
@@ -135,7 +136,11 @@ describe('/api/cost/summary coverage', () => {
       // the figure, it never adjusts it. Guessing at the missing sessions'
       // spend would be the same sin as pricing an unknown model at $0.
       expect(body.totals.costUsd).toBeCloseTo(10, 9);
-      expect(body.coverage).toEqual({ sessionsExcluded: 16, sessionsQuarantined: 16 });
+      expect(body.coverage).toEqual({
+        sessionsExcluded: 16,
+        sessionsQuarantined: 16,
+        sessionsStale: 4,
+      });
     } finally {
       await app.close();
     }
@@ -227,7 +232,12 @@ describe('the exclusion counts over a corpus that cannot be priced', () => {
       // The whole point, in one pair of assertions: the totals are $0 and
       // look complete, and only `coverage` says they are not.
       expect(body.totals).toEqual({ tokens: 0, costUsd: 0, unpricedTokens: 0 });
-      expect(body.coverage).toEqual({ sessionsExcluded: 1, sessionsQuarantined: 0 });
+      // Never ingested, so no row: absent, not stale (ARC-5).
+      expect(body.coverage).toEqual({
+        sessionsExcluded: 1,
+        sessionsQuarantined: 0,
+        sessionsStale: 0,
+      });
     } finally {
       await server.close();
     }

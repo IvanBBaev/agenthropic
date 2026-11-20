@@ -41,6 +41,7 @@ import {
   type MigrationRunResult,
 } from './db/migrations';
 import { readFormatDrift } from './db/format-drift';
+import { createIngestFailureStore } from './db/ingest-failures';
 import { createReplayCheckpointStore } from './db/replay-checkpoints';
 import { applyHookLiveness } from './hooks/liveness-status';
 import { registerHookRoutes } from './hooks/routes';
@@ -135,6 +136,12 @@ export { insertTokenUsageRows } from './db/token-usage';
 export type { TokenUsageInsertResult } from './db/token-usage';
 export { createReplayCheckpointStore, REPLAY_CHECKPOINT_REVISION } from './db/replay-checkpoints';
 export type { ReplayCheckpointStore, ReplayCheckpointStoreOptions } from './db/replay-checkpoints';
+export { createIngestFailureStore } from './db/ingest-failures';
+export type {
+  IngestFailureStore,
+  IngestFailureStoreOptions,
+  PersistedIngestFailure,
+} from './db/ingest-failures';
 export { ingestSession } from './ingest/ingest-session';
 export type { IngestDeps, IngestOutcome } from './ingest/ingest-session';
 export { normalizeSession } from './ingest/normalize-session';
@@ -445,6 +452,10 @@ export async function start(
       // hands back a fingerprint only for a session whose row is still present,
       // and degrades to an empty map (a full replay) on any doubt.
       checkpoints: createReplayCheckpointStore(db),
+      // ARC-5: the retry budget survives a restart, so the exclusion counts
+      // and the per-session 409 are right from the first request after boot.
+      // Best-effort like the checkpoint: a store fault boots an empty budget.
+      failures: createIngestFailureStore(db),
       // Reachable from a REAL corpus, so it is covered end-to-end rather than
       // ignored: `isSafeEntryName` rejects any directory-entry name carrying a
       // path separator, and `foo\bar` is a perfectly legal file name on

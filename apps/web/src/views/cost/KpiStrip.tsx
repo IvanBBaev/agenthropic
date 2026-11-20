@@ -96,6 +96,36 @@ function quarantinedClause(coverage: {
   return ` ${String(sessionsQuarantined)} of those will not be retried until the corpus or the pricing table changes (usually a model with no price row).`;
 }
 
+/**
+ * ARC-5 (2026-11-20): the absent-or-stale clause of the ingest-coverage banner.
+ * `sessionsStale` splits the excluded sessions into those still in the totals
+ * at an older extent (an earlier pass succeeded) and those absent from them.
+ * Impossible values are named rather than hidden, as in
+ * {@link quarantinedClause}; a measured zero says every excluded session is
+ * absent, because that is what it measures. Only reached from the arm that
+ * has already established a readable, positive `sessionsExcluded`.
+ */
+function staleClause(coverage: {
+  readonly sessionsExcluded: number;
+  readonly sessionsStale: number;
+}): string {
+  const { sessionsExcluded, sessionsStale } = coverage;
+  if (isImpossibleCount(sessionsStale)) {
+    return ` How many of those still have rows from an earlier pass came back as ${impossibleCountText(sessionsStale)}.`;
+  }
+  if (sessionsStale > sessionsExcluded) {
+    return ` The stale count says ${String(sessionsStale)} still have rows from an earlier pass, which is more than the ${plural(sessionsExcluded, 'session')} excluded - the two served counts disagree.`;
+  }
+  const absent = sessionsExcluded - sessionsStale;
+  if (sessionsStale === 0) {
+    return sessionsExcluded === 1
+      ? ' It has no rows from an earlier pass, so it is absent from them entirely.'
+      : ' None of them has rows from an earlier pass, so all are absent from them entirely.';
+  }
+  const absentText = absent === 0 ? 'none is' : `${String(absent)} ${absent === 1 ? 'is' : 'are'}`;
+  return ` ${String(sessionsStale)} of those ${sessionsStale === 1 ? 'is' : 'are'} in these totals at an older extent, from an earlier pass that succeeded; ${absentText} absent from them entirely.`;
+}
+
 /** The all-time totals row, the coverage banners and the honesty note. */
 export function TotalsKpis({
   summary,
@@ -207,6 +237,7 @@ export function TotalsKpis({
             {`${plural(summary.coverage.sessionsExcluded, 'session')} could not be ingested on the latest pass, so ${
               summary.coverage.sessionsExcluded === 1 ? 'its' : 'their'
             } spend is incomplete or absent in every figure on this page - these totals are a lower bound, not a complete one.`}
+            {staleClause(summary.coverage)}
             {quarantinedClause(summary.coverage)}
           </p>
         )}

@@ -586,7 +586,10 @@ Nothing has been ingested yet. In rough order of likelihood:
   gap. A skipped file freezes what it would have contributed, so it is reported
   rather than dropped silently.
 - **A session failed or was quarantined.** `sessionsExcluded` / `sessionsQuarantined` on
-  `/api/health` count sessions whose spend is in *no* total. Both fields are **omitted**
+  `/api/health` count sessions whose latest ingest attempt failed: each is absent from the
+  totals or present only at an older extent. `coverage.sessionsStale` on
+  `/api/cost/summary` says how many are the latter. The retry budget behind these counts
+  survives a restart *(ARC-5, 2026-11-20)*. Both fields are **omitted**
   rather than zeroed when the underlying seam is absent — an absent field means "not
   measured", never "none".
 

@@ -155,7 +155,7 @@ describe('corpus watcher: a failing session whose bytes keep moving backs off', 
       true,
       ...new Array<boolean>(reads.length - 2).fill(false),
     ]);
-    expect(live.exclusions()).toEqual({ failing: 1, quarantined: 1 });
+    expect(live.exclusions()).toEqual({ failing: 1, quarantined: 1, stale: 0 });
   });
 
   it('leaves a quarantined session alone while its bytes stay put, whatever the schedule says', () => {
@@ -169,7 +169,7 @@ describe('corpus watcher: a failing session whose bytes keep moving backs off', 
       expect(live.tick(false).kind).toBe('unchanged'); // passes 5, 6, 7: no new bytes
     }
     expect(live.reads).toEqual([1, 2, 3, 4]);
-    expect(live.exclusions()).toEqual({ failing: 1, quarantined: 1 });
+    expect(live.exclusions()).toEqual({ failing: 1, quarantined: 1, stale: 0 });
 
     // The gap (2) has long elapsed, so the next append is read at once.
     expect(live.tick(true).kind).toBe('ingested');
@@ -181,12 +181,12 @@ describe('corpus watcher: a failing session whose bytes keep moving backs off', 
     for (let i = 0; i < MAX_INGEST_ATTEMPTS; i += 1) {
       live.tick(true);
     }
-    expect(live.exclusions()).toEqual({ failing: 1, quarantined: 1 });
+    expect(live.exclusions()).toEqual({ failing: 1, quarantined: 1, stale: 0 });
 
     live.heal();
     expect(live.tick(true).kind).toBe('ingested'); // pass 4: gap 1, read, ok
     expect(live.reads).toEqual([1, 2, 3, 4]);
-    expect(live.exclusions()).toEqual({ failing: 0, quarantined: 0 });
+    expect(live.exclusions()).toEqual({ failing: 0, quarantined: 0, stale: 0 });
     expect(live.tick(false).kind).toBe('unchanged');
 
     // Failing again afterwards starts from attempt 1, and the backoff from 1.

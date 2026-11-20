@@ -51,6 +51,7 @@ constraint, and invariant named in the tables is sourced.
 | `model_pricing` | Reference | **Built** (migration 7, converged by 11, `effective_from` canonicalized and guarded by 14, ten rows for two models added by 18, `claude-opus-5-5` added by 19 and `claude-sonnet-5` re-priced to the official page by 20; `PROVISIONAL` seed) | Versioned per-token rates, dated, per `(model, bucket)` | CD-4, `WP-C1` |
 | `pricing_audit` | Reference (audit) | **Built** (migration 27) | Append-only record of every rate the operator `pricing` CLI wrote: model, bucket, instant, new and previous rate, note. Migration-seeded rates are not in it | R15, DAT-4, D3 |
 | `ingest_checkpoints` | Operational cache | **Built** (migration 9) | Opt-in durable replay memory: which sessions' bytes have not moved since the last run. A cache of work already done — never dashboard truth | `WP-IN10` |
+| `ingest_failures` | Operational state | **Built** (migration 30) | The watcher's retry budget as a per-corpus snapshot: which sessions failed their latest ingest pass, how many times in a row, and the sanitized reason. Replaced after every pass; quarantine is derived on load | ARC-5 |
 | `schema_version` | Runner bookkeeping | **Built** (the runner itself) | One row per applied migration: id, name, applied-at, sha-256 content checksum | `WP-D3` |
 | `alert_rules` | Alerting (v2.0 core) | **Built** (migration 23) | Trigger conditions mirrored from the alerts config file; `armed_at` bounds which subjects a rule considers | DESIGN §4/§7, `WP-A2` |
 | `alert_events` | Alerting (v2.0 core) | **Built** (migration 23) | Fired-alert log; `dedupe_key` UNIQUE makes a rule fire once per subject | DESIGN §4/§7, `WP-A2` |
@@ -111,6 +112,8 @@ leaves the schema byte-identical.
 | 26 | `sessions-format-census` | `sessions.claude_code_versions` and `sessions.format_census` — the format-drift census of each session's latest parse, aggregated by `/api/health` (R13) |
 | 27 | `pricing-audit` | `pricing_audit`, the append-only trail of every rate the `pricing` CLI writes (R15) |
 | 28 | `orchestration-edges-prompt-id-source` | Rebuilds the edge table to admit the sixth `source` value, `prompt_id`, and recreates migration 22's ingest-clock trigger with it |
+| 29 | `sessions-cost-state` | `ALTER TABLE sessions ADD COLUMN cost_state` — the normalized `cost-state` record of each session's latest main-transcript parse, the input of the pricing drift alarm (DAT-10) |
+| 30 | `ingest-failures` | `ingest_failures` (`WITHOUT ROWID`) — the persisted retry budget (ARC-5); the first migration shipped as a file under `migration-files/` |
 
 Three properties of that list are worth stating explicitly, because they are the reason
 the ledger table exists at all.
@@ -959,6 +962,41 @@ believed. A checkpoint may never be the reason a session is invisible.
 
 The fingerprint itself, and the in-memory tier that backs this table, are described in
 [ingest & reconciliation](../architecture/ingest-reconciliation.md).
+
+## `ingest_failures` — the retry budget across restarts
+
+Added by migration 30 for ARC-5 (2026-11-20). Until then the watcher's retry budget lived
+only in process memory, so a restart forgot it: until the first pass finished, health and
+the cost summary reported zero excluded sessions, and every quarantined session came back
+with a fresh budget.
+
+```sql
+CREATE TABLE ingest_failures (
+  scope       TEXT NOT NULL,
+  session_id  TEXT NOT NULL,
+  attempts    INTEGER NOT NULL CHECK (attempts >= 1),
+  reason      TEXT NOT NULL,
+  recorded_at TEXT NOT NULL,
+  PRIMARY KEY (scope, session_id)
+) WITHOUT ROWID;
+```
+
+- **A snapshot, not a log.** After a pass that changed the budget, the store replaces
+  every row of the scope in one transaction. A session that ingests cleanly simply drops
+  out of the next snapshot.
+- **`scope` is the same sha-256 of the resolved corpus root** that `ingest_checkpoints`
+  uses, so a budget recorded against one corpus is never loaded for another and no
+  absolute path is persisted.
+- **Quarantine is derived, not stored.** A restored session with `attempts` at or above
+  `MAX_INGEST_ATTEMPTS` (3) is quarantined again on load, so the stored count and the
+  verdict can never disagree. `reason` is the sanitized, path-free reason of the latest
+  failed pass — never transcript content.
+- **Read once on boot.** A restored session's in-memory fingerprint is cleared and its
+  retry gap zeroed, so the first pass after a restart reads it once: one that now ingests
+  leaves the table, and one that still fails continues its count where it stopped.
+- **It degrades like the checkpoint store.** A load that fails yields an empty budget (the
+  pre-ARC-5 behavior); a save that fails is retried after the next pass. Neither stops
+  ingest.
 
 ## Alert & webhook tables (v2.0 core, built 2026-10-24)
 

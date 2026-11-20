@@ -609,7 +609,11 @@ only when its bytes change, and then on a cadence that doubles with every failed
 re-read (1, 2, 4... passes, capped at 32), so a live transcript the halt gate refuses (an over-tier
 `claude-haiku-5-5` request, since R2 the only model-driven refusal)
 costs a bounded number of re-parses instead of one every poll. Each failed re-read
-logs again as `attempt 3/3`. The verdict in the parentheses is the useful half —
+logs again as `attempt 3/3`. The budget survives a restart *(ARC-5, 2026-11-20)*: it is
+persisted in the `ingest_failures` table, so a restarted server reports the same
+`sessionsExcluded` / `sessionsQuarantined` before its first pass, and reads each restored
+session once on that pass — one that now ingests is cleared, one that still fails keeps
+its verdict. The verdict in the parentheses is the useful half —
 `will retry` means the watcher intends another pass, `quarantined` means it will
 wait for a change. The same report is
 published on the SSE stream, so the dashboard can show it without log access, and the
