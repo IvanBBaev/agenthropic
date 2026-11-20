@@ -558,8 +558,11 @@ milestone record, not a second copy._
       timeout (the case took 75.6 s under load).
     - `startup-replay.test.ts`, the OPS-13 database-outage case: after two synchronous
       `vi.advanceTimersByTime(1000)` calls the server still reported `replaying` with 2 of
-      3 sessions. The advance does not wait for the async poll tick, so a slow runner loses
-      the race.
+      3 sessions (`pollBackoffIntervals: 1`). Only `setInterval` is faked, while the OPS-16
+      poll back-off measures pass duration with the real clock: a startup pass slower than
+      500 ms at load makes the next interval a skip, so one advance is not one pass.
+      *(Diagnosis corrected 2026-11-20 by QA-FLAKE-1; the first record blamed an async tick,
+      but the tick is synchronous.)*
     - Both files then passed 3/3 in isolation at the same load. The recursive run stopped at
       the server, so web was run separately: 33 / 1203, 100% on all four axes.
   - The spawner gate scanned 464 files: 1 allowlisted, 6 inline-exempt lines (the same

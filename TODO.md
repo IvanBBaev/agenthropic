@@ -1107,9 +1107,9 @@ exit and proof live in the plan. Dated one-word answers under D1…D8 are the si
     `money-rounding-rule` (long-horizon case, 60 s timeout) and `startup-replay` (OPS-13
     outage case: the poll was still `replaying` after the fake-timer advance). Both files
     pass 3/3 in isolation at the same load, and the web suite (skipped by the recursive
-    run's early stop) passes separately. The `startup-replay` case advances fake timers
-    synchronously over an async poll, a timing race that a slow runner can lose. It is
-    queued as its own item. `test:real` on the live corpus: 452 ok / 0 failed / 2 skipped,
+    run's early stop) passes separately. In the `startup-replay` case a slow startup pass
+    makes the OPS-16 poll back-off (real clock) skip the next interval, so one fake-timer
+    advance is not one pass. It is queued as QA-FLAKE-1. `test:real` on the live corpus: 452 ok / 0 failed / 2 skipped,
     3278/3279 subagents edged, 1 unanchorable orphan, 6/6 green. Docs truth pass (R2):
     route and variable counts dropped from four pages, with dated amendments. Full record
     in `DONE.md`. No box ticked. Row stays open.
