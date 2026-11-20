@@ -34,6 +34,11 @@
 >   (default 30) and `DASHBOARD_RETENTION_BACKUP_KEEP_MIN` (default 7). One more
 >   variable, **`DASHBOARD_INSTANCE`**, reaches the server outside `loadConfig` — the
 >   composition root passes it straight to the corpus identity resolver.
+>   *(Amended 2026-11-20: this list is the 2026-09 surface. `loadConfig` has since
+>   gained `DASHBOARD_ALERTS_CONFIG`, `DASHBOARD_LOG_LEVEL`, `DASHBOARD_MAX_FILE_MIB`
+>   and `DASHBOARD_BACKUP_MIRROR_DIR`, and it refuses a set
+>   `DASHBOARD_RETENTION_TOKEN_USAGE_DAYS`. The [reference table](#reference-table) is
+>   the current surface; read the count from it, not from this note.)*
 > - **The bind host has no variable at all.** It is the exported constant
 >   `HOST = '127.0.0.1'`. Not overridable, not even by env.
 > - **The two poll/watchdog defaults are PROVISIONAL (LABEL-ME)** — marked so in the
@@ -75,9 +80,13 @@ though there is no `.env` file support; they must be actual environment variable
 
 **As built — the environment the server reads today.** There is no general config file
 (the alerts JSON named by `DASHBOARD_ALERTS_CONFIG` is the one exception) and no other
-variable; anything not in this table cannot be configured. The first thirteen rows are
-what `loadConfig` parses; `DASHBOARD_INSTANCE` is read separately, by the corpus identity
-resolver.
+variable; anything not in this table cannot be configured. Every row above
+`DASHBOARD_INSTANCE` is parsed by `loadConfig`; `DASHBOARD_INSTANCE` is read separately,
+by the corpus identity resolver. `loadConfig` also refuses one variable outright:
+`DASHBOARD_RETENTION_TOKEN_USAGE_DAYS`, when set, is a startup error, because v1.0 never
+prunes `token_usage` (see [Backup directory and retention](#backup-directory-and-retention)).
+The other `DASHBOARD_RETENTION_*` names in `apps/server/src/retention/policy.ts` belong to
+the library loader `loadRetentionPolicy`, which the server never calls.
 
 | Variable | Required? | Default | What it controls | Validation |
 |---|---|---|---|---|

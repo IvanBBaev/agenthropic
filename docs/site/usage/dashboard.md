@@ -760,7 +760,7 @@ Two things follow directly from "no token → no data/stream":
 
 The full endpoint and stream reference — routes, payload shapes field by field, the
 health payload, and the reconnection semantics — lives on
-[the API reference](api.md), which documents the twelve routes the server actually
+[the API reference](api.md), which documents every route the server actually
 registers. When this page was first written that reference was still an unwritten Phase 4
 deliverable, which is why several paragraphs above hedge about "illustrative naming";
 it is written now, and it is the authority wherever the two pages differ.

@@ -547,6 +547,35 @@ milestone record, not a second copy._
     and the `gh api` checks (branch protection, Pages, LICENSE, PVR). CI on `0f6f3fc` was not
     checked because it is not pushed.
 
+- **Sixth rehearsal — 2026-11-20, on `ba6010b` (`main`), clean tree, Node 22.23.2.** Recorded
+  here directly (W4-R1R2). The machine was heavily loaded (load average about 76 throughout).
+  `main` has since moved to `5ecbfe5` (QA-9c, test-only); the figures below are for `ba6010b`.
+  - `pnpm install --frozen-lockfile`, `gate:node`, typecheck, lint, format:check and the web
+    build exited 0.
+  - `pnpm test` **exited 1**: shared 10 / 188, test-fixtures 6 / 167 and core 27 / 497 passed at
+    100% on all four axes. Server: 161 of 163 files passed (2480 of 2482 tests). The two failures:
+    - `money-rounding-rule.test.ts`, "holds over a long horizon: 20,000 messages…": a 60 s
+      timeout (the case took 75.6 s under load).
+    - `startup-replay.test.ts`, the OPS-13 database-outage case: after two synchronous
+      `vi.advanceTimersByTime(1000)` calls the server still reported `replaying` with 2 of
+      3 sessions. The advance does not wait for the async poll tick, so a slow runner loses
+      the race.
+    - Both files then passed 3/3 in isolation at the same load. The recursive run stopped at
+      the server, so web was run separately: 33 / 1203, 100% on all four axes.
+  - The spawner gate scanned 464 files: 1 allowlisted, 6 inline-exempt lines (the same
+    six sites as the fifth rehearsal), 6 manifests, 141 server-process files checked for
+    outbound calls.
+  - The license gate read 523 packages / 572 installed versions: 522 allowlisted, 1 documented
+    exception (`caniuse-lite`, CC-BY-4.0).
+  - `test:real` against `~/.claude/projects` passed 6/6: 454 sessions discovered, 452 ok, 0 failed,
+    2 skipped (1 oversize, 1 empty-main), 3279 subagents, 3278 edged, 1 unanchorable orphan.
+  - The web e2e (Playwright) passed. The bench was not run: it measures latency, and the load
+    would invalidate it.
+  - §2/§4 greps: same result as the fifth rehearsal (only `telegram-sink.ts`; comments only;
+    empty). §6 leftovers: only history marked as such.
+  - Not re-run: the §5 live drill and the `gh api` checks. CI on `ba6010b` was not checked
+    because it is not pushed.
+
 ### Still open, and owned by Ivan — not by any agent
 - ~~**Everything above is UNCOMMITTED.**~~ **Closed 2026-07-30** — committed and pushed
   as `9b6c6b3` on Ivan's explicit instruction (198 files, +27 133 / −1 113). CI is

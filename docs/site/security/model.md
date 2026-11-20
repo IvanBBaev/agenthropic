@@ -34,7 +34,9 @@ the build **red** on violation, not a review-time reminder — see
 > no-token-no-start. Two boxes in the picture below — the webhook sink and the
 > Telegram relay — remain **planned, post-1.0** (entered only via KC-5); they are kept
 > in the diagram as the target contract, marked as such. Per-rule as-built notes
-> follow each rule.
+> follow each rule. *(Amended 2026-11-20: both boxes exist since 2026-10-24 as the
+> opt-in v2.0 alerting core, off unless `DASHBOARD_ALERTS_CONFIG` is set; v1.0.0 ships
+> it dark. See the note under the diagram and rule 7's amendment.)*
 
 ## Why a flagship page: the field failed at exactly this
 

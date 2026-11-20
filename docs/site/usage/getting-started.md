@@ -354,7 +354,7 @@ rather than gloss over it:
   reads, including `DASHBOARD_TOKEN`, the `~/.claude/projects` path, the poll interval
   and the watchdog window, plus what the backup and retention machinery does and does
   not do yet.
-- [API reference](api.md) — the twelve routes, the health payload, and the response fields
+- [API reference](api.md) — every route, the health payload, and the response fields
   the four views are built on.
 - [Hooks installer](hooks-installer.md) — installing the hook scripts, leak-free token
   acquisition, and verifying an end-to-end hook → loopback ingest → `events_raw` run

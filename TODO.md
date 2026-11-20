@@ -1101,6 +1101,18 @@ exit and proof live in the plan. Dated one-word answers under D1…D8 are the si
     pages that still called the alerting core or `events_raw` unbuilt. Full record in
     `DONE.md`. Not re-run: `test:real` (1 orphan remains), live drill, `gh api` checks.
     No box ticked. Row stays open.
+  - **R1 rehearsed again 2026-11-20** on clean `ba6010b`, at load ≈ 76 (W4-R1R2): install,
+    `gate:node`, typecheck, lint, format:check, web build, `gate:spawner`, `gate:licenses`,
+    `test:real` and the web e2e exited 0; **`pnpm test` exited 1** on two server tests,
+    `money-rounding-rule` (long-horizon case, 60 s timeout) and `startup-replay` (OPS-13
+    outage case: the poll was still `replaying` after the fake-timer advance). Both files
+    pass 3/3 in isolation at the same load, and the web suite (skipped by the recursive
+    run's early stop) passes separately. The `startup-replay` case advances fake timers
+    synchronously over an async poll, a timing race that a slow runner can lose. It is
+    queued as its own item. `test:real` on the live corpus: 452 ok / 0 failed / 2 skipped,
+    3278/3279 subagents edged, 1 unanchorable orphan, 6/6 green. Docs truth pass (R2):
+    route and variable counts dropped from four pages, with dated amendments. Full record
+    in `DONE.md`. No box ticked. Row stays open.
 - [ ] **Wave 5 · by 2026-12-01 (KC-4)** — release commit, `v1.0.0` tag, push (Ivan) ·
   post-tag CI/Pages/badges green, `DONE.md` closed, this board reduced to the KC-5 items
   (orchestrator). One week of buffer; the critical path is D1 → Wave 3's 14 days → R3.

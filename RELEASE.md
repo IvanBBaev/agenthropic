@@ -34,7 +34,7 @@ Rules of this document:
         re-verified 2026-10-22. The tick is still Ivan's.
       - KC-5 cannot be met before the tag.
 
-      Last checked **2026-11-14**: 17 days to KC-4. Redo this box on the tag day.
+      Last checked **2026-11-20**: 11 days to KC-4. Redo this box on the tag day.
 - [ ] **[HUMAN] LABEL-ME ratification.** Ivan hand-fills the five
       `spike/corpus/sessions/<short>/LABEL-ME.md` trees (224 per-edge blanks); see
       [`docs/analysis/phase0-verdict.md`](docs/analysis/phase0-verdict.md) §"what still
@@ -458,6 +458,5 @@ pnpm --filter @agenthropic/web e2e                          # real-browser smoke
 #       §0/§4/§6/§7 gh api verifications
 ```
 
-Last full rehearsal on a non-release tree: **2026-10-27, `7dcf795`**. Every command
-exited 0. Earlier rehearsals and their figures are recorded in [`DONE.md`](DONE.md). A
-rehearsal ticks no box.
+Last rehearsal on a non-release tree: **2026-11-20, `ba6010b`**. All rehearsals, with their
+results and figures, are recorded in [`DONE.md`](DONE.md). A rehearsal ticks no box.
