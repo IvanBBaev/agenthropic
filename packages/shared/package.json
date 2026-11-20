@@ -21,7 +21,7 @@
     "test": "node ../../scripts/check-node-version.mjs && vitest run --coverage"
   },
   "dependencies": {
-    "@sinclair/typebox": "^0.34.51"
+    "@sinclair/typebox": "^0.34.52"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^4.1.10",
