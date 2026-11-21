@@ -61,7 +61,11 @@ function serveCorpus(total: number): void {
  * On a loaded machine that pushed these tests past the 30 s timeout. So the
  * row-heavy queries below use selectors and text, which cost milliseconds.
  * The role and the accessible name of the row controls are pinned once, in
- * 'gives every row one pressable button'.
+ * 'gives every row one pressable button', and those of "Load older" in
+ * 'names "Load older" as a button by its role and accessible name', both on
+ * three rows. QA-FLAKE-2 (2026-11-21): one `getByRole('button', ...)` left on
+ * the 50-row first page cost ~425 ms of a ~900 ms test when run alone and took
+ * the test past 30 s under a loaded gate (37 s at load ~90).
  */
 
 /** One selectable button per listed session (UX-11: the row is the only control). */
@@ -177,14 +181,25 @@ describe('session list filter and paging (UX-12)', () => {
     expect(buttons.every((button) => button.hasAttribute('aria-pressed'))).toBe(true);
   });
 
+  it('names "Load older" as a button by its role and accessible name', async () => {
+    // Three rows of a larger corpus: the button shows, and the role query
+    // stays cheap (see the note above sessionRows). The 50-200 row paging
+    // test below finds the same button by its text only.
+    fetchMock.mockImplementation(() =>
+      Promise.resolve(jsonResponse(200, sessionList(summaries(3), { total: 500, limit: 3 }))),
+    );
+    renderView();
+    await screen.findByRole('list', { name: 'session list' });
+    expect(screen.getByRole('button', { name: 'Load older sessions' })).toBe(
+      getButton('Load older sessions'),
+    );
+  });
+
   it('loads older sessions as one longer read until the cap, then points at the filter', async () => {
     serveCorpus(500);
     renderView();
     await screen.findByRole('list', { name: 'session list' });
     expect(sessionRows()).toHaveLength(SESSION_LIST_LIMIT);
-    expect(screen.getByRole('button', { name: 'Load older sessions' })).toBe(
-      getButton('Load older sessions'),
-    );
 
     for (const expected of [100, 150, 200]) {
       fireEvent.click(getButton('Load older sessions'));

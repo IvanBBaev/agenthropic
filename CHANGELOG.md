@@ -696,6 +696,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The web "Load older sessions" paging test no longer times out under load (QA-FLAKE-2).**
+  It took 37 s against the 30 s limit in the 2026-11-20 gate at load ~90 and passed in
+  isolation. One `getByRole('button', ...)` on the 50-row first page computed the accessible
+  name of every row button, about 425 ms of a roughly 900 ms run when the test ran alone. The button's role and
+  accessible name are now pinned in a three-row test, and the paging test finds the button
+  by its text, which roughly halves its isolated run time.
 - **Two load-sensitive server tests are now deterministic (QA-FLAKE-1).** Both failed in the
   2026-11-20 rehearsal at load ~76 and passed in isolation.
   - The startup-replay cases that drive the scheduled poll by hand advanced one interval per
