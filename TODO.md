@@ -1113,6 +1113,12 @@ exit and proof live in the plan. Dated one-word answers under D1…D8 are the si
     3278/3279 subagents edged, 1 unanchorable orphan, 6/6 green. Docs truth pass (R2):
     route and variable counts dropped from four pages, with dated amendments. Full record
     in `DONE.md`. No box ticked. Row stays open.
+  - **R1 rehearsed again 2026-11-21** on clean `74a440f`, at load ≈ 54–72 (W4-R1R2b), after
+    QA-FLAKE-1, ARC-5 and QA-FLAKE-2: install, `gate:node`, typecheck, lint, format:check, web
+    build, **`pnpm test` (241 files / 4,578 tests, 100% in five packages)**, `gate:spawner`,
+    `gate:licenses`, `test:real` (452 ok / 0 failed, 3340/3341 subagents edged, 1 unanchorable
+    orphan) and the web e2e all exited 0; §2/§4/§6 greps as expected. Full record in
+    `DONE.md`. Not re-run: live drill, `gh api` checks. No box ticked. Row stays open.
 - [ ] **Wave 5 · by 2026-12-01 (KC-4)** — release commit, `v1.0.0` tag, push (Ivan) ·
   post-tag CI/Pages/badges green, `DONE.md` closed, this board reduced to the KC-5 items
   (orchestrator). One week of buffer; the critical path is D1 → Wave 3's 14 days → R3.

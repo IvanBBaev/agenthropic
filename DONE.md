@@ -579,6 +579,32 @@ milestone record, not a second copy._
   - Not re-run: the §5 live drill and the `gh api` checks. CI on `ba6010b` was not checked
     because it is not pushed.
 
+- **Seventh rehearsal — 2026-11-21, on `74a440f` (`main`), clean tree, Node 22.23.2.** Recorded
+  here directly (W4-R1R2b), the first run after QA-FLAKE-1 (`45bbfdb`), ARC-5 (`f2bf5d9`) and
+  QA-FLAKE-2 (`74a440f`). The machine was heavily loaded (load average 54 at the start, 72 at
+  the end).
+  - `pnpm install --frozen-lockfile`, `gate:node`, typecheck, lint, format:check, the web
+    build and **`pnpm test` exited 0**: shared 10 / 188, test-fixtures 6 / 167, core 28 / 511,
+    server 164 / 2500, web 33 / 1212, 100% on all four axes in five packages (241 files /
+    4,578 tests). The two server tests that failed the sixth rehearsal and the web paging test
+    that timed out in the ARC-5 gate all passed under load.
+  - The spawner gate scanned 468 files: 1 allowlisted, 6 inline-exempt lines (the same six
+    sites), 6 manifests, 143 server-process files checked for outbound calls.
+  - The license gate read 523 packages / 572 installed versions: 522 allowlisted, 1 documented
+    exception (`caniuse-lite`, CC-BY-4.0).
+  - `test:real` against `~/.claude/projects` passed 6/6: 454 sessions discovered, 452 ok, 0
+    failed, 2 skipped, 3341 subagents, 3340 edged, 1 unanchorable orphan. (A first invocation
+    without `AGENTHROPIC_REAL_CORPUS` set failed fast on the opt-in guard, as designed.)
+  - The web e2e (Playwright) passed. The bench was not run: the load would invalidate it.
+  - §2: the no-SSRF grep matched only `telegram-sink.ts` (the call and its header comment); the
+    corpus write-symbol grep matched only the in-file comments; no `0.0.0.0` in server source.
+    §4: the `controlGate|nirdiamant` grep was empty. §6 leftovers: only history marked as such
+    (`running.md:13`, `hooks-installer.md:550`).
+  - The hierarchy exit gate printed NOT CERTIFIED (synthetic provenance, n = 14 < 52), as in
+    every rehearsal until LABEL-ME.
+  - Not re-run: the §5 live drill and the `gh api` checks. CI on `74a440f` was not checked
+    because it is not pushed. No box ticked.
+
 ### Still open, and owned by Ivan — not by any agent
 - ~~**Everything above is UNCOMMITTED.**~~ **Closed 2026-07-30** — committed and pushed
   as `9b6c6b3` on Ivan's explicit instruction (198 files, +27 133 / −1 113). CI is
